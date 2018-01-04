@@ -3,8 +3,9 @@
   <projects>
     <project name="zircon"
              path="zircon"
-             remote="https://fuchsia.googlesource.com/zircon"
-             gerrithost="https://fuchsia-review.googlesource.com"/>
+             remote="ssh://review.gerrithub.io:29418/OpenTrustGroup/zircon"
+             remotebranch="gzos"
+             gerrithost="https://review.gerrithub.io"/>
   </projects>
   <hooks>
     <hook name="download-toolchain"
