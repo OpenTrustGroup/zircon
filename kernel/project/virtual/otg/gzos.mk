@@ -8,6 +8,8 @@
 # modules needed to implement user space
 
 KERNEL_DEFINES += WITH_DEBUG_LINEBUFFER=1
+## Directly output kernel message to the console rather than buffering it
+#KERNEL_DEFINES += ENABLE_KERNEL_LL_DEBUG=1
 
 MODULES += \
     kernel/lib/userboot \
@@ -32,6 +34,7 @@ MODULES += \
     third_party/uapp/dash \
 
 MODULES += \
-    third_party/lib/safeint
+    third_party/lib/safeint \
+    third_party/lib/sm \
 
 EXTRA_BUILDDEPS += $(USER_BOOTDATA)

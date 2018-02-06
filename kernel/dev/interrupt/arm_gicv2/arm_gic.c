@@ -36,7 +36,12 @@
 #define IFRAME_PC(frame) ((frame)->elr)
 
 static spin_lock_t gicd_lock;
+#if WITH_LIB_SM
+#define GICD_LOCK_FLAGS SPIN_LOCK_FLAG_IRQ_FIQ
+#else
 #define GICD_LOCK_FLAGS SPIN_LOCK_FLAG_INTERRUPTS
+#endif
+
 
 // values read from MDI
 uint64_t arm_gicv2_gic_base = 0;
@@ -63,6 +68,9 @@ static bool gic_is_valid_interrupt(unsigned int vector, uint32_t flags)
     return (vector < max_irqs);
 }
 
+#if WITH_LIB_SM
+static DEFINE_GIC_SHADOW_REG(gicd_igroupr, 32, ~0U, 0);
+#endif
 static DEFINE_GIC_SHADOW_REG(gicd_itargetsr, 4, 0x01010101, 32);
 
 static void gic_set_enable(uint vector, bool enable)
@@ -78,7 +86,12 @@ static void gic_set_enable(uint vector, bool enable)
 
 static void gic_init_percpu_early(void)
 {
+#if WITH_LIB_SM
+    GICREG(0, GICC_CTLR) = 0xb; // enable GIC0 and select fiq mode for secure
+    GICREG(0, GICD_IGROUPR(0)) = ~0U; /* GICD_IGROUPR0 is banked */
+#else
     GICREG(0, GICC_CTLR) = 1; // enable GIC0
+#endif
     GICREG(0, GICC_PMR) = 0xFF; // unmask interrupts at all priority levels
 }
 
@@ -162,6 +175,18 @@ static zx_status_t arm_gic_init(void)
         gic_configure_interrupt(i, IRQ_TRIGGER_MODE_EDGE, IRQ_POLARITY_ACTIVE_HIGH);
 
     GICREG(0, GICD_CTLR) = 1; // enable GIC0
+#if WITH_LIB_SM
+    GICREG(0, GICD_CTLR) = 3; // enable GIC0 ns interrupts
+    /*
+     * Iterate through all IRQs and set them to non-secure
+     * mode. This will allow the non-secure side to handle
+     * all the interrupts we don't explicitly claim.
+     */
+    for (i = 32; i < max_irqs; i += 32) {
+        u_int reg = i / 32;
+        GICREG(0, GICD_IGROUPR(reg)) = gicd_igroupr[reg];
+    }
+#endif
 
     gic_init_percpu_early();
 
@@ -250,6 +275,85 @@ static unsigned int gic_remap_interrupt(unsigned int vector)
     return vector;
 }
 
+#if WITH_LIB_SM
+static zx_status_t arm_gic_get_priority(u_int irq)
+{
+    u_int reg = irq / 4;
+    u_int shift = 8 * (irq % 4);
+    return (GICREG(0, GICD_IPRIORITYR(reg)) >> shift) & 0xff;
+}
+
+static zx_status_t arm_gic_set_priority_locked(u_int irq, uint8_t priority)
+{
+    u_int reg = irq / 4;
+    u_int shift = 8 * (irq % 4);
+    u_int mask = 0xff << shift;
+    uint32_t regval;
+
+    regval = GICREG(0, GICD_IPRIORITYR(reg));
+    LTRACEF("irq %u, old GICD_IPRIORITYR%u = %x\n", irq, reg, regval);
+    regval = (regval & ~mask) | ((uint32_t)priority << shift);
+    GICREG(0, GICD_IPRIORITYR(reg)) = regval;
+    LTRACEF("irq %u, new GICD_IPRIORITYR%u = %x, req %x\n",
+            irq, reg, GICREG(0, GICD_IPRIORITYR(reg)), regval);
+
+    return ZX_OK;
+}
+
+static enum handler_return sm_handle_irq(void)
+{
+    TRACEF("warning: got ns irq before irq thread is ready\n");
+    return INT_RESCHEDULE;
+}
+
+static enum handler_return gic_handle_irq(struct iframe *frame)
+{
+    uint32_t ahppir = GICREG(0, GICC_AHPPIR);
+    uint32_t pending_irq = ahppir & 0x3ff;
+    struct int_handler_struct *h;
+    uint cpu = arch_curr_cpu_num();
+
+    LTRACEF("ahppir %u\n", ahppir);
+    if (pending_irq < max_irqs && pdev_get_int_handler(pending_irq)->handler) {
+        enum handler_return ret = 0;
+        uint32_t irq;
+        uint8_t old_priority;
+        spin_lock_saved_state_t state;
+
+        spin_lock_save(&gicd_lock, &state, GICD_LOCK_FLAGS);
+
+        /* Temporarily raise the priority of the interrupt we want to
+         * handle so another interrupt does not take its place before
+         * we can acknowledge it.
+         */
+        old_priority = arm_gic_get_priority(pending_irq);
+        arm_gic_set_priority_locked(pending_irq, 0);
+        DSB;
+        irq = GICREG(0, GICC_AIAR) & 0x3ff;
+        arm_gic_set_priority_locked(pending_irq, old_priority);
+
+        spin_unlock_restore(&gicd_lock, state, GICD_LOCK_FLAGS);
+
+        LTRACEF_LEVEL(2, "cpu %u currthread %p irq %u pc %#" PRIxPTR "\n",
+                cpu, get_current_thread(), irq, (uintptr_t)IFRAME_PC(frame));
+
+        ktrace_tiny(TAG_IRQ_ENTER, (irq << 8) | cpu);
+
+        if (irq < max_irqs && (h = pdev_get_int_handler(pending_irq))->handler)
+            ret = h->handler(h->arg);
+        else
+            TRACEF("unexpected irq %u != %u may get lost\n", irq, pending_irq);
+        GICREG(0, GICC_AEOIR) = irq;
+
+        LTRACEF_LEVEL(2, "cpu %u exit %u\n", cpu, ret);
+
+        ktrace_tiny(TAG_IRQ_EXIT, (irq << 8) | cpu);
+
+        return ret;
+    }
+    return sm_handle_irq();
+}
+#else
 static enum handler_return gic_handle_irq(struct iframe *frame)
 {
     // get the current vector
@@ -290,6 +394,7 @@ static enum handler_return gic_handle_irq(struct iframe *frame)
 
     return ret;
 }
+#endif
 
 static enum handler_return gic_handle_fiq(struct iframe *frame)
 {
