@@ -9,7 +9,7 @@
 # for 64bit arm (cortex-a53)
 
 ARCH := arm64
-TARGET := qemu-virt
+TARGET := qemu-virt-tz
 
 include kernel/project/virtual/test.mk
 include kernel/project/virtual/otg/gzos.mk

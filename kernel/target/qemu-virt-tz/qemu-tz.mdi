@@ -1,0 +1,64 @@
+include "system/public/zircon/mdi/zircon.mdi"
+
+cpu-map = {
+    clusters = {
+        {
+            cpu-count = 1
+        }
+    }
+}
+
+const MEMBASE = 0x0e100000
+
+mem-map = {
+    bank = {
+        base-phys = MEMBASE
+        length = 0x00f00000
+    }
+}
+
+const PERIPH_VIRT = 0xffffffffc0000000
+
+periph-mem-map = {
+    bank = {
+        base-virt = PERIPH_VIRT
+        base-phys = 0x0
+        length = 0x40000000
+    }
+}
+
+kernel = {
+    arm-pl011-uart = {
+        base-phys = 0x09040000
+        base-virt = PERIPH_VIRT + 0x09040000
+        irq = 40
+    }
+    // qemu optionally implements either gic v3 or v2
+    // put both devices here and mark them optional
+    arm-gic-v3 = {
+        base-phys = 0x08000000
+        base-virt = PERIPH_VIRT + 0x08000000
+        gicd-offset = 0x00000
+        gicr-offset = 0xa0000
+        gicr-stride = 0x20000
+        ipi-base = 13
+        optional = true
+    }
+    arm-gic-v2 = {
+        base-phys = 0x08000000
+        base-virt = PERIPH_VIRT + 0x08000000
+        gicd-offset = 0x00000
+        gicc-offset = 0x10000
+        ipi-base = 13
+        msi-frame-phys = 0x08020000
+        msi-frame-virt = PERIPH_VIRT + 0x08020000
+        optional = true
+        msi = true
+    }
+    arm-psci = {
+        use-smc = true
+    }
+    arm-timer = {
+        irq-sphys = 29
+    }
+}
