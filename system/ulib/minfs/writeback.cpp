@@ -27,21 +27,21 @@ namespace minfs {
 
 #ifdef __Fuchsia__
 
-void WriteTxn::Enqueue(zx_handle_t vmo, uint64_t relative_block,
-                       uint64_t absolute_block, uint64_t nblocks) {
-    validate_vmo_size(vmo, static_cast<blk_t>(relative_block));
+void WriteTxn::Enqueue(zx_handle_t vmo, uint64_t vmo_offset, uint64_t dev_offset,
+                       uint64_t nblocks) {
+    validate_vmo_size(vmo, static_cast<blk_t>(vmo_offset));
     for (size_t i = 0; i < count_; i++) {
         if (requests_[i].vmo != vmo) {
             continue;
         }
 
-        if (requests_[i].vmo_offset == relative_block) {
+        if (requests_[i].vmo_offset == vmo_offset) {
             // Take the longer of the operations (if operating on the same
             // blocks).
             requests_[i].length = (requests_[i].length > nblocks) ? requests_[i].length : nblocks;
             return;
-        } else if ((requests_[i].vmo_offset + requests_[i].length == relative_block) &&
-                   (requests_[i].dev_offset + requests_[i].length == absolute_block)) {
+        } else if ((requests_[i].vmo_offset + requests_[i].length == vmo_offset) &&
+                   (requests_[i].dev_offset + requests_[i].length == dev_offset)) {
             // Combine with the previous request, if immediately following.
             requests_[i].length += nblocks;
             return;
@@ -52,8 +52,8 @@ void WriteTxn::Enqueue(zx_handle_t vmo, uint64_t relative_block,
     // NOTE: It's easier to compare everything when dealing
     // with blocks (not offsets!) so the following are described in
     // terms of blocks until we Flush().
-    requests_[count_].vmo_offset = relative_block;
-    requests_[count_].dev_offset = absolute_block;
+    requests_[count_].vmo_offset = vmo_offset;
+    requests_[count_].dev_offset = dev_offset;
     requests_[count_].length = nblocks;
     count_++;
 
@@ -66,41 +66,21 @@ zx_status_t WriteTxn::Flush(zx_handle_t vmo, vmoid_t vmoid) {
     ZX_DEBUG_ASSERT(vmo != ZX_HANDLE_INVALID);
     ZX_DEBUG_ASSERT(vmoid != VMOID_INVALID);
 
-    // Update all the outgoing transactions to be in "bytes", not blocks
+    // Update all the outgoing transactions to be in "disk blocks",
+    // not "Minfs blocks".
     block_fifo_request_t blk_reqs[MAX_TXN_MESSAGES];
+    const uint32_t kDiskBlocksPerMinfsBlock = kMinfsBlockSize / bc_->BlockSize();
     for (size_t i = 0; i < count_; i++) {
         blk_reqs[i].txnid = bc_->TxnId();
         blk_reqs[i].vmoid = vmoid;
         blk_reqs[i].opcode = BLOCKIO_WRITE;
-        blk_reqs[i].vmo_offset = requests_[i].vmo_offset * kMinfsBlockSize;
-        blk_reqs[i].dev_offset = requests_[i].dev_offset * kMinfsBlockSize;
-        blk_reqs[i].length = requests_[i].length * kMinfsBlockSize;
+        blk_reqs[i].vmo_offset = requests_[i].vmo_offset * kDiskBlocksPerMinfsBlock;
+        blk_reqs[i].dev_offset = requests_[i].dev_offset * kDiskBlocksPerMinfsBlock;
+        blk_reqs[i].length = requests_[i].length * kDiskBlocksPerMinfsBlock;
     }
 
     // Actually send the operations to the underlying block device.
     zx_status_t status = bc_->Txn(blk_reqs, count_);
-
-    // Decommit the pages that we used in the buffer to store the outgoing data
-    size_t decommit_offset = 0;
-    size_t decommit_length = 0;
-    for (size_t i = 0; i < count_; i++) {
-        if (i == 0 || blk_reqs[i].vmo_offset != decommit_offset + blk_reqs[i - 1].length) {
-            // Reset case, either because we're initializing or because we have
-            // found a request at a noncontiguous offset (it wrapped around).
-            if (decommit_length != 0) {
-                ZX_ASSERT(zx_vmo_op_range(vmo, ZX_VMO_OP_DECOMMIT, decommit_offset,
-                                          decommit_length, nullptr, 0) == ZX_OK);
-            }
-            decommit_offset = blk_reqs[i].vmo_offset;
-            decommit_length = blk_reqs[i].length;
-        } else {
-            decommit_length += blk_reqs[i].length;
-        }
-    }
-    if (decommit_length != 0) {
-        ZX_ASSERT(zx_vmo_op_range(vmo, ZX_VMO_OP_DECOMMIT, decommit_offset, decommit_length,
-                                  nullptr, 0) == ZX_OK);
-    }
 
     count_ = 0;
     return status;
@@ -118,14 +98,14 @@ size_t WriteTxn::BlkCount() const {
 
 WritebackWork::WritebackWork(Bcache* bc) :
 #ifdef __Fuchsia__
-    completion_(nullptr),
+    closure_(nullptr),
 #endif
     txn_(bc), node_count_(0) {}
 
 void WritebackWork::Reset() {
 #ifdef __Fuchsia__
     ZX_DEBUG_ASSERT(txn_.Count() == 0);
-    completion_ = nullptr;
+    closure_ = nullptr;
 #endif
     while (0 < node_count_) {
         vn_[--node_count_] = nullptr;
@@ -137,17 +117,17 @@ void WritebackWork::Reset() {
 // consumed
 size_t WritebackWork::Complete(zx_handle_t vmo, vmoid_t vmoid) {
     size_t blk_count = txn_.BlkCount();
-    txn_.Flush(vmo, vmoid);
-    if (completion_ != nullptr) {
-        completion_signal(completion_);
+    zx_status_t status = txn_.Flush(vmo, vmoid);
+    if (closure_) {
+        closure_(status);
     }
     Reset();
     return blk_count;
 }
 
-void WritebackWork::SetCompletion(completion_t* completion) {
-    ZX_DEBUG_ASSERT(completion_ == nullptr);
-    completion_ = completion;
+void WritebackWork::SetClosure(SyncCallback closure) {
+    ZX_DEBUG_ASSERT(!closure_);
+    closure_ = fbl::move(closure);
 }
 #else
 void WritebackWork::Complete() {

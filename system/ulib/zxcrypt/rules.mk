@@ -9,7 +9,7 @@ MODULE_SO_NAME := $(LOCAL_DIR)
 MODULE_TYPE := userlib
 
 MODULE_SRCS += \
-    $(LOCAL_DIR)/superblock.cpp \
+    $(LOCAL_DIR)/volume.cpp \
 
 MODULE_LIBS := \
     system/ulib/c \
@@ -23,6 +23,8 @@ MODULE_STATIC_LIBS := \
     third_party/ulib/uboringssl \
     system/ulib/ddk \
     system/ulib/fbl \
+    system/ulib/pretty \
     system/ulib/sync \
+    system/ulib/zx \
 
 include make/module.mk

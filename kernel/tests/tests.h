@@ -15,7 +15,6 @@ __BEGIN_CDECLS
 int thread_tests(void);
 int sleep_tests(void);
 int port_tests(void);
-void printf_tests(void);
 void clock_tests(void);
 void timer_tests(void);
 void benchmarks(void);
@@ -29,7 +28,6 @@ int list_tests(int argc, const cmd_args* argv);
 int hash_tests(int argc, const cmd_args* argv);
 int vm_tests(int argc, const cmd_args* argv);
 int auto_call_tests(int argc, const cmd_args* argv);
-int sync_ipi_tests(int argc, const cmd_args* argv);
 int arena_tests(int argc, const cmd_args* argv);
 int fifo_tests(int argc, const cmd_args* argv);
 int alloc_checker_tests(int argc, const cmd_args* argv);

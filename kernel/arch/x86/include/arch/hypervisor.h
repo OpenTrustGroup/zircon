@@ -9,11 +9,11 @@
 #include <arch/x86/apic.h>
 #include <arch/x86/interrupts.h>
 #include <arch/x86/vmx_state.h>
-#include <bitmap/raw-bitmap.h>
-#include <bitmap/storage.h>
 #include <fbl/array.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
+#include <hypervisor/guest_physical_address_space.h>
+#include <hypervisor/id_allocator.h>
 #include <hypervisor/interrupt_tracker.h>
 #include <hypervisor/trap_map.h>
 #include <kernel/event.h>
@@ -60,14 +60,19 @@ public:
 
     GuestPhysicalAddressSpace* AddressSpace() const { return gpas_.get(); }
     TrapMap* Traps() { return &traps_; }
-    zx_paddr_t ApicAccessAddress() const { return apic_access_page_.PhysicalAddress(); }
     zx_paddr_t MsrBitmapsAddress() const { return msr_bitmaps_page_.PhysicalAddress(); }
+
+    zx_status_t AllocVpid(uint16_t* vpid);
+    zx_status_t FreeVpid(uint16_t vpid);
 
 private:
     fbl::unique_ptr<GuestPhysicalAddressSpace> gpas_;
     TrapMap traps_;
-    VmxPage apic_access_page_;
     VmxPage msr_bitmaps_page_;
+
+    fbl::Mutex vcpu_mutex_;
+    // TODO(alexlegg): Find a good place for this constant to live (max vcpus).
+    hypervisor::IdAllocator<uint16_t, 64> TA_GUARDED(vcpu_mutex_) vpid_allocator_;
 
     Guest() = default;
 };
@@ -76,7 +81,7 @@ private:
 struct LocalApicState {
     // Timer for APIC timer.
     timer_t timer;
-    // Tracks active interrupts.
+    // Tracks pending interrupts.
     hypervisor::InterruptTracker<X86_INT_COUNT> interrupt_tracker;
     // LVT timer configuration
     uint32_t lvt_timer = LVT_MASKED; // Initial state is masked (Vol 3 Section 10.12.5.1).
@@ -87,9 +92,7 @@ struct LocalApicState {
 // Represents a virtual CPU within a guest.
 class Vcpu {
 public:
-    static zx_status_t Create(zx_vaddr_t ip, zx_vaddr_t cr3, zx_paddr_t msr_bitmaps_address,
-                              GuestPhysicalAddressSpace* gpas, TrapMap* traps,
-                              fbl::unique_ptr<Vcpu>* out);
+    static zx_status_t Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* out);
     ~Vcpu();
     DISALLOW_COPY_ASSIGN_AND_MOVE(Vcpu);
 
@@ -99,39 +102,15 @@ public:
     zx_status_t WriteState(uint32_t kind, const void* buffer, uint32_t len);
 
 private:
-    const thread_t* thread_;
+    Guest* guest_;
     const uint16_t vpid_;
+    const thread_t* thread_;
+    fbl::atomic_bool running_;
     LocalApicState local_apic_state_;
-    GuestPhysicalAddressSpace* gpas_;
-    TrapMap* traps_;
     VmxState vmx_state_;
     VmxPage host_msr_page_;
     VmxPage guest_msr_page_;
     VmxPage vmcs_page_;
 
-    Vcpu(const thread_t* thread, uint16_t vpid, GuestPhysicalAddressSpace* gpas, TrapMap* traps);
+    Vcpu(Guest* guest, uint16_t vpid, const thread_t* thread);
 };
-
-// Create a guest.
-zx_status_t arch_guest_create(fbl::RefPtr<VmObject> physmem, fbl::unique_ptr<Guest>* guest);
-
-// Set a trap within a guest.
-zx_status_t arch_guest_set_trap(Guest* guest, uint32_t kind, zx_vaddr_t addr, size_t len,
-                                fbl::RefPtr<PortDispatcher> port, uint64_t key);
-
-// Create a VCPU.
-zx_status_t x86_vcpu_create(zx_vaddr_t ip, zx_vaddr_t cr3, zx_paddr_t msr_bitmaps_address,
-                            GuestPhysicalAddressSpace* gpas, TrapMap* traps,
-                            fbl::unique_ptr<Vcpu>* out);
-
-// Resume execution of a VCPU.
-zx_status_t arch_vcpu_resume(Vcpu* vcpu, zx_port_packet_t* packet);
-
-// Issue an interrupt on a VCPU.
-zx_status_t arch_vcpu_interrupt(Vcpu* vcpu, uint32_t interrupt);
-
-// Read the register state of a VCPU.
-zx_status_t arch_vcpu_read_state(const Vcpu* vcpu, uint32_t kind, void* buffer, uint32_t len);
-
-// Write the register state of a VCPU.
-zx_status_t arch_vcpu_write_state(Vcpu* vcpu, uint32_t kind, const void* buffer, uint32_t len);

@@ -30,6 +30,9 @@ zx_status_t pci_rpc_request(kpci_device_t* dev, uint32_t op, zx_handle_t* handle
 
     uint32_t handle_cnt = 0;
     if (handle) {
+        // Since only the caller knows if they expected a valid handle back, make
+        // sure the handle reads INVALID if we didn't get one.
+        *handle = ZX_HANDLE_INVALID;
         handle_cnt = 1;
     }
 
@@ -52,8 +55,6 @@ zx_status_t pci_rpc_request(kpci_device_t* dev, uint32_t op, zx_handle_t* handle
         return st;
     }
 
-    // actual_handles is not checked here because only the caller knows
-    // if they expected a valid handle back
     if (actual_bytes != sizeof(*resp)) {
         return ZX_ERR_INTERNAL;
     }
@@ -103,6 +104,26 @@ static zx_status_t pci_op_config_read(void* ctx, uint16_t offset, size_t width, 
         *val = resp.cfg.value;
     }
     return st;
+}
+
+// These reads are proxied directly over to the device's PciConfig object so the validity of the
+// widths and offsets will be validated on that end and then trickle back to this level of the
+// protocol.
+static zx_status_t pci_op_config_write(void* ctx, uint16_t offset, size_t width, uint32_t val) {
+    kpci_device_t* dev = ctx;
+    if (width > sizeof(uint32_t)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    pci_msg_t req = {
+        .cfg = {
+            .offset = offset,
+            .width = width,
+            .value = val,
+        },
+    };
+    pci_msg_t resp = {};
+    return pci_rpc_request(dev, PCI_OP_CONFIG_WRITE, NULL, &req, &resp);
 }
 
 static uint8_t pci_op_get_next_capability(void* ctx, uint8_t offset, uint8_t type) {
@@ -317,6 +338,7 @@ static pci_protocol_ops_t _pci_protocol = {
     .set_irq_mode = pci_op_set_irq_mode,
     .get_device_info = pci_op_get_device_info,
     .config_read = pci_op_config_read,
+    .config_write = pci_op_config_write,
     .get_next_capability = pci_op_get_next_capability,
     .get_auxdata = pci_op_get_auxdata,
 };

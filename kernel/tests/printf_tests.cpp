@@ -10,106 +10,180 @@
 #include <debug.h>
 #include <stdio.h>
 #include <string.h>
+#include <unittest.h>
 
-#if !WITH_NO_FP
-#include "float_test_vec.c"
+// Checks that vsnprintf() gives the expected string as output.
+static bool test_printf(const char* expected, const char* format, ...) {
+    char buf[100];
+    va_list args;
+    va_start(args, format);
+    int length = vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
 
-static void printf_tests_float(void) {
-    printf("floating point printf tests\n");
-
-    for (size_t i = 0; i < float_test_vec_size; i++) {
-        PRINT_FLOAT;
+    if (length < 0 || length >= (int)sizeof(buf)) {
+        printf("vsnprintf() returned %d\n", length);
+        return false;
     }
+    if (buf[length] != '\0') {
+        printf("missing string terminator\n");
+        return false;
+    }
+    if (length != (int)strlen(expected) ||
+        memcmp(buf, expected, length + 1) != 0) {
+        printf("expected: \"%s\" (length %d)\n",
+               expected, (int)strlen(expected));
+        printf("but got:  \"%s\" (length %d) with return value %d)\n",
+               buf, strlen(buf), length);
+        return false;
+    }
+    return true;
 }
-#endif
 
-void printf_tests(void) {
-    printf("printf tests\n");
+static bool printf_tests(void* context) {
+    BEGIN_TEST;
 
     printf("numbers:\n");
-    printf("int8:  %hhd %hhd %hhd\n", -12, 0, 254);
-    printf("uint8: %hhu %hhu %hhu\n", -12, 0, 254);
-    printf("int16: %hd %hd %hd\n", -1234, 0, 1234);
-    printf("uint16:%hu %hu %hu\n", -1234, 0, 1234);
-    printf("int:   %d %d %d\n", -12345678, 0, 12345678);
-    printf("uint:  %u %u %u\n", -12345678, 0, 12345678);
-    printf("long:  %ld %ld %ld\n", -12345678L, 0L, 12345678L);
-    printf("ulong: %lu %lu %lu\n", -12345678UL, 0UL, 12345678UL);
+    EXPECT_TRUE(test_printf("int8:  -12 0 -2",
+                            "int8:  %hhd %hhd %hhd", -12, 0, 254), "");
+    EXPECT_TRUE(test_printf("uint8: 244 0 254",
+                            "uint8: %hhu %hhu %hhu", -12, 0, 254), "");
+    EXPECT_TRUE(test_printf("int16: -1234 0 1234",
+                            "int16: %hd %hd %hd", -1234, 0, 1234), "");
+    EXPECT_TRUE(test_printf("uint16:64302 0 1234",
+                            "uint16:%hu %hu %hu", -1234, 0, 1234), "");
+    EXPECT_TRUE(test_printf("int:   -12345678 0 12345678",
+                            "int:   %d %d %d", -12345678, 0, 12345678), "");
+    static_assert(-12345678U == 4282621618, "");
+    EXPECT_TRUE(test_printf("uint:  4282621618 0 12345678",
+                            "uint:  %u %u %u", -12345678, 0, 12345678), "");
+    EXPECT_TRUE(test_printf("long:  -12345678 0 12345678",
+                            "long:  %ld %ld %ld", -12345678L, 0L, 12345678L), "");
+    static_assert(-12345678UL == 18446744073697205938UL, "");
+    EXPECT_TRUE(test_printf("ulong: 18446744073697205938 0 12345678",
+                            "ulong: %lu %lu %lu", -12345678UL, 0UL, 12345678UL), "");
 
-    printf("longlong: %lli %lli %lli\n", -12345678LL, 0LL, 12345678LL);
-    printf("ulonglong: %llu %llu %llu\n", -12345678LL, 0LL, 12345678LL);
-    printf("ssize_t: %zd %zd %zd\n", (ssize_t)-12345678, (ssize_t)0, (ssize_t)12345678);
-    printf("usize_t: %zu %zu %zu\n", (size_t)-12345678, (size_t)0, (size_t)12345678);
-    printf("intmax_t: %jd %jd %jd\n", (intmax_t)-12345678, (intmax_t)0, (intmax_t)12345678);
-    printf("uintmax_t: %ju %ju %ju\n", (uintmax_t)-12345678, (uintmax_t)0, (uintmax_t)12345678);
-    printf("ptrdiff_t: %td %td %td\n", (ptrdiff_t)-12345678, (ptrdiff_t)0, (ptrdiff_t)12345678);
-    printf("ptrdiff_t (u): %tu %tu %tu\n", (ptrdiff_t)-12345678, (ptrdiff_t)0, (ptrdiff_t)12345678);
+    EXPECT_TRUE(test_printf("longlong: -12345678 0 12345678",
+                            "longlong: %lli %lli %lli", -12345678LL, 0LL, 12345678LL), "");
+    EXPECT_TRUE(test_printf("ulonglong: 18446744073697205938 0 12345678",
+                            "ulonglong: %llu %llu %llu", -12345678LL, 0LL, 12345678LL), "");
+    EXPECT_TRUE(test_printf("ssize_t: -12345678 0 12345678",
+                            "ssize_t: %zd %zd %zd", (ssize_t)-12345678, (ssize_t)0, (ssize_t)12345678), "");
+    EXPECT_TRUE(test_printf("usize_t: 18446744073697205938 0 12345678",
+                            "usize_t: %zu %zu %zu", (size_t)-12345678, (size_t)0, (size_t)12345678), "");
+    EXPECT_TRUE(test_printf("intmax_t: -12345678 0 12345678",
+                            "intmax_t: %jd %jd %jd", (intmax_t)-12345678, (intmax_t)0, (intmax_t)12345678), "");
+    EXPECT_TRUE(test_printf("uintmax_t: 18446744073697205938 0 12345678",
+                            "uintmax_t: %ju %ju %ju", (uintmax_t)-12345678, (uintmax_t)0, (uintmax_t)12345678), "");
+    EXPECT_TRUE(test_printf("ptrdiff_t: -12345678 0 12345678",
+                            "ptrdiff_t: %td %td %td", (ptrdiff_t)-12345678, (ptrdiff_t)0, (ptrdiff_t)12345678), "");
+    EXPECT_TRUE(test_printf("ptrdiff_t (u): 18446744073697205938 0 12345678",
+                            "ptrdiff_t (u): %tu %tu %tu", (ptrdiff_t)-12345678, (ptrdiff_t)0, (ptrdiff_t)12345678), "");
 
     printf("hex:\n");
-    printf("uint8: %hhx %hhx %hhx\n", -12, 0, 254);
-    printf("uint16:%hx %hx %hx\n", -1234, 0, 1234);
-    printf("uint:  %x %x %x\n", -12345678, 0, 12345678);
-    printf("ulong: %lx %lx %lx\n", -12345678UL, 0UL, 12345678UL);
-    printf("ulong: %X %X %X\n", -12345678, 0, 12345678);
-    printf("ulonglong: %llx %llx %llx\n", -12345678LL, 0LL, 12345678LL);
-    printf("usize_t: %zx %zx %zx\n", (size_t)-12345678, (size_t)0, (size_t)12345678);
+    EXPECT_TRUE(test_printf("uint8: f4 0 fe",
+                            "uint8: %hhx %hhx %hhx", -12, 0, 254), "");
+    EXPECT_TRUE(test_printf("uint16:fb2e 0 4d2",
+                            "uint16:%hx %hx %hx", -1234, 0, 1234), "");
+    EXPECT_TRUE(test_printf("uint:  ff439eb2 0 bc614e",
+                            "uint:  %x %x %x", -12345678, 0, 12345678), "");
+    EXPECT_TRUE(test_printf("ulong: ffffffffff439eb2 0 bc614e",
+                            "ulong: %lx %lx %lx", -12345678UL, 0UL, 12345678UL), "");
+    EXPECT_TRUE(test_printf("ulong: FF439EB2 0 BC614E",
+                            "ulong: %X %X %X", -12345678, 0, 12345678), "");
+    EXPECT_TRUE(test_printf("ulonglong: ffffffffff439eb2 0 bc614e",
+                            "ulonglong: %llx %llx %llx", -12345678LL, 0LL, 12345678LL), "");
+    EXPECT_TRUE(test_printf("usize_t: ffffffffff439eb2 0 bc614e",
+                            "usize_t: %zx %zx %zx", (size_t)-12345678, (size_t)0, (size_t)12345678), "");
 
     printf("alt/sign:\n");
-    printf("uint: %#x %#X\n", 0xabcdef, 0xabcdef);
-    printf("int: %+d %+d\n", 12345678, -12345678);
-    printf("int: % d %+d\n", 12345678, 12345678);
+    EXPECT_TRUE(test_printf("uint: 0xabcdef 0XABCDEF",
+                            "uint: %#x %#X", 0xabcdef, 0xabcdef), "");
+    EXPECT_TRUE(test_printf("int: +12345678 -12345678",
+                            "int: %+d %+d", 12345678, -12345678), "");
+    EXPECT_TRUE(test_printf("int:  12345678 +12345678",
+                            "int: % d %+d", 12345678, 12345678), "");
 
     printf("formatting\n");
-    printf("int: a%8da\n", 12345678);
-    printf("int: a%9da\n", 12345678);
-    printf("int: a%-9da\n", 12345678);
-    printf("int: a%10da\n", 12345678);
-    printf("int: a%-10da\n", 12345678);
-    printf("int: a%09da\n", 12345678);
-    printf("int: a%010da\n", 12345678);
-    printf("int: a%6da\n", 12345678);
+    EXPECT_TRUE(test_printf("int: a12345678a",
+                            "int: a%8da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a 12345678a",
+                            "int: a%9da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a12345678 a",
+                            "int: a%-9da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a  12345678a",
+                            "int: a%10da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a12345678  a",
+                            "int: a%-10da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a012345678a",
+                            "int: a%09da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a0012345678a",
+                            "int: a%010da", 12345678), "");
+    EXPECT_TRUE(test_printf("int: a12345678a",
+                            "int: a%6da", 12345678), "");
 
-    printf("a%1sa\n", "b");
-    printf("a%9sa\n", "b");
-    printf("a%-9sa\n", "b");
-    printf("a%5sa\n", "thisisatest");
+    EXPECT_TRUE(test_printf("aba",
+                            "a%1sa", "b"), "");
+    EXPECT_TRUE(test_printf("a        ba",
+                            "a%9sa", "b"), "");
+    EXPECT_TRUE(test_printf("ab        a",
+                            "a%-9sa", "b"), "");
+    EXPECT_TRUE(test_printf("athisisatesta",
+                            "a%5sa", "thisisatest"), "");
 
-    printf("%03d\n", -2);       /* '-02' */
-    printf("%0+3d\n", -2);      /* '-02' */
-    printf("%0+3d\n", 2);       /* '+02' */
-    printf("%+3d\n", 2);        /* ' +2' */
-    printf("% 3d\n", -2000);    /* '-2000' */
-    printf("% 3d\n", 2000);     /* ' 2000' */
-    printf("%+3d\n", 2000);     /* '+2000' */
-    printf("%10s\n", "test");   /* '      test' */
-    printf("%010s\n", "test");  /* '      test' */
-    printf("%-10s\n", "test");  /* 'test      ' */
-    printf("%-010s\n", "test"); /* 'test      ' */
+    EXPECT_TRUE(test_printf("-02",
+                            "%03d", -2), "");
+    EXPECT_TRUE(test_printf("-02",
+                            "%0+3d", -2), "");
+    EXPECT_TRUE(test_printf("+02",
+                            "%0+3d", 2), "");
+    EXPECT_TRUE(test_printf(" +2",
+                            "%+3d", 2), "");
+    EXPECT_TRUE(test_printf("-2000",
+                            "% 3d", -2000), "");
+    EXPECT_TRUE(test_printf(" 2000",
+                            "% 3d", 2000), "");
+    EXPECT_TRUE(test_printf("+2000",
+                            "%+3d", 2000), "");
+    EXPECT_TRUE(test_printf("      test",
+                            "%10s", "test"), "");
+    EXPECT_TRUE(test_printf("      test",
+                            "%010s", "test"), "");
+    EXPECT_TRUE(test_printf("test      ",
+                            "%-10s", "test"), "");
+    EXPECT_TRUE(test_printf("test      ",
+                            "%-010s", "test"), "");
 
-    int err;
+    END_TEST;
+}
 
-    err = printf("a");
-    printf(" returned %d\n", err);
-    err = printf("ab");
-    printf(" returned %d\n", err);
-    err = printf("abc");
-    printf(" returned %d\n", err);
-    err = printf("abcd");
-    printf(" returned %d\n", err);
-    err = printf("abcde");
-    printf(" returned %d\n", err);
-    err = printf("abcdef");
-    printf(" returned %d\n", err);
+// Test snprintf() when the output is larger than the given buffer.
+static bool snprintf_truncation_test(void* context) {
+    BEGIN_TEST;
 
-    /* make sure snprintf terminates at the right spot */
     char buf[32];
 
-    memset(buf, 0, sizeof(buf));
-    err = snprintf(buf, 15, "0123456789abcdef012345678");
-    printf("snprintf returns %d\n", err);
-    hexdump8(buf, sizeof(buf));
+    memset(buf, 'x', sizeof(buf));
+    static const char str[26] = "0123456789abcdef012345678";
+    int shorter_length = 15;
+    int result = snprintf(buf, shorter_length, "%s", str);
 
-#if !WITH_NO_FP
-    printf_tests_float();
-#endif
+    // Check that snprintf() returns the length of the string that it would
+    // have written if the buffer was big enough.
+    EXPECT_EQ(result, (int)strlen(str), "");
+
+    // Check that snprintf() wrote a truncated, terminated string.
+    EXPECT_EQ(memcmp(buf, str, shorter_length - 1), 0, "");
+    EXPECT_EQ(buf[shorter_length - 1], '\0', "");
+
+    // Check that snprintf() did not overrun the buffer it was given.
+    for (uint32_t i = shorter_length; i < sizeof(buf); ++i)
+        EXPECT_EQ(buf[i], 'x', "");
+
+    END_TEST;
 }
+
+UNITTEST_START_TESTCASE(printf_tests)
+UNITTEST("printf_tests", printf_tests)
+UNITTEST("snprintf_truncation_test", snprintf_truncation_test)
+UNITTEST_END_TESTCASE(printf_tests, "printf_tests", "printf_tests",
+                      nullptr, nullptr);

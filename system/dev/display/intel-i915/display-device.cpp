@@ -135,10 +135,9 @@ bool DisplayDevice::Init() {
         return false;
     }
 
-    fb_gfx_addr_ = controller_->gtt()
-            ->Insert(controller_->mmio_space(), &framebuffer_vmo_, framebuffer_size_,
-                     registers::PlaneSurface::kLinearAlignment,
-                     registers::PlaneSurface::kTrailingPtePadding);
+    fb_gfx_addr_ = controller_->gtt()->Insert(&framebuffer_vmo_, framebuffer_size_,
+                                              registers::PlaneSurface::kLinearAlignment,
+                                              registers::PlaneSurface::kTrailingPtePadding);
     if (!fb_gfx_addr_) {
         zxlogf(ERROR, "i915: Failed to allocate gfx address for framebuffer\n");
         return false;
@@ -169,7 +168,7 @@ bool DisplayDevice::Init() {
 
     auto plane_surface = pipe_regs.PlaneSurface().ReadFrom(controller_->mmio_space());
     plane_surface.set_surface_base_addr(
-            static_cast<uint32_t>(fb_gfx_addr_->base >> plane_surface.kRShiftCount));
+            static_cast<uint32_t>(fb_gfx_addr_->base() >> plane_surface.kRShiftCount));
     plane_surface.WriteTo(controller_->mmio_space());
 
     return true;

@@ -84,6 +84,7 @@
     system_register \inst, SS_CONTEXTIDR_EL1, contextidr_el1
     system_register \inst, SS_CPACR_EL1, cpacr_el1
     system_register \inst, SS_CSSELR_EL1, csselr_el1
+    system_register \inst, SS_ELR_EL1, elr_el1
     system_register \inst, SS_ESR_EL1, esr_el1
     system_register \inst, SS_FAR_EL1, far_el1
     system_register \inst, SS_MAIR_EL1, mair_el1
@@ -91,6 +92,7 @@
     system_register \inst, SS_PAR_EL1, par_el1
     system_register \inst, SS_SCTLR_EL1, sctlr_el1
     system_register \inst, SS_SP_EL1, sp_el1
+    system_register \inst, SS_SPSR_EL1, spsr_el1
     system_register \inst, SS_TCR_EL1, tcr_el1
     system_register \inst, SS_TPIDR_EL1, tpidr_el1
     system_register \inst, SS_TTBR0_EL1, ttbr0_el1
@@ -99,6 +101,7 @@
 
     system_register \inst, SS_ELR_EL2, elr_el2
     system_register \inst, SS_SPSR_EL2, spsr_el2
+    system_register \inst, SS_VMPIDR_EL2, vmpidr_el2
 .endm
 
 .macro host_state inst, off
@@ -140,6 +143,13 @@
 
 .macro guest_x9_state inst, reg
     \inst x8, \reg, [x9, GS_X(8)]
+.endm
+
+.macro guest_enter_state
+    ldr x10, [x9, GS_CNTV_CVAL_EL0]
+    msr cntv_cval_el0, x10
+    ldr x10, [x9, GS_CNTV_CTL_EL0]
+    msr cntv_ctl_el0, x10
 .endm
 
 .macro guest_exit_state
@@ -199,19 +209,7 @@
     exception_return ZX_ERR_INVALID_ARGS
 .endm
 
-.macro entry_init
-.align 7
-    hvc_jump .Linit_table 5
-.Linit_table:
-    b el2_hvc_psci
-    b el2_hvc_mexec
-    b el2_hvc_on
-    b el2_hvc_tlbi_ipa
-    b el2_hvc_tlbi_vmid
-.endm
-
-.macro entry_exec name return_code
-.align 7
+.macro guest_exit return_code
     // We push X9 onto the stack so we have one scratch register. We only use
     // X9 here, so that we don't accidentally trample the guest state.
     str x9, [sp, -16]!
@@ -225,7 +223,24 @@
 
     // The exception came from the host, so there is no guest state to preserve.
     pop_stack
+.endm
 
+.macro entry_init
+.align 7
+    hvc_jump .Linit_table 5
+.Linit_table:
+    b el2_hvc_psci
+    b el2_hvc_mexec
+    b el2_hvc_on
+    b el2_hvc_tlbi_ipa
+    b el2_hvc_tlbi_vmid
+.endm
+
+.macro entry_exec name return_code
+.align 7
+    guest_exit \return_code
+
+    // If we got to here, the exception came from the host or EL2.
     // Continue execution through a jump table based on the HVC index.
     hvc_jump .L\name\()_exec_table 6
 .L\name\()_exec_table:
@@ -239,9 +254,10 @@
 
 .macro entry_invalid_exception
 .align 7
-    // TODO(abdulla): Check VMID from VTTBR_EL2. ERET to host with error. If
-    // VMID was not 0, terminate guest.
-    hlt 0
+    // If we got to here, the exception came from the host or EL2.
+    // We reset, as something unexpected happened.
+    mov x0, xzr
+    b psci_system_reset
 .endm
 
 // We have two vector tables that we switch between, init and exec. The reason
@@ -393,6 +409,9 @@ END_FUNCTION(arm64_el2_tlbi_ipa)
 FUNCTION_LABEL(el2_hvc_tlbi_ipa)
     switch_to_guest
 
+    // TLBI IPAS2* instructions take bits [51:12] of the IPA.
+    lsr x1, x1, 12
+
     // Invalidate IPA. Based on ARM DEN 0024A, page 12-5.
     dsb ishst
     cbnz x2, .Lterminal
@@ -401,6 +420,8 @@ FUNCTION_LABEL(el2_hvc_tlbi_ipa)
 .Lterminal:
     tlbi ipas2le1is, x1
 .Lsync:
+    dsb ish
+    tlbi vmalle1is
     dsb ish
     isb
 
@@ -455,12 +476,14 @@ FUNCTION_LABEL(el2_hvc_resume)
     msr cnthctl_el2, x10
 
     // Enable floating-point traps.
-    movlit x10, CPTR_EL2_RES1 | CPTR_EL2_TFP
-    msr cptr_el2, x10
+    // TODO(ZX-1685): Re-enable floating-point traps once bug is fixed.
+    // movlit x10, CPTR_EL2_RES1 | CPTR_EL2_TFP
+    // msr cptr_el2, x10
     isb
 
     host_state stp, HS_X18
     system_state str, HS_SYSTEM_STATE
+    guest_enter_state
     system_state ldr, GS_SYSTEM_STATE
     guest_state ldp
     guest_x9_state ldp, x9

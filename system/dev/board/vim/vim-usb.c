@@ -10,7 +10,6 @@
 #include <soc/aml-a113/a113-usb-phy.h>
 
 #include "vim.h"
-#include "vim-hw.h"
 
 #define BIT_MASK(start, count) (((1 << (count)) - 1) << (start))
 #define SET_BITS(dest, start, count, value) \
@@ -26,6 +25,7 @@ static const pbus_mmio_t xhci_mmios[] = {
 static const pbus_irq_t xhci_irqs[] = {
     {
         .irq = 62,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
 };
 

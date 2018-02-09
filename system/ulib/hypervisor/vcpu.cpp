@@ -10,8 +10,8 @@
 
 #include <fbl/auto_lock.h>
 #include <fbl/string_buffer.h>
-#include <hypervisor/io.h>
 #include <hypervisor/guest.h>
+#include <hypervisor/io.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/hypervisor.h>
@@ -24,7 +24,7 @@
 #if __aarch64__
 static zx_status_t handle_mmio_arm(const zx_packet_guest_mem_t* mem, uint64_t trap_key,
                                    uint64_t* reg) {
-    IoValue mmio = { mem->access_size, { .u64 = mem->data } };
+    IoValue mmio = {mem->access_size, {.u64 = mem->data}};
     if (!mem->read)
         return trap_key_to_mapping(trap_key)->Write(mem->addr, mmio);
 
@@ -40,7 +40,7 @@ static zx_status_t handle_mmio_arm(const zx_packet_guest_mem_t* mem, uint64_t tr
 static zx_status_t handle_mmio_x86(const zx_packet_guest_mem_t* mem, uint64_t trap_key,
                                    const instruction_t* inst) {
     zx_status_t status;
-    IoValue mmio = { inst->access_size, { .u64 = 0 } };
+    IoValue mmio = {inst->access_size, {.u64 = 0}};
     switch (inst->type) {
     case INST_MOV_WRITE:
         switch (inst->access_size) {
@@ -104,7 +104,7 @@ static zx_status_t handle_mem(Vcpu* vcpu, const zx_packet_guest_mem_t* mem, uint
             return status;
     }
 
-    bool do_write;
+    bool do_write = false;
 #if __aarch64__
     do_write = mem->read;
     status = handle_mmio_arm(mem, trap_key, &vcpu_state.x[mem->xt]);
@@ -169,25 +169,26 @@ static zx_status_t handle_io(Vcpu* vcpu, const zx_packet_guest_io_t* io, uint64_
 
 static zx_status_t handle_vcpu(Vcpu* vcpu, const zx_packet_guest_vcpu_t* packet,
                                uint64_t trap_key) {
-    // TODO: Start up a new VCPU.
     fprintf(stderr, "Got VCPU packet with addr = %lx, apic_id = %ld\n", packet->addr, packet->id);
-    return ZX_ERR_NOT_SUPPORTED;
+    return vcpu->StartSecondaryProcessor(packet->addr, packet->id);
 }
 
 struct Vcpu::ThreadEntryArgs {
-    const Guest* guest;
+    Guest* guest;
     Vcpu* vcpu;
-    zx_vcpu_create_args_t* vcpu_create_args;
+    zx_vaddr_t entry;
 };
 
-zx_status_t Vcpu::Create(const Guest* guest, zx_vcpu_create_args_t* vcpu_create_args) {
+zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, uint64_t id) {
+    guest_ = guest;
+    id_ = id;
     ThreadEntryArgs args = {
         .guest = guest,
         .vcpu = this,
-        .vcpu_create_args = vcpu_create_args,
+        .entry = entry,
     };
     fbl::StringBuffer<ZX_MAX_NAME_LEN> name_buffer;
-    name_buffer.AppendPrintf("vcpu-%d", 0);
+    name_buffer.AppendPrintf("vcpu-%lu", id);
     auto thread_entry = [](void* arg) {
         ThreadEntryArgs* thread_args = reinterpret_cast<ThreadEntryArgs*>(arg);
         return thread_args->vcpu->ThreadEntry(thread_args);
@@ -212,7 +213,7 @@ zx_status_t Vcpu::ThreadEntry(const ThreadEntryArgs* args) {
             return ZX_ERR_BAD_STATE;
         }
 
-        zx_status_t status = zx_vcpu_create(args->guest->handle(), 0, args->vcpu_create_args, &vcpu_);
+        zx_status_t status = zx_vcpu_create(args->guest->handle(), 0, args->entry, &vcpu_);
         if (status != ZX_OK) {
             SetStateLocked(State::ERROR_FAILED_TO_CREATE);
             return status;
@@ -231,13 +232,11 @@ zx_status_t Vcpu::ThreadEntry(const ThreadEntryArgs* args) {
                 return status;
             }
         }
+
+        SetStateLocked(State::STARTED);
     }
 
     return Loop();
-}
-
-zx_status_t Vcpu::Init(const Guest& guest, zx_vcpu_create_args_t* args) {
-    return zx_vcpu_create(guest.handle(), 0, args, &vcpu_);
 }
 
 void Vcpu::SetStateLocked(State new_state) {
@@ -272,7 +271,7 @@ zx_status_t Vcpu::Loop() {
     while (true) {
         zx_status_t status = zx_vcpu_resume(vcpu_, &packet);
         if (status != ZX_OK) {
-            fprintf(stderr, "Failed to resume VCPU %d\n", status);
+            fprintf(stderr, "Failed to resume VCPU-%lu: %d\n", id_, status);
             fbl::AutoLock lock(&mutex_);
             SetStateLocked(State::ERROR_FAILED_TO_RESUME);
             return status;
@@ -325,4 +324,12 @@ zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
 
 zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
     return zx_vcpu_write_state(vcpu_, kind, buffer, len);
+}
+
+zx_status_t Vcpu::StartSecondaryProcessor(uintptr_t entry, uint64_t id) {
+    if (id_ != 0) {
+        fprintf(stderr, "Application processors must be started by the base processor\n");
+        return ZX_ERR_BAD_STATE;
+    }
+    return guest_->StartVcpu(entry, id);
 }

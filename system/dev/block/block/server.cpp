@@ -8,7 +8,6 @@
 #include <string.h>
 
 #include <ddk/device.h>
-#include <ddk/iotxn.h>
 #include <fbl/algorithm.h>
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_lock.h>
@@ -32,7 +31,7 @@ constexpr zx_signals_t kSignalFifoTerminate = ZX_USER_SIGNAL_0;
 
 namespace {
 
-void OutOfBandErrorRespond(const zx::fifo& fifo, zx_status_t status, txnid_t txnid) {
+void OutOfBandRespond(const zx::fifo& fifo, zx_status_t status, txnid_t txnid) {
     block_fifo_response_t response;
     response.status = status;
     response.txnid = txnid;
@@ -60,11 +59,6 @@ void BlockComplete(void* cookie, zx_status_t status) {
     blktxn->Complete(msg, status);
 }
 
-void BlockCompleteIotxn(iotxn_t* txn, void* cookie) {
-    BlockComplete(cookie, txn->status);
-    iotxn_release(txn);
-}
-
 void BlockCompleteCb(block_op_t* bop, zx_status_t status) {
     BlockComplete(bop->cookie, status);
     free(bop);
@@ -74,37 +68,20 @@ void BlockCompleteCb(block_op_t* bop, zx_status_t status) {
 
 void BlockServer::Queue(uint32_t flags, zx_handle_t vmo, uint64_t length,
                         uint64_t vmo_offset, uint64_t dev_offset, block_msg_t* msg) {
-    if (bp_.ops == NULL) {
-        iotxn_t* txn;
-        zx_status_t status;
-        if ((status = iotxn_alloc_vmo(&txn, IOTXN_ALLOC_POOL, vmo,
-                                      vmo_offset, length)) != ZX_OK) {
-            BlockComplete(msg, status);
-            return;
-        }
-        txn->flags = flags;
-        txn->opcode = msg->opcode;
-        txn->offset = dev_offset;
-        txn->cookie = msg;
-        txn->complete_cb = BlockCompleteIotxn;
-        iotxn_queue(dev_, txn);
-    } else {
-        size_t bsz = info_.block_size;
-        block_op_t* bop = (block_op_t*) malloc(block_op_size_);
-        if (bop == nullptr) {
-            BlockComplete(msg, ZX_ERR_NO_MEMORY);
-            return;
-        }
-        bop->command = (msg->opcode == BLOCKIO_READ) ? BLOCK_OP_READ : BLOCK_OP_WRITE;
-        bop->rw.length = (uint32_t) (length / bsz);
-        bop->rw.vmo = vmo;
-        bop->rw.offset_dev = dev_offset / bsz;
-        bop->rw.offset_vmo = vmo_offset / bsz;
-        bop->rw.pages = NULL;
-        bop->completion_cb = BlockCompleteCb;
-        bop->cookie = msg;
-        bp_.ops->queue(bp_.ctx, bop);
+    block_op_t* bop = (block_op_t*) malloc(block_op_size_);
+    if (bop == nullptr) {
+        BlockComplete(msg, ZX_ERR_NO_MEMORY);
+        return;
     }
+    bop->command = (msg->opcode == BLOCKIO_READ) ? BLOCK_OP_READ : BLOCK_OP_WRITE;
+    bop->rw.length = (uint32_t) length;
+    bop->rw.vmo = vmo;
+    bop->rw.offset_dev = dev_offset;
+    bop->rw.offset_vmo = vmo_offset;
+    bop->rw.pages = NULL;
+    bop->completion_cb = BlockCompleteCb;
+    bop->cookie = msg;
+    bp_.ops->queue(bp_.ctx, bop);
 }
 
 BlockTransaction::BlockTransaction(zx_handle_t fifo, txnid_t txnid) :
@@ -119,6 +96,7 @@ zx_status_t BlockTransaction::Enqueue(bool do_respond, block_msg_t** msg_out) {
     fbl::AutoLock lock(&lock_);
     if (flags_ & kTxnFlagRespond) {
         // Can't get more than one response for a txn
+        response_.status = ZX_ERR_IO;
         goto fail;
     } else if (ctr_ == MAX_TXN_MESSAGES - 1) {
         // This is the last message! We expect TXN_END, and will append it
@@ -127,23 +105,55 @@ zx_status_t BlockTransaction::Enqueue(bool do_respond, block_msg_t** msg_out) {
         // clear the current block transaction.
         do_respond = true;
     }
-    ZX_DEBUG_ASSERT(ctr_ < MAX_TXN_MESSAGES); // Avoid overflowing msgs
-    if (ctr_ == 0) {
-        msgs_[ctr_].flags = IOTXN_SYNC_BEFORE;
-    } else if (do_respond) {
-        msgs_[ctr_].flags = IOTXN_SYNC_AFTER;
-    } else {
-        msgs_[ctr_].flags = 0;
+
+    if (response_.status != ZX_OK) {
+        // This operation already failed; don't bother enqueueing it.
+        goto fail;
     }
+    ZX_DEBUG_ASSERT(ctr_ < MAX_TXN_MESSAGES); // Avoid overflowing msgs
+    msgs_[ctr_].flags = 0;
     msgs_[ctr_].sub_txns = 1;
     *msg_out = &msgs_[ctr_++];
-    flags_ |= do_respond ? kTxnFlagRespond : 0;
+    if (do_respond) {
+        SetResponseReadyLocked();
+    }
     return ZX_OK;
 fail:
     if (do_respond) {
-        OutOfBandErrorRespond(zx::unowned_fifo::wrap(fifo_), ZX_ERR_IO, response_.txnid);
+        SetResponseReadyLocked();
     }
     return ZX_ERR_IO;
+}
+
+void BlockTransaction::SetResponse(zx_status_t status, bool ready_to_send) {
+    fbl::AutoLock lock(&lock_);
+
+    if (response_.status == ZX_OK) {
+        response_.status = status;
+    }
+    if (ready_to_send) {
+        SetResponseReadyLocked();
+    }
+}
+
+void BlockTransaction::SetResponseReadyLocked() {
+    flags_ |= kTxnFlagRespond;
+    if (response_.count == ctr_) {
+        RespondLocked();
+    }
+}
+
+void BlockTransaction::RespondLocked() {
+    uint32_t actual;
+    zx_status_t status = zx_fifo_write(fifo_, &response_,
+                                       sizeof(block_fifo_response_t), &actual);
+    if (status != ZX_OK) {
+        fprintf(stderr, "Block Server I/O error: Could not write response\n");
+    }
+    response_.count = 0;
+    response_.status = ZX_OK;
+    ctr_ = 0;
+    flags_ &= ~kTxnFlagRespond;
 }
 
 void BlockTransaction::Complete(block_msg_t* msg, zx_status_t status) {
@@ -166,18 +176,7 @@ void BlockTransaction::Complete(block_msg_t* msg, zx_status_t status) {
     ZX_DEBUG_ASSERT(response_.count <= ctr_);
 
     if ((flags_ & kTxnFlagRespond) && (response_.count == ctr_)) {
-        // Don't block the block device. Respond if we can (and in the absence
-        // of an I/O error or closed remote, this should just work).
-        uint32_t actual;
-        zx_status_t status = zx_fifo_write(fifo_, &response_,
-                                           sizeof(block_fifo_response_t), &actual);
-        if (status != ZX_OK) {
-            fprintf(stderr, "Block Server I/O error: Could not write response\n");
-        }
-        response_.count = 0;
-        response_.status = ZX_OK;
-        ctr_ = 0;
-        flags_ &= ~kTxnFlagRespond;
+        RespondLocked();
     }
     msg->txn.reset();
     msg->iobuf.reset();
@@ -206,7 +205,7 @@ zx_status_t BlockServer::Read(block_fifo_request_t* requests, uint32_t* count) {
         if (status == ZX_ERR_SHOULD_WAIT) {
             zx_signals_t waitfor = ZX_FIFO_READABLE | ZX_FIFO_PEER_CLOSED | kSignalFifoTerminate;
             zx_signals_t observed;
-            if ((status = fifo_.wait_one(waitfor, ZX_TIME_INFINITE, &observed)) != ZX_OK) {
+            if ((status = fifo_.wait_one(waitfor, zx::time::infinite(), &observed)) != ZX_OK) {
                 return status;
             }
             if ((observed & ZX_FIFO_PEER_CLOSED) || (observed & kSignalFifoTerminate)) {
@@ -319,43 +318,28 @@ zx_status_t BlockServer::Serve() {
             vmoid_t vmoid = requests[i].vmoid;
 
             fbl::AutoLock server_lock(&server_lock_);
-            auto iobuf = tree_.find(vmoid);
-            if (!iobuf.IsValid()) {
-                // Operation which is not accessing a valid vmo
-                if (wants_reply) {
-                    OutOfBandErrorRespond(fifo_, ZX_ERR_IO, txnid);
-                }
-                continue;
-            }
             if (txnid >= MAX_TXN_COUNT || txns_[txnid] == nullptr) {
                 // Operation which is not accessing a valid txn
                 if (wants_reply) {
-                    OutOfBandErrorRespond(fifo_, ZX_ERR_IO, txnid);
+                    OutOfBandRespond(fifo_, ZX_ERR_IO, txnid);
                 }
+                continue;
+            }
+
+            auto iobuf = tree_.find(vmoid);
+            if (!iobuf.IsValid()) {
+                // Operation which is not accessing a valid vmo
+                txns_[txnid]->SetResponse(ZX_ERR_IO, wants_reply);
                 continue;
             }
 
             switch (requests[i].opcode & BLOCKIO_OP_MASK) {
             case BLOCKIO_READ:
             case BLOCKIO_WRITE: {
-                if (requests[i].length > fbl::numeric_limits<uint32_t>::max()) {
-                    // Operation which is too large
-                    if (wants_reply) {
-                        OutOfBandErrorRespond(fifo_, ZX_ERR_INVALID_ARGS, txnid);
-                    }
-                    continue;
-                }
-
-                // Transaction bytes values must be in multiples of block size
-                // Transaction transfer length must fit in a uint16 n+1 field
-                size_t bsmask = info_.block_size - 1;
-                if ((requests[i].length & bsmask) ||
-                    (requests[i].dev_offset & bsmask) ||
-                    (requests[i].vmo_offset & bsmask) ||
-                    ((requests[i].length / info_.block_size) < 1)) {
-                    if (wants_reply) {
-                        OutOfBandErrorRespond(fifo_, ZX_ERR_INVALID_ARGS, txnid);
-                    }
+                if ((requests[i].length < 1) ||
+                    (requests[i].length > fbl::numeric_limits<uint32_t>::max())) {
+                    // Operation which is too small or too large
+                    txns_[txnid]->SetResponse(ZX_ERR_INVALID_ARGS, wants_reply);
                     continue;
                 }
 
@@ -372,7 +356,9 @@ zx_status_t BlockServer::Serve() {
                 // Hack to ensure that the vmo is valid.
                 // In the future, this code will be responsible for pinning VMO pages,
                 // and the completion will be responsible for un-pinning those same pages.
-                status = iobuf->ValidateVmoHack(requests[i].length, requests[i].vmo_offset);
+                size_t bsz = info_.block_size;
+                status = iobuf->ValidateVmoHack(bsz * requests[i].length,
+                                                bsz * requests[i].vmo_offset);
                 if (status != ZX_OK) {
                     BlockComplete(msg, status);
                     break;
@@ -380,7 +366,7 @@ zx_status_t BlockServer::Serve() {
 
                 msg->opcode = requests[i].opcode & BLOCKIO_OP_MASK;
 
-                const uint64_t max_xfer = info_.max_transfer_size;
+                const uint64_t max_xfer = info_.max_transfer_size / bsz;
                 if (max_xfer != 0 && max_xfer < requests[i].length) {
                     uint64_t len_remaining = requests[i].length;
                     uint64_t vmo_offset = requests[i].vmo_offset;
@@ -393,10 +379,6 @@ zx_status_t BlockServer::Serve() {
                         len_remaining -= length;
 
                         uint32_t flags = msg->flags;
-                        // Only allow IOTXN_SYNC_AFTER to be set on the last sub-txn.
-                        flags &= ~(i == sub_txns - 1 ? 0 : IOTXN_SYNC_AFTER);
-                        // Only allow IOTXN_SYNC_BEFORE to be set on the first sub-txn.
-                        flags &= ~(i == 0 ? 0 : IOTXN_SYNC_BEFORE);
                         Queue(flags, iobuf->vmo(), length,
                               vmo_offset, dev_offset, msg);
                         vmo_offset += length;
@@ -416,10 +398,10 @@ zx_status_t BlockServer::Serve() {
                 break;
             }
             case BLOCKIO_CLOSE_VMO: {
+                // TODO(smklein): Ensure that "iobuf" is not being used by
+                // any in-flight txns.
                 tree_.erase(*iobuf);
-                if (wants_reply) {
-                    OutOfBandErrorRespond(fifo_, ZX_OK, txnid);
-                }
+                txns_[txnid]->SetResponse(ZX_OK, wants_reply);
                 break;
             }
             default: {

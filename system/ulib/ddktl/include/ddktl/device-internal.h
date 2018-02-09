@@ -207,19 +207,6 @@ constexpr void CheckWritable() {
                   "'zx_status_t DdkWrite(const void*, size_t, zx_off_t, size_t*)'.");
 }
 
-DECLARE_HAS_MEMBER_FN(has_ddk_iotxn_queue, DdkIotxnQueue);
-
-template <typename D>
-constexpr void CheckIotxnQueueable() {
-    static_assert(has_ddk_iotxn_queue<D>::value,
-                  "IotxnQueueable classes must implement DdkIotxnQueue");
-    static_assert(fbl::is_base_of<base_device, D>::value,
-                  "IotxnQueueable classes must be derived from ddk::Device<...>.");
-    static_assert(fbl::is_same<decltype(&D::DdkIotxnQueue), void (D::*)(iotxn_t*)>::value,
-                  "DdkIotxnQueue must be a public non-static member function with signature "
-                  "'void DdkIotxnQueue(iotxn_t*)'.");
-}
-
 DECLARE_HAS_MEMBER_FN(has_ddk_get_size, DdkGetSize);
 
 template <typename D>

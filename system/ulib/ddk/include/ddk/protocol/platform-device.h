@@ -4,12 +4,27 @@
 
 #pragma once
 
+#include <ddk/driver.h>
 #include <zircon/compiler.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/types.h>
 
+#include <limits.h>
+
 __BEGIN_CDECLS;
+
+typedef struct {
+    uint32_t flags;
+    uint32_t vid;
+    uint32_t pid;
+    uint32_t did;
+    uint32_t mmio_count;
+    uint32_t irq_count;
+    uint32_t gpio_count;
+    uint32_t i2c_channel_count;
+    uint32_t reserved[8];
+} pdev_device_info_t;
 
 typedef struct {
     zx_status_t (*map_mmio)(void* ctx, uint32_t index, uint32_t cache_policy, void** out_vaddr,
@@ -19,6 +34,7 @@ typedef struct {
                                     zx_handle_t* out_handle);
     zx_status_t (*map_contig_vmo)(void* ctx, size_t size, uint32_t align_log2, uint32_t map_flags,
                                   void** out_vaddr, zx_paddr_t* out_paddr, zx_handle_t* out_handle);
+    zx_status_t (*get_device_info)(void* ctx, pdev_device_info_t* out_info);
 } platform_device_protocol_ops_t;
 
 typedef struct {
@@ -54,6 +70,11 @@ static inline zx_status_t pdev_map_contig_vmo(platform_device_protocol_t* pdev, 
                                      out_handle);
 }
 
+static inline zx_status_t pdev_get_device_info(platform_device_protocol_t* pdev,
+                                               pdev_device_info_t* out_info) {
+    return pdev->ops->get_device_info(pdev->ctx, out_info);
+}
+
 // MMIO and contiguous VMO mapping helpers
 
 typedef struct {
@@ -71,8 +92,12 @@ static inline zx_status_t pdev_map_mmio_buffer(platform_device_protocol_t* pdev,
 static inline zx_status_t pdev_map_contig_buffer(platform_device_protocol_t* pdev, size_t size,
                                                  uint32_t align_log2, uint32_t map_flags,
                                                  pdev_vmo_buffer_t* buffer) {
-    return pdev_map_contig_vmo(pdev, size, align_log2, map_flags, &buffer->vaddr, &buffer->paddr,
-                               &buffer->handle);
+    zx_status_t status = pdev_map_contig_vmo(pdev, size, align_log2, map_flags, &buffer->vaddr,
+                                             &buffer->paddr, &buffer->handle);
+    if (status == ZX_OK) {
+        status = zx_vmo_get_size(buffer->handle, &buffer->size);
+    }
+    return status;
 }
 
 static inline zx_status_t pdev_vmo_buffer_cache_flush(pdev_vmo_buffer_t* buffer, zx_off_t offset,
@@ -88,7 +113,10 @@ static inline zx_status_t pdev_vmo_buffer_cache_flush_invalidate(pdev_vmo_buffer
 
 static inline void pdev_vmo_buffer_release(pdev_vmo_buffer_t* buffer) {
     if (buffer->vaddr) {
-        zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)buffer->vaddr, buffer->size);
+        uintptr_t vaddr = ROUNDDOWN((uintptr_t)buffer->vaddr, PAGE_SIZE);
+        size_t size;
+        zx_vmo_get_size(buffer->handle, &size);
+        zx_vmar_unmap(zx_vmar_root_self(), vaddr, size);
     }
     zx_handle_close(buffer->handle);
 }

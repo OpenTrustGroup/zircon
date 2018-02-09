@@ -6,10 +6,10 @@
 
 #include <zircon/syscalls.h>
 
-#include <async/loop.h>
-#include <async/receiver.h>
-#include <async/task.h>
-#include <async/wait.h>
+#include <async/cpp/loop.h>
+#include <async/cpp/receiver.h>
+#include <async/cpp/task.h>
+#include <async/cpp/wait.h>
 
 #include <zx/event.h>
 #include <fbl/atomic.h>
@@ -21,7 +21,7 @@
 namespace {
 
 inline zx_time_t now() {
-    return zx_time_get(ZX_CLOCK_MONOTONIC);
+    return zx_clock_get(ZX_CLOCK_MONOTONIC);
 }
 
 class TestWait {

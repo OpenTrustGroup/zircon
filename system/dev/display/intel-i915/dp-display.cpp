@@ -103,37 +103,90 @@ const ddi_buf_trans_entry dp_ddi_buf_trans_kbl_u[9] = {
     { 0x000000c0, 0x80005012 },
 };
 
+const ddi_buf_trans_entry edp_ddi_buf_trans_skl_hs[10] = {
+    { 0x000000a8, 0x00000018 },
+    { 0x000000a9, 0x00004013 },
+    { 0x000000a2, 0x00007011 },
+    { 0x0000009c, 0x00009010 },
+    { 0x000000a9, 0x00000018 },
+    { 0x000000a2, 0x00006013 },
+    { 0x000000a6, 0x00007011 },
+    { 0x000000ab, 0x00000018 },
+    { 0x0000009f, 0x00007013 },
+    { 0x000000df, 0x00000018 },
+};
+
+const ddi_buf_trans_entry edp_ddi_buf_trans_skl_y[10] = {
+    { 0x000000a8, 0x00000018 },
+    { 0x000000ab, 0x00004013 },
+    { 0x000000a4, 0x00007011 },
+    { 0x000000df, 0x00009010 },
+    { 0x000000aa, 0x00000018 },
+    { 0x000000a4, 0x00006013 },
+    { 0x0000009d, 0x00007011 },
+    { 0x000000a0, 0x00000018 },
+    { 0x000000df, 0x00006012 },
+    { 0x0000008a, 0x00000018 },
+};
+
+const ddi_buf_trans_entry edp_ddi_buf_trans_skl_u[10] = {
+    { 0x000000a8, 0x00000018 },
+    { 0x000000a9, 0x00004013 },
+    { 0x000000a2, 0x00007011 },
+    { 0x0000009c, 0x00009010 },
+    { 0x000000a9, 0x00000018 },
+    { 0x000000a2, 0x00006013 },
+    { 0x000000a6, 0x00007011 },
+    { 0x000000ab, 0x00002016 },
+    { 0x0000009f, 0x00005013 },
+    { 0x000000df, 0x00000018 },
+};
+
 void get_dp_ddi_buf_trans_entries(uint16_t device_id, const ddi_buf_trans_entry** entries,
                                   uint8_t* i_boost, unsigned* count) {
     if (is_skl(device_id)) {
         if (is_skl_u(device_id)) {
             *entries = dp_ddi_buf_trans_skl_u;
             *i_boost = 0x1;
-            *count = fbl::count_of(dp_ddi_buf_trans_skl_u);
+            *count = static_cast<unsigned>(fbl::count_of(dp_ddi_buf_trans_skl_u));
         } else if (is_skl_y(device_id)) {
             *entries = dp_ddi_buf_trans_skl_y;
             *i_boost = 0x3;
-            *count = fbl::count_of(dp_ddi_buf_trans_skl_y);
+            *count = static_cast<unsigned>(fbl::count_of(dp_ddi_buf_trans_skl_y));
         } else {
             *entries = dp_ddi_buf_trans_skl_hs;
             *i_boost = 0x1;
-            *count = fbl::count_of(dp_ddi_buf_trans_skl_hs);
+            *count = static_cast<unsigned>(fbl::count_of(dp_ddi_buf_trans_skl_hs));
         }
     } else {
         ZX_DEBUG_ASSERT_MSG(is_kbl(device_id), "Expected kbl device");
         if (is_kbl_u(device_id)) {
             *entries = dp_ddi_buf_trans_kbl_u;
             *i_boost = 0x1;
-            *count = fbl::count_of(dp_ddi_buf_trans_kbl_u);
+            *count = static_cast<unsigned>(fbl::count_of(dp_ddi_buf_trans_kbl_u));
         } else if (is_kbl_y(device_id)) {
             *entries = dp_ddi_buf_trans_kbl_y;
             *i_boost = 0x3;
-            *count = fbl::count_of(dp_ddi_buf_trans_kbl_y);
+            *count = static_cast<unsigned>(fbl::count_of(dp_ddi_buf_trans_kbl_y));
         } else {
             *entries = dp_ddi_buf_trans_kbl_hs;
             *i_boost = 0x3;
-            *count = fbl::count_of(dp_ddi_buf_trans_kbl_hs);
+            *count = static_cast<unsigned>(fbl::count_of(dp_ddi_buf_trans_kbl_hs));
         }
+    }
+}
+
+void get_edp_ddi_buf_trans_entries(uint16_t device_id, const ddi_buf_trans_entry** entries,
+                                   unsigned* count) {
+    if (is_skl_u(device_id) || is_kbl_u(device_id)) {
+        *entries = edp_ddi_buf_trans_skl_u;
+        *count = static_cast<int>(fbl::count_of(edp_ddi_buf_trans_skl_u));
+    } else if (is_skl_y(device_id) || is_kbl_y(device_id)) {
+        *entries = edp_ddi_buf_trans_skl_y;
+        *count = static_cast<int>(fbl::count_of(edp_ddi_buf_trans_skl_y));
+    } else {
+        *entries = edp_ddi_buf_trans_skl_hs;
+        *count = static_cast<int>(fbl::count_of(edp_ddi_buf_trans_skl_hs));
     }
 }
 
@@ -476,23 +529,22 @@ bool DpDisplay::DpcdHandleAdjustRequest(dpcd::TrainingLaneSet* training,
     }
 
     // In the Recommended buffer translation programming for DisplayPort from the intel display
-    // doc, the max voltage swing is 2 and the max (voltage swing + pre-emphasis) is 3. According
-    // to the v1.1a of the DP docs, if v + pe is too large then v should be reduced to the highest
-    // supported value for the pe level (section 3.5.1.3)
+    // doc, the max voltage swing is 2/3 for DP/eDP and the max (voltage swing + pre-emphasis) is
+    // 3. According to the v1.1a of the DP docs, if v + pe is too large then v should be reduced
+    // to the highest supported value for the pe level (section 3.5.1.3)
     static constexpr uint32_t kMaxVPlusPe = 3;
-    // TODO(ZX-1416): If we're eDP, read the VBT to determine if we support low voltage swings
-    static constexpr uint32_t kMaxV = 2;
+    uint8_t max_v = controller()->igd_opregion().IsLowVoltageEdp(ddi()) ? 3 : 2;
     if (v + pe > kMaxVPlusPe) {
         v = static_cast<uint8_t>(kMaxVPlusPe - pe);
     }
-    if (v > kMaxV) {
-        v = kMaxV;
+    if (v > max_v) {
+        v = max_v;
     }
 
     for (unsigned i = 0; i < dp_lane_count_; i++) {
         voltage_change |= (training[i].voltage_swing_set() != v);
         training[i].set_voltage_swing_set(v);
-        training[i].set_max_swing_reached(v == kMaxV);
+        training[i].set_max_swing_reached(v == max_v);
         training[i].set_pre_emphasis_set(pe);
         training[i].set_max_pre_emphasis_set(pe + v == kMaxVPlusPe);
     }
@@ -523,7 +575,7 @@ bool DpDisplay::LinkTrainingSetup() {
     // TODO(ZX-1416): set SET_POWER dpcd field (0x600)
 
     uint8_t max_lc_byte;
-    if (!DpcdRead(dpcd::DPCD_COUNT_SET, &max_lc_byte, 1)) {
+    if (!DpcdRead(dpcd::DPCD_MAX_LANE_COUNT, &max_lc_byte, 1)) {
         zxlogf(ERROR, "Failed to read lane count\n");
         return false;
     }
@@ -540,24 +592,32 @@ bool DpDisplay::LinkTrainingSetup() {
     dp_tp.WriteTo(mmio_space());
 
     // Configure ddi voltage swing
-    // TODO(ZX-1416): Read the VBT to check for low voltage eDP
     // TODO(ZX-1416): Read the VBT to handle unique motherboard configs for kaby lake
     unsigned count;
     uint8_t i_boost;
     const ddi_buf_trans_entry* entries;
-    get_dp_ddi_buf_trans_entries(controller()->device_id(), &entries, &i_boost, &count);
+    if (controller()->igd_opregion().IsLowVoltageEdp(ddi())) {
+        i_boost = 0;
+        get_edp_ddi_buf_trans_entries(controller()->device_id(), &entries, &count);
+    } else {
+        get_dp_ddi_buf_trans_entries(controller()->device_id(), &entries, &i_boost, &count);
+    }
+    uint8_t i_boost_override = controller()->igd_opregion().GetIBoost(ddi());
 
     for (unsigned i = 0; i < count; i++) {
         auto ddi_buf_trans_high = ddi_regs.DdiBufTransHi(i).ReadFrom(mmio_space());
         auto ddi_buf_trans_low = ddi_regs.DdiBufTransLo(i).ReadFrom(mmio_space());
         ddi_buf_trans_high.set_reg_value(entries[i].high_dword);
         ddi_buf_trans_low.set_reg_value(entries[i].low_dword);
+        if (i_boost_override) {
+            ddi_buf_trans_low.set_balance_leg_enable(1);
+        }
         ddi_buf_trans_high.WriteTo(mmio_space());
         ddi_buf_trans_low.WriteTo(mmio_space());
     }
     auto disio_cr_tx_bmu = registers::DisplayIoCtrlRegTxBmu::Get().ReadFrom(mmio_space());
-    disio_cr_tx_bmu.set_disable_balance_leg(0);
-    disio_cr_tx_bmu.tx_balance_leg_select(ddi()).set(i_boost);
+    disio_cr_tx_bmu.set_disable_balance_leg(!i_boost && !i_boost_override);
+    disio_cr_tx_bmu.tx_balance_leg_select(ddi()).set(i_boost_override ? i_boost_override : i_boost);
     disio_cr_tx_bmu.WriteTo(mmio_space());
 
     // Enable and wait for DDI_BUF_CTL
@@ -747,12 +807,14 @@ namespace {
 
 // Convert ratio x/y into the form used by the Link/Data M/N ratio registers.
 void CalculateRatio(uint32_t x, uint32_t y, uint32_t* m_out, uint32_t* n_out) {
-    // The exact denominator (N) value shouldn't matter too much.  Larger
-    // values will tend to represent the ratio more accurately.  The value
-    // must fit into a 24-bit register, so use 1 << 23.
-    const uint32_t kDenominator = 1 << 23;
-    *n_out = kDenominator;
-    *m_out = static_cast<uint32_t>(static_cast<uint64_t>(x) * kDenominator / y);
+    // The exact values of N and M shouldn't matter too much.  N and M can be
+    // up to 24 bits, and larger values will tend to represent the ratio more
+    // accurately. However, large values of N (e.g. 1 << 23) cause some monitors
+    // to inexplicably fail. Pick a relatively arbitrary value for N that works
+    // well in practice.
+    *n_out = 1 << 20;
+    *m_out = static_cast<uint32_t>(static_cast<uint64_t>(x) * *n_out / y);
+
 }
 
 } // namespace
@@ -768,7 +830,8 @@ bool DpDisplay::Init(zx_display_info* info) {
     }
 
     edid::Edid edid(this);
-    if (!edid.Init()) {
+    edid::timing_params_t timing;
+    if (!edid.Init() || !edid.GetPreferredTiming(&timing)) {
         return false;
     }
     zxlogf(TRACE, "Found a displayport monitor\n");
@@ -830,11 +893,9 @@ bool DpDisplay::Init(zx_display_info* info) {
     clock_select.set_trans_clock_select(ddi() + 1);
     clock_select.WriteTo(mmio_space());
 
-    edid::DetailedTimingDescriptor* timing = &edid.preferred_timing();
-
     // Pixel clock rate: The rate at which pixels are sent, in pixels per
     // second (Hz), divided by 10000.
-    uint32_t pixel_clock_rate = timing->pixel_clock_10khz;
+    uint32_t pixel_clock_rate = timing.pixel_freq_10khz;
 
     // This is the rate at which bits are sent on a single DisplayPort
     // lane, in raw bits per second, divided by 10000.
@@ -875,15 +936,15 @@ bool DpDisplay::Init(zx_display_info* info) {
     link_n_reg.WriteTo(mmio_space());
 
     // Configure the rest of the transcoder
-    uint32_t h_active = timing->horizontal_addressable() - 1;
-    uint32_t h_sync_start = h_active + timing->horizontal_front_porch();
-    uint32_t h_sync_end = h_sync_start + timing->horizontal_sync_pulse_width();
-    uint32_t h_total = h_active + timing->horizontal_blanking();
+    uint32_t h_active = timing.horizontal_addressable - 1;
+    uint32_t h_sync_start = h_active + timing.horizontal_front_porch;
+    uint32_t h_sync_end = h_sync_start + timing.horizontal_sync_pulse;
+    uint32_t h_total = h_sync_end + timing.horizontal_back_porch;
 
-    uint32_t v_active = timing->vertical_addressable() - 1;
-    uint32_t v_sync_start = v_active + timing->vertical_front_porch();
-    uint32_t v_sync_end = v_sync_start + timing->vertical_sync_pulse_width();
-    uint32_t v_total = v_active + timing->vertical_blanking();
+    uint32_t v_active = timing.vertical_addressable - 1;
+    uint32_t v_sync_start = v_active + timing.vertical_front_porch;
+    uint32_t v_sync_end = v_sync_start + timing.vertical_sync_pulse;
+    uint32_t v_total = v_sync_end + timing.vertical_back_porch;
 
     auto h_total_reg = trans.HTotal().FromValue(0);
     h_total_reg.set_count_total(h_total);
@@ -918,7 +979,7 @@ bool DpDisplay::Init(zx_display_info* info) {
     ddi_func.set_ddi_select(ddi());
     ddi_func.set_trans_ddi_mode_select(ddi_func.kModeDisplayPortSst);
     ddi_func.set_bits_per_color(ddi_func.k8bbc); // kPixelFormat
-    ddi_func.set_sync_polarity(timing->vsync_polarity() << 1 | timing->hsync_polarity());
+    ddi_func.set_sync_polarity(timing.vertical_sync_polarity << 1 | timing.horizontal_sync_polarity);
     ddi_func.set_port_sync_mode_enable(0);
     ddi_func.set_dp_vc_payload_allocate(0);
     ddi_func.set_dp_port_width_selection(dp_lane_count_ - 1);
@@ -926,7 +987,7 @@ bool DpDisplay::Init(zx_display_info* info) {
 
     auto trans_conf = trans.Conf().FromValue(0);
     trans_conf.set_transcoder_enable(1);
-    trans_conf.set_interlaced_mode(timing->interlaced());
+    trans_conf.set_interlaced_mode(timing.interlaced);
     trans_conf.WriteTo(mmio_space());
 
     // Configure the pipe
@@ -949,8 +1010,8 @@ bool DpDisplay::Init(zx_display_info* info) {
     plane_size.set_height_minus_1(v_active);
     plane_size.WriteTo(mmio_space());
 
-    info->width = timing->horizontal_addressable();
-    info->height = timing->vertical_addressable();
+    info->width = timing.horizontal_addressable;
+    info->height = timing.vertical_addressable;
     info->stride = ROUNDUP(info->width, registers::PlaneSurfaceStride::kLinearStrideChunkSize);
     info->format = kPixelFormat;
     info->pixelsize = ZX_PIXEL_FORMAT_BYTES(info->format);

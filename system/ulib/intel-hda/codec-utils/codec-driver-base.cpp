@@ -42,7 +42,6 @@ zx_protocol_device_t IntelHDACodecDriverBase::CODEC_DEVICE_THUNKS = {
     .release      = [](void* ctx) { DEV(ctx)->DeviceRelease(); },
     .read         = nullptr,
     .write        = nullptr,
-    .iotxn_queue  = nullptr,
     .get_size     = nullptr,
     .ioctl        = nullptr,
     .suspend      = nullptr,

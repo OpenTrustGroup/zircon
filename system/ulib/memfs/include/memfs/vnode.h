@@ -7,7 +7,6 @@
 #include <threads.h>
 
 #include <zircon/compiler.h>
-#include <zircon/thread_annotations.h>
 #include <zircon/types.h>
 #include <fdio/io.h>
 #include <fdio/remoteio.h>
@@ -34,7 +33,7 @@ class Vfs;
 class VnodeMemfs : public fs::Vnode {
 public:
     virtual zx_status_t Setattr(const vnattr_t* a) final;
-    virtual zx_status_t Sync() final;
+    virtual void Sync(SyncCallback closure) final;
     zx_status_t Ioctl(uint32_t op, const void* in_buf, size_t in_len,
                       void* out_buf, size_t out_len, size_t* out_actual) override;
     zx_status_t AttachRemote(fs::MountChannel h) final;
@@ -42,7 +41,7 @@ public:
     // To be more specific: Is this vnode connected into the directory hierarchy?
     // VnodeDirs can be unlinked, and this method will subsequently return false.
     bool IsDirectory() const { return dnode_ != nullptr; }
-    void UpdateModified() { modify_time_ = zx_time_get(ZX_CLOCK_UTC); }
+    void UpdateModified() { modify_time_ = zx_clock_get(ZX_CLOCK_UTC); }
 
     virtual ~VnodeMemfs();
 

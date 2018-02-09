@@ -37,17 +37,17 @@ zero-or-more = ( list-part )* ;
 `file` is the starting symbol.
 
 ```
-file = module-header , using-list , declaration-list ;
+file = library-header , using-list , declaration-list ;
 
-module-header = "module" , compound-identifier ;
+library-header = "library" , compound-identifier , ";" ;
 
 using-list = ( using )* ;
 
-declaration-list = ( declaration )* ;
+declaration-list = ( declaration , ";" )* ;
 
 compound-identifier = IDENTIFIER ( "." , IDENTIFIER )* ;
 
-using = "using" , compound-identifier , ( "as" , IDENTIFIER ) ;
+using = "using" , compound-identifier , ( "as" , IDENTIFIER ) , ";" ;
 
 declaration = const-declaration | enum-declaration | interface-declaration |
               struct-declaration | union-declaration ;
@@ -71,8 +71,8 @@ interface-member = interface-method | const-declaration | enum-declaration ;
 
 interface-method = ordinal , ":" , interface-parameters
 
-interface-parameters = parameter-list ( "->" , parameter-list )
-                     | "event" parameter-list
+interface-parameters = IDENTIFIER , parameter-list , ( "->" , parameter-list )
+                     | "event" , IDENTIFIER , parameter-list
 
 parameter-list = "(" , parameters , ")" ;
 
@@ -119,6 +119,8 @@ integer-type = "int8" | "int16" | "int32" | "int64" |
                "uint8" | "uint16" | "uint32" | "uint64" ;
 
 constant = compound-identifier | literal ;
+
+ordinal = NUMERIC-LITERAL ;
 
 literal = STRING-LITERAL | NUMERIC-LITERAL | TRUE | FALSE | DEFAULT ;
 ```

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,64 +16,35 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/protocol/platform-defs.h>
+#include <hw/reg.h>
+
+#include <soc/aml-s912/s912-hw.h>
 
 #include <zircon/assert.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 
 #include "vim.h"
-#include "vim-hw.h"
 
-// display MMIO for VIM board
-static const pbus_mmio_t vim_display_mmios[] = {
+// DMC MMIO for display driver
+static pbus_mmio_t vim_display_mmios[] = {
     {
-        .base = 0x3d800000,
-        .length = 1920 * 1080 * 2,
+        .base = DMC_REG_BASE,
+        .length = PAGE_SIZE,
     },
 };
 
-// display MMIO for VIM2 board
-static const pbus_mmio_t vim2_display_mmios[] = {
-    {
-        .base = 0xbd851000,
-        .length = 1920 * 1080 * 2,
-    },
-};
-
-static pbus_dev_t display_dev = {
+static const pbus_dev_t display_dev = {
     .name = "display",
     .vid = PDEV_VID_KHADAS,
     .pid = PDEV_PID_VIM,
-    .did = PDEV_PID_VIM_DISPLAY,
+    .did = PDEV_DID_VIM_DISPLAY,
     .mmios = vim_display_mmios,
     .mmio_count = countof(vim_display_mmios),
 };
 
-static zx_status_t vim_bus_get_protocol(void* ctx, uint32_t proto_id, void* out) {
-//    vim_bus_t* bus = ctx;
-
-    switch (proto_id) {
-/*
-    case ZX_PROTOCOL_GPIO:
-        memcpy(out, &bus->gpio.proto, sizeof(bus->gpio.proto));
-        return ZX_OK;
-    case ZX_PROTOCOL_I2C:
-        memcpy(out, &bus->i2c.proto, sizeof(bus->i2c.proto));
-        return ZX_OK;
-*/
-    default:
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-}
-
-static pbus_interface_ops_t vim_bus_ops = {
-    .get_protocol = vim_bus_get_protocol,
-};
-
 static void vim_bus_release(void* ctx) {
     vim_bus_t* bus = ctx;
-
-//    a113_gpio_release(&bus->gpio);
     free(bus);
 }
 
@@ -81,6 +53,34 @@ static zx_protocol_device_t vim_bus_device_protocol = {
     .release = vim_bus_release,
 };
 
+static int vim_start_thread(void* arg) {
+    vim_bus_t* bus = arg;
+    zx_status_t status;
+
+    if ((status = vim_gpio_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_gpio_init failed: %d\n", status);
+        goto fail;
+    }
+    if ((status = vim_i2c_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_i2c_init failed: %d\n", status);
+        goto fail;
+    }
+    if ((status = vim_usb_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_usb_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
+        zxlogf(ERROR, "vim_start_thread could not add display_dev: %d\n", status);
+        goto fail;
+    }
+
+    return ZX_OK;
+fail:
+    zxlogf(ERROR, "vim_start_thread failed, not all devices have been initialized\n");
+    return status;
+}
+
 static zx_status_t vim_bus_bind(void* ctx, zx_device_t* parent) {
     zx_status_t status;
 
@@ -88,22 +88,22 @@ static zx_status_t vim_bus_bind(void* ctx, zx_device_t* parent) {
     if (!bus) {
         return ZX_ERR_NO_MEMORY;
     }
+    bus->parent = parent;
 
     if ((status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &bus->pbus)) != ZX_OK) {
         goto fail;
     }
 
-/*
-    if ((status = a113_gpio_init(&bus->gpio)) != ZX_OK) {
-        zxlogf(ERROR, "a113_gpio_init failed: %d\n", status);
+    const char* board_name = pbus_get_board_name(&bus->pbus);
+    if (!strcmp(board_name, "vim")) {
+        bus->soc_pid = PDEV_PID_AMLOGIC_S905X;
+    } else if (!strcmp(board_name, "vim2")) {
+        bus->soc_pid = PDEV_PID_AMLOGIC_S912;
+    } else {
+        zxlogf(ERROR, "unsupported board %s\n", board_name);
+        status = ZX_ERR_NOT_SUPPORTED;
         goto fail;
     }
-
-    if ((status = a113_i2c_init(&bus->i2c)) != ZX_OK) {
-        zxlogf(ERROR, "a113_i2c_init failed: %d\n", status);
-        goto fail;
-    }
-*/
 
     device_add_args_t args = {
         .version = DEVICE_ADD_ARGS_VERSION,
@@ -118,25 +118,11 @@ static zx_status_t vim_bus_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    pbus_interface_t intf;
-    intf.ops = &vim_bus_ops;
-    intf.ctx = bus;
-    pbus_set_interface(&bus->pbus, &intf);
-
-    if ((status = vim_usb_init(bus)) != ZX_OK) {
-        zxlogf(ERROR, "vim_usb_init failed: %d\n", status);
+    thrd_t t;
+    int thrd_rc = thrd_create_with_name(&t, vim_start_thread, bus, "vim_start_thread");
+    if (thrd_rc != thrd_success) {
+        goto fail;
     }
-
-    // VIM2 board has different framebuffer address
-    if (!strcmp(pbus_get_board_name(&bus->pbus), "vim2")) {
-        display_dev.mmios = vim2_display_mmios;
-    }
-
-    if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "vim_usb_init could not add display_dev: %d\n", status);
-        return status;
-    }
-
     return ZX_OK;
 
 fail:

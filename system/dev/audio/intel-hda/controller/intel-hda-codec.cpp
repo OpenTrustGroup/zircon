@@ -54,7 +54,6 @@ zx_protocol_device_t IntelHDACodec::CODEC_DEVICE_THUNKS = {
     .release      = nullptr,
     .read         = nullptr,
     .write        = nullptr,
-    .iotxn_queue  = nullptr,
     .get_size     = nullptr,
     .ioctl        = [](void* ctx,
                        uint32_t op,

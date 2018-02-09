@@ -9,7 +9,7 @@
 #include <fidl/cpp/builder.h>
 #include <fidl/cpp/message_buffer.h>
 #include <fidl/cpp/message.h>
-#include <fidl/types.h>
+#include <zircon/fidl.h>
 #include <zircon/types.h>
 
 namespace fidl {
@@ -58,6 +58,12 @@ public:
     // The |message| parameter might be modified even if this method returns an
     // error.
     zx_status_t Encode(Message* message_out, const char** error_msg_out);
+
+    // Resets all the data in the |MessageBuffer|.
+    //
+    // The underlying buffer is retained and reused. The next object will be
+    // allocated at the start of the buffer.
+    void Reset();
 
 private:
     const fidl_type_t* type_;

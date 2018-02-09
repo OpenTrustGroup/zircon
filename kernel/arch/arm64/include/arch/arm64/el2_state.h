@@ -26,6 +26,7 @@
 #define HCR_EL2_VI          BIT_64(7)
 #define HCR_EL2_DC          BIT_64(12)
 #define HCR_EL2_TWI         BIT_64(13)
+#define HCR_EL2_TWE         BIT_64(14)
 #define HCR_EL2_TSC         BIT_64(19)
 #define HCR_EL2_TVM         BIT_64(26)
 #define HCR_EL2_RW          BIT_64(31)
@@ -52,20 +53,23 @@
 #define SS_CONTEXTIDR_EL1   (SS_CNTKCTL_EL1 + 8)
 #define SS_CPACR_EL1        (SS_CONTEXTIDR_EL1 + 8)
 #define SS_CSSELR_EL1       (SS_CPACR_EL1 + 8)
-#define SS_ESR_EL1          (SS_CSSELR_EL1 + 8)
+#define SS_ELR_EL1          (SS_CSSELR_EL1 + 8)
+#define SS_ESR_EL1          (SS_ELR_EL1 + 8)
 #define SS_FAR_EL1          (SS_ESR_EL1 + 8)
 #define SS_MAIR_EL1         (SS_FAR_EL1 + 8)
 #define SS_MDSCR_EL1        (SS_MAIR_EL1 + 8)
 #define SS_PAR_EL1          (SS_MDSCR_EL1 + 8)
 #define SS_SCTLR_EL1        (SS_PAR_EL1 + 8)
 #define SS_SP_EL1           (SS_SCTLR_EL1 + 8)
-#define SS_TCR_EL1          (SS_SP_EL1 + 8)
+#define SS_SPSR_EL1         (SS_SP_EL1 + 8)
+#define SS_TCR_EL1          (SS_SPSR_EL1 + 8)
 #define SS_TPIDR_EL1        (SS_TCR_EL1 + 8)
 #define SS_TTBR0_EL1        (SS_TPIDR_EL1 + 8)
 #define SS_TTBR1_EL1        (SS_TTBR0_EL1 + 8)
 #define SS_VBAR_EL1         (SS_TTBR1_EL1 + 8)
 #define SS_ELR_EL2          (SS_VBAR_EL1 + 8)
 #define SS_SPSR_EL2         (SS_ELR_EL2 + 8)
+#define SS_VMPIDR_EL2       (SS_SPSR_EL2 + 8)
 
 #define ES_RESUME           0
 
@@ -74,13 +78,13 @@
 #define GS_NUM_REGS         31
 #define GS_FP_STATE         (GS_X(GS_NUM_REGS) + 8)
 #define GS_SYSTEM_STATE     (GS_FP_STATE + FS_FPCR + 8)
-#define GS_CNTV_CTL_EL0     (GS_SYSTEM_STATE + SS_SPSR_EL2 + 8)
+#define GS_CNTV_CTL_EL0     (GS_SYSTEM_STATE + SS_VMPIDR_EL2 + 8)
 #define GS_CNTV_CVAL_EL0    (GS_CNTV_CTL_EL0 + 8)
 #define GS_ESR_EL2          (GS_CNTV_CVAL_EL0 + 8)
 #define GS_FAR_EL2          (GS_ESR_EL2 + 8)
 #define GS_HPFAR_EL2        (GS_FAR_EL2 + 8)
 
-#define HS_X18              (GS_HPFAR_EL2 + 8)
+#define HS_X18              (GS_HPFAR_EL2 + 16)
 // NOTE(abdulla): This differs from GS_X in that it calculates a value relative
 // to host_state.x, and not relative to El2State.
 #define HS_X(num)           ((num) * 8)
@@ -97,13 +101,12 @@
 typedef uint32_t __ALIGNED(8) algn32_t;
 
 struct FpState {
-    __uint128_t q[FS_NUM_REGS];
+    long double q[FS_NUM_REGS];
     algn32_t fpsr;
     algn32_t fpcr;
 };
 
 struct SystemState {
-    // TODO(abdulla): Re-evaluate what registers are required.
     uint64_t sp_el0;
     uint64_t tpidr_el0;
     uint64_t tpidrro_el0;
@@ -112,6 +115,7 @@ struct SystemState {
     algn32_t contextidr_el1;
     algn32_t cpacr_el1;
     algn32_t csselr_el1;
+    uint64_t elr_el1;
     algn32_t esr_el1;
     uint64_t far_el1;
     uint64_t mair_el1;
@@ -119,6 +123,7 @@ struct SystemState {
     uint64_t par_el1;
     algn32_t sctlr_el1;
     uint64_t sp_el1;
+    algn32_t spsr_el1;
     uint64_t tcr_el1;
     uint64_t tpidr_el1;
     uint64_t ttbr0_el1;
@@ -127,6 +132,7 @@ struct SystemState {
 
     uint64_t elr_el2;
     algn32_t spsr_el2;
+    uint64_t vmpidr_el2;
 };
 
 struct GuestState {
@@ -168,6 +174,7 @@ static_assert(__offsetof(SystemState, cntkctl_el1) == SS_CNTKCTL_EL1, "");
 static_assert(__offsetof(SystemState, contextidr_el1) == SS_CONTEXTIDR_EL1, "");
 static_assert(__offsetof(SystemState, cpacr_el1) == SS_CPACR_EL1, "");
 static_assert(__offsetof(SystemState, csselr_el1) == SS_CSSELR_EL1, "");
+static_assert(__offsetof(SystemState, elr_el1) == SS_ELR_EL1, "");
 static_assert(__offsetof(SystemState, esr_el1) == SS_ESR_EL1, "");
 static_assert(__offsetof(SystemState, far_el1) == SS_FAR_EL1, "");
 static_assert(__offsetof(SystemState, mair_el1) == SS_MAIR_EL1, "");
@@ -175,6 +182,7 @@ static_assert(__offsetof(SystemState, mdscr_el1) == SS_MDSCR_EL1, "");
 static_assert(__offsetof(SystemState, par_el1) == SS_PAR_EL1, "");
 static_assert(__offsetof(SystemState, sctlr_el1) == SS_SCTLR_EL1, "");
 static_assert(__offsetof(SystemState, sp_el1) == SS_SP_EL1, "");
+static_assert(__offsetof(SystemState, spsr_el1) == SS_SPSR_EL1, "");
 static_assert(__offsetof(SystemState, tcr_el1) == SS_TCR_EL1, "");
 static_assert(__offsetof(SystemState, tpidr_el1) == SS_TPIDR_EL1, "");
 static_assert(__offsetof(SystemState, ttbr0_el1) == SS_TTBR0_EL1, "");
@@ -182,12 +190,14 @@ static_assert(__offsetof(SystemState, ttbr1_el1) == SS_TTBR1_EL1, "");
 static_assert(__offsetof(SystemState, vbar_el1) == SS_VBAR_EL1, "");
 static_assert(__offsetof(SystemState, elr_el2) == SS_ELR_EL2, "");
 static_assert(__offsetof(SystemState, spsr_el2) == SS_SPSR_EL2, "");
+static_assert(__offsetof(SystemState, vmpidr_el2) == SS_VMPIDR_EL2, "");
 
 static_assert(__offsetof(El2State, resume) == ES_RESUME, "");
 
 static_assert(__offsetof(El2State, guest_state.x) == GS_X0, "");
 static_assert(__offsetof(El2State, guest_state.x[GS_NUM_REGS - 1]) == GS_X(GS_NUM_REGS - 1), "");
 static_assert(__offsetof(El2State, guest_state.fp_state) == GS_FP_STATE, "");
+static_assert(__offsetof(El2State, guest_state.fp_state.q) == GS_FP_STATE + FS_Q0, "");
 static_assert(__offsetof(El2State, guest_state.system_state) == GS_SYSTEM_STATE, "");
 static_assert(__offsetof(El2State, guest_state.cntv_ctl_el0) == GS_CNTV_CTL_EL0, "");
 static_assert(__offsetof(El2State, guest_state.cntv_cval_el0) == GS_CNTV_CVAL_EL0, "");
@@ -198,6 +208,7 @@ static_assert(__offsetof(El2State, guest_state.hpfar_el2) == GS_HPFAR_EL2, "");
 static_assert(__offsetof(El2State, host_state.x) == HS_X18, "");
 static_assert(__offsetof(El2State, host_state.x[HS_NUM_REGS - 1]) == HS_X18 + HS_X(HS_NUM_REGS - 1), "");
 static_assert(__offsetof(El2State, host_state.fp_state) == HS_FP_STATE, "");
+static_assert(__offsetof(El2State, host_state.fp_state.q) == HS_FP_STATE + FS_Q0, "");
 static_assert(__offsetof(El2State, host_state.system_state) == HS_SYSTEM_STATE, "");
 
 __BEGIN_CDECLS

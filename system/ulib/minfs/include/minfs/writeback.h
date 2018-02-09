@@ -59,8 +59,7 @@ public:
 
     // Identify that a block should be written to disk
     // as a later point in time.
-    void Enqueue(zx_handle_t vmo, uint64_t relative_block, uint64_t absolute_block,
-                 uint64_t nblocks);
+    void Enqueue(zx_handle_t vmo, uint64_t vmo_offset, uint64_t dev_offset, uint64_t nblocks);
     size_t Count() const { return count_; }
     write_request_t* Requests() { return &requests_[0]; }
 
@@ -107,12 +106,13 @@ public:
     // consumed.
     size_t Complete(zx_handle_t vmo, vmoid_t vmoid);
 
-    // Adds a completion to the WritebackWork, such that it will be signalled
+    // Adds a closure to the WritebackWork, such that it will be signalled
     // when the WritebackWork is flushed to disk.
-    // If no completion is set, nothing will get signalled.
+    // If no closure is set, nothing will get signalled.
     //
-    // Only one completion may be set for each WritebackWork unit.
-    void SetCompletion(completion_t* completion);
+    // Only one closure may be set for each WritebackWork unit.
+    using SyncCallback = fs::Vnode::SyncCallback;
+    void SetClosure(SyncCallback closure);
 #else
     void Complete();
 #endif
@@ -124,7 +124,7 @@ public:
     WriteTxn* txn() { return &txn_; }
 private:
 #ifdef __Fuchsia__
-    completion_t* completion_; // Optional.
+    SyncCallback closure_; // Optional.
 #endif
     WriteTxn txn_;
     size_t node_count_;

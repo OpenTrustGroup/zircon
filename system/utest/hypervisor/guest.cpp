@@ -5,12 +5,12 @@
 #include <threads.h>
 
 #include <hypervisor/guest.h>
+#include <unittest/unittest.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/hypervisor.h>
 #include <zircon/syscalls/port.h>
 #include <zircon/types.h>
-#include <unittest/unittest.h>
 
 #include "constants_priv.h"
 
@@ -64,7 +64,7 @@ static bool setup(test_t* test, const char* start, const char* end) {
               ZX_OK);
 
     // Setup the guest.
-    uintptr_t guest_ip = 0;
+    uintptr_t entry = 0;
     uintptr_t phys_addr = test->guest.phys_mem().addr();
 #if __x86_64__
     // PML4 entry pointing to (phys_addr + 0x1000)
@@ -73,17 +73,11 @@ static bool setup(test_t* test, const char* start, const char* end) {
     // PDP entry with 1GB page.
     pte_off = reinterpret_cast<uint64_t*>(phys_addr + PAGE_SIZE);
     *pte_off = X86_PTE_PS | X86_PTE_P | X86_PTE_RW;
-    guest_ip = GUEST_IP;
+    entry = GUEST_ENTRY;
 #endif // __x86_64__
-    memcpy((void*)(phys_addr + guest_ip), start, end - start);
+    memcpy((void*)(phys_addr + entry), start, end - start);
 
-    zx_vcpu_create_args_t args = {
-        guest_ip,
-#if __x86_64__
-        0 /* cr3 */,
-#endif // __x86_64__
-    };
-    status = zx_vcpu_create(test->guest.handle(), 0, &args, &test->vcpu);
+    status = zx_vcpu_create(test->guest.handle(), 0, entry, &test->vcpu);
     test->supported = status != ZX_ERR_NOT_SUPPORTED;
     if (!test->supported) {
         fprintf(stderr, "VCPU creation not supported\n");
@@ -94,7 +88,7 @@ static bool setup(test_t* test, const char* start, const char* end) {
     return true;
 }
 
-static bool setup_interrupt_test(test_t* test, const char* start, const char* end) {
+static bool setup_and_interrupt(test_t* test, const char* start, const char* end) {
     ASSERT_TRUE(setup(test, start, end));
     if (!test->supported) {
         // The hypervisor isn't supported, so don't run the test.
@@ -106,7 +100,8 @@ static bool setup_interrupt_test(test_t* test, const char* start, const char* en
         test_t* test = static_cast<test_t*>(ctx);
         zx_nanosleep(zx_deadline_after(ZX_MSEC(100)));
         return zx_vcpu_interrupt(test->vcpu, 0);
-    }, test);
+    },
+                          test);
     ASSERT_EQ(ret, thrd_success);
 
     return true;
@@ -136,7 +131,7 @@ static bool vcpu_interrupt(void) {
     BEGIN_TEST;
 
     test_t test;
-    ASSERT_TRUE(setup_interrupt_test(&test, vcpu_interrupt_start, vcpu_interrupt_end));
+    ASSERT_TRUE(setup_and_interrupt(&test, vcpu_interrupt_start, vcpu_interrupt_end));
     if (!test.supported) {
         // The hypervisor isn't supported, so don't run the test.
         return true;
@@ -156,7 +151,7 @@ static bool vcpu_hlt(void) {
     BEGIN_TEST;
 
     test_t test;
-    ASSERT_TRUE(setup_interrupt_test(&test, vcpu_hlt_start, vcpu_hlt_end));
+    ASSERT_TRUE(setup_and_interrupt(&test, vcpu_hlt_start, vcpu_hlt_end));
     if (!test.supported) {
         // The hypervisor isn't supported, so don't run the test.
         return true;
@@ -176,7 +171,7 @@ static bool vcpu_wfi(void) {
     BEGIN_TEST;
 
     test_t test;
-    ASSERT_TRUE(setup_interrupt_test(&test, vcpu_wfi_start, vcpu_wfi_end));
+    ASSERT_TRUE(setup(&test, vcpu_wfi_start, vcpu_wfi_end));
     if (!test.supported) {
         // The hypervisor isn't supported, so don't run the test.
         return true;

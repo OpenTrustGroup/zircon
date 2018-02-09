@@ -8,7 +8,6 @@
 #include <zircon/device/device.h>
 #include <zircon/syscalls.h>
 #include <zircon/types.h>
-#include <ddk/iotxn.h>
 #include <zircon/listnode.h>
 
 __BEGIN_CDECLS;
@@ -162,24 +161,6 @@ typedef struct zx_protocol_device {
     zx_status_t (*write)(void* ctx, const void* buf, size_t count,
                          zx_off_t off, size_t* actual);
 
-    //@ ## iotxn_queue
-    // The iotxn_queue hook is the core mechanism for asynchronous IO.  A driver that
-    // implements iotxn_queue should not implement read or write, as iotxn_queue takes
-    // precedence over them.
-    //
-    // The iotxn_queue hook may not block.  It is expected to start the IO operation
-    // and return immediately, having taken ownership of *txn*.
-    //
-    // When the operation succeeds or fails, the completion callback on *txn* must be
-    // called to finish the operation.  If the request is invalid, the completion
-    // callback may be called from within the iotxn_queue hook.  Otherwise it is
-    // usually called from an irq handler or worker thread that observes the success
-    // or failure of the requested IO operation.
-    //
-    // There is no default iotxn_queue implementation.
-    //
-    void (*iotxn_queue)(void* ctx, iotxn_t* txn);
-
     //@ ## get_size
     // If the device is seekable, the get_size hook should return the size of the device.
     //
@@ -213,8 +194,13 @@ typedef struct zx_protocol_device {
     // device that is shadowing is notified by the rxrpc op and
     // should attempt to read and respond to a single message on
     // the provided channel.
+    //
     // Any error return from this method will result in the channel
     // being closed and the remote "shadow" losing its connection.
+    //
+    // This method is called with ZX_HANDLE_INVALID for the channel
+    // when a new client connects -- at which point any state from
+    // the previous client should be torn down.
     zx_status_t (*rxrpc)(void* ctx, zx_handle_t channel);
 } zx_protocol_device_t;
 
@@ -244,10 +230,6 @@ zx_off_t device_get_size(zx_device_t* dev);
 zx_status_t device_ioctl(zx_device_t* dev, uint32_t op,
                          const void* in_buf, size_t in_len,
                          void* out_buf, size_t out_len, size_t* out_actual);
-
-// return ZX_ERR_NOT_SUPPORTED if this device does not support the iotxn_queue op
-// otherwise returns ZX_OK after queuing the iotxn
-zx_status_t device_iotxn_queue(zx_device_t* dev, iotxn_t* txn);
 
 // Device State Change Functions
 //@ #### Device State Bits

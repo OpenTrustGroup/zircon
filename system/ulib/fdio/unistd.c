@@ -27,7 +27,6 @@
 #include <zircon/process.h>
 #include <zircon/processargs.h>
 #include <zircon/syscalls.h>
-#include <zircon/thread_annotations.h>
 
 #include <fdio/debug.h>
 #include <fdio/io.h>
@@ -643,7 +642,7 @@ void __libc_extensions_init(uint32_t handle_count,
 // Clean up during process teardown. This runs after atexit hooks in
 // libc. It continues to hold the fdio lock until process exit, to
 // prevent other threads from racing on file descriptors.
-void __libc_extensions_fini(void) TA_ACQ(&fdio_lock) {
+void __libc_extensions_fini(void) __TA_ACQUIRE(&fdio_lock) {
     mtx_lock(&fdio_lock);
     for (int fd = 0; fd < FDIO_MAX_FD; fd++) {
         fdio_t* io = fdio_fdtab[fd];
@@ -1541,7 +1540,7 @@ static int zx_utimens(fdio_t* io, const struct timespec times[2], int flags) {
 
     // extract modify time
     vn.modify_time = (times == NULL || times[1].tv_nsec == UTIME_NOW)
-        ? zx_time_get(ZX_CLOCK_UTC)
+        ? zx_clock_get(ZX_CLOCK_UTC)
         : ZX_SEC(times[1].tv_sec) + times[1].tv_nsec;
 
     if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {

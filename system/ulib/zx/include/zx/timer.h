@@ -30,13 +30,8 @@ public:
 
     static zx_status_t create(uint32_t options, uint32_t clock_id, timer* result);
 
-    // TODO(abarth): Remove.
-    zx_status_t set(zx_time_t deadline, zx_duration_t slack) const {
-        return zx_timer_set(get(), deadline, slack);
-    }
-
     zx_status_t set(zx::time deadline, zx::duration slack) const {
-        return zx_timer_set(get(), deadline.value(), slack.value());
+        return zx_timer_set(get(), deadline.get(), slack.get());
     }
 
     zx_status_t cancel() const {

@@ -19,6 +19,7 @@ enum {
     PDEV_GET_MMIO = 1,
     PDEV_GET_INTERRUPT,
     PDEV_ALLOC_CONTIG_VMO,
+    PDEV_GET_DEVICE_INFO,
 
     // ZX_PROTOCOL_USB_MODE_SWITCH
     PDEV_UMS_GET_INITIAL_MODE,
@@ -26,6 +27,7 @@ enum {
 
     // ZX_PROTOCOL_GPIO
     PDEV_GPIO_CONFIG,
+    PDEV_GPIO_SET_ALT_FUNCTION,
     PDEV_GPIO_READ,
     PDEV_GPIO_WRITE,
 
@@ -72,7 +74,8 @@ typedef struct {
     union {
         pdev_config_vmo_t contig_vmo;
         usb_mode_t usb_mode;
-        gpio_config_flags_t gpio_flags;
+        uint32_t gpio_flags;
+        uint32_t gpio_alt_function;
         uint8_t gpio_value;
         pdev_i2c_req_t i2c;
     };
@@ -85,5 +88,10 @@ typedef struct {
         usb_mode_t usb_mode;
         uint8_t gpio_value;
         pdev_i2c_resp_t i2c;
+        struct {
+            zx_off_t offset;
+            size_t length;
+        } mmio;
+        pdev_device_info_t info;
     };
 } pdev_resp_t;

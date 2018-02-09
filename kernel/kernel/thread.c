@@ -139,8 +139,6 @@ thread_t* thread_create_etc(
 
     t->entry = entry;
     t->arg = arg;
-    t->base_priority = priority;
-    t->priority_boost = 0;
     t->state = THREAD_INITIAL;
     t->signals = 0;
     t->blocking_wait_queue = NULL;
@@ -152,6 +150,8 @@ thread_t* thread_create_etc(
 
     t->retcode = 0;
     wait_queue_init(&t->retcode_wait_queue);
+
+    sched_init_thread(t, priority);
 
     /* create the stack */
     if (!stack) {
@@ -828,8 +828,8 @@ void thread_reschedule(void) {
 }
 
 /* timer callback to wake up a sleeping thread */
-static enum handler_return thread_sleep_handler(timer_t* timer, zx_time_t now,
-                                                void* arg) TA_NO_THREAD_SAFETY_ANALYSIS {
+static void thread_sleep_handler(timer_t* timer, zx_time_t now,
+                                 void* arg) TA_NO_THREAD_SAFETY_ANALYSIS {
     thread_t* t = (thread_t*)arg;
 
     DEBUG_ASSERT(t->magic == THREAD_MAGIC);
@@ -839,11 +839,11 @@ static enum handler_return thread_sleep_handler(timer_t* timer, zx_time_t now,
      * thread_lock.
      */
     if (timer_trylock_or_cancel(timer, &thread_lock))
-        return INT_NO_RESCHEDULE;
+        return;
 
     if (t->state != THREAD_SLEEPING) {
         spin_unlock(&thread_lock);
-        return INT_NO_RESCHEDULE;
+        return;
     }
 
     t->blocked_status = ZX_OK;
@@ -853,8 +853,6 @@ static enum handler_return thread_sleep_handler(timer_t* timer, zx_time_t now,
         sched_reschedule();
 
     spin_unlock(&thread_lock);
-
-    return INT_NO_RESCHEDULE;
 }
 
 #define MIN_SLEEP_SLACK ZX_USEC(1)
@@ -1196,10 +1194,11 @@ void dump_thread(thread_t* t, bool full_dump) {
 
     if (full_dump) {
         dprintf(INFO, "dump_thread: t %p (%s:%s)\n", t, oname, t->name);
-        dprintf(INFO, "\tstate %s, curr/last cpu %d/%d, cpu_affinity %#x, priority %d:%d, "
+        dprintf(INFO, "\tstate %s, curr/last cpu %d/%d, cpu_affinity %#x, priority %d [%d:%d,%d], "
                       "remaining time slice %" PRIu64 "\n",
-                thread_state_to_str(t->state), (int)t->curr_cpu, (int)t->last_cpu, t->cpu_affinity, t->base_priority,
-                t->priority_boost, t->remaining_time_slice);
+                thread_state_to_str(t->state), (int)t->curr_cpu, (int)t->last_cpu, t->cpu_affinity,
+                t->effec_priority, t->base_priority,
+                t->priority_boost, t->inheirited_priority, t->remaining_time_slice);
         dprintf(INFO, "\truntime_ns %" PRIu64 ", runtime_s %" PRIu64 "\n",
                 runtime, runtime / 1000000000);
         dprintf(INFO, "\tstack %p, stack_size %zu\n", t->stack, t->stack_size);
@@ -1210,15 +1209,16 @@ void dump_thread(thread_t* t, bool full_dump) {
                 (t->flags & THREAD_FLAG_REAL_TIME) ? "Rt" : "",
                 (t->flags & THREAD_FLAG_IDLE) ? "Id" : "",
                 (t->flags & THREAD_FLAG_DEBUG_STACK_BOUNDS_CHECK) ? "Sc" : "");
-        dprintf(INFO, "\twait queue %p, blocked_status %d, interruptable %d\n",
-                t->blocking_wait_queue, t->blocked_status, t->interruptable);
+        dprintf(INFO, "\twait queue %p, blocked_status %d, interruptable %d, mutexes held %d\n",
+                t->blocking_wait_queue, t->blocked_status, t->interruptable, t->mutexes_held);
         dprintf(INFO, "\taspace %p\n", t->aspace);
         dprintf(INFO, "\tuser_thread %p, pid %" PRIu64 ", tid %" PRIu64 "\n",
                 t->user_thread, t->user_pid, t->user_tid);
         arch_dump_thread(t);
     } else {
-        printf("thr %p st %4s pri %2d:%d pid %" PRIu64 " tid %" PRIu64 " (%s:%s)\n",
-               t, thread_state_to_str(t->state), t->base_priority, t->priority_boost, t->user_pid,
+        printf("thr %p st %4s m %d pri %2d [%d:%d,%d] pid %" PRIu64 " tid %" PRIu64 " (%s:%s)\n",
+               t, thread_state_to_str(t->state), t->mutexes_held, t->effec_priority, t->base_priority,
+               t->priority_boost, t->inheirited_priority, t->user_pid,
                t->user_tid, oname, t->name);
     }
 }

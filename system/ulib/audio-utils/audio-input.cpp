@@ -65,7 +65,7 @@ zx_status_t AudioInput::Record(AudioSink& sink, float duration_seconds) {
 
     zx_time_t duration_nsec = static_cast<zx_time_t>(ZX_SEC(1)
                             * static_cast<double>(duration_seconds));
-    zx_time_t stop_time = zx_time_get(ZX_CLOCK_MONOTONIC) + duration_nsec;
+    zx_time_t stop_time = zx_clock_get(ZX_CLOCK_MONOTONIC) + duration_nsec;
     printf("Recording for %.1f seconds\n", duration_seconds);
 
     res = StartRingBuffer();
@@ -80,7 +80,7 @@ zx_status_t AudioInput::Record(AudioSink& sink, float duration_seconds) {
         zx_signals_t sigs;
 
         res = rb_ch_.wait_one(ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED,
-                              stop_time, &sigs);
+                              zx::time(stop_time), &sigs);
 
         // If we get a timeout error, we have hit our stop time.
         if (res == ZX_ERR_TIMED_OUT) break;

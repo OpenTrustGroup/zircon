@@ -95,7 +95,7 @@
 
 ## Time
 + [nanosleep](syscalls/nanosleep.md) - sleep for some number of nanoseconds
-+ [time_get](syscalls/time_get.md) - read a system clock
++ [clock_get](syscalls/clock_get.md) - read a system clock
 + [ticks_get](syscalls/ticks_get.md) - read high-precision timer ticks
 + [ticks_per_second](syscalls/ticks_per_second.md) - read the number of high-precision timer ticks in a second
 
@@ -116,6 +116,7 @@
 + [vcpu_write_state](syscalls/vcpu_write_state.md) - write state to a virtual cpu
 
 ## Global system information
++ [system_get_features](syscalls/system_get_features.md) - get hardware-specific features
 + [system_get_num_cpus](syscalls/system_get_num_cpus.md) - get number of CPUs
 + [system_get_physmem](syscalls/system_get_physmem.md) - get physical memory size
 + [system_get_version](syscalls/system_get_version.md) - get version string

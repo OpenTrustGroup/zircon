@@ -28,6 +28,15 @@ struct vdso_constants {
     // of the booted system.
     uint32_t max_num_cpus;
 
+    // Bit map indicating features.  For specific feature bits, see
+    // zircon/features.h.
+    // TODO(ZX-458): This struct may need to grow over time as new features
+    // are added and/or supported.  A mask may be needed to indicate which
+    // bits are valid.
+    struct {
+        uint32_t cpu;
+    } features;
+
     // Number of bytes in a data cache line.
     uint32_t dcache_line_size;
 

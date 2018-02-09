@@ -4,6 +4,8 @@
 
 #include "ethernet.h"
 
+#include <assert.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -75,7 +77,6 @@ zx_protocol_device_t kDeviceOps = {
     virtio_net_release,
     nullptr, // read
     nullptr, // write
-    nullptr, // iotxn_queue
     nullptr, // get_size
     nullptr, // ioctl
     nullptr, // suspend

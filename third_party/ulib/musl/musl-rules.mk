@@ -605,7 +605,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/process/posix_spawnattr_setsigmask.c \
     $(LOCAL_DIR)/src/process/posix_spawnp.c \
     $(LOCAL_DIR)/src/process/system.c \
-    $(LOCAL_DIR)/src/process/vfork.c \
     $(LOCAL_DIR)/src/process/wait.c \
     $(LOCAL_DIR)/src/process/waitid.c \
     $(LOCAL_DIR)/src/process/waitpid.c \
@@ -1080,10 +1079,23 @@ MODULE := system/ulib/c
 MODULE_TYPE := userlib
 MODULE_COMPILEFLAGS := $(LOCAL_COMPILEFLAGS)
 MODULE_CFLAGS := $(LOCAL_CFLAGS)
+MODULE_SRCDEPS := $(LOCAL_DIR)/exported.map
+MODULE_LDFLAGS := --version-script=$(LOCAL_DIR)/exported.map
+
+# Extra symbols for ASAN builds which shouldn't be included
+# in normal builds.
+ifeq ($(call TOBOOL,$(USE_ASAN)),true)
+  MODULE_LDFLAGS += --version-script=$(LOCAL_DIR)/sanitizers/asan.map
+  MODULE_SRCDEPS += $(LOCAL_DIR)/sanitizers/asan.map
+endif
+
+MODULE_LDFLAGS += --no-undefined-version
 MODULE_SRCS := $(LOCAL_SRCS)
 
 MODULE_LIBS := system/ulib/zircon
-MODULE_STATIC_LIBS := system/ulib/runtime
+MODULE_STATIC_LIBS := \
+    system/ulib/ldmsg \
+    system/ulib/runtime \
 
 # At link time and in DT_SONAME, musl is known as libc.so.  But the
 # (only) place it needs to be installed at runtime is where the

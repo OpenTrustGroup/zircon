@@ -5,18 +5,19 @@
 #pragma once
 
 #include <ddk/io-buffer.h>
+#include <ddk/protocol/gpio.h>
+#include <ddk/protocol/i2c.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/usb-mode-switch.h>
 #include <soc/aml-a113/a113-clocks.h>
-#include <soc/aml-a113/a113-gpio.h>
-#include <soc/aml-common/aml-i2c.h>
 
 #include <threads.h>
 
 typedef struct {
     platform_bus_protocol_t pbus;
-    a113_gpio_t gpio;
-    aml_i2c_t i2c;
+    zx_device_t* parent;
+    gpio_protocol_t gpio;
+    i2c_protocol_t i2c;
     usb_mode_switch_protocol_t usb_mode_switch;
     io_buffer_t usb_phy;
     zx_handle_t usb_phy_irq_handle;
@@ -26,6 +27,12 @@ typedef struct {
 
 // gauss-audio.c
 zx_status_t gauss_audio_init(gauss_bus_t* bus);
+
+// gauss-gpio.c
+zx_status_t gauss_gpio_init(gauss_bus_t* bus);
+
+// gauss-i2c.c
+zx_status_t gauss_i2c_init(gauss_bus_t* bus);
 
 // gauss-usb.c
 zx_status_t gauss_usb_init(gauss_bus_t* bus);

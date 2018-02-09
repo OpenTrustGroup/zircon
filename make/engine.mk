@@ -112,7 +112,7 @@ endif
 endif
 
 BUILDDIR := $(BUILDROOT)/build-$(PROJECT)$(BUILDDIR_SUFFIX)
-GENERATED_INCLUDES:=$(BUILDDIR)/gen/include
+GENERATED_INCLUDES:=$(BUILDDIR)/gen/global/include
 OUTLKBIN := $(BUILDDIR)/$(LKNAME).bin
 OUTLKELF := $(BUILDDIR)/$(LKNAME).elf
 GLOBAL_CONFIG_HEADER := $(BUILDDIR)/config-global.h
@@ -137,14 +137,9 @@ GLOBAL_COMPILEFLAGS += -fno-common
 # kernel/include/lib/counters.h and kernel.ld depend on -fdata-sections.
 GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
 ifeq ($(call TOBOOL,$(USE_CLANG)),true)
-GLOBAL_COMPILEFLAGS += -fcolor-diagnostics
 GLOBAL_COMPILEFLAGS += -no-canonical-prefixes
 GLOBAL_COMPILEFLAGS += -Wno-address-of-packed-member
 GLOBAL_COMPILEFLAGS += -Wthread-safety
-# TODO(phosek): We need to disable this warning type because the current
-# implementation is too aggressive and is reporting cases that are generally
-# safe. Remove this once https://reviews.llvm.org/D39462 lands.
-GLOBAL_COMPILEFLAGS += -Wno-tautological-constant-compare
 else
 GLOBAL_COMPILEFLAGS += -Wno-nonnull-compare
 endif

@@ -30,7 +30,10 @@
         ZX_OK;                                                                  \
     })
 
-static const uint16_t kSmcPsci = 0;
+static constexpr uint16_t kSmcPsci = 0;
+static constexpr uint32_t kTimerVector = 27;
+
+static_assert(kTimerVector < kNumInterrupts, "Timer vector is out of range");
 
 enum TimerControl : uint64_t {
     ENABLE = 1u << 0,
@@ -68,36 +71,37 @@ static void next_pc(GuestState* guest_state) {
     guest_state->system_state.elr_el2 += 4;
 }
 
-static handler_return deadline_callback(timer_t* timer, zx_time_t now, void* arg) {
-    GichState* gich_state = static_cast<GichState*>(arg);
-    bool signaled;
-    zx_status_t status = gich_state->interrupt_tracker.Signal(false, &signaled);
-    if (status != ZX_OK || !signaled) {
-        return INT_NO_RESCHEDULE;
-    }
-    return INT_RESCHEDULE;
+static void deadline_callback(timer_t* timer, zx_time_t now, void* arg) {
+    auto gich_state = static_cast<GichState*>(arg);
+    __UNUSED zx_status_t status = gich_state->interrupt_tracker.Interrupt(kTimerVector, nullptr);
+    DEBUG_ASSERT(status == ZX_OK);
 }
 
 static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_state,
                                               GichState* gich_state) {
+    next_pc(guest_state);
     const WaitInstruction wi(iss);
     if (wi.is_wfe) {
-        return ZX_ERR_NOT_SUPPORTED;
+        thread_reschedule();
+        return ZX_OK;
     }
-    next_pc(guest_state);
 
-    timer_cancel(&gich_state->timer);
+    bool pending = gich_state->active_interrupts.GetOne(kTimerVector);
     bool enabled = guest_state->cntv_ctl_el0 & TimerControl::ENABLE;
     bool masked = guest_state->cntv_ctl_el0 & TimerControl::IMASK;
-    if (enabled && !masked) {
-        uint64_t cntpct_deadline = guest_state->cntv_cval_el0;
-        zx_time_t deadline = cntpct_to_zx_time(cntpct_deadline);
-        if (deadline <= current_time()) {
-            return ZX_OK;
-        }
-        timer_set_oneshot(&gich_state->timer, deadline, deadline_callback, gich_state);
+    if (pending || !enabled || masked) {
+        thread_yield();
+        return ZX_OK;
     }
 
+    timer_cancel(&gich_state->timer);
+    uint64_t cntpct_deadline = guest_state->cntv_cval_el0;
+    zx_time_t deadline = cntpct_to_zx_time(cntpct_deadline);
+    if (deadline <= current_time()) {
+        return gich_state->interrupt_tracker.Track(kTimerVector);
+    }
+
+    timer_set_oneshot(&gich_state->timer, deadline, deadline_callback, gich_state);
     return gich_state->interrupt_tracker.Wait(nullptr);
 }
 
@@ -125,23 +129,24 @@ static zx_status_t handle_system_instruction(uint32_t iss, uint64_t* hcr, GuestS
     case SystemRegister::MAIR_EL1:
         return SET_SYSREG(mair_el1);
     case SystemRegister::SCTLR_EL1: {
-        if (si.read)
+        if (si.read) {
             return ZX_ERR_NOT_SUPPORTED;
+        }
 
         // From ARM DDI 0487B.b, Section D10.2.89: If the value of HCR_EL2.{DC,
         // TGE} is not {0, 0} then in Non-secure state the PE behaves as if the
         // value of the SCTLR_EL1.M field is 0 for all purposes other than
         // returning the value of a direct read of the field.
         //
-        // We do not set HCR_EL2.TGE, so we only need to modify HCR_EL2.DC.
-        //
-        // TODO(abdulla): Investigate clean of cache and invalidation of TLB.
+        // Therefore if SCTLR_EL1.M is set to 1, we need to set HCR_EL2.DC to 0.
         uint32_t sctlr_el1 = reg & UINT32_MAX;
-        if ((guest_state->system_state.sctlr_el1 ^ sctlr_el1) & SCTLR_ELX_M) {
-            if (sctlr_el1 & SCTLR_ELX_M) {
-                *hcr &= ~HCR_EL2_DC;
-            } else {
-                *hcr |= HCR_EL2_DC;
+        if (sctlr_el1 & SCTLR_ELX_M) {
+            *hcr &= ~HCR_EL2_DC;
+            // Additionally, if the guest has also set SCTLR_EL1.C to 1, we no
+            // longer need to trap writes to virtual memory control registers,
+            // so we can set HCR_EL2.TVM to 0 to improve performance.
+            if (sctlr_el1 & SCTLR_ELX_C) {
+                *hcr &= ~HCR_EL2_TVM;
             }
         }
         guest_state->system_state.sctlr_el1 = sctlr_el1;
@@ -159,6 +164,7 @@ static zx_status_t handle_system_instruction(uint32_t iss, uint64_t* hcr, GuestS
         return SET_SYSREG(ttbr1_el1);
     }
 
+    dprintf(CRITICAL, "Unhandled system register %#x\n", static_cast<uint16_t>(si.sysreg));
     return ZX_ERR_NOT_SUPPORTED;
 }
 

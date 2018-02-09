@@ -248,6 +248,7 @@ public:
 private:
     int fd_;
     txnid_t txnid_;
+    block_info_t info_;
     fifo_client_t* client_;
 };
 
@@ -311,6 +312,7 @@ bool VmoClient::Create(int fd, fbl::RefPtr<VmoClient>* out) {
     ASSERT_TRUE(ac.check());
     zx_handle_t fifo;
     ASSERT_GT(ioctl_block_get_fifos(fd, &fifo), 0, "Failed to get FIFO");
+    ASSERT_GT(ioctl_block_get_info(fd, &vc->info_), 0, "Failed to get block info");
     ASSERT_GT(ioctl_block_alloc_txn(fd, &vc->txnid_), 0, "Failed to alloc txn");
     ASSERT_EQ(block_fifo_create_client(fifo, &vc->client_), ZX_OK);
     vc->fd_ = fd;
@@ -334,9 +336,12 @@ bool VmoClient::CheckWrite(VmoBuf* vbuf, size_t buf_off, size_t dev_off, size_t 
     request.txnid = txnid_;
     request.vmoid = vbuf->vmoid_;
     request.opcode = BLOCKIO_WRITE;
-    request.length = len;
-    request.vmo_offset = buf_off;
-    request.dev_offset = dev_off;
+    ASSERT_EQ(len % info_.block_size, 0);
+    ASSERT_EQ(buf_off % info_.block_size, 0);
+    ASSERT_EQ(dev_off % info_.block_size, 0);
+    request.length = len / info_.block_size;
+    request.vmo_offset = buf_off / info_.block_size;
+    request.dev_offset = dev_off / info_.block_size;
     ASSERT_TRUE(Txn(&request, 1));
     END_HELPER;
 }
@@ -355,9 +360,12 @@ bool VmoClient::CheckRead(VmoBuf* vbuf, size_t buf_off, size_t dev_off, size_t l
     request.txnid = txnid_;
     request.vmoid = vbuf->vmoid_;
     request.opcode = BLOCKIO_READ;
-    request.length = len;
-    request.vmo_offset = buf_off;
-    request.dev_offset = dev_off;
+    ASSERT_EQ(len % info_.block_size, 0);
+    ASSERT_EQ(buf_off % info_.block_size, 0);
+    ASSERT_EQ(dev_off % info_.block_size, 0);
+    request.length = len / info_.block_size;
+    request.vmo_offset = buf_off / info_.block_size;
+    request.dev_offset = dev_off / info_.block_size;
     ASSERT_TRUE(Txn(&request, 1));
 
     // Read from the registered VMO
@@ -1570,7 +1578,6 @@ static bool TestSliceAccessNonContiguousPhysical(void) {
 
             // Test a variety of:
             // Starting device offsets,
-
             size_t bsz = info.block_size;
             for (size_t dev_off = dev_off_start; dev_off <= dev_off_end; dev_off += bsz) {
                 printf("  Testing non-contiguous write/read starting at offset: %zu\n", dev_off);
@@ -1579,8 +1586,21 @@ static bool TestSliceAccessNonContiguousPhysical(void) {
                     printf("    Testing operation of length: %zu\n", len);
                     // and starting VMO offsets
                     for (size_t vmo_off = 0; vmo_off < 3 * bsz; vmo_off += bsz) {
+                        // Try writing & reading the entire section (multiple
+                        // slices) at once.
                         ASSERT_TRUE(vc->CheckWrite(vb.get(), vmo_off, dev_off, len));
                         ASSERT_TRUE(vc->CheckRead(vb.get(), vmo_off, dev_off, len));
+
+                        // Try reading the section one slice at a time.
+                        // The results should be the same.
+                        size_t sub_off = 0;
+                        size_t sub_len = slice_size - (dev_off % slice_size);
+                        while (sub_off < len) {
+                            ASSERT_TRUE(vc->CheckRead(vb.get(), vmo_off + sub_off,
+                                                      dev_off + sub_off, sub_len));
+                            sub_off += sub_len;
+                            sub_len = fbl::min(slice_size, len - sub_off);
+                        }
                     }
                 }
             }

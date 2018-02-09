@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT
 
 #include <arch/hypervisor.h>
-#include <dev/interrupt/arm_gic_regs.h>
+#include <dev/interrupt/arm_gic_hw_interface.h>
 #include <hypervisor/guest_physical_address_space.h>
 #include <vm/pmm.h>
 #include <zircon/syscalls/hypervisor.h>
@@ -15,25 +15,15 @@
 static const vaddr_t kGicvAddress = 0xe82b2000;
 static const size_t kGicvSize = 0x2000;
 
-static zx_status_t get_gicv(paddr_t* gicv_paddr) {
-    // Check for presence of GICv2 virtualisation extensions.
-    //
-    // TODO(abdulla): Support GICv3 virtualisation.
-    if (GICV_OFFSET == 0)
-        return ZX_ERR_NOT_SUPPORTED;
-
-    *gicv_paddr = vaddr_to_paddr(reinterpret_cast<void*>(GICV_ADDRESS));
-    return ZX_OK;
-}
-
 // static
 zx_status_t Guest::Create(fbl::RefPtr<VmObject> physmem, fbl::unique_ptr<Guest>* out) {
+    if (arm64_get_boot_el() < 2)
+        return ZX_ERR_NOT_SUPPORTED;
+
     uint8_t vmid;
     zx_status_t status = alloc_vmid(&vmid);
     if (status != ZX_OK)
         return status;
-    // TODO(abdulla): Invalidate (TLBI + IC) after allocating VMID, in case it
-    // was previously used.
 
     fbl::AllocChecker ac;
     fbl::unique_ptr<Guest> guest(new (&ac) Guest(vmid));
@@ -42,19 +32,30 @@ zx_status_t Guest::Create(fbl::RefPtr<VmObject> physmem, fbl::unique_ptr<Guest>*
         return ZX_ERR_NO_MEMORY;
     }
 
-    status = GuestPhysicalAddressSpace::Create(fbl::move(physmem), &guest->gpas_);
+    fbl::AutoLock lock(&guest->vcpu_mutex_);
+    status = guest->vpid_allocator_.Init();
+    if (status != ZX_OK)
+        return status;
+
+    status = GuestPhysicalAddressSpace::Create(fbl::move(physmem), vmid, &guest->gpas_);
     if (status != ZX_OK)
         return status;
 
     paddr_t gicv_paddr;
-    status = get_gicv(&gicv_paddr);
-    if (status != ZX_OK)
-        return status;
-    status = guest->gpas_->MapInterruptController(kGicvAddress, gicv_paddr, kGicvSize);
-    if (status != ZX_OK)
-        return status;
+    status = gic_get_gicv(&gicv_paddr);
 
-    guest->gpas_->aspace()->arch_aspace().asid_ = vmid;
+    // If status == ZX_ERR_NOT_FOUND, we are running GICv3
+    // There is no need to map GICV to the guest
+    // Handle other cases below
+    if (status == ZX_OK) {
+        status = guest->gpas_->MapInterruptController(kGicvAddress, gicv_paddr, kGicvSize);
+        if (status != ZX_OK) {
+            return status;
+        }
+    } else if (status == ZX_ERR_NOT_SUPPORTED) {
+        return status;
+    }
+
     *out = fbl::move(guest);
     return ZX_OK;
 }
@@ -90,13 +91,12 @@ zx_status_t Guest::SetTrap(uint32_t kind, zx_vaddr_t addr, size_t len,
     return traps_.InsertTrap(kind, addr, len, fbl::move(port), key);
 }
 
-zx_status_t arch_guest_create(fbl::RefPtr<VmObject> physmem, fbl::unique_ptr<Guest>* guest) {
-    if (arm64_get_boot_el() < 2)
-        return ZX_ERR_NOT_SUPPORTED;
-    return Guest::Create(fbl::move(physmem), guest);
+zx_status_t Guest::AllocVpid(uint8_t* vpid) {
+    fbl::AutoLock lock(&vcpu_mutex_);
+    return vpid_allocator_.AllocId(vpid);
 }
 
-zx_status_t arch_guest_set_trap(Guest* guest, uint32_t kind, zx_vaddr_t addr, size_t len,
-                                fbl::RefPtr<PortDispatcher> port, uint64_t key) {
-    return guest->SetTrap(kind, addr, len, port, key);
+zx_status_t Guest::FreeVpid(uint8_t vpid) {
+    fbl::AutoLock lock(&vcpu_mutex_);
+    return vpid_allocator_.FreeId(vpid);
 }

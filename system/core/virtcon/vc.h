@@ -106,7 +106,10 @@ typedef struct vc {
 
 const gfx_font* vc_get_font();
 zx_status_t vc_alloc(vc_t** out, bool special);
+void vc_attach_gfx(vc_t* vc);
 void vc_free(vc_t* vc);
+void vc_flush(vc_t* vc);
+void vc_flush_all(vc_t* vc);
 
 // called to re-draw the status bar after
 // status-worthy vc or global state has changed
@@ -115,6 +118,7 @@ void vc_status_update();
 // used by vc_status_invalidate to draw the status bar
 void vc_status_clear();
 void vc_status_write(int x, unsigned color, const char* text);
+void vc_status_commit();
 
 void vc_render(vc_t* vc);
 void vc_full_repaint(vc_t* vc);
@@ -161,3 +165,4 @@ zx_status_t vc_create(vc_t** out, bool special);
 void vc_destroy(vc_t* vc);
 ssize_t vc_write(vc_t* vc, const void* buf, size_t count, zx_off_t off);
 zx_status_t vc_set_active(int num, vc_t* vc);
+void vc_show_active();

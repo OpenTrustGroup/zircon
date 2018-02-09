@@ -115,7 +115,7 @@ zx_status_t InterruptEventDispatcher::Bind(uint32_t slot, uint32_t vector, uint3
     return ZX_OK;
 }
 
-enum handler_return InterruptEventDispatcher::IrqHandler(void* ctx) {
+void InterruptEventDispatcher::IrqHandler(void* ctx) {
     Interrupt* interrupt = reinterpret_cast<Interrupt*>(ctx);
 
     // only record timestamp if this is the first IRQ since we started waiting
@@ -128,11 +128,7 @@ enum handler_return InterruptEventDispatcher::IrqHandler(void* ctx) {
     if (interrupt->flags & INTERRUPT_MASK_POSTWAIT)
         mask_interrupt(interrupt->vector);
 
-    if (thiz->Signal(SIGNAL_MASK(interrupt->slot), false) > 0) {
-        return INT_RESCHEDULE;
-    } else {
-        return INT_NO_RESCHEDULE;
-    }
+    thiz->Signal(SIGNAL_MASK(interrupt->slot), true);
 }
 
 void InterruptEventDispatcher::MaskInterrupt(uint32_t vector) {

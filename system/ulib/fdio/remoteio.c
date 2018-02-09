@@ -28,7 +28,7 @@
 
 #include "private-remoteio.h"
 
-#define MXDEBUG 0
+#define ZXDEBUG 0
 
 // POLL_MASK and POLL_SHIFT intend to convert the lower five POLL events into
 // ZX_USER_SIGNALs and vice-versa. Other events need to be manually converted to
@@ -120,10 +120,17 @@ zx_status_t zxrio_handle_rpc(zx_handle_t h, zxrio_msg_t* msg, zxrio_cb_t cb, voi
     }
     bool is_close = (ZXRIO_OP(msg->op) == ZXRIO_CLOSE);
 
-    if ((msg->arg = cb(msg, cookie)) == ERR_DISPATCHER_INDIRECT) {
+    msg->arg = cb(msg, cookie);
+    switch (msg->arg) {
+    case ERR_DISPATCHER_INDIRECT:
         // callback is handling the reply itself
         // and took ownership of the reply handle
         return ZX_OK;
+    case ERR_DISPATCHER_ASYNC:
+        // Same as the indirect case, but also identify that
+        // the callback will asynchronously re-trigger the
+        // dispatcher.
+        return ERR_DISPATCHER_ASYNC;
     }
 
     r = zxrio_respond(h, msg);
@@ -186,12 +193,9 @@ zx_status_t zxrio_txn_handoff(zx_handle_t srv, zx_handle_t reply, zxrio_msg_t* m
     zx_status_t r;
     uint32_t dsize = ZXRIO_HDR_SZ + msg->datalen;
     if ((r = zx_channel_write(srv, 0, msg, dsize, msg->handle, msg->hcount)) != ZX_OK) {
-        // nothing to do but inform the caller that we failed
-        struct {
-            zx_status_t status;
-            uint32_t type;
-        } error = { r, 0 };
-        zx_channel_write(reply, 0, &error, sizeof(error), NULL, 0);
+        // The caller may or may not be expecting a response. Either way,
+        // we need to close the channel, since it will not arrive at its
+        // intended destination.
         zx_handle_close(reply);
     }
     return r;

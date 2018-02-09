@@ -47,7 +47,7 @@
 
 # Time
 
-syscall time_get
+syscall clock_get
     (clock_id: uint32_t)
     returns (zx_time_t);
 
@@ -84,6 +84,10 @@ syscall system_get_version vdsocall
 syscall system_get_physmem vdsocall
     ()
     returns (uint64_t);
+
+syscall system_get_features vdsocall const
+    (kind: uint32_t)
+    returns (zx_status_t, out: uint32_t features);
 
 # Abstraction of machine operations
 
@@ -232,11 +236,11 @@ syscall thread_start
 
 syscall thread_read_state
     (handle: zx_handle_t, kind: uint32_t,
-        buffer: any[len] OUT, len: uint32_t)
-    returns (zx_status_t, actual: uint32_t);
+        buffer: any[len] OUT, len: size_t)
+    returns (zx_status_t);
 
 syscall thread_write_state
-    (handle: zx_handle_t, kind: uint32_t, buffer: any[buffer_len] IN, buffer_len: uint32_t)
+    (handle: zx_handle_t, kind: uint32_t, buffer: any[buffer_len] IN, buffer_len: size_t)
     returns (zx_status_t);
 
 # NOTE: thread_set_priority is an experimental syscall.
@@ -597,6 +601,10 @@ syscall pci_config_read
     (handle: zx_handle_t, offset: uint16_t, width: size_t, out_val: uint32_t[1] OUT)
     returns (zx_status_t);
 
+syscall pci_config_write
+    (handle: zx_handle_t, offset: uint16_t, width: size_t, val: uint32_t)
+    returns (zx_status_t);
+
 syscall pci_cfg_pio_rw
     (handle: zx_handle_t, bus: uint8_t, dev: uint8_t, func: uint8_t, offset: uint8_t,
         val: uint32_t[1] INOUT, width: size_t, write: bool)
@@ -605,15 +613,6 @@ syscall pci_cfg_pio_rw
 syscall pci_get_bar
     (handle: zx_handle_t, bar_num: uint32_t, out_bar: zx_pci_bar_t[1] OUT)
     returns (zx_status_t, out_handle: zx_handle_t);
-
-syscall pci_io_write
-    (handle: zx_handle_t, bar_num: uint32_t, offset: uint32_t, len: uint32_t, value: uint32_t)
-    returns (zx_status_t);
-
-syscall pci_io_read
-    (handle: zx_handle_t, bar_num: uint32_t,
-        offset: uint32_t, len: uint32_t)
-    returns (zx_status_t, out_value: uint32_t);
 
 syscall pci_map_interrupt
     (handle: zx_handle_t, which_irq: int32_t)
@@ -659,7 +658,7 @@ syscall guest_set_trap
     returns (zx_status_t);
 
 syscall vcpu_create
-    (guest: zx_handle_t, options: uint32_t, args: zx_vcpu_create_args_t[1] IN)
+    (guest: zx_handle_t, options: uint32_t, entry: zx_vaddr_t)
     returns (zx_status_t, out: zx_handle_t handle_acquire);
 
 syscall vcpu_resume

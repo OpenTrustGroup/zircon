@@ -85,6 +85,9 @@ static uint32_t logflagval(char* flag) {
     if (!strcmp(flag, "error")) {
         return DDK_LOG_ERROR;
     }
+    if (!strcmp(flag, "warn")) {
+        return DDK_LOG_WARN;
+    }
     if (!strcmp(flag, "info")) {
         return DDK_LOG_INFO;
     }
@@ -254,7 +257,7 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
     const char* path = mkdevpath(ios->dev, buffer, sizeof(buffer));
 
     // handle remoteio open messages only
-    if ((msize >= ZXRIO_HDR_SZ) && (ZXRIO_OP(msg.op) == ZXRIO_OPEN)) {
+    if ((msize >= ZXRIO_HDR_SZ) && (msg.op == ZXRIO_OPEN)) {
         if (hcount != 1) {
             r = ZX_ERR_INTERNAL;
             goto fail;
@@ -422,6 +425,7 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
             break;
         }
         log(RPC_SDW, "devhost[%s] connect proxy rpc\n", path);
+        ios->dev->ops->rxrpc(ios->dev->ctx, ZX_HANDLE_INVALID);
         proxy_ios_create(ios->dev, hin[0]);
         return ZX_OK;
 

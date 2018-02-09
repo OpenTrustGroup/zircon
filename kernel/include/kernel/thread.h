@@ -90,13 +90,43 @@ typedef struct thread {
     unsigned int flags;
     unsigned int signals;
 
+    /* Total time in THREAD_RUNNING state.  If the thread is currently in
+     * THREAD_RUNNING state, this excludes the time it has accrued since it
+     * left the scheduler. */
+    zx_duration_t runtime_ns;
+
+    /* priority: in the range of [MIN_PRIORITY, MAX_PRIORITY], from low to high.
+     * base_priority is set at creation time, and can be tuned with thread_set_priority().
+     * priority_boost is a signed value that is moved around within a range by the scheduler.
+     * inheirited_priority is temporarily set to >0 when inheiriting a priority from another
+     * thread blocked on a locking primitive this thread holds. -1 means no inheirit.
+     * effective_priority is MAX(base_priority + priority boost, inheirited_priority) and is
+     * the working priority for run queue decisions.
+     */
+    int effec_priority;
     int base_priority;
     int priority_boost;
+    int inheirited_priority;
 
     /* current cpu the thread is either running on or in the ready queue, undefined otherwise */
     cpu_num_t curr_cpu;
     cpu_num_t last_cpu;      /* last cpu the thread ran on, INVALID_CPU if it's never run */
     cpu_mask_t cpu_affinity; /* mask of cpus that this thread can run on */
+
+    /* if blocked, a pointer to the wait queue */
+    struct wait_queue* blocking_wait_queue;
+
+    /* list of other wait queue heads if we're a head */
+    struct list_node wait_queue_heads_node;
+
+    /* return code if woken up abnormally from suspend, sleep, or block */
+    zx_status_t blocked_status;
+
+    /* are we allowed to be interrupted on the current thing we're blocked/sleeping on */
+    bool interruptable;
+
+    /* number of mutexes we currently hold */
+    int mutexes_held;
 
     /* pointer to the kernel address space this thread is associated with */
     struct vmm_aspace* aspace;
@@ -108,20 +138,6 @@ typedef struct thread {
 
     /* callback for user thread state changes */
     thread_user_callback_t user_callback;
-
-    /* Total time in THREAD_RUNNING state.  If the thread is currently in
-     * THREAD_RUNNING state, this excludes the time it has accrued since it
-     * left the scheduler. */
-    zx_duration_t runtime_ns;
-
-    /* if blocked, a pointer to the wait queue */
-    struct wait_queue* blocking_wait_queue;
-
-    /* return code if woken up abnormally from suspend, sleep, or block */
-    zx_status_t blocked_status;
-
-    /* are we allowed to be interrupted on the current thing we're blocked/sleeping on */
-    bool interruptable;
 
     /* non-NULL if stopped in an exception */
     const struct arch_exception_context* exception_context;

@@ -69,6 +69,16 @@ static zx_status_t kpci_config_read(pci_msg_t* req, kpci_device_t* device, zx_ha
     return pci_rpc_reply(ch, st, NULL, req, &resp);
 }
 
+static zx_status_t kpci_config_write(pci_msg_t* req, kpci_device_t* device, zx_handle_t ch) {
+    pci_msg_t resp = {};
+    zx_status_t st = zx_pci_config_write(device->handle, req->cfg.offset, req->cfg.width,
+                                         req->cfg.value);
+    if (st == ZX_OK) {
+        resp.cfg = req->cfg;
+    }
+    return pci_rpc_reply(ch, st, NULL, req, &resp);
+}
+
 static zx_status_t kpci_get_auxdata(pci_msg_t* req, kpci_device_t* device, zx_handle_t ch) {
     char args[32];
     snprintf(args, sizeof(args), "%s,%02x:%02x:%02x", req->data,
@@ -144,6 +154,7 @@ const rxrpc_cbk_t rxrpc_cbk_tbl[] = {
     [PCI_OP_RESET_DEVICE] = kpci_reset_device,
     [PCI_OP_ENABLE_BUS_MASTER] = kpci_enable_bus_master,
     [PCI_OP_CONFIG_READ] = kpci_config_read,
+    [PCI_OP_CONFIG_WRITE] = kpci_config_write,
     [PCI_OP_GET_BAR] = kpci_get_bar,
     [PCI_OP_QUERY_IRQ_MODE] = kpci_query_irq_mode,
     [PCI_OP_SET_IRQ_MODE] = kpci_set_irq_mode,
@@ -159,6 +170,7 @@ const char* const rxrpc_string_tbl[] = {
     LABEL(PCI_OP_RESET_DEVICE),
     LABEL(PCI_OP_ENABLE_BUS_MASTER),
     LABEL(PCI_OP_CONFIG_READ),
+    LABEL(PCI_OP_CONFIG_WRITE),
     LABEL(PCI_OP_GET_BAR),
     LABEL(PCI_OP_QUERY_IRQ_MODE),
     LABEL(PCI_OP_SET_IRQ_MODE),
@@ -177,6 +189,11 @@ static inline const char* rpc_op_lbl(uint32_t op) {
 }
 
 static zx_status_t kpci_rxrpc(void* ctx, zx_handle_t ch) {
+    if (ch == ZX_HANDLE_INVALID) {
+        // new proxy connection
+        return ZX_OK;
+    }
+
     kpci_device_t* device = ctx;
     const char* name = device_get_name(device->zxdev);
     pci_msg_t req;

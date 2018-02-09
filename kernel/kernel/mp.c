@@ -103,6 +103,9 @@ static void mp_sync_task(void* raw_context) {
  *  mask will be used to determine actual targets.
  *
  * Interrupts must be disabled if calling with MP_IPI_TARGET_ALL_BUT_LOCAL as target
+ *
+ * The callback in |task| will always be called with |arch_in_int_handler()|
+ * set to true.
  */
 void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, void* context) {
     uint num_cpus = arch_max_num_cpus();
@@ -162,7 +165,10 @@ void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, 
     DEBUG_ASSERT(status == ZX_OK);
 
     if (targetting_self) {
+        bool previous_in_int_handler = arch_in_int_handler();
+        arch_set_in_int_handler(true);
         mp_sync_task(&sync_context);
+        arch_set_in_int_handler(previous_in_int_handler);
     }
     smp_mb();
 
@@ -187,7 +193,10 @@ void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, 
             /* Optimistically check if our task list has work without the lock.
              * mp_mbx_generic_irq will take the lock and check again */
             if (!list_is_empty(&mp.ipi_task_list[local_cpu])) {
+                bool previous_in_int_handler = arch_in_int_handler();
+                arch_set_in_int_handler(true);
                 mp_mbx_generic_irq();
+                arch_set_in_int_handler(previous_in_int_handler);
                 continue;
             }
         }
@@ -383,7 +392,7 @@ void mp_set_curr_cpu_active(bool active) {
     }
 }
 
-enum handler_return mp_mbx_generic_irq(void) {
+void mp_mbx_generic_irq(void) {
     DEBUG_ASSERT(arch_ints_disabled());
     const cpu_num_t local_cpu = arch_curr_cpu_num();
 
@@ -400,10 +409,9 @@ enum handler_return mp_mbx_generic_irq(void) {
 
         task->func(task->context);
     }
-    return INT_NO_RESCHEDULE;
 }
 
-enum handler_return mp_mbx_reschedule_irq(void) {
+void mp_mbx_reschedule_irq(void) {
     const cpu_num_t cpu = arch_curr_cpu_num();
 
     LTRACEF("cpu %u\n", cpu);
@@ -412,8 +420,6 @@ enum handler_return mp_mbx_reschedule_irq(void) {
 
     if (mp.active_cpus & cpu_num_to_mask(cpu))
         thread_preempt_set_pending();
-
-    return INT_NO_RESCHEDULE;
 }
 
 __WEAK zx_status_t arch_mp_cpu_hotplug(uint cpu_id) {

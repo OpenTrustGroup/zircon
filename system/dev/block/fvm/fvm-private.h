@@ -31,8 +31,7 @@ class VPartitionManager;
 using ManagerDeviceType = ddk::Device<VPartitionManager, ddk::Ioctlable, ddk::Unbindable>;
 
 class VPartition;
-using PartitionDeviceType = ddk::Device<VPartition, ddk::Ioctlable,
-                                        ddk::IotxnQueueable, ddk::GetSizable, ddk::Unbindable>;
+using PartitionDeviceType = ddk::Device<VPartition, ddk::Ioctlable, ddk::GetSizable, ddk::Unbindable>;
 
 class SliceExtent : public fbl::WAVLTreeContainable<fbl::unique_ptr<SliceExtent>> {
 public:
@@ -97,6 +96,10 @@ public:
     // Automatically handles alternating writes to primary / backup copy of FVM.
     zx_status_t WriteFvmLocked() TA_REQ(lock_);
 
+    // Block Protocol
+    size_t BlockOpSize() const { return block_op_size_; }
+    void Queue(block_op_t* txn) const { bp_.ops->queue(bp_.ctx, txn); }
+
     // Acquire access to a VPart Entry which has already been modified (and
     // will, as a consequence, not be de-allocated underneath us).
     vpart_entry_t* GetAllocatedVPartEntry(size_t index) const TA_NO_THREAD_SAFETY_ANALYSIS {
@@ -147,7 +150,8 @@ public:
     void DdkUnbind();
     void DdkRelease();
 
-    VPartitionManager(zx_device_t* dev, const block_info_t& info);
+    VPartitionManager(zx_device_t* dev, const block_info_t& info, size_t block_op_size,
+                      const block_protocol_t* bp);
     ~VPartitionManager();
     block_info_t info_; // Cached info from parent device
     thrd_t init_;
@@ -184,11 +188,17 @@ private:
         return metadata_size_;
     }
 
+    zx_status_t DoIoLocked(zx_handle_t vmo, size_t off, size_t len, uint32_t command);
+
     fbl::Mutex lock_;
     fbl::unique_ptr<MappedVmo> metadata_ TA_GUARDED(lock_);
     bool first_metadata_is_primary_ TA_GUARDED(lock_);
     size_t metadata_size_;
     size_t slice_size_;
+
+    // Block Protocol
+    const size_t block_op_size_;
+    block_protocol_t bp_;
 };
 
 class VPartition : public PartitionDeviceType, public ddk::BlockProtocol<VPartition> {
@@ -198,10 +208,13 @@ public:
     // Device Protocol
     zx_status_t DdkIoctl(uint32_t op, const void* cmd, size_t cmdlen,
                          void* reply, size_t max, size_t* out_actual);
-    void DdkIotxnQueue(iotxn_t* txn);
     zx_off_t DdkGetSize();
     void DdkUnbind();
     void DdkRelease();
+
+    // Block Protocol
+    void BlockQuery(block_info_t* info_out, size_t* block_op_size_out);
+    void BlockQueue(block_op_t* txn);
 
     auto ExtentBegin() TA_REQ(lock_) {
         return slice_map_.begin();
@@ -242,7 +255,7 @@ public:
     void KillLocked() TA_REQ(lock_) { entry_index_ = 0; }
     bool IsKilledLocked() TA_REQ(lock_) { return entry_index_ == 0; }
 
-    VPartition(VPartitionManager* vpm, size_t entry_index);
+    VPartition(VPartitionManager* vpm, size_t entry_index, size_t block_op_size);
     ~VPartition();
     fbl::Mutex lock_;
 
@@ -267,16 +280,6 @@ private:
 #endif // ifdef __cplusplus
 
 __BEGIN_CDECLS
-
-/////////////////// C++-compatibility definitions (Provided to C++ from C)
-
-// Completions don't exist in C++, thanks to an incompatibility of atomics.
-// This function allows C++ functions to synchronously execute iotxns using
-// C completions.
-//
-// Modifies "completion_cb" and "cookie" fields of txn; doesn't free or
-// allocate any memory.
-void iotxn_synchronous_op(zx_device_t* dev, iotxn_t* txn);
 
 /////////////////// C-compatibility definitions (Provided to C from C++)
 

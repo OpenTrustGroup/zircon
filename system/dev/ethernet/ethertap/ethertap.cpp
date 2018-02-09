@@ -60,7 +60,7 @@ zx_status_t TapCtl::DdkIoctl(uint32_t op, const void* in_buf, size_t in_len, voi
             zxlogf(ERROR, "tapctl: could not add tap device: %d\n", status);
         } else {
             // devmgr owns the memory until release is called
-            tap.release();
+            __UNUSED auto ptr = tap.release();
 
             zx_handle_t* out = reinterpret_cast<zx_handle_t*>(out_buf);
             *out = remote.release();
@@ -137,6 +137,10 @@ zx_status_t TapDevice::EthmacStart(fbl::unique_ptr<ddk::EthmacIfcProxy> proxy) {
 }
 
 zx_status_t TapDevice::EthmacQueueTx(uint32_t options, ethmac_netbuf_t* netbuf) {
+    fbl::AutoLock lock(&lock_);
+    if (dead_) {
+        return ZX_ERR_PEER_CLOSED;
+    }
     uint8_t temp_buf[ETHERTAP_MAX_MTU + sizeof(ethertap_socket_header_t)];
     auto header = reinterpret_cast<ethertap_socket_header*>(temp_buf);
     uint8_t* data = temp_buf + sizeof(ethertap_socket_header_t);
@@ -146,7 +150,6 @@ zx_status_t TapDevice::EthmacQueueTx(uint32_t options, ethmac_netbuf_t* netbuf) 
     header->type = ETHERTAP_MSG_PACKET;
 
     if (unlikely(options_ & ETHERTAP_OPT_TRACE_PACKETS)) {
-        fbl::AutoLock lock(&lock_);
         ethertap_trace("sending %zu bytes\n", length);
         hexdump8_ex(data, length, 0);
     }
@@ -160,7 +163,8 @@ zx_status_t TapDevice::EthmacQueueTx(uint32_t options, ethmac_netbuf_t* netbuf) 
 }
 
 zx_status_t TapDevice::EthmacSetParam(uint32_t param, int32_t value, void* data) {
-    if (!(options_ & ETHERTAP_OPT_REPORT_PARAM)) {
+    fbl::AutoLock lock(&lock_);
+    if (!(options_ & ETHERTAP_OPT_REPORT_PARAM) || dead_) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
@@ -173,6 +177,27 @@ zx_status_t TapDevice::EthmacSetParam(uint32_t param, int32_t value, void* data)
     send_buf.report.param = param;
     send_buf.report.value = value;
     send_buf.report.data_length = 0;
+    switch (param) {
+    case ETHMAC_SETPARAM_MULTICAST_FILTER:
+        if (value == ETHMAC_MULTICAST_FILTER_OVERFLOW) {
+            break;
+        }
+        // Send the final byte of each address, sorted lowest-to-highest.
+        uint32_t i;
+        for (i = 0; i < static_cast<uint32_t>(value) && i < sizeof(send_buf.report.data); i++) {
+            send_buf.report.data[i] = static_cast<uint8_t*>(data)[i * ETH_MAC_SIZE + 5];
+        }
+        send_buf.report.data_length = i;
+        qsort(send_buf.report.data, send_buf.report.data_length, 1,
+              [](const void* ap, const void* bp) {
+                  int a = *static_cast<const uint8_t*>(ap);
+                  int b = *static_cast<const uint8_t*>(bp);
+                  return a < b ? -1 : (a > 1 ? 1 : 0);
+              });
+        break;
+    default:
+        break;
+    }
     zx_status_t status = data_.write(0, &send_buf, sizeof(send_buf), nullptr);
     if (status != ZX_OK) {
         ethertap_trace("error writing SetParam info to socket: %d\n", status);
@@ -191,7 +216,7 @@ int TapDevice::Thread() {
     const zx_signals_t wait = ZX_SOCKET_READABLE | ZX_SOCKET_PEER_CLOSED | ETHERTAP_SIGNAL_ONLINE
         | ETHERTAP_SIGNAL_OFFLINE | TAP_SHUTDOWN;
     while (true) {
-        status = data_.wait_one(wait, ZX_TIME_INFINITE, &pending);
+        status = data_.wait_one(wait, zx::time::infinite(), &pending);
         if (status != ZX_OK) {
             ethertap_trace("error waiting on data: %d\n", status);
             break;
@@ -219,9 +244,12 @@ int TapDevice::Thread() {
             break;
         }
     }
-
-    zxlogf(INFO, "ethertap: device '%s' destroyed\n", name());
-    data_.reset();
+    {
+        fbl::AutoLock lock(&lock_);
+        dead_ = true;
+        zxlogf(INFO, "ethertap: device '%s' destroyed\n", name());
+        data_.reset();
+    }
     DdkRemove();
 
     return static_cast<int>(status);
@@ -300,7 +328,7 @@ extern "C" zx_status_t tapctl_bind(void* ctx, zx_device_t* device, void** cookie
         zxlogf(ERROR, "%s: could not add device: %d\n", __func__, status);
     } else {
         // devmgr owns the memory now
-        dev.release();
+        __UNUSED auto ptr = dev.release();
     }
     return status;
 }

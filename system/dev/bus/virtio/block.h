@@ -12,8 +12,18 @@
 #include "backends/backend.h"
 #include <virtio/block.h>
 #include <zircon/device/block.h>
+#include <ddk/protocol/block.h>
+
+#include <sync/completion.h>
 
 namespace virtio {
+
+struct block_txn_t {
+    block_op_t op;
+    struct vring_desc* desc;
+    size_t index;
+    list_node_t node;
+};
 
 class Ring;
 
@@ -34,14 +44,18 @@ public:
 
 private:
     // DDK driver hooks
-    static void virtio_block_iotxn_queue(void* ctx, iotxn_t* txn);
     static zx_off_t virtio_block_get_size(void* ctx);
     static zx_status_t virtio_block_ioctl(void* ctx, uint32_t op, const void* in_buf, size_t in_len,
                                           void* out_buf, size_t out_len, size_t* out_actual);
 
+    static void virtio_block_query(void* ctx, block_info_t* bi, size_t* bopsz);
+    static void virtio_block_queue(void* ctx, block_op_t* bop);
+
     void GetInfo(block_info_t* info);
 
-    void QueueReadWriteTxn(iotxn_t* txn);
+    zx_status_t QueueTxn(block_txn_t* txn, bool write, size_t bytes,
+                         uint64_t* pages, size_t pagecount, uint16_t* idx);
+    void QueueReadWriteTxn(block_txn_t* txn, bool write);
 
     // the main virtio ring
     Ring vring_ = {this};
@@ -75,8 +89,13 @@ private:
         blk_req_bitmap_ &= ~(1 << i);
     }
 
-    // pending iotxns
-    list_node iotxn_list = LIST_INITIAL_VALUE(iotxn_list);
+    // pending iotxns and waiter state
+    fbl::Mutex txn_lock_;
+    list_node txn_list_ = LIST_INITIAL_VALUE(txn_list_);
+    bool txn_wait_ = false;
+    completion_t txn_signal_;
+
+    block_protocol_ops_t block_ops_ = {};
 };
 
 } // namespace virtio

@@ -6,15 +6,15 @@
 
 #include <stdio.h>
 
-#include <async/loop.h>
-#include <async/task.h>
+#include <async/cpp/loop.h>
+#include <async/cpp/task.h>
 #include <trace-provider/provider.h>
 #include <trace/event.h>
 
 namespace {
 
 zx_time_t now() {
-    return zx_time_get(ZX_CLOCK_MONOTONIC);
+    return zx_clock_get(ZX_CLOCK_MONOTONIC);
 }
 
 } // namespace

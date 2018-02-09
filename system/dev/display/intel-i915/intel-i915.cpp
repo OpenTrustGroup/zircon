@@ -48,7 +48,7 @@
 
 #define FLAGS_BACKLIGHT 1
 
-#define ENABLE_MODESETTING 0
+#define ENABLE_MODESETTING 1
 
 namespace {
 static int irq_handler(void* arg) {
@@ -119,25 +119,25 @@ void Controller::EnableBacklight(bool enable) {
     }
 }
 
-zx_status_t Controller::InitHotplug(pci_protocol_t* pci) {
+zx_status_t Controller::InitHotplug() {
     // Disable interrupts here, we'll re-enable them at the very end of ::Bind
     auto interrupt_ctrl = registers::MasterInterruptControl::Get().ReadFrom(mmio_space_.get());
     interrupt_ctrl.set_enable_mask(0);
     interrupt_ctrl.WriteTo(mmio_space_.get());
 
     uint32_t irq_cnt = 0;
-    zx_status_t status = pci_query_irq_mode(pci, ZX_PCIE_IRQ_MODE_LEGACY, &irq_cnt);
+    zx_status_t status = pci_query_irq_mode(&pci_, ZX_PCIE_IRQ_MODE_LEGACY, &irq_cnt);
     if (status != ZX_OK || !irq_cnt) {
         zxlogf(ERROR, "i915: Failed to find interrupts %d %d\n", status, irq_cnt);
         return ZX_ERR_INTERNAL;
     }
 
-    if ((status = pci_set_irq_mode(pci, ZX_PCIE_IRQ_MODE_LEGACY, 1)) != ZX_OK) {
+    if ((status = pci_set_irq_mode(&pci_, ZX_PCIE_IRQ_MODE_LEGACY, 1)) != ZX_OK) {
         zxlogf(ERROR, "i915: Failed to set irq mode %d\n", status);
         return status;
     }
 
-    if ((status = pci_map_interrupt(pci, 0, &irq_) != ZX_OK)) {
+    if ((status = pci_map_interrupt(&pci_, 0, &irq_) != ZX_OK)) {
         zxlogf(ERROR, "i915: Failed to map interrupt %d\n", status);
         return status;
     }
@@ -205,7 +205,9 @@ void Controller::HandleHotplug(registers::Ddi ddi) {
             return;
         }
 
-        AddDisplay(fbl::move(device));
+        if (AddDisplay(fbl::move(device)) != ZX_OK) {
+            zxlogf(INFO, "Failed to add display %d\n", ddi);
+        }
     }
 }
 
@@ -500,7 +502,7 @@ zx_status_t Controller::InitDisplays() {
             auto disp_device = InitDisplay(registers::kDdis[i]);
             if (disp_device) {
                 if (AddDisplay(fbl::move(disp_device)) != ZX_OK) {
-                    return ZX_ERR_INTERNAL;
+                    zxlogf(INFO, "Failed to add display %d\n", i);
                 }
             }
         }
@@ -557,15 +559,66 @@ void Controller::DdkRelease() {
     delete this;
 }
 
+zx_status_t Controller::DdkSuspend(uint32_t hint) {
+    if ((hint & DEVICE_SUSPEND_REASON_MASK) == DEVICE_SUSPEND_FLAG_MEXEC) {
+        uint32_t format, width, height, stride;
+        if (zx_bootloader_fb_get_info(&format, &width, &height, &stride) != ZX_OK) {
+            return ZX_OK;
+        }
+
+        // The bootloader framebuffer is most likely at the start of the display
+        // controller's bar 2. Try to get that buffer working again across the
+        // mexec by mapping gfx stolen memory to gaddr 0.
+
+        auto bdsm_reg = registers::BaseDsm::Get().FromValue(0);
+        zx_status_t status =
+                pci_config_read32(&pci_, bdsm_reg.kAddr, bdsm_reg.reg_value_ptr());
+        if (status != ZX_OK) {
+            zxlogf(TRACE, "i915: failed to read dsm base\n");
+            return ZX_OK;
+        }
+
+        // The Intel docs say that the first page should be reserved for the gfx
+        // hardware, but a lot of BIOSes seem to ignore that.
+        uintptr_t fb = bdsm_reg.base_phys_addr() << bdsm_reg.base_phys_addr_shift;
+        uint32_t fb_size = stride * height * ZX_PIXEL_FORMAT_BYTES(format);
+
+        gtt_.SetupForMexec(fb, fb_size, registers::PlaneSurface::kTrailingPtePadding);
+
+        // Try to map the framebuffer and clear it. If not, oh well.
+        void* gmadr;
+        uint64_t gmadr_size;
+        zx_handle_t gmadr_handle;
+        if (pci_map_bar(&pci_, 2, ZX_CACHE_POLICY_WRITE_COMBINING,
+                        &gmadr, &gmadr_size, &gmadr_handle) == ZX_OK) {
+            memset(reinterpret_cast<void*>(gmadr), 0, fb_size);
+            zx_handle_close(gmadr_handle);
+        }
+
+        for (auto* display : display_devices_) {
+            // TODO(ZX-1413): Reset/scale the display to ensure the buffer displays properly
+            registers::PipeRegs pipe_regs(display->pipe());
+
+            auto plane_stride = pipe_regs.PlaneSurfaceStride().ReadFrom(mmio_space_.get());
+            plane_stride.set_stride(stride / registers::PlaneSurfaceStride::kLinearStrideChunkSize);
+            plane_stride.WriteTo(mmio_space_.get());
+
+            auto plane_surface = pipe_regs.PlaneSurface().ReadFrom(mmio_space_.get());
+            plane_surface.set_surface_base_addr(0);
+            plane_surface.WriteTo(mmio_space_.get());
+        }
+    }
+    return ZX_OK;
+}
+
 zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) {
     zxlogf(TRACE, "i915: binding to display controller\n");
 
-    pci_protocol_t pci;
-    if (device_get_protocol(parent_, ZX_PROTOCOL_PCI, &pci)) {
+    if (device_get_protocol(parent_, ZX_PROTOCOL_PCI, &pci_)) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
-    pci_config_read16(&pci, PCI_CONFIG_DEVICE_ID, &device_id_);
+    pci_config_read16(&pci_, PCI_CONFIG_DEVICE_ID, &device_id_);
     zxlogf(TRACE, "i915: device id %x\n", device_id_);
     if (device_id_ == INTEL_I915_BROADWELL_DID) {
         // TODO: this should be based on the specific target
@@ -574,26 +627,18 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
 
     zx_status_t status;
     if (is_gen9(device_id_) && ENABLE_MODESETTING) {
-        status = igd_opregion_.Init(&pci);
+        status = igd_opregion_.Init(&pci_);
         if (status != ZX_OK) {
             zxlogf(ERROR, "i915: Failed to init VBT (%d)\n", status);
             return status;
         }
     }
 
-    uint16_t gmch_ctrl;
-    status = pci_config_read16(&pci, registers::GmchGfxControl::kAddr, &gmch_ctrl);
-    if (status != ZX_OK) {
-        zxlogf(ERROR, "i915: failed to read GfxControl\n");
-        return status;
-    }
-    uint32_t gtt_size = registers::GmchGfxControl::mem_size_to_mb(gmch_ctrl);
-
     zxlogf(TRACE, "i915: mapping registers\n");
     // map register window
     uintptr_t regs;
     uint64_t regs_size;
-    status = pci_map_bar(&pci, 0u, ZX_CACHE_POLICY_UNCACHED_DEVICE,
+    status = pci_map_bar(&pci_, 0u, ZX_CACHE_POLICY_UNCACHED_DEVICE,
                               reinterpret_cast<void**>(&regs), &regs_size, &regs_handle_);
     if (status != ZX_OK) {
         zxlogf(ERROR, "i915: failed to map bar 0: %d\n", status);
@@ -611,7 +656,7 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
 
     if (ENABLE_MODESETTING && is_gen9(device_id_)) {
         zxlogf(TRACE, "i915: initialzing hotplug\n");
-        status = InitHotplug(&pci);
+        status = InitHotplug();
         if (status != ZX_OK) {
             zxlogf(ERROR, "i915: failed to init hotplugging\n");
             return status;
@@ -619,7 +664,7 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
     }
 
     zxlogf(TRACE, "i915: mapping gtt\n");
-    if ((status = gtt_.Init(mmio_space_.get(), gtt_size)) != ZX_OK) {
+    if ((status = gtt_.Init(this)) != ZX_OK) {
         zxlogf(ERROR, "i915: failed to init gtt %d\n", status);
         return status;
     }
@@ -629,7 +674,9 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
         zxlogf(ERROR, "i915: failed to add controller device\n");
         return status;
     }
-    controller_ptr->release();
+    // DevMgr now owns this pointer, release it to avoid destroying the object
+    // when device goes out of scope.
+    __UNUSED auto ptr = controller_ptr->release();
 
     zxlogf(TRACE, "i915: initializing displays\n");
     status = InitDisplays();

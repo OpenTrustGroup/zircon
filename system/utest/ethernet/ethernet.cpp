@@ -34,11 +34,11 @@
 // Delay for data to work through the system. The test will pause this long, so it's best
 // to keep it fairly short. If it's too short, the test will occasionally be flaky,
 // especially on qemu.
-#define PROPAGATE_MSEC (50)
-#define PROPAGATE_TIME (zx::deadline_after(ZX_MSEC(PROPAGATE_MSEC)))
+#define PROPAGATE_MSEC (200)
+#define PROPAGATE_TIME (zx::deadline_after(zx::msec(PROPAGATE_MSEC)))
 // We expect something to happen prior to timeout, and the test will fail if it doesn't. So
 // wait longer to further reduce the likelihood of test flakiness.
-#define FAIL_TIMEOUT (zx::deadline_after(ZX_MSEC(3 * PROPAGATE_MSEC)))
+#define FAIL_TIMEOUT (zx::deadline_after(zx::msec(5 * PROPAGATE_MSEC)))
 
 // Because of test flakiness if a previous test case's ethertap device isn't cleaned up, we put a
 // delay at the end of each test to give devmgr time to clean up the ethertap devices.
@@ -133,7 +133,7 @@ zx_status_t OpenEthertapDev(int* fd) {
         return ZX_ERR_IO;
     }
 
-    zx_status_t status = fdio_watch_directory(ethdir, WatchCb, zx::deadline_after(ZX_SEC(2)),
+    zx_status_t status = fdio_watch_directory(ethdir, WatchCb, zx_deadline_after(ZX_SEC(2)),
                                               reinterpret_cast<void*>(fd));
     if (status == ZX_ERR_STOP) {
         return ZX_OK;
@@ -146,17 +146,34 @@ struct FifoEntry : public fbl::SinglyLinkedListable<fbl::unique_ptr<FifoEntry>> 
     eth_fifo_entry_t e;
 };
 
+struct EthernetOpenInfo {
+    EthernetOpenInfo(const char* name) : name(name) {}
+    // Special setup until we have IGMP: turn off multicast-promisc in init.
+    bool multicast = false;
+    const char* name;
+    bool online = true;
+    uint32_t options = 0;
+};
+
 class EthernetClient {
-  public:
-    explicit EthernetClient(int fd) : fd_(fd) {}
+public:
+    EthernetClient()
+        : fd_(-1) {}
     ~EthernetClient() {
+        Cleanup();
+    }
+
+    void Cleanup() {
         if (mapped_ > 0) {
             zx::vmar::root_self().unmap(mapped_, vmo_size_);
         }
-        close(fd_);
+        if (fd_ >= 0) {
+            close(fd_);
+        }
     }
 
-    zx_status_t Register(const char* name, uint32_t nbufs, uint16_t bufsize) {
+    zx_status_t Register(int fd, const char* name, uint32_t nbufs, uint16_t bufsize) {
+        fd_ = fd;
         ssize_t rc = ioctl_ethernet_set_client_name(fd_, name, strlen(name) + 1);
         if (rc < 0) {
             fprintf(stderr, "could not set client name to %s: %zd\n", name, rc);
@@ -256,6 +273,38 @@ class EthernetClient {
         return rc < 0 ? static_cast<zx_status_t>(rc) : ZX_OK;
     }
 
+    zx_status_t SetMulticastPromisc(bool on) {
+        eth_multicast_config_t config = {};
+        config.op = on ? ETH_MULTICAST_RECV_ALL : ETH_MULTICAST_RECV_FILTER;
+        ssize_t rc = ioctl_ethernet_config_multicast(fd_, &config);
+        return rc < 0 ? static_cast<zx_status_t>(rc) : ZX_OK;
+    }
+
+    zx_status_t MulticastAddressAdd(uint8_t* mac) {
+        eth_multicast_config_t config = {};
+        config.op = ETH_MULTICAST_ADD_MAC;
+        memcpy(config.mac, mac, 6);
+        ssize_t rc = ioctl_ethernet_config_multicast(fd_, &config);
+        return rc < 0 ? static_cast<zx_status_t>(rc) : ZX_OK;
+    }
+
+    zx_status_t MulticastAddressDel(uint8_t* mac) {
+        eth_multicast_config_t config = {};
+        config.op = ETH_MULTICAST_DEL_MAC;
+        memcpy(config.mac, mac, 6);
+        ssize_t rc = ioctl_ethernet_config_multicast(fd_, &config);
+        return rc < 0 ? static_cast<zx_status_t>(rc) : ZX_OK;
+    }
+
+    // Delete this along with other "multicast_" related code once we have IGMP.
+    // This tells the driver to turn off the on-by-default multicast-promisc.
+    zx_status_t MulticastInitForTest() {
+        eth_multicast_config_t config = {};
+        config.op = ETH_MULTICAST_TEST_FILTER;
+        ssize_t rc = ioctl_ethernet_config_multicast(fd_, &config);
+        return rc < 0 ? static_cast<zx_status_t>(rc) : ZX_OK;
+    }
+
     zx::fifo* tx_fifo() { return &tx_; }
     zx::fifo* rx_fifo() { return &rx_; }
     uint32_t tx_depth() { return tx_depth_; }
@@ -307,26 +356,42 @@ class EthernetClient {
 #define HEADER_SIZE (sizeof(ethertap_socket_header_t))
 #define READBUF_SIZE (ETHERTAP_MAX_MTU + HEADER_SIZE)
 
+// Returns the number of reads
+static int DrainSocket(zx::socket* sock) {
+    zx_signals_t obs;
+    uint8_t read_buf[READBUF_SIZE];
+    size_t actual_sz = 0;
+    int reads = 0;
+    zx_status_t status = ZX_OK;
+
+    while (ZX_OK == (status = sock->wait_one(ZX_SOCKET_READABLE, PROPAGATE_TIME, &obs))) {
+        status = sock->read(0u, static_cast<void*>(read_buf), READBUF_SIZE, &actual_sz);
+        ASSERT_EQ(ZX_OK, status);
+        reads++;
+    }
+    ASSERT_EQ(status, ZX_ERR_TIMED_OUT);
+    return reads;
+}
+
 static bool ExpectSockRead(zx::socket* sock, uint32_t type, size_t size, void* data,
                            const char* msg) {
-    BEGIN_HELPER;
     zx_signals_t obs;
     uint8_t read_buf[READBUF_SIZE];
     // The socket should be readable
-    EXPECT_EQ(ZX_OK, sock->wait_one(ZX_SOCKET_READABLE, FAIL_TIMEOUT, &obs), msg);
+    ASSERT_EQ(ZX_OK, sock->wait_one(ZX_SOCKET_READABLE, FAIL_TIMEOUT, &obs), msg);
     ASSERT_TRUE(obs & ZX_SOCKET_READABLE, msg);
 
     // Read the data from the socket, which should match what was written to the fifo
     size_t actual_sz = 0;
-    EXPECT_EQ(ZX_OK, sock->read(0u, static_cast<void*>(read_buf), READBUF_SIZE, &actual_sz), msg);
+    ASSERT_EQ(ZX_OK, sock->read(0u, static_cast<void*>(read_buf), READBUF_SIZE, &actual_sz), msg);
     ASSERT_EQ(size, actual_sz - HEADER_SIZE, msg);
     auto header = reinterpret_cast<ethertap_socket_header*>(read_buf);
-    EXPECT_EQ(type, header->type, msg);
+    ASSERT_EQ(type, header->type, msg);
     if (size > 0) {
         ASSERT_NONNULL(data, msg);
-        EXPECT_BYTES_EQ(static_cast<uint8_t*>(data), read_buf + HEADER_SIZE, size, msg);
+        ASSERT_BYTES_EQ(static_cast<uint8_t*>(data), read_buf + HEADER_SIZE, size, msg);
     }
-    END_HELPER;
+    return true;
 }
 
 static bool ExpectPacketRead(zx::socket* sock, size_t size, void* data, const char* msg) {
@@ -339,30 +404,92 @@ static bool ExpectSetParamRead(zx::socket* sock, uint32_t param, int32_t value,
     report.param = param;
     report.value = value;
     report.data_length = data_length;
+    ASSERT_LE(data_length, SETPARAM_REPORT_DATA_SIZE, "Report can't return that much data");
     if (data_length > 0 && data != nullptr) {
         memcpy(report.data, data, data_length);
     }
     return ExpectSockRead(sock, ETHERTAP_MSG_PARAM_REPORT, sizeof(report), &report, msg);
 }
 
-static bool EthernetStartTest() {
-    BEGIN_TEST;
-    // Create the ethertap device
-    zx::socket sock;
-    ASSERT_EQ(ZX_OK, CreateEthertap(1500, __func__, &sock));
+// Functions named ...Helper are intended to be called from every test function for
+// setup and teardown of the ethdevs.
+// To generate informative error messages in case they fail, use ASSERT_TRUE() when
+// calling them.
 
+// Note that the test framework will not return false from a helper function upon failure
+// of an EXPECT_ unless the BEGIN_HELPER / END_HELPER macros are used in that function.
+// See zircon/system/ulib/unittest/include/unittest/unittest.h and read carefully!
+
+static bool AddClientHelper(zx::socket* sock,
+                            EthernetClient* client,
+                            const EthernetOpenInfo& openInfo) {
     // Open the ethernet device
     int devfd = -1;
     ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfd));
     ASSERT_GE(devfd, 0);
 
-    // Set up an ethernet client
-    EthernetClient client(devfd);
-    ASSERT_EQ(ZX_OK, client.Register(__func__, 32, 2048));
+    // Initialize the ethernet client
+    ASSERT_EQ(ZX_OK, client->Register(devfd, openInfo.name, 32, 2048));
+    if (openInfo.online) {
+        // Start the ethernet client
+        ASSERT_EQ(ZX_OK, client->Start());
+    }
+    if (openInfo.multicast) {
+        ASSERT_EQ(ZX_OK, client->MulticastInitForTest());
+    }
+    if (openInfo.options & ETHERTAP_OPT_REPORT_PARAM) {
+        DrainSocket(sock); // internal driver setup probably has caused some reports
+    }
+    return true;
+}
+
+static bool OpenFirstClientHelper(zx::socket* sock,
+                               EthernetClient* client,
+                               const EthernetOpenInfo& openInfo) {
+    // Create the ethertap device
+    ASSERT_EQ(ZX_OK, CreateEthertapWithOption(1500, openInfo.name, sock, openInfo.options));
+
+    if (openInfo.online) {
+        // Set the link status to online
+        sock->signal_peer(0, ETHERTAP_SIGNAL_ONLINE);
+        // Sleep for just long enough to let the signal propagate
+        zx::nanosleep(PROPAGATE_TIME);
+    }
+
+    ASSERT_TRUE(AddClientHelper(sock, client, openInfo));
+    return true;
+}
+
+static bool EthernetCleanupHelper(zx::socket* sock,
+                                  EthernetClient* client,
+                                  EthernetClient* client2 = nullptr) {
+    // Note: Don't keep adding client params; find another way if more than 2 clients.
+
+    // Shutdown the ethernet client(s)
+    ASSERT_EQ(ZX_OK, client->Stop());
+    if (client2 != nullptr) {
+        ASSERT_EQ(ZX_OK, client->Stop());
+    }
+
+    // Clean up the ethertap device
+    sock->reset();
+
+    ETHTEST_CLEANUP_DELAY;
+    return true;
+}
+
+static bool EthernetStartTest() {
+    BEGIN_TEST;
+
+    zx::socket sock;
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    info.online = false;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
 
     // Verify no signals asserted on the rx fifo
     zx_signals_t obs;
-    client.rx_fifo()->wait_one(ETH_SIGNAL_STATUS, 0, &obs);
+    client.rx_fifo()->wait_one(ETH_SIGNAL_STATUS, zx::time(), &obs);
     EXPECT_FALSE(obs & ETH_SIGNAL_STATUS);
 
     // Start the ethernet client
@@ -382,13 +509,7 @@ static bool EthernetStartTest() {
     EXPECT_EQ(ZX_OK, client.GetStatus(&eth_status));
     EXPECT_EQ(ETH_STATUS_ONLINE, eth_status);
 
-    // Shutdown the ethernet client
-    EXPECT_EQ(ZX_OK, client.Stop());
-
-    // Clean up the ethertap device
-    sock.reset();
-
-    ETHTEST_CLEANUP_DELAY;
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &client));
     END_TEST;
 }
 
@@ -396,26 +517,11 @@ static bool EthernetLinkStatusTest() {
     BEGIN_TEST;
     // Create the ethertap device
     zx::socket sock;
-    ASSERT_EQ(ZX_OK, CreateEthertap(1500, __func__, &sock));
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
 
-    // Set the link status to online
-    sock.signal_peer(0, ETHERTAP_SIGNAL_ONLINE);
-    // Sleep for just long enough to let the signal propagate
-    zx::nanosleep(PROPAGATE_TIME);
-
-    // Open the ethernet device
-    int devfd = -1;
-    ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfd));
-    ASSERT_GE(devfd, 0);
-
-    // Set up an ethernet client
-    EthernetClient client(devfd);
-    ASSERT_EQ(ZX_OK, client.Register(__func__, 32, 2048));
-
-    // Start the ethernet client
-    EXPECT_EQ(ZX_OK, client.Start());
-
-    // Link status should be ONLINE since we set it before starting the client
+    // Link status should be ONLINE since it's set in OpenFirstClientHelper
     uint32_t eth_status = 0;
     EXPECT_EQ(ZX_OK, client.GetStatus(&eth_status));
     EXPECT_EQ(ETH_STATUS_ONLINE, eth_status);
@@ -431,102 +537,225 @@ static bool EthernetLinkStatusTest() {
     EXPECT_EQ(ZX_OK, client.GetStatus(&eth_status));
     EXPECT_EQ(0, eth_status);
 
-    // Shutdown the ethernet client
-    EXPECT_EQ(ZX_OK, client.Stop());
-
-    // Clean up the ethertap device
-    sock.reset();
-
-    ETHTEST_CLEANUP_DELAY;
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &client));
     END_TEST;
 }
 
 static bool EthernetSetPromiscMultiClientTest() {
     BEGIN_TEST;
-    // Create the ethertap device
+
     zx::socket sock;
-    ASSERT_EQ(ZX_OK, CreateEthertapWithOption(1500, __func__, &sock, ETHERTAP_OPT_REPORT_PARAM));
+    EthernetClient clientA;
+    EthernetOpenInfo info("SetPromiscA");
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &clientA, info));
+    EthernetClient clientB;
+    info.name = "SetPromiscB";
+    ASSERT_TRUE(AddClientHelper(&sock, &clientB, info));
 
-    // Open the ethernet devices
-    int devfdA = -1;
-    ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfdA));
-    ASSERT_GE(devfdA, 0);
-    int devfdB = -1;
-    ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfdB));
-    ASSERT_GE(devfdB, 0);
-
-    // Set up ethernet clients
-    EthernetClient clientA(devfdA);
-    ASSERT_EQ(ZX_OK, clientA.Register(__func__, 32, 2048));
-    EthernetClient clientB(devfdB);
-    ASSERT_EQ(ZX_OK, clientB.Register(__func__, 32, 2048));
-
-    // Start the ethernet clients
-    EXPECT_EQ(ZX_OK, clientA.Start());
-    EXPECT_EQ(ZX_OK, clientB.Start());
-
-    zx_signals_t obs;
-    // Ensure sock is empty before starting test - should be unnecessary
-    EXPECT_EQ(ZX_ERR_TIMED_OUT, sock.wait_one(ZX_SOCKET_CONTROL_READABLE, PROPAGATE_TIME, &obs));
-
-    // This should send an ethertap_setparam_report up the control channel,
-    // saying param ETHMAC_SETPARAM_PROMISC, value true.
-    clientA.SetPromisc(true);
+    ASSERT_EQ(ZX_OK, clientA.SetPromisc(true));
 
     ExpectSetParamRead(&sock, ETHMAC_SETPARAM_PROMISC, 1, 0, nullptr, "Promisc on (1)");
 
     // None of these should cause a change in promisc commands to ethermac.
-    clientA.SetPromisc(true); // It was already requested by A.
-    clientB.SetPromisc(true);
-    clientA.SetPromisc(false); // A should now not want it, but B still does.
-    EXPECT_EQ(ZX_ERR_TIMED_OUT, sock.wait_one(ZX_SOCKET_CONTROL_READABLE, PROPAGATE_TIME, &obs));
+    ASSERT_EQ(ZX_OK, clientA.SetPromisc(true)); // It was already requested by A.
+    ASSERT_EQ(ZX_OK, clientB.SetPromisc(true));
+    ASSERT_EQ(ZX_OK, clientA.SetPromisc(false)); // A should now not want it, but B still does.
+    EXPECT_EQ(0, DrainSocket(&sock));
 
     // After the next line, no one wants promisc, so I should get a command to turn it off.
-    clientB.SetPromisc(false);
+    ASSERT_EQ(ZX_OK, clientB.SetPromisc(false));
     ExpectSetParamRead(&sock, ETHMAC_SETPARAM_PROMISC, 0, 0, nullptr, "Promisc should be off (2)");
 
-    // Shutdown the ethernet clients
-    EXPECT_EQ(ZX_OK, clientA.Stop());
-    EXPECT_EQ(ZX_OK, clientB.Stop());
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &clientA, &clientB));
+    END_TEST;
+}
 
-    // Clean up the ethertap device
+static bool EthernetSetPromiscClearOnCloseTest() {
+    BEGIN_TEST;
+    zx::socket sock;
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
+
+    ASSERT_EQ(ZX_OK, client.SetPromisc(true));
+
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_PROMISC, 1, 0, nullptr, "Promisc on (1)");
+
+    // Shutdown the ethernet client.
+    EXPECT_EQ(ZX_OK, client.Stop());
+    client.Cleanup(); // This will free devfd
+
+    // That should have caused promisc to turn off.
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_PROMISC, 0, 0, nullptr, "Closed: promisc off (2)");
+
+    // Clean up the ethertap device.
     sock.reset();
 
     ETHTEST_CLEANUP_DELAY;
     END_TEST;
 }
 
-static bool EthernetSetPromiscClearOnCloseTest() {
+// Since we don't have IGMP, multicast promiscuous is on by default. Multicast-related tests
+// need to turn it off. This test establishes that this is happening correctly. When IGMP is
+// added and promisc-by-default is turned off, this test will fail. When that happens, delete
+// the code related to EthernetOpenInfo.multicast.
+static bool EthernetClearMulticastPromiscTest() {
     BEGIN_TEST;
-    // Create the ethertap device
     zx::socket sock;
-    ASSERT_EQ(ZX_OK, CreateEthertapWithOption(1500, __func__, &sock, ETHERTAP_OPT_REPORT_PARAM));
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
 
-    // Open the ethernet device
-    int devfd = -1;
-    ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfd));
-    ASSERT_GE(devfd, 0);
+    ASSERT_EQ(ZX_OK, client.MulticastInitForTest());
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_PROMISC, 0, 0, nullptr, "promisc off");
 
-    // Set up ethernet client
-    auto pClient = fbl::make_unique<EthernetClient>(devfd);
-    ASSERT_EQ(ZX_OK, pClient->Register(__func__, 32, 2048));
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &client));
+    END_TEST;
+}
 
-    // Start the ethernet client
-    EXPECT_EQ(ZX_OK, pClient->Start());
+static bool EthernetMulticastRejectsUnicastAddress() {
+    BEGIN_TEST;
+    zx::socket sock;
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    info.multicast = true;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
 
-    zx_signals_t obs;
-    // Ensure sock is empty before starting test - should be unnecessary
-    EXPECT_EQ(ZX_ERR_TIMED_OUT, sock.wait_one(ZX_SOCKET_CONTROL_READABLE, PROPAGATE_TIME, &obs));
+    uint8_t unicastMac[] = {2, 4, 6, 8, 10, 12}; // For multicast, LSb of MSB should be 1
+    ASSERT_EQ(ZX_ERR_INVALID_ARGS, client.MulticastAddressAdd(unicastMac));
 
-    // This should send an ethertap_setparam_report up the control channel,
-    // saying param ETHMAC_SETPARAM_PROMISC, value true.
-    pClient->SetPromisc(true);
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &client));
+    END_TEST;
+}
+
+static bool EthernetMulticastSetsAddresses() {
+    BEGIN_TEST;
+    zx::socket sock;
+    EthernetClient clientA;
+    EthernetOpenInfo info("MultiAdrTestA");
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    info.multicast = true;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &clientA, info));
+    info.name = "MultiAdrTestB";
+    EthernetClient clientB;
+    ASSERT_TRUE(AddClientHelper(&sock, &clientB, info));
+
+    uint8_t macA[] = {1,2,3,4,5,6};
+    uint8_t macB[] = {7,8,9,10,11,12};
+    uint8_t data[] = {6, 12};
+    ASSERT_EQ(ZX_OK, clientA.MulticastAddressAdd(macA));
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, 1, 1, data, "first addr");
+    ASSERT_EQ(ZX_OK, clientB.MulticastAddressAdd(macB));
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, 2, 2, data, "second addr");
+
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &clientA, &clientB));
+    END_TEST;
+}
+
+// This value is implementation dependent, set in zircon/system/dev/ethernet/ethernet/ethernet.c
+#define MULTICAST_LIST_LIMIT 32
+
+static bool EthernetMulticastPromiscOnOverflow() {
+    BEGIN_TEST;
+    zx::socket sock;
+    EthernetClient clientA;
+    EthernetOpenInfo info("McPromOvA");
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    info.multicast = true;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &clientA, info));
+    EthernetClient clientB;
+    info.name = "McPromOvB";
+    ASSERT_TRUE(AddClientHelper(&sock, &clientB, info));
+    uint8_t mac[] = {1,2,3,4,5,0};
+    uint8_t data[MULTICAST_LIST_LIMIT];
+    ASSERT_LT(MULTICAST_LIST_LIMIT, 255); // If false, add code to avoid duplicate mac addresses
+    uint8_t next_val = 0x11; // Any value works; starting at 0x11 makes the dump extra readable.
+    uint32_t n_data = 0;
+    for (uint32_t i = 0; i < MULTICAST_LIST_LIMIT-1; i++) {
+        mac[5] = next_val;
+        data[n_data++] = next_val++;
+        ASSERT_EQ(ZX_OK, clientA.MulticastAddressAdd(mac));
+        ASSERT_TRUE(ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER,
+                                       n_data, n_data, data, "loading filter"));
+    }
+    ASSERT_EQ(n_data, MULTICAST_LIST_LIMIT-1); // There should be 1 space left
+    mac[5] = next_val;
+    data[n_data++] = next_val++;
+    ASSERT_EQ(ZX_OK, clientB.MulticastAddressAdd(mac));
+    ASSERT_TRUE(ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, n_data, n_data, data,
+                                   "b - filter should be full"));
+    mac[5] = next_val++;
+    ASSERT_EQ(ZX_OK, clientB.MulticastAddressAdd(mac));
+    ASSERT_TRUE(ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, -1, 0, nullptr,
+                                   "overloaded B"));
+    ASSERT_EQ(ZX_OK, clientB.Stop());
+    n_data--;
+    ASSERT_TRUE(ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, n_data, n_data, data,
+                                   "deleted B - filter should have 31"));
+    mac[5] = next_val;
+    data[n_data++] = next_val++;
+    ASSERT_EQ(ZX_OK, clientA.MulticastAddressAdd(mac));
+    ASSERT_TRUE(ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, n_data, n_data, data,
+                                   "a - filter should be full"));
+    mac[5] = next_val++;
+    ASSERT_EQ(ZX_OK, clientA.MulticastAddressAdd(mac));
+    ASSERT_TRUE(ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_FILTER, -1, 0, nullptr,
+                                   "overloaded A"));
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &clientA));
+    END_TEST;
+}
+
+static bool EthernetSetMulticastPromiscMultiClientTest() {
+    BEGIN_TEST;
+    zx::socket sock;
+    EthernetClient clientA;
+    EthernetOpenInfo info("MultiPromiscA");
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    info.multicast = true;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &clientA, info));
+    EthernetClient clientB;
+    info.name = "MultiPromiscB";
+    ASSERT_TRUE(AddClientHelper(&sock, &clientB, info));
+
+    clientA.SetMulticastPromisc(true);
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_PROMISC, 1, 0, nullptr, "Promisc on (1)");
+
+    // None of these should cause a change in promisc commands to ethermac.
+    clientA.SetMulticastPromisc(true); // It was already requested by A.
+    clientB.SetMulticastPromisc(true);
+    clientA.SetMulticastPromisc(false); // A should now not want it, but B still does.
+    EXPECT_EQ(0, DrainSocket(&sock));
+
+    // After the next line, no one wants promisc, so I should get a command to turn it off.
+    clientB.SetMulticastPromisc(false);
+    // That should have caused promisc to turn off.
+    ExpectSetParamRead(&sock, ETHMAC_SETPARAM_MULTICAST_PROMISC, 0, 0, nullptr,
+                       "Closed: promisc off (2)");
+
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &clientA, &clientB));
+    END_TEST;
+}
+
+static bool EthernetSetMulticastPromiscClearOnCloseTest() {
+    BEGIN_TEST;
+    zx::socket sock;
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    info.options = ETHERTAP_OPT_REPORT_PARAM;
+    info.multicast = true;
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
+
+    ASSERT_EQ(ZX_OK, client.SetPromisc(true));
 
     ExpectSetParamRead(&sock, ETHMAC_SETPARAM_PROMISC, 1, 0, nullptr, "Promisc on (1)");
 
     // Shutdown the ethernet client.
-    EXPECT_EQ(ZX_OK, pClient->Stop());
-    pClient.reset(); // This will free devfd
+    EXPECT_EQ(ZX_OK, client.Stop());
+    client.Cleanup(); // This will free devfd
 
     // That should have caused promisc to turn off.
     ExpectSetParamRead(&sock, ETHMAC_SETPARAM_PROMISC, 0, 0, nullptr, "Closed: promisc off (2)");
@@ -540,23 +769,14 @@ static bool EthernetSetPromiscClearOnCloseTest() {
 
 static bool EthernetDataTest_Send() {
     BEGIN_TEST;
-    // Set up the tap device and the ethernet client
     zx::socket sock;
-    ASSERT_EQ(ZX_OK, CreateEthertap(1500, __func__, &sock));
-
-    int devfd = -1;
-    ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfd));
-    ASSERT_GE(devfd, 0);
-
-    EthernetClient client(devfd);
-    ASSERT_EQ(ZX_OK, client.Register(__func__, 32, 2048));
-    ASSERT_EQ(ZX_OK, client.Start());
-
-    sock.signal_peer(0, ETHERTAP_SIGNAL_ONLINE);
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
 
     // Ensure that the fifo is writable
     zx_signals_t obs;
-    EXPECT_EQ(ZX_OK, client.tx_fifo()->wait_one(ZX_FIFO_WRITABLE, 0, &obs));
+    EXPECT_EQ(ZX_OK, client.tx_fifo()->wait_one(ZX_FIFO_WRITABLE, zx::time(), &obs));
     ASSERT_TRUE(obs & ZX_FIFO_WRITABLE);
 
     // Grab an available TX fifo entry
@@ -598,33 +818,20 @@ static bool EthernetDataTest_Send() {
     // pending at the end of te test.
     client.ReturnTxBuffer(&return_entry);
 
-    // Shutdown the client and cleanup the tap device
-    EXPECT_EQ(ZX_OK, client.Stop());
-    sock.reset();
-
-    ETHTEST_CLEANUP_DELAY;
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &client));
     END_TEST;
 }
 
 static bool EthernetDataTest_Recv() {
     BEGIN_TEST;
-    // Set up the tap device and the ethernet client
     zx::socket sock;
-    ASSERT_EQ(ZX_OK, CreateEthertap(1500, __func__, &sock));
-
-    int devfd = -1;
-    ASSERT_EQ(ZX_OK, OpenEthertapDev(&devfd));
-    ASSERT_GE(devfd, 0);
-
-    EthernetClient client(devfd);
-    ASSERT_EQ(ZX_OK, client.Register(__func__, 32, 2048));
-    ASSERT_EQ(ZX_OK, client.Start());
-
-    sock.signal_peer(0, ETHERTAP_SIGNAL_ONLINE);
+    EthernetClient client;
+    EthernetOpenInfo info(__func__);
+    ASSERT_TRUE(OpenFirstClientHelper(&sock, &client, info));
 
     // The socket should be writable
     zx_signals_t obs;
-    EXPECT_EQ(ZX_OK, sock.wait_one(ZX_SOCKET_WRITABLE, 0, &obs));
+    EXPECT_EQ(ZX_OK, sock.wait_one(ZX_SOCKET_WRITABLE, zx::time(), &obs));
     ASSERT_TRUE(obs & ZX_SOCKET_WRITABLE);
 
     // Send a buffer through the socket
@@ -651,18 +858,14 @@ static bool EthernetDataTest_Recv() {
     EXPECT_BYTES_EQ(buf, return_buf, entry.length, "");
 
     // RX fifo should be readable, and we can return the buffer to the driver
-    EXPECT_EQ(ZX_OK, client.rx_fifo()->wait_one(ZX_FIFO_WRITABLE, 0, &obs));
+    EXPECT_EQ(ZX_OK, client.rx_fifo()->wait_one(ZX_FIFO_WRITABLE, zx::time(), &obs));
     ASSERT_TRUE(obs & ZX_FIFO_WRITABLE);
 
     entry.length = 2048;
     EXPECT_EQ(ZX_OK, client.rx_fifo()->write(&entry, sizeof(eth_fifo_entry_t), &actual_entries));
     EXPECT_EQ(1, actual_entries);
 
-    // Shutdown the client and cleanup the tap device
-    EXPECT_EQ(ZX_OK, client.Stop());
-    sock.reset();
-
-    ETHTEST_CLEANUP_DELAY;
+    ASSERT_TRUE(EthernetCleanupHelper(&sock, &client));
     END_TEST;
 }
 
@@ -674,6 +877,12 @@ END_TEST_CASE(EthernetSetupTests)
 BEGIN_TEST_CASE(EthernetConfigTests)
 RUN_TEST_MEDIUM(EthernetSetPromiscMultiClientTest)
 RUN_TEST_MEDIUM(EthernetSetPromiscClearOnCloseTest)
+RUN_TEST_MEDIUM(EthernetClearMulticastPromiscTest)
+RUN_TEST_MEDIUM(EthernetMulticastRejectsUnicastAddress)
+RUN_TEST_MEDIUM(EthernetMulticastSetsAddresses)
+RUN_TEST_MEDIUM(EthernetMulticastPromiscOnOverflow)
+RUN_TEST_MEDIUM(EthernetSetMulticastPromiscMultiClientTest)
+RUN_TEST_MEDIUM(EthernetSetMulticastPromiscClearOnCloseTest)
 END_TEST_CASE(EthernetConfigTests)
 
 BEGIN_TEST_CASE(EthernetDataTests)

@@ -59,7 +59,7 @@ static zx_time_t iotime_posix(int is_read, int fd, size_t total, size_t bufsz) {
         return ZX_TIME_INFINITE;
     }
 
-    zx_time_t t0 = zx_time_get(ZX_CLOCK_MONOTONIC);
+    zx_time_t t0 = zx_clock_get(ZX_CLOCK_MONOTONIC);
     size_t n = total;
     const char* fn_name = is_read ? "read" : "write";
     while (n > 0) {
@@ -75,7 +75,7 @@ static zx_time_t iotime_posix(int is_read, int fd, size_t total, size_t bufsz) {
         }
         n -= xfer;
     }
-    zx_time_t t1 = zx_time_get(ZX_CLOCK_MONOTONIC);
+    zx_time_t t1 = zx_clock_get(ZX_CLOCK_MONOTONIC);
 
     return t1 - t0;
 }
@@ -104,6 +104,12 @@ static zx_time_t iotime_fifo(char* dev, int is_read, int fd, size_t total, size_
     zx_handle_t vmo;
     if ((r = zx_vmo_create(bufsz, 0, &vmo)) != ZX_OK) {
         fprintf(stderr, "error: out of memory %d\n", r);
+        return ZX_TIME_INFINITE;
+    }
+
+    block_info_t info;
+    if (ioctl_block_get_info(fd, &info) < 0) {
+        fprintf(stderr, "error: cannot get info for '%s'\n", dev);
         return ZX_TIME_INFINITE;
     }
 
@@ -137,7 +143,7 @@ static zx_time_t iotime_fifo(char* dev, int is_read, int fd, size_t total, size_
         return ZX_TIME_INFINITE;
     }
 
-    zx_time_t t0 = zx_time_get(ZX_CLOCK_MONOTONIC);
+    zx_time_t t0 = zx_clock_get(ZX_CLOCK_MONOTONIC);
     size_t n = total;
     while (n > 0) {
         size_t xfer = (n > bufsz) ? bufsz : n;
@@ -145,9 +151,9 @@ static zx_time_t iotime_fifo(char* dev, int is_read, int fd, size_t total, size_
             .txnid = txnid,
             .vmoid = vmoid,
             .opcode = is_read ? BLOCKIO_READ : BLOCKIO_WRITE,
-            .length = xfer,
+            .length = xfer / info.block_size,
             .vmo_offset = 0,
-            .dev_offset = total - n,
+            .dev_offset = (total - n) / info.block_size,
         };
         if ((r = block_fifo_txn(client, &request, 1)) != ZX_OK) {
             fprintf(stderr, "error: block_fifo_txn error %d\n", r);
@@ -155,7 +161,7 @@ static zx_time_t iotime_fifo(char* dev, int is_read, int fd, size_t total, size_
         }
         n -= xfer;
     }
-    zx_time_t t1 = zx_time_get(ZX_CLOCK_MONOTONIC);
+    zx_time_t t1 = zx_clock_get(ZX_CLOCK_MONOTONIC);
     return t1 - t0;
 }
 

@@ -252,10 +252,13 @@ static zx_status_t usb_interface_control(void* ctx, uint8_t request_type, uint8_
 
     completion_t completion = COMPLETION_INIT;
 
+    req->header.device_id = intf->device_id;
     req->header.length = length;
     req->complete_cb = usb_control_complete;
     req->cookie = &completion;
-    hci_queue(ctx, req);
+    // We call this directly instead of via hci_queue, as it's safe to call our
+    // own completion callback, and prevents clients getting into odd deadlocks.
+    usb_hci_request_queue(&intf->hci, req);
     zx_status_t status = completion_wait(&completion, timeout);
 
     if (status == ZX_OK) {
@@ -308,13 +311,6 @@ static zx_status_t usb_interface_set_configuration(void* ctx, int configuration)
 
 static zx_status_t usb_interface_reset_endpoint(void* ctx, uint8_t ep_address) {
     usb_interface_t* intf = ctx;
-
-    // calling USB_REQ_CLEAR_FEATURE on a stalled control endpoint will not work,
-    // so we only do this for the other endpoints
-    if (ep_address != 0) {
-        usb_device_control(intf->device,  USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_ENDPOINT,
-                           USB_REQ_CLEAR_FEATURE, USB_ENDPOINT_HALT, ep_address, NULL, 0);
-    }
     return usb_hci_reset_endpoint(&intf->hci, intf->device_id, ep_address);
 }
 

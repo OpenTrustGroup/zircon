@@ -10,7 +10,6 @@
 #include <arch/x86/feature.h>
 #include <fbl/auto_call.h>
 #include <hypervisor/cpu.h>
-#include <hypervisor/guest_physical_address_space.h>
 #include <kernel/mp.h>
 #include <vm/fault.h>
 #include <vm/physmap.h>
@@ -249,7 +248,7 @@ static void edit_msr_list(VmxPage* msr_list_page, size_t index, uint32_t msr, ui
     entry->value = value;
 }
 
-zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t ip, uintptr_t cr3,
+zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
                       paddr_t msr_bitmaps_address, paddr_t pml4_address, VmxState* vmx_state,
                       VmxPage* host_msr_page, VmxPage* guest_msr_page) {
     zx_status_t status = vmclear(vmcs_address);
@@ -527,8 +526,8 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t ip, uintptr
     vmcs.Write(VmcsField32::GUEST_IA32_SYSENTER_CS, 0);
 
     vmcs.Write(VmcsFieldXX::GUEST_RSP, 0);
-    vmcs.Write(VmcsFieldXX::GUEST_RIP, ip);
-    vmcs.Write(VmcsFieldXX::GUEST_CR3, cr3);
+    vmcs.Write(VmcsFieldXX::GUEST_RIP, entry);
+    vmcs.Write(VmcsFieldXX::GUEST_CR3, 0);
 
     // From Volume 3, Section 24.4.2: If the “VMCS shadowing” VM-execution
     // control is 1, the VMREAD and VMWRITE instructions access the VMCS
@@ -546,14 +545,20 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t ip, uintptr
 }
 
 // static
-zx_status_t Vcpu::Create(zx_vaddr_t ip, zx_vaddr_t cr3, paddr_t msr_bitmaps_address,
-                         GuestPhysicalAddressSpace* gpas, TrapMap* traps,
-                         fbl::unique_ptr<Vcpu>* out) {
+zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* out) {
+    GuestPhysicalAddressSpace* gpas = guest->AddressSpace();
+    if (entry >= gpas->size())
+        return ZX_ERR_INVALID_ARGS;
+
     uint16_t vpid;
-    zx_status_t status = alloc_vpid(&vpid);
-    if (status != ZX_OK)
+    zx_status_t status = guest->AllocVpid(&vpid);
+    if (status != ZX_OK) {
         return status;
-    auto auto_call = fbl::MakeAutoCall([vpid]() { free_vpid(vpid); });
+    }
+
+    auto auto_call = fbl::MakeAutoCall([guest, vpid]() {
+        guest->FreeVpid(vpid);
+    });
 
     // When we create a VCPU, we bind it to the current thread and a CPU based
     // on the VPID. The VCPU must always be run on the current thread and the
@@ -568,7 +573,7 @@ zx_status_t Vcpu::Create(zx_vaddr_t ip, zx_vaddr_t cr3, paddr_t msr_bitmaps_addr
     thread_t* thread = pin_thread(vpid);
 
     fbl::AllocChecker ac;
-    fbl::unique_ptr<Vcpu> vcpu(new (&ac) Vcpu(thread, vpid, gpas, traps));
+    fbl::unique_ptr<Vcpu> vcpu(new (&ac) Vcpu(guest, vpid, thread));
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
@@ -593,9 +598,9 @@ zx_status_t Vcpu::Create(zx_vaddr_t ip, zx_vaddr_t cr3, paddr_t msr_bitmaps_addr
 
     VmxRegion* region = vcpu->vmcs_page_.VirtualAddress<VmxRegion>();
     region->revision_id = vmx_info.revision_id;
-    status = vmcs_init(vcpu->vmcs_page_.PhysicalAddress(), vpid, ip, cr3, msr_bitmaps_address,
-                       gpas->table_phys(), &vcpu->vmx_state_, &vcpu->host_msr_page_,
-                       &vcpu->guest_msr_page_);
+    status = vmcs_init(vcpu->vmcs_page_.PhysicalAddress(), vpid, entry,
+                       guest->MsrBitmapsAddress(), gpas->table_phys(), &vcpu->vmx_state_,
+                       &vcpu->host_msr_page_, &vcpu->guest_msr_page_);
     if (status != ZX_OK)
         return status;
 
@@ -603,9 +608,8 @@ zx_status_t Vcpu::Create(zx_vaddr_t ip, zx_vaddr_t cr3, paddr_t msr_bitmaps_addr
     return ZX_OK;
 }
 
-Vcpu::Vcpu(const thread_t* thread, uint16_t vpid, GuestPhysicalAddressSpace* gpas, TrapMap* traps)
-    : thread_(thread), vpid_(vpid), gpas_(gpas), traps_(traps),
-      vmx_state_(/* zero-init */) {}
+Vcpu::Vcpu(Guest* guest, uint16_t vpid, const thread_t* thread)
+    : guest_(guest), vpid_(vpid), thread_(thread), running_(false), vmx_state_(/* zero-init */) {}
 
 Vcpu::~Vcpu() {
     if (!vmcs_page_.IsAllocated())
@@ -615,7 +619,7 @@ Vcpu::~Vcpu() {
     // pin the current thread to the same CPU as the VCPU.
     AutoPin pin(vpid_);
     vmclear(vmcs_page_.PhysicalAddress());
-    __UNUSED zx_status_t status = free_vpid(vpid_);
+    __UNUSED zx_status_t status = guest_->FreeVpid(vpid_);
     DEBUG_ASSERT(status == ZX_OK);
 }
 
@@ -623,11 +627,13 @@ Vcpu::~Vcpu() {
 static void local_apic_maybe_interrupt(AutoVmcs* vmcs, LocalApicState* local_apic_state) {
     uint32_t vector;
     zx_status_t status = local_apic_state->interrupt_tracker.Pop(&vector);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
         return;
+    }
 
-    if (vmcs->Read(VmcsFieldXX::GUEST_RFLAGS) & X86_FLAGS_IF) {
-        // If interrupts are enabled, we inject an interrupt.
+    if (vector <= X86_INT_MAX_INTEL_DEFINED || vmcs->Read(VmcsFieldXX::GUEST_RFLAGS) & X86_FLAGS_IF) {
+        // If the vector is non-maskable or interrupts are enabled, we inject
+        // an interrupt.
         vmcs->IssueInterrupt(vector);
     } else {
         local_apic_state->interrupt_tracker.Track(vector);
@@ -637,7 +643,7 @@ static void local_apic_maybe_interrupt(AutoVmcs* vmcs, LocalApicState* local_api
 }
 
 zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
-    if (!check_pinned_cpu_invariant(thread_, vpid_))
+    if (!check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     zx_status_t status;
     do {
@@ -648,7 +654,9 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
             vmx_state_.host_state.xcr0 = x86_xgetbv(0);
             x86_xsetbv(0, vmx_state_.guest_state.xcr0);
         }
+        running_.store(true);
         status = vmx_enter(&vmx_state_);
+        running_.store(false);
         if (x86_feature_test(X86_FEATURE_XSAVE)) {
             // Save the guest XCR0, and load the host XCR0.
             vmx_state_.guest_state.xcr0 = x86_xgetbv(0);
@@ -659,8 +667,8 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
             dprintf(INFO, "VCPU resume failed: %#lx\n", error);
         } else {
             vmx_state_.resume = true;
-            status = vmexit_handler(&vmcs, &vmx_state_.guest_state, &local_apic_state_, gpas_,
-                                    traps_, packet);
+            status = vmexit_handler(&vmcs, &vmx_state_.guest_state, &local_apic_state_,
+                                    guest_->AddressSpace(), guest_->Traps(), packet);
         }
     } while (status == ZX_OK);
     return status == ZX_ERR_NEXT ? ZX_OK : status;
@@ -681,21 +689,12 @@ void vmx_exit(VmxState* vmx_state) {
 }
 
 zx_status_t Vcpu::Interrupt(uint32_t vector) {
-    bool signaled;
-    zx_status_t status = local_apic_state_.interrupt_tracker.Interrupt(vector, true, &signaled);
-    if (status != ZX_OK)
+    bool signaled = false;
+    zx_status_t status = local_apic_state_.interrupt_tracker.Interrupt(vector, &signaled);
+    if (status != ZX_OK) {
         return status;
-
-    if (!signaled) {
-        DEBUG_ASSERT(!arch_ints_disabled());
-        arch_disable_ints();
-        auto cpu = cpu_of(vpid_);
-        // If we did not signal the VCPU and we are not running on the same CPU,
-        // it means the VCPU is currently running, therefore we should issue an
-        // IPI to force a VM exit.
-        if (cpu != arch_curr_cpu_num())
-            mp_reschedule(MP_IPI_TARGET_MASK, cpu_num_to_mask(cpu), 0);
-        arch_enable_ints();
+    } else if (!signaled && running_.load()) {
+        mp_reschedule(MP_IPI_TARGET_MASK, cpu_num_to_mask(cpu_of(vpid_)), 0);
     }
     return ZX_OK;
 }
@@ -720,7 +719,7 @@ static void register_copy(Out* out, const In& in) {
 }
 
 zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
-    if (!check_pinned_cpu_invariant(thread_, vpid_))
+    if (!check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
     case ZX_VCPU_STATE: {
@@ -738,7 +737,7 @@ zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
 }
 
 zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
-    if (!check_pinned_cpu_invariant(thread_, vpid_))
+    if (!check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
     case ZX_VCPU_STATE: {
@@ -765,26 +764,4 @@ zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
     }
     }
     return ZX_ERR_INVALID_ARGS;
-}
-
-zx_status_t x86_vcpu_create(zx_vaddr_t ip, zx_vaddr_t cr3, paddr_t msr_bitmaps_address,
-                            GuestPhysicalAddressSpace* gpas, TrapMap* traps,
-                            fbl::unique_ptr<Vcpu>* out) {
-    return Vcpu::Create(ip, cr3, msr_bitmaps_address, gpas, traps, out);
-}
-
-zx_status_t arch_vcpu_resume(Vcpu* vcpu, zx_port_packet_t* packet) {
-    return vcpu->Resume(packet);
-}
-
-zx_status_t arch_vcpu_interrupt(Vcpu* vcpu, uint32_t vector) {
-    return vcpu->Interrupt(vector);
-}
-
-zx_status_t arch_vcpu_read_state(const Vcpu* vcpu, uint32_t kind, void* buffer, uint32_t len) {
-    return vcpu->ReadState(kind, buffer, len);
-}
-
-zx_status_t arch_vcpu_write_state(Vcpu* vcpu, uint32_t kind, const void* buffer, uint32_t len) {
-    return vcpu->WriteState(kind, buffer, len);
 }

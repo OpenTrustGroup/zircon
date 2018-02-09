@@ -10,7 +10,6 @@ MODULE_TYPE := userlib
 
 MODULE_SRCS += \
     $(LOCAL_DIR)/io-buffer.c \
-    $(LOCAL_DIR)/iotxn.c \
     $(LOCAL_DIR)/phys-iter.c \
     $(LOCAL_DIR)/usb-request.c \
 
@@ -35,7 +34,6 @@ TEST_DIR := $(LOCAL_DIR)/test
 MODULE_SRCS := \
     $(TEST_DIR)/ddk-test.c \
     $(TEST_DIR)/ddk-test-binding.c \
-    $(TEST_DIR)/iotxn-test.c \
     $(TEST_DIR)/usb-request-test.c \
 
 MODULE_STATIC_LIBS := system/ulib/ddk system/ulib/sync

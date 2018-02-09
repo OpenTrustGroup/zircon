@@ -14,16 +14,16 @@
 // Various lock guard wrappers for kernel only locks
 // NOTE: wrapper for mutex_t is in fbl/auto_lock.h
 
-class TA_SCOPED_CAP AutoSpinLock {
+class TA_SCOPED_CAP AutoSpinLockNoIrqSave {
 public:
-    explicit AutoSpinLock(spin_lock_t* lock) TA_ACQ(lock)
+    explicit AutoSpinLockNoIrqSave(spin_lock_t* lock) TA_ACQ(lock)
         : spinlock_(lock) {
         DEBUG_ASSERT(lock);
         spin_lock(spinlock_);
     }
-    explicit AutoSpinLock(SpinLock* lock) TA_ACQ(lock)
-        : AutoSpinLock(lock->GetInternal()) { }
-    ~AutoSpinLock() TA_REL() { release(); }
+    explicit AutoSpinLockNoIrqSave(SpinLock* lock) TA_ACQ(lock)
+        : AutoSpinLockNoIrqSave(lock->GetInternal()) { }
+    ~AutoSpinLockNoIrqSave() TA_REL() { release(); }
 
     void release() TA_REL() {
         if (spinlock_) {
@@ -33,22 +33,22 @@ public:
     }
 
     // suppress default constructors
-    DISALLOW_COPY_ASSIGN_AND_MOVE(AutoSpinLock);
+    DISALLOW_COPY_ASSIGN_AND_MOVE(AutoSpinLockNoIrqSave);
 
 private:
     spin_lock_t* spinlock_;
 };
 
-class TA_SCOPED_CAP AutoSpinLockIrqSave {
+class TA_SCOPED_CAP AutoSpinLock {
 public:
-    explicit AutoSpinLockIrqSave(spin_lock_t* lock) TA_ACQ(lock)
+    explicit AutoSpinLock(spin_lock_t* lock) TA_ACQ(lock)
         : spinlock_(lock) {
         DEBUG_ASSERT(lock);
         spin_lock_irqsave(spinlock_, state_);
     }
-    explicit AutoSpinLockIrqSave(SpinLock* lock) TA_ACQ(lock)
-        : AutoSpinLockIrqSave(lock->GetInternal()) { }
-    ~AutoSpinLockIrqSave() TA_REL() { release(); }
+    explicit AutoSpinLock(SpinLock* lock) TA_ACQ(lock)
+        : AutoSpinLock(lock->GetInternal()) { }
+    ~AutoSpinLock() TA_REL() { release(); }
 
     void release() TA_REL() {
         if (spinlock_) {
@@ -58,7 +58,7 @@ public:
     }
 
     // suppress default constructors
-    DISALLOW_COPY_ASSIGN_AND_MOVE(AutoSpinLockIrqSave);
+    DISALLOW_COPY_ASSIGN_AND_MOVE(AutoSpinLock);
 
 private:
     spin_lock_t* spinlock_;

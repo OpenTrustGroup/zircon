@@ -42,13 +42,6 @@
 #include <lk/init.h>
 #endif
 
-// For reading general purpose integer registers, we can allocate in
-// an inline array and save the malloc. Assume 64 registers as a
-// conservative estimate for an architecture with 32 general purpose
-// integer registers.
-constexpr uint32_t kInlineThreadStateSize = sizeof(void*) * 64;
-constexpr uint32_t kMaxThreadStateSize = ZX_MAX_THREAD_STATE_SIZE;
-
 constexpr size_t kMaxDebugReadBlock = 64 * 1024u * 1024u;
 constexpr size_t kMaxDebugWriteBlock = 64 * 1024u * 1024u;
 
@@ -168,8 +161,7 @@ void sys_thread_exit() {
 }
 
 zx_status_t sys_thread_read_state(zx_handle_t handle, uint32_t state_kind,
-                                  user_out_ptr<void> _buffer,
-                                  uint32_t buffer_len, user_out_ptr<uint32_t> _actual) {
+                                  user_out_ptr<void> _buffer, size_t buffer_len) {
     LTRACEF("handle %x, state_kind %u\n", handle, state_kind);
 
     auto up = ProcessDispatcher::GetCurrent();
@@ -180,36 +172,26 @@ zx_status_t sys_thread_read_state(zx_handle_t handle, uint32_t state_kind,
     if (status != ZX_OK)
         return status;
 
-    // avoid malloc'ing insane amounts
-    if (buffer_len > kMaxThreadStateSize)
+    // Currently only "general regs" is supported.
+    if (state_kind != ZX_THREAD_STATE_GENERAL_REGS)
         return ZX_ERR_INVALID_ARGS;
 
-    fbl::AllocChecker ac;
-    fbl::InlineArray<uint8_t, kInlineThreadStateSize> bytes(&ac, buffer_len);
-    if (!ac.check())
-        return ZX_ERR_NO_MEMORY;
+    zx_thread_state_general_regs local_buffer;
+    size_t local_buffer_len = sizeof(local_buffer);
+    if (buffer_len < local_buffer_len)
+        return ZX_ERR_BUFFER_TOO_SMALL;
 
-    status = thread->ReadState(state_kind, bytes.get(), &buffer_len);
-
-    // Always set the actual size so the caller can provide larger buffers.
-    // The value is only usable if the status is ZX_OK or ZX_ERR_BUFFER_TOO_SMALL.
-    if (status == ZX_OK || status == ZX_ERR_BUFFER_TOO_SMALL) {
-        zx_status_t status = _actual.copy_to_user(buffer_len);
-        if (status != ZX_OK)
-            return status;
-    }
-
+    status = thread->ReadState(state_kind, &local_buffer, local_buffer_len);
     if (status != ZX_OK)
         return status;
 
-    if (_buffer.copy_array_to_user(bytes.get(), buffer_len) != ZX_OK)
+    if (_buffer.copy_array_to_user(&local_buffer, local_buffer_len) != ZX_OK)
         return ZX_ERR_INVALID_ARGS;
-
     return ZX_OK;
 }
 
 zx_status_t sys_thread_write_state(zx_handle_t handle, uint32_t state_kind,
-                                   user_in_ptr<const void> _buffer, uint32_t buffer_len) {
+                                   user_in_ptr<const void> _buffer, size_t buffer_len) {
     LTRACEF("handle %x, state_kind %u\n", handle, state_kind);
 
     auto up = ProcessDispatcher::GetCurrent();
@@ -220,21 +202,20 @@ zx_status_t sys_thread_write_state(zx_handle_t handle, uint32_t state_kind,
     if (status != ZX_OK)
         return status;
 
-    // avoid malloc'ing insane amounts
-    if (buffer_len > kMaxThreadStateSize)
+    // Currently only "general regs" is supported.
+    if (state_kind != ZX_THREAD_STATE_GENERAL_REGS ||
+        buffer_len != sizeof(zx_thread_state_general_regs)) {
         return ZX_ERR_INVALID_ARGS;
+    }
 
-    fbl::AllocChecker ac;
-    fbl::InlineArray<uint8_t, kInlineThreadStateSize> bytes(&ac, buffer_len);
-    if (!ac.check())
-        return ZX_ERR_NO_MEMORY;
+    zx_thread_state_general_regs local_buffer;
+    size_t local_buffer_len = sizeof(local_buffer);
 
-    status = _buffer.copy_array_from_user(bytes.get(), buffer_len);
+    status = _buffer.copy_array_from_user(&local_buffer, local_buffer_len);
     if (status != ZX_OK)
         return ZX_ERR_INVALID_ARGS;
 
-    status = thread->WriteState(state_kind, bytes.get(), buffer_len);
-    return status;
+    return thread->WriteState(state_kind, &local_buffer, local_buffer_len);
 }
 
 // See ZX-940
@@ -429,9 +410,6 @@ zx_status_t sys_process_read_memory(zx_handle_t proc, uintptr_t vaddr,
     if (!vmo)
         return ZX_ERR_NO_MEMORY;
 
-    uint64_t offset = vaddr - vm_mapping->base() + vm_mapping->object_offset();
-    size_t read = 0;
-
     // Force map the range, even if it crosses multiple mappings.
     // TODO(ZX-730): This is a workaround for this bug.  If we start decommitting
     // things, the bug will come back.  We should fix this more properly.
@@ -452,6 +430,12 @@ zx_status_t sys_process_read_memory(zx_handle_t proc, uintptr_t vaddr,
         }
     }
 
+    uint64_t offset = vaddr - vm_mapping->base() + vm_mapping->object_offset();
+    size_t read = 0;
+    // TODO(ZX-1631): While this limits reading to the mapped address space of
+    // this VMO, it should be reading from multiple VMOs, not a single one.
+    // Additionally, it is racy with the mapping going away.
+    len = MIN(len, vm_mapping->size() - offset);
     zx_status_t st = vmo->ReadUser(_buffer, offset, len, &read);
 
     if (st == ZX_OK) {
@@ -517,7 +501,10 @@ zx_status_t sys_process_write_memory(zx_handle_t proc, uintptr_t vaddr,
 
     uint64_t offset = vaddr - vm_mapping->base() + vm_mapping->object_offset();
     size_t written = 0;
-
+    // TODO(ZX-1631): While this limits writing to the mapped address space of
+    // this VMO, it should be writing to multiple VMOs, not a single one.
+    // Additionally, it is racy with the mapping going away.
+    len = MIN(len, vm_mapping->size() - offset);
     zx_status_t st = vmo->WriteUser(_buffer, offset, len, &written);
 
     if (st == ZX_OK) {

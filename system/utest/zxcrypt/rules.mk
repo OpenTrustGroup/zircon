@@ -10,8 +10,10 @@ MODULE_TYPE := usertest
 
 MODULE_SRCS += \
     $(LOCAL_DIR)/main.c \
-    $(LOCAL_DIR)/superblock.cpp \
     $(LOCAL_DIR)/test-device.cpp \
+    $(LOCAL_DIR)/volume.cpp \
+    $(LOCAL_DIR)/zxcrypt.cpp \
+
 
 MODULE_NAME := zxcrypt-test
 
@@ -35,6 +37,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/fvm \
     system/ulib/fs \
     system/ulib/gpt \
+    system/ulib/pretty \
     system/ulib/sync \
     system/ulib/zx \
     system/ulib/zxcpp \

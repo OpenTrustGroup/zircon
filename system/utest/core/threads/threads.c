@@ -371,13 +371,14 @@ static bool test_resume_suspended(void) {
     ASSERT_EQ(zx_object_wait_one(thread_h, ZX_THREAD_TERMINATED, zx_deadline_after(ZX_MSEC(100)),
                                  NULL), ZX_ERR_TIMED_OUT, "");
 
-    // Verify thread is blocked
+    // Verify thread is blocked (though may still be running if on a very busy system)
     zx_info_thread_t info;
     ASSERT_EQ(zx_object_get_info(thread_h, ZX_INFO_THREAD,
                                  &info, sizeof(info), NULL, NULL),
               ZX_OK, "");
     ASSERT_EQ(info.wait_exception_port_type, ZX_EXCEPTION_PORT_TYPE_NONE, "");
-    ASSERT_EQ(info.state, ZX_THREAD_STATE_BLOCKED, "");
+    ASSERT_TRUE(info.state == ZX_THREAD_STATE_RUNNING ||
+                info.state == ZX_THREAD_STATE_BLOCKED, "");
 
     // Check that signaling the event while suspended results in the expected
     // behavior
@@ -449,7 +450,7 @@ static bool test_suspend_sleeping(void) {
     // Wait for the sleep to finish
     ASSERT_EQ(zx_object_wait_one(thread_h, ZX_THREAD_TERMINATED, sleep_deadline + ZX_MSEC(50), NULL),
               ZX_OK, "");
-    const zx_time_t now = zx_time_get(ZX_CLOCK_MONOTONIC);
+    const zx_time_t now = zx_clock_get(ZX_CLOCK_MONOTONIC);
     ASSERT_GE(now, sleep_deadline, "thread did not sleep long enough");
 
     ASSERT_EQ(zx_handle_close(thread_h), ZX_OK, "");
@@ -741,7 +742,8 @@ static bool test_suspend_wait_async_signal_delivery_worker(bool use_repeating) {
     ASSERT_EQ(zx_object_get_info(thread_h, ZX_INFO_THREAD,
                                  &info, sizeof(info), NULL, NULL),
               ZX_OK, "");
-    ASSERT_EQ(info.state, ZX_THREAD_STATE_BLOCKED, "");
+    ASSERT_TRUE(info.state == ZX_THREAD_STATE_RUNNING ||
+                info.state == ZX_THREAD_STATE_BLOCKED, "");
 
     // Check that suspend/resume while blocked in a syscall results in
     // the expected behavior and is visible via async wait.
@@ -813,7 +815,7 @@ static bool test_suspend_repeating_wait_async_signal_delivery(void) {
 static bool test_reading_register_state(void) {
     BEGIN_TEST;
 
-    zx_general_regs_t regs_expected;
+    zx_thread_state_general_regs_t regs_expected;
     regs_fill_test_values(&regs_expected);
     regs_expected.REG_PC = (uintptr_t)spin_with_regs_spin_address;
 
@@ -828,11 +830,9 @@ static bool test_reading_register_state(void) {
 
     ASSERT_TRUE(suspend_thread_synchronous(thread_handle), "");
 
-    zx_general_regs_t regs;
-    uint32_t size_read;
-    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_REGSET0,
-                                   &regs, sizeof(regs), &size_read), ZX_OK, "");
-    ASSERT_EQ(size_read, sizeof(regs), "");
+    zx_thread_state_general_regs_t regs;
+    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
+                                   &regs, sizeof(regs)), ZX_OK, "");
     ASSERT_TRUE(regs_expect_eq(&regs, &regs_expected), "");
 
     // Clean up.
@@ -863,16 +863,16 @@ static bool test_writing_register_state(void) {
 
     struct {
         // A small stack that is used for calling zx_thread_exit().
-        char stack[1024];
-        zx_general_regs_t regs_got;
+        char stack[1024] __ALIGNED(16);
+        zx_thread_state_general_regs_t regs_got;
     } stack;
 
-    zx_general_regs_t regs_to_set;
+    zx_thread_state_general_regs_t regs_to_set;
     regs_fill_test_values(&regs_to_set);
     regs_to_set.REG_PC = (uintptr_t)save_regs_and_exit_thread;
-    regs_to_set.REG_STACK_PTR = (uintptr_t)&stack.regs_got;
+    regs_to_set.REG_STACK_PTR = (uintptr_t)(stack.stack + sizeof(stack.stack));
     ASSERT_EQ(zx_thread_write_state(
-                  thread_handle, ZX_THREAD_STATE_REGSET0,
+                  thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
                   &regs_to_set, sizeof(regs_to_set)), ZX_OK, "");
     ASSERT_EQ(zx_task_resume(thread_handle, 0), ZX_OK, "");
     ASSERT_EQ(zx_object_wait_one(thread_handle, ZX_THREAD_TERMINATED,
@@ -921,11 +921,9 @@ static bool test_noncanonical_rip_address(void) {
 
     ASSERT_TRUE(suspend_thread_synchronous(thread_handle), "");
 
-    struct zx_x86_64_general_regs regs;
-    uint32_t size_read;
-    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_REGSET0,
-                                   &regs, sizeof(regs), &size_read), ZX_OK, "");
-    ASSERT_EQ(size_read, sizeof(regs), "");
+    zx_thread_state_general_regs_t regs;
+    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
+                                   &regs, sizeof(regs)), ZX_OK, "");
 
     // Example addresses to test.
     uintptr_t noncanonical_addr =
@@ -933,16 +931,16 @@ static bool test_noncanonical_rip_address(void) {
     uintptr_t canonical_addr = noncanonical_addr - 1;
     uint64_t kKernelAddr = 0xffff800000000000;
 
-    struct zx_x86_64_general_regs regs_modified = regs;
+    zx_thread_state_general_regs_t regs_modified = regs;
 
     // This RIP address must be disallowed.
     regs_modified.rip = noncanonical_addr;
-    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_REGSET0,
+    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
                                     &regs_modified, sizeof(regs_modified)),
               ZX_ERR_INVALID_ARGS, "");
 
     regs_modified.rip = canonical_addr;
-    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_REGSET0,
+    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
                                     &regs_modified, sizeof(regs_modified)),
               ZX_OK, "");
 
@@ -950,12 +948,12 @@ static bool test_noncanonical_rip_address(void) {
     // disallowed because this simplifies the check and it's not useful to
     // allow this address.
     regs_modified.rip = kKernelAddr;
-    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_REGSET0,
+    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
                                     &regs_modified, sizeof(regs_modified)),
               ZX_ERR_INVALID_ARGS, "");
 
     // Clean up: Restore the original register state.
-    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_REGSET0,
+    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
                                     &regs, sizeof(regs)), ZX_OK, "");
     // Allow the child thread to resume and exit.
     ASSERT_EQ(zx_task_resume(thread_handle, 0), ZX_OK, "");
@@ -993,11 +991,9 @@ static bool test_writing_arm_flags_register(void) {
     }
     ASSERT_TRUE(suspend_thread_synchronous(thread_handle), "");
 
-    zx_general_regs_t regs;
-    uint32_t size_read;
-    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_REGSET0,
-                                   &regs, sizeof(regs), &size_read), ZX_OK, "");
-    ASSERT_EQ(size_read, sizeof(regs), "");
+    zx_thread_state_general_regs_t regs;
+    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
+                                   &regs, sizeof(regs)), ZX_OK, "");
 
     // Check that zx_thread_read_state() does not report any more flag bits
     // than are readable via userland instructions.
@@ -1007,14 +1003,13 @@ static bool test_writing_arm_flags_register(void) {
     // Try setting more flag bits.
     uint64_t original_cpsr = regs.cpsr;
     regs.cpsr |= ~kUserVisibleFlags;
-    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_REGSET0,
+    ASSERT_EQ(zx_thread_write_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
                                     &regs, sizeof(regs)), ZX_OK, "");
 
     // Firstly, if we read back the register flag, the extra flag bits
     // should have been ignored and should not be reported as set.
-    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_REGSET0,
-                                   &regs, sizeof(regs), &size_read), ZX_OK, "");
-    ASSERT_EQ(size_read, sizeof(regs), "");
+    ASSERT_EQ(zx_thread_read_state(thread_handle, ZX_THREAD_STATE_GENERAL_REGS,
+                                   &regs, sizeof(regs)), ZX_OK, "");
     EXPECT_EQ(regs.cpsr, original_cpsr, "");
 
     // Secondly, if we resume the thread, we should be able to kill it.  If

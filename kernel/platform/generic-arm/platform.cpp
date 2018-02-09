@@ -37,6 +37,7 @@
 #include <arch/mp.h>
 
 #include <vm/vm_aspace.h>
+#include <vm/bootreserve.h>
 
 #include <lib/console.h>
 #include <lib/memory_limit.h>
@@ -56,9 +57,6 @@
 
 extern paddr_t boot_structure_paddr; // Defined in start.S.
 
-static paddr_t ramdisk_start_phys = 0;
-static paddr_t ramdisk_end_phys = 0;
-
 static void* ramdisk_base;
 static size_t ramdisk_size;
 
@@ -73,10 +71,6 @@ struct mem_bank {
     uint64_t base_virt;
     uint64_t length;
 };
-
-// save a list of reserved bootloader regions
-const size_t MAX_BOOT_RESERVE_BANKS = 8;
-static mem_bank boot_reserve_banks[MAX_BOOT_RESERVE_BANKS];
 
 // save a list of peripheral memory banks
 const size_t MAX_PERIPH_BANKS = 4;
@@ -123,7 +117,10 @@ void platform_panic_start(void) {
 }
 
 // Reads Linux device tree to initialize command line and return ramdisk location
-static void read_device_tree(void** ramdisk_base, size_t* ramdisk_size, size_t* mem_size) {
+static void read_device_tree(void *fdt, void** ramdisk_base, size_t* ramdisk_size, size_t* mem_size) {
+    paddr_t ramdisk_start_phys = 0;
+    paddr_t ramdisk_end_phys = 0;
+
     if (ramdisk_base)
         *ramdisk_base = nullptr;
     if (ramdisk_size)
@@ -131,16 +128,15 @@ static void read_device_tree(void** ramdisk_base, size_t* ramdisk_size, size_t* 
     if (mem_size)
         *mem_size = 0;
 
-    void* fdt = paddr_to_physmap(boot_structure_paddr);
-    if (!fdt) {
-        printf("%s: could not find device tree\n", __FUNCTION__);
-        return;
-    }
-
     if (fdt_check_header(fdt) < 0) {
         printf("%s fdt_check_header failed\n", __FUNCTION__);
         return;
     }
+
+    // mark the range used by the FDT as reserved, in case we need it later
+    dprintf(INFO, "FDT: device tree located at [%#" PRIx64 ", %#" PRIx64 "]\n",
+            boot_structure_paddr, boot_structure_paddr + fdt_totalsize(fdt) - 1);
+    boot_reserve_add_range(boot_structure_paddr, fdt_totalsize(fdt));
 
     int offset = fdt_path_offset(fdt, "/chosen");
     if (offset < 0) {
@@ -206,28 +202,6 @@ static void read_device_tree(void** ramdisk_base, size_t* ramdisk_size, size_t* 
             //uint64_t base = fdt64_to_cpu(*(uint64_t *)prop_ptr);
             *mem_size = fdt64_to_cpu(*((const uint64_t*)prop_ptr + 1));
         }
-    }
-}
-
-static void platform_preserve_ramdisk(void) {
-    if (!ramdisk_start_phys || !ramdisk_end_phys) {
-        return;
-    }
-
-    dprintf(INFO, "reserving ramdisk phys range [%#" PRIx64 ", %#" PRIx64 "]\n",
-            ramdisk_start_phys, ramdisk_end_phys - 1);
-
-    struct list_node list = LIST_INITIAL_VALUE(list);
-    size_t pages = (ramdisk_end_phys - ramdisk_start_phys + PAGE_SIZE - 1) / PAGE_SIZE;
-    size_t actual = pmm_alloc_range(ramdisk_start_phys, pages, &list);
-    if (actual != pages) {
-        panic("unable to reserve ramdisk memory range\n");
-    }
-
-    // mark all of the pages we allocated as WIRED
-    vm_page_t* p;
-    list_for_every_entry (&list, p, vm_page_t, free.node) {
-        p->state = VM_PAGE_STATE_WIRED;
     }
 }
 
@@ -477,9 +451,8 @@ static void platform_mdi_init(const bootdata_t* section) {
         process_mdi_banks(mem_map, [](const auto& b) {
             dprintf(INFO, "boot reserve mem range %zu: phys base %#" PRIx64 " virt base %#" PRIx64 " length %#" PRIx64 "\n",
                     b.num, b.base_phys, b.base_virt, b.length);
-            // only can handle so many reserve banks
-            ASSERT(b.num < fbl::count_of(boot_reserve_banks));
-            boot_reserve_banks[b.num] = b;
+
+            boot_reserve_add_range(b.base_phys, b.length);
         });
     }
     if (mdi_find_node(&root, MDI_PERIPH_MEM_MAP, &mem_map) == ZX_OK) {
@@ -548,38 +521,38 @@ static void process_bootdata(bootdata_t* root) {
 }
 
 void platform_early_init(void) {
-    // QEMU does not put device tree pointer in the boot-time x0 register if loaded
-    // as a ELF file. so set it here before calling read_device_tree.
-    if (boot_structure_paddr == 0) {
-        // TODO: remove this hard coded constant
-        // one possible solution is to start booting qemu via the .bin file instead of .elf
-        // which seems to cause qemu to pass this pointer via x0
-        boot_structure_paddr = 0x40000000;
+    // if the boot_structure_paddr variable is -1, it was not set
+    // in start.S, so we are in a bad place.
+    if (boot_structure_paddr == -1UL) {
+        panic("no bootdata structure!\n");
     }
 
     void* boot_structure_kvaddr = paddr_to_physmap(boot_structure_paddr);
-    if (!boot_structure_kvaddr) {
-        panic("no bootdata structure!\n");
-    }
+    DEBUG_ASSERT(boot_structure_kvaddr);
+
+    // initialize the boot memory reservation system
+    boot_reserve_init();
 
     // The previous environment passes us a boot structure. It may be a
     // device tree or a bootdata container. We attempt to detect the type of the
     // container and handle it appropriately.
+    const char *boot_structure_type = "";
     size_t arena_size = 0;
     if (is_bootdata_container(boot_structure_kvaddr)) {
         // We leave out arena size for now
+        boot_structure_type = "bootdata container";
         ramdisk_from_bootdata_container(boot_structure_kvaddr, &ramdisk_base,
                                         &ramdisk_size);
     } else if (is_zircon_boot_header(boot_structure_kvaddr)) {
+        boot_structure_type = "efi header";
         efi_zircon_hdr_t* hdr = (efi_zircon_hdr_t*)boot_structure_kvaddr;
         cmdline_append(hdr->cmd_line);
-        ramdisk_start_phys = hdr->ramdisk_base_phys;
+        ramdisk_base = paddr_to_physmap(hdr->ramdisk_base_phys);
         ramdisk_size = hdr->ramdisk_size;
-        ramdisk_end_phys = ramdisk_start_phys + ramdisk_size;
-        ramdisk_base = paddr_to_physmap(ramdisk_start_phys);
     } else {
+        boot_structure_type = "FDT";
         // on qemu we read arena size from the device tree
-        read_device_tree(&ramdisk_base, &ramdisk_size, &arena_size);
+        read_device_tree(boot_structure_kvaddr, &ramdisk_base, &ramdisk_size, &arena_size);
         // Some legacy bootloaders do not properly set linux,initrd-end
         // Pull the ramdisk size directly from the bootdata container
         //   now that we have the base to ensure that the size is valid.
@@ -591,9 +564,25 @@ void platform_early_init(void) {
         panic("no ramdisk!\n");
     }
 
+    // walk the bootdata structure, looking for MDI and command line
+    // if MDI is found, process it. this will likely initialize platform drivers
     process_bootdata(reinterpret_cast<bootdata_t*>(ramdisk_base));
+
+    // Serial port should be active now
+
     // Read cmdline after processing bootdata, which may contain cmdline data.
     halt_on_panic = cmdline_get_bool("kernel.halt-on-panic", false);
+
+    // add the ramdisk to the boot reserve memory list
+    paddr_t ramdisk_start_phys = physmap_to_paddr(ramdisk_base);
+    paddr_t ramdisk_end_phys = ramdisk_start_phys + ramdisk_size;
+    dprintf(INFO, "reserving ramdisk phys range [%#" PRIx64 ", %#" PRIx64 "]\n",
+            ramdisk_start_phys, ramdisk_end_phys - 1);
+    boot_reserve_add_range(ramdisk_start_phys, ramdisk_size);
+
+    // print how we got here to help us debug bringup
+    dprintf(INFO, "boot structure at %#lx seems to point to a %s\n",
+            boot_structure_paddr, boot_structure_type);
 
     /* add the main memory arena */
     if (arena_size) {
@@ -622,17 +611,8 @@ void platform_early_init(void) {
         pmm_add_arena(&mem_arena);
     }
 
-    // Allocate memory regions reserved by bootloaders for other functions
-    for (const auto& b : boot_reserve_banks) {
-        if (b.length == 0)
-            break;
-
-        dprintf(INFO, "reserving phys range [%#" PRIx64 ", %#" PRIx64 "]\n",
-                b.base_phys, b.base_phys + b.length - 1);
-        pmm_alloc_range(b.base_phys, b.length / PAGE_SIZE, nullptr);
-    }
-
-    platform_preserve_ramdisk();
+    // tell the boot allocator to mark ranges we've reserved as off limits
+    boot_reserve_wire();
 }
 
 void platform_init(void) {

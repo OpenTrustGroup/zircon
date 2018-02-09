@@ -32,8 +32,8 @@ public:
     // TODO(smklein): This function is currently labelled 'hack' since we have
     // no way to ensure that the size of the VMO won't change in between
     // checking it and using it.  This will require a mechanism to "pin" VMO pages.
+    // The units of length and vmo_offset is bytes.
     zx_status_t ValidateVmoHack(uint64_t length, uint64_t vmo_offset);
-
 
     zx_handle_t vmo() const { return io_vmo_.get(); }
 
@@ -71,10 +71,24 @@ public:
     // received before the transaction is identified as successful.
     zx_status_t Enqueue(bool do_respond, block_msg_t** msg_out);
 
+    // |status| sets the response's error to a "sticky" value -- if this method
+    // is called twice, the response will be set to the first non |ZX_OK| value.
+    //
+    // |ready_to_send| identifies that once all txns in the group complete, a
+    // response should be transmitted to the client.
+    //
+    // If all txns in a group have already completed, transmits a respose
+    // immediately.
+    void SetResponse(zx_status_t status, bool ready_to_send);
+
     // Called once the transaction has completed successfully.
+    // This function may respond on the fifo, resetting |response_|.
     void Complete(block_msg_t* msg, zx_status_t status);
 private:
     DISALLOW_COPY_ASSIGN_AND_MOVE(BlockTransaction);
+
+    void SetResponseReadyLocked() TA_REQ(lock_);
+    void RespondLocked() TA_REQ(lock_);
 
     const zx_handle_t fifo_;
 
@@ -106,6 +120,7 @@ private:
     zx_status_t Read(block_fifo_request_t* requests, uint32_t* count);
     zx_status_t FindVmoIDLocked(vmoid_t* out) TA_REQ(server_lock_);
 
+    // The units of length, vmo_offset, and dev_offset are 'blocks'.
     void Queue(uint32_t flags, zx_handle_t vmo, uint64_t length,
                uint64_t vmo_offset, uint64_t dev_offset, block_msg_t* msg);
 

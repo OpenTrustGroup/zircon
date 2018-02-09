@@ -22,7 +22,6 @@ MODULE_STATIC_LIBS := \
     system/ulib/fs \
     system/ulib/fs-management \
     system/ulib/fvm \
-    system/ulib/installer \
     system/ulib/sync \
     system/ulib/zx \
     system/ulib/fbl \
@@ -30,6 +29,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/zxcpp \
     third_party/ulib/cksum \
     third_party/ulib/uboringssl \
+    third_party/ulib/lz4
 
 MODULE_LIBS := \
     system/ulib/c \

@@ -19,7 +19,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/types.h>
 
-#define MXDEBUG 0
+#define ZXDEBUG 0
 
 namespace crypto {
 
@@ -70,7 +70,7 @@ zx_status_t Bytes::Randomize() {
     while (size != 0) {
         size_t n = fbl::min(size, static_cast<size_t>(ZX_CPRNG_DRAW_MAX_LEN));
         if ((rc = zx_cprng_draw(p, n, &actual)) != ZX_OK) {
-            xprintf("%s: zx_cprng_draw(%p, %zu, %p) failed: %s", __PRETTY_FUNCTION__, p, n, &actual,
+            xprintf("zx_cprng_draw(%p, %zu, %p) failed: %s", p, n, &actual,
                     zx_status_get_string(rc));
             return rc;
         }
@@ -94,7 +94,7 @@ zx_status_t Bytes::Resize(size_t size, uint8_t fill) {
     fbl::AllocChecker ac;
     fbl::unique_ptr<uint8_t[]> tmp(new (&ac) uint8_t[size]);
     if (!ac.check()) {
-        xprintf("%s: allocation failed: %zu bytes\n", __PRETTY_FUNCTION__, size);
+        xprintf("allocation failed: %zu bytes\n", size);
         return ZX_ERR_NO_MEMORY;
     }
 
@@ -121,7 +121,7 @@ zx_status_t Bytes::Copy(const void* buf, size_t len, zx_off_t off) {
         return ZX_OK;
     }
     if (!buf) {
-        xprintf("%s: null buffer\n", __PRETTY_FUNCTION__);
+        xprintf("null buffer\n");
         return ZX_ERR_INVALID_ARGS;
     }
     safeint::CheckedNumeric<size_t> size = off;
@@ -146,12 +146,11 @@ zx_status_t Bytes::Split(Bytes* tail) {
     zx_status_t rc;
 
     if (!tail) {
-        xprintf("%s: missing tail\n", __PRETTY_FUNCTION__);
+        xprintf("missing tail\n");
         return ZX_ERR_INVALID_ARGS;
     }
     if (len_ < tail->len()) {
-        xprintf("%s: insufficient data; have %zu, need %zu\n", __PRETTY_FUNCTION__, len_,
-                tail->len());
+        xprintf("insufficient data; have %zu, need %zu\n", len_, tail->len());
         return ZX_ERR_OUT_OF_RANGE;
     }
     size_t off = len_ - tail->len();
@@ -162,19 +161,22 @@ zx_status_t Bytes::Split(Bytes* tail) {
     return ZX_OK;
 }
 
-zx_status_t Bytes::Increment() {
-    bool overflow = true;
+zx_status_t Bytes::Increment(uint64_t amount) {
+    bool overflow = false;
     size_t i = len_;
+    uint8_t val = 0;
     // This is intentionally branchless to be as close to constant time as possible.  Although
     // unlikely, it's conceivable that differences in timing on incrementing leak information about
     // the contents.
     while (i != 0) {
         --i;
-        uint8_t n = overflow ? 1 : 0;
-        buf_[i] = static_cast<uint8_t>(buf_[i] + n);
-        overflow &= (buf_[i] == 0);
+        amount += overflow ? 1 : 0;
+        val = static_cast<uint8_t>(amount & 0xFF);
+        buf_[i] = static_cast<uint8_t>(buf_[i] + val);
+        amount >>= 8;
+        overflow = buf_[i] < val;
     }
-    return overflow ? ZX_ERR_OUT_OF_RANGE : ZX_OK;
+    return (overflow || (amount != 0)) ? ZX_ERR_OUT_OF_RANGE : ZX_OK;
 }
 
 fbl::unique_ptr<uint8_t[]> Bytes::Release(size_t* len) {

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <ddk/device.h>
+#include <ddk/driver.h>
 #include <ddktl/device-internal.h>
 #include <zircon/assert.h>
 #include <fbl/type_support.h>
@@ -50,8 +51,6 @@
 // | ddk::Writable        | zx_status_t DdkWrite(const void* buf,              |
 // |                      |                      size_t count, zx_off_t off,   |
 // |                      |                      size_t* actual)               |
-// |                      |                                                    |
-// | ddk::IotxnQueueable  | void DdkIotxnQueue(iotxn_t* txn)                   |
 // |                      |                                                    |
 // | ddk::GetSizable      | zx_off_t DdkGetSize()                              |
 // |                      |                                                    |
@@ -219,20 +218,6 @@ class Writable : public internal::base_mixin {
 };
 
 template <typename D>
-class IotxnQueueable : public internal::base_mixin {
-  protected:
-    explicit IotxnQueueable(zx_protocol_device_t* proto) {
-        internal::CheckIotxnQueueable<D>();
-        proto->iotxn_queue = IotxnQueue;
-    }
-
-  private:
-    static void IotxnQueue(void* ctx, iotxn_t* txn) {
-        static_cast<D*>(ctx)->DdkIotxnQueue(txn);
-    }
-};
-
-template <typename D>
 class GetSizable : public internal::base_mixin {
   protected:
     explicit GetSizable(zx_protocol_device_t* proto) {
@@ -393,7 +378,6 @@ using FullDevice = Device<D,
                           Unbindable,
                           Readable,
                           Writable,
-                          IotxnQueueable,
                           GetSizable,
                           Ioctlable,
                           Suspendable,

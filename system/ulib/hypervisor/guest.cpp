@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <fbl/alloc_checker.h>
+#include <fbl/auto_lock.h>
 #include <fbl/type_support.h>
 #include <zircon/device/sysinfo.h>
 #include <zircon/process.h>
@@ -35,27 +36,27 @@ static zx_status_t guest_get_resource(zx_handle_t* resource) {
 zx_status_t Guest::Init(size_t mem_size) {
     zx_status_t status = phys_mem_.Init(mem_size);
     if (status != ZX_OK) {
-        fprintf(stderr, "Failed to create guest physical memory.\n");
+        fprintf(stderr, "Failed to create guest physical memory\n");
         return status;
     }
 
     zx_handle_t resource;
     status = guest_get_resource(&resource);
     if (status != ZX_OK) {
-        fprintf(stderr, "Failed to get hypervisor resource.\n");
+        fprintf(stderr, "Failed to get hypervisor resource\n");
         return status;
     }
 
     status = zx_guest_create(resource, 0, phys_mem_.vmo(), &guest_);
     if (status != ZX_OK) {
-        fprintf(stderr, "Failed to create guest.\n");
+        fprintf(stderr, "Failed to create guest\n");
         return status;
     }
     zx_handle_close(resource);
 
     status = zx::port::create(0, &port_);
     if (status != ZX_OK) {
-        fprintf(stderr, "Failed to create port.\n");
+        fprintf(stderr, "Failed to create port\n");
         return status;
     }
 
@@ -85,7 +86,7 @@ Guest::~Guest() {
 zx_status_t Guest::IoThread() {
     while (true) {
         zx_port_packet_t packet;
-        zx_status_t status = port_.wait(ZX_TIME_INFINITE, &packet, 0);
+        zx_status_t status = port_.wait(zx::time::infinite(), &packet, 0);
         if (status != ZX_OK) {
             fprintf(stderr, "Failed to wait for device port %d\n", status);
             break;
@@ -130,7 +131,7 @@ static constexpr uint32_t trap_kind(TrapType type) {
     case TrapType::PIO_ASYNC:
         return ZX_GUEST_TRAP_IO;
     default:
-        ZX_PANIC("Unhandled TrapType %d.\n",
+        ZX_PANIC("Unhandled TrapType %d\n",
                  static_cast<fbl::underlying_type<TrapType>::type>(type));
         return 0;
     }
@@ -145,7 +146,7 @@ static constexpr zx_handle_t get_trap_port(TrapType type, zx_handle_t port) {
     case TrapType::MMIO_SYNC:
         return ZX_HANDLE_INVALID;
     default:
-        ZX_PANIC("Unhandled TrapType %d.\n",
+        ZX_PANIC("Unhandled TrapType %d\n",
                  static_cast<fbl::underlying_type<TrapType>::type>(type));
         return ZX_HANDLE_INVALID;
     }
@@ -170,4 +171,48 @@ zx_status_t Guest::CreateMapping(TrapType type, uint64_t addr, size_t size, uint
 
     mappings_.push_front(fbl::move(mapping));
     return ZX_OK;
+}
+
+void Guest::RegisterVcpuFactory(VcpuFactory factory) {
+    vcpu_factory_ = fbl::move(factory);
+}
+
+zx_status_t Guest::StartVcpu(uintptr_t entry, uint64_t id) {
+    fbl::AutoLock lock(&mutex_);
+    if (id >= kMaxVcpus) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    if (vcpus_[0] == nullptr && id != 0) {
+        fprintf(stderr, "VCPU-0 must be started before other VCPUs\n");
+        return ZX_ERR_BAD_STATE;
+    }
+    if (vcpus_[id] != nullptr) {
+        return ZX_ERR_ALREADY_EXISTS;
+    }
+    auto vcpu = fbl::make_unique<Vcpu>();
+    zx_status_t status = vcpu_factory_(this, entry, id, vcpu.get());
+    if (status != ZX_OK) {
+        return status;
+    }
+    vcpus_[id] = fbl::move(vcpu);
+
+    return ZX_OK;
+}
+
+zx_status_t Guest::Join() {
+    // We assume that the VCPU-0 thread will be started first, and that no additional VCPUs will
+    // be brought up after it terminates.
+    zx_status_t status = vcpus_[0]->Join();
+
+    // Once the initial VCPU has terminated, wait for any additional VCPUs.
+    for (size_t id = 1; id != kMaxVcpus; ++id) {
+        if (vcpus_[id] != nullptr) {
+            zx_status_t vcpu_status = vcpus_[id]->Join();
+            if (vcpu_status != ZX_OK) {
+                status = vcpu_status;
+            }
+        }
+    }
+
+    return status;
 }

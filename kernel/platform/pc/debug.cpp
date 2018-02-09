@@ -51,27 +51,23 @@ static void uart_write(uint8_t reg, uint8_t val) {
     }
 }
 
-static enum handler_return platform_drain_debug_uart_rx(void) {
+static void platform_drain_debug_uart_rx(void) {
     unsigned char c;
-    bool resched = false;
 
     while (uart_read(5) & (1 << 0)) {
         c = uart_read(0);
-        cbuf_write_char(&console_input_buf, c, false);
-        resched = true;
+        cbuf_write_char(&console_input_buf, c);
     }
-
-    return resched ? INT_RESCHEDULE : INT_NO_RESCHEDULE;
 }
 
-static enum handler_return uart_irq_handler(void* arg) {
-    return platform_drain_debug_uart_rx();
+static void uart_irq_handler(void* arg) {
+    platform_drain_debug_uart_rx();
 }
 
 // for devices where the uart rx interrupt doesn't seem to work
-static enum handler_return uart_rx_poll(timer_t* t, zx_time_t now, void* arg) {
+static void uart_rx_poll(timer_t* t, zx_time_t now, void* arg) {
     timer_set(t, now + ZX_MSEC(10), TIMER_SLACK_CENTER, ZX_MSEC(1), uart_rx_poll, NULL);
-    return platform_drain_debug_uart_rx();
+    platform_drain_debug_uart_rx();
 }
 
 // also called from the pixel2 quirk file

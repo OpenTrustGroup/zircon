@@ -9,7 +9,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include <async/loop.h>
+#include <async/cpp/loop.h>
 #include <fbl/algorithm.h>
 #include <fbl/alloc_checker.h>
 #include <fbl/atomic.h>
@@ -42,7 +42,7 @@ fbl::atomic<uint64_t> VnodeMemfs::ino_ctr_(0);
 
 VnodeMemfs::VnodeMemfs(Vfs* vfs) : dnode_(nullptr), link_count_(0), vfs_(vfs),
     ino_(ino_ctr_.fetch_add(1, fbl::memory_order_relaxed)) {
-    create_time_ = modify_time_ = zx_time_get(ZX_CLOCK_UTC);
+    create_time_ = modify_time_ = zx_clock_get(ZX_CLOCK_UTC);
 }
 
 VnodeMemfs::~VnodeMemfs() {}
@@ -58,10 +58,10 @@ zx_status_t VnodeMemfs::Setattr(const vnattr_t* attr) {
     return ZX_OK;
 }
 
-zx_status_t VnodeMemfs::Sync() {
+void VnodeMemfs::Sync(SyncCallback closure) {
     // Since this filesystem is in-memory, all data is already up-to-date in
     // the underlying storage
-    return ZX_OK;
+    closure(ZX_OK);
 }
 
 constexpr const char kFsName[] = "memfs";
