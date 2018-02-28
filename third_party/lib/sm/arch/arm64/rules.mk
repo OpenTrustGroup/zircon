@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2013-2015, Google, Inc. All rights reserved
+# Copyright (c) 2014, Google, Inc. All rights reserved
 #
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files
@@ -21,17 +21,9 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
-LOCAL_DIR := $(GET_LOCAL_DIR)
-
-MODULE := $(LOCAL_DIR)
-
-GLOBAL_INCLUDES += \
-    $(LOCAL_DIR)/include
+CUR_DIR := $(GET_LOCAL_DIR)
 
 MODULE_SRCS += \
-    $(LOCAL_DIR)/sm.c \
-    $(LOCAL_DIR)/smcall.c \
+	$(CUR_DIR)/entry.S \
 
-include $(LOCAL_DIR)/arch/$(ARCH)/rules.mk
-
-include make/module.mk
+CUR_DIR :=
