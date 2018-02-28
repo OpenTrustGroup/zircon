@@ -30,6 +30,11 @@
 #include <pdev/driver.h>
 #include <pdev/interrupt.h>
 
+#if WITH_LIB_SM
+#include <lib/sm.h>
+#include <lib/sm/sm_err.h>
+#endif
+
 #define LOCAL_TRACE 0
 
 #include <arch/arm64.h>
@@ -38,6 +43,7 @@
 
 static spin_lock_t gicd_lock;
 #if WITH_LIB_SM
+#define GIC_MAX_PER_CPU_INT 32
 #define GICD_LOCK_FLAGS SPIN_LOCK_FLAG_IRQ_FIQ
 #else
 #define GICD_LOCK_FLAGS SPIN_LOCK_FLAG_INTERRUPTS
@@ -267,6 +273,37 @@ static unsigned int gic_remap_interrupt(unsigned int vector) {
 }
 
 #if WITH_LIB_SM
+static zx_status_t arm_gic_get_next_irq_locked(uint min_irq, bool per_cpu)
+{
+    uint irq;
+    uint max_irq = per_cpu ? GIC_MAX_PER_CPU_INT : max_irqs;
+
+    if (!per_cpu && min_irq < GIC_MAX_PER_CPU_INT)
+        min_irq = GIC_MAX_PER_CPU_INT;
+
+    for (irq = min_irq; irq < max_irq; irq++)
+        if (pdev_get_int_handler(irq)->handler)
+            return irq;
+
+    return SM_ERR_END_OF_INPUT;
+}
+
+long smc_intc_get_next_irq(smc32_args_t *args)
+{
+    zx_status_t ret;
+    spin_lock_saved_state_t state;
+
+    spin_lock_save(&gicd_lock, &state, GICD_LOCK_FLAGS);
+
+    ret = arm_gic_get_next_irq_locked(args->params[0], args->params[1]);
+    LTRACEF("min_irq %u, per_cpu %u, ret %d\n",
+            args->params[0], args->params[1], ret);
+
+    spin_unlock_restore(&gicd_lock, state, GICD_LOCK_FLAGS);
+
+    return ret;
+}
+
 static zx_status_t arm_gic_get_priority(u_int irq) {
     u_int reg = irq / 4;
     u_int shift = 8 * (irq % 4);
@@ -287,10 +324,6 @@ static zx_status_t arm_gic_set_priority_locked(u_int irq, uint8_t priority) {
             irq, reg, GICREG(0, GICD_IPRIORITYR(reg)), regval);
 
     return ZX_OK;
-}
-
-static void sm_handle_irq(void) {
-    TRACEF("warning: got ns irq before irq thread is ready\n");
 }
 
 static void gic_handle_irq(struct iframe *frame) {
@@ -535,8 +568,11 @@ static void arm_gic_v2_init(mdi_node_ref_t* node, uint level) {
     DEBUG_ASSERT(status == ZX_OK);
     status = register_int_handler(MP_IPI_RESCHEDULE + ipi_base, &arm_ipi_reschedule_handler, 0);
     DEBUG_ASSERT(status == ZX_OK);
+
+#if !WITH_LIB_SM
     status = register_int_handler(MP_IPI_HALT + ipi_base, &arm_ipi_halt_handler, 0);
     DEBUG_ASSERT(status == ZX_OK);
+#endif
 
     gicv2_hw_interface_register();
 }
