@@ -36,6 +36,7 @@ MODULES += \
     third_party/uapp/dash \
 
 MODULES += \
+    system/ulib/virtio \
     third_party/lib/sm \
 
 EXTRA_BUILDDEPS += $(USER_BOOTDATA)
