@@ -7,15 +7,9 @@
 
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
-KERNEL_INCLUDES += \
-    $(LOCAL_DIR)/include
-
-PLATFORM := generic-arm
-
-KERNEL_LOAD_OFFSET := 0x80000 # 512k
-
 PLATFORM_VID := 1   # PDEV_VID_QEMU
 PLATFORM_PID := 1   # PDEV_PID_QEMU
-PLATFORM_BOARD_NAME := qemu-virt
+PLATFORM_BOARD_NAME := qemu-tz
+PLATFORM_MDI_SRCS += $(LOCAL_DIR)/qemu-tz.mdi
 
-MDI_SRCS += $(LOCAL_DIR)/qemu-tz.mdi
+include make/board.mk

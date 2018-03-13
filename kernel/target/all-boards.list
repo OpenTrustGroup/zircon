@@ -2,6 +2,7 @@
 gauss
 hikey960
 qemu
+qemu-tz
 vim2
 [x64]
 pc
