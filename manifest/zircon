@@ -2,7 +2,8 @@
 <manifest>
   <imports>
     <localimport file="minimal"/>
-    <import remote="https://fuchsia.googlesource.com/manifest"
+    <import remote="ssh://review.gerrithub.io:29418/OpenTrustGroup/build"
+            remotebranch="gzos"
             manifest="build"
             name="manifest"/>
   </imports>

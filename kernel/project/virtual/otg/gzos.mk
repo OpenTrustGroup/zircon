@@ -31,10 +31,11 @@ MODULES += \
 MODULES += \
     system/uapp/driverctl \
     system/uapp/psutils \
+    system/uapp/dlog \
+    system/ulib/syslog \
     third_party/uapp/dash \
 
 MODULES += \
-    third_party/lib/safeint \
     third_party/lib/sm \
 
 EXTRA_BUILDDEPS += $(USER_BOOTDATA)
