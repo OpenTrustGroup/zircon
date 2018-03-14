@@ -9,8 +9,10 @@
 #include <arch/arm64/el2_state.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
+#include <hypervisor/guest_physical_address_space.h>
 #include <hypervisor/id_allocator.h>
 #include <hypervisor/interrupt_tracker.h>
+#include <hypervisor/page.h>
 #include <hypervisor/trap_map.h>
 #include <kernel/event.h>
 #include <kernel/spinlock.h>
@@ -18,11 +20,12 @@
 #include <zircon/types.h>
 
 static constexpr uint16_t kNumInterrupts = 256;
+static constexpr uint32_t kTimerVector = 27;
+static_assert(kTimerVector < kNumInterrupts, "Timer vector is out of range");
 
 typedef struct zx_port_packet zx_port_packet_t;
 using InterruptBitmap = bitmap::RawBitmapGeneric<bitmap::FixedStorage<kNumInterrupts>>;
 
-class GuestPhysicalAddressSpace;
 class PortDispatcher;
 class VmObject;
 
@@ -35,16 +38,16 @@ public:
     zx_status_t SetTrap(uint32_t kind, zx_vaddr_t addr, size_t len,
                         fbl::RefPtr<PortDispatcher> port, uint64_t key);
 
-    GuestPhysicalAddressSpace* AddressSpace() const { return gpas_.get(); }
-    TrapMap* Traps() { return &traps_; }
+    hypervisor::GuestPhysicalAddressSpace* AddressSpace() const { return gpas_.get(); }
+    hypervisor::TrapMap* Traps() { return &traps_; }
     uint8_t Vmid() const { return vmid_; }
 
     zx_status_t AllocVpid(uint8_t* vpid);
     zx_status_t FreeVpid(uint8_t vpid);
 
 private:
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas_;
-    TrapMap traps_;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas_;
+    hypervisor::TrapMap traps_;
     const uint8_t vmid_;
 
     fbl::Mutex vcpu_mutex_;
@@ -80,6 +83,23 @@ private:
     GichState* gich_state_;
 };
 
+// Provides a smart pointer to an EL2State allocated in its own page.
+//
+// We allocate an EL2State into its own page as the structure is passed between
+// EL1 and EL2, which have different address spaces mappings. This ensures that
+// EL2State will not cross a page boundary and be incorrectly accessed in EL2.
+class El2StatePtr {
+public:
+    zx_status_t Alloc();
+
+    paddr_t PhysicalAddress() const { return page_.PhysicalAddress(); }
+    El2State* operator->() const { return state_; }
+
+private:
+    hypervisor::Page page_;
+    El2State* state_ = nullptr;
+};
+
 class Vcpu {
 public:
     static zx_status_t Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* out);
@@ -97,27 +117,8 @@ private:
     const thread_t* thread_;
     fbl::atomic_bool running_;
     GichState gich_state_;
-    El2State el2_state_;
+    El2StatePtr el2_state_;
     uint64_t hcr_;
 
     Vcpu(Guest* guest, uint8_t vpid, const thread_t* thread);
 };
-
-/* Create a guest. */
-zx_status_t arch_guest_create(fbl::RefPtr<VmObject> physmem, fbl::unique_ptr<Guest>* guest);
-
-/* Set a trap within a guest. */
-zx_status_t arch_guest_set_trap(Guest* guest, uint32_t kind, zx_vaddr_t addr, size_t len,
-                                fbl::RefPtr<PortDispatcher> port, uint64_t key);
-
-/* Resume execution of a VCPU. */
-zx_status_t arch_vcpu_resume(Vcpu* vcpu, zx_port_packet_t* packet);
-
-/* Issue an interrupt on a VCPU. */
-zx_status_t arch_vcpu_interrupt(Vcpu* vcpu, uint32_t interrupt);
-
-/* Read the register state of a VCPU. */
-zx_status_t arch_vcpu_read_state(const Vcpu* vcpu, uint32_t kind, void* buffer, uint32_t len);
-
-/* Write the register state of a VCPU. */
-zx_status_t arch_vcpu_write_state(Vcpu* vcpu, uint32_t kind, const void* buffer, uint32_t len);

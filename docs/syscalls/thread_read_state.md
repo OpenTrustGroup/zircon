@@ -20,7 +20,8 @@ zx_status_t zx_thread_read_state(
 ## DESCRIPTION
 
 **thread_read_state**() reads one aspect of state of the thread. The thread
-state may only be read when the thread is halted for an exception.
+state may only be read when the thread is halted for an exception or the thread
+is suspended.
 
 The thread state is highly processor specific. See the structures in
 zircon/syscalls/debug.h for the contents of the structures on each platform.
@@ -31,6 +32,11 @@ zircon/syscalls/debug.h for the contents of the structures on each platform.
 
 The buffer must point to a **zx_thread_state_general_regs_t** structure that
 contains the general registers for the current architecture.
+
+### ZX_THREAD_STATE_SINGLE_STEP
+
+The buffer must point to a **zx_thread_state_single_step_t** value which
+may contain either 0 (normal running), or 1 (single stepping enabled).
 
 ## RETURN VALUE
 
@@ -55,6 +61,10 @@ the data required by *kind*.
 **ZX_ERR_BAD_STATE**  The thread is not stopped at a point where state
 is available. The thread state may only be read when the thread is stopped due
 to an exception.
+
+**ZX_ERR_NOT_SUPPORTED**  *kind* is not supported.
+This can happen, for example, when trying to read a register set that
+is not supported by the hardware the program is currently running on.
 
 ## SEE ALSO
 

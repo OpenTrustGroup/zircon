@@ -100,8 +100,23 @@ $(BUILDDIR)/%.id: $(BUILDDIR)/%
 	$(call BUILDECHO,generating id file $@)
 	$(NOECHO)env READELF="$(READELF)" scripts/get-build-id $< > $@
 
+# EXTRA_USER_MANIFEST_LINES is a space-separated list of
+# </boot-relative-path>=<local-host-path> entries to add to USER_MANIFEST.
+# This lets users add files to the bootfs via make without needing to edit the
+# manifest or call mkbootfs directly.
+ifneq ($(EXTRA_USER_MANIFEST_LINES),)
+USER_MANIFEST_LINES += $(EXTRA_USER_MANIFEST_LINES)
+$(info EXTRA_USER_MANIFEST_LINES = $(EXTRA_USER_MANIFEST_LINES))
+endif
+
+# TODO(dbort): Remove all references to USER_AUTORUN after 2018-03-16, once
+# all current users have had a chance to encounter this error.
 ifneq ($(USER_AUTORUN),)
-USER_MANIFEST_LINES += autorun=$(USER_AUTORUN)
+$(warning USER_AUTORUN=$(USER_AUTORUN) is deprecated)
+$(warning - Use EXTRA_USER_MANIFEST_LINES="autorun=$(USER_AUTORUN)")
+$(warning - Ensure that $(USER_AUTORUN) starts with "#!/boot/bin/sh")
+$(warning - Add "zircon.autorun.boot=/boot/autorun" to the kernel cmdline)
+$(error USER_AUTORUN is no longer supported)
 endif
 
 # generate a new manifest and compare to see if it differs from the previous one
@@ -125,29 +140,6 @@ GENERATED += $(USER_MANIFEST)
 # to generate dependencies
 USER_MANIFEST_DEPS := $(foreach x,$(USER_MANIFEST_LINES),$(lastword $(subst =,$(SPACE),$(strip $(x)))))
 
-PLATFORM_OPTS :=
-ifneq ($(PLATFORM_VID),)
-    PLATFORM_OPTS += --vid $(PLATFORM_VID)
-    GLOBAL_DEFINES += PLATFORM_VID=$(PLATFORM_VID)
-endif
-ifneq ($(PLATFORM_PID),)
-    PLATFORM_OPTS += --pid $(PLATFORM_PID)
-    GLOBAL_DEFINES += PLATFORM_PID=$(PLATFORM_PID)
-endif
-ifneq ($(PLATFORM_BOARD_NAME),)
-    PLATFORM_OPTS += --board $(PLATFORM_BOARD_NAME)
-    GLOBAL_DEFINES += PLATFORM_BOARD_NAME=$(PLATFORM_BOARD_NAME)
-endif
-
-ifneq ($(PLATFORM_OPTS),)
-$(BUILDDIR)/platform-id.bin: $(MKBOOTFS) FORCE
-	$(call BUILDECHO,generating $@)
-	@$(MKDIR)
-	$(NOECHO)$(MKBOOTFS) -o $@ $(PLATFORM_OPTS)
-ADDITIONAL_BOOTDATA_ITEMS += $(BUILDDIR)/platform-id.bin
-GENERATED += $(BUILDDIR)/platform-id.bin
-endif
-
 .PHONY: user-manifest additional-bootdata
 user-manifest: $(USER_MANIFEST) $(USER_MANIFEST_DEPS)
 additional-bootdata: $(ADDITIONAL_BOOTDATA_ITEMS)
@@ -158,15 +150,8 @@ ifeq ($(call TOBOOL,$(ENABLE_BUILD_SYSROOT)),true)
 user-only: sysroot
 endif
 
-KERNEL_BOOTDATA := $(BUILDDIR)/kernel-bootdata.bin
-$(KERNEL_BOOTDATA): $(MKBOOTFS) $(ADDITIONAL_BOOTDATA_ITEMS)
-	$(call BUILDECHO,generating $@)
-	@$(MKDIR)
-	$(NOECHO)$(MKBOOTFS) -o $@ $(or $(ADDITIONAL_BOOTDATA_ITEMS),--empty)
-
-.PHONY: kernel-only kernel-bootdata
-kernel-only: kernel kernel-bootdata
-kernel-bootdata: $(KERNEL_BOOTDATA)
+.PHONY: kernel-only
+kernel-only: kernel 
 
 $(USER_BOOTDATA): $(MKBOOTFS) $(USER_MANIFEST) $(USER_MANIFEST_DEPS) $(ADDITIONAL_BOOTDATA_ITEMS)
 	$(call BUILDECHO,generating $@)

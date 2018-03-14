@@ -9,6 +9,7 @@
 #include <fidl/coding.h>
 
 #include <unittest/unittest.h>
+#include <zircon/syscalls.h>
 
 #include "fidl_coded_types.h"
 #include "fidl_structs.h"
@@ -311,6 +312,47 @@ bool encode_array_of_present_handles() {
     EXPECT_EQ(handles[1], dummy_handle_1);
     EXPECT_EQ(handles[2], dummy_handle_2);
     EXPECT_EQ(handles[3], dummy_handle_3);
+
+    END_TEST;
+}
+
+bool encode_array_of_present_handles_error_closes_handles() {
+    BEGIN_TEST;
+
+    array_of_nonnullable_handles_message_layout message = {};
+    zx_handle_t handle_pairs[4][2];
+    // Use eventpairs so that we can know for sure that handles were closed by fidl_encode.
+    for (uint32_t i = 0; i < ArrayCount(handle_pairs); ++i) {
+        ASSERT_EQ(zx_eventpair_create(0u, &handle_pairs[i][0], &handle_pairs[i][1]), ZX_OK);
+    }
+    message.inline_struct.handles[0] = handle_pairs[0][0];
+    message.inline_struct.handles[1] = handle_pairs[1][0];
+    message.inline_struct.handles[2] = handle_pairs[2][0];
+    message.inline_struct.handles[3] = handle_pairs[3][0];
+
+    zx_handle_t output_handles[4] = {};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status = fidl_encode(&array_of_nonnullable_handles_message_type, &message, sizeof(message),
+                              output_handles,
+                              // -2 makes this invalid.
+                              ArrayCount(message.inline_struct.handles) - 2,
+                              &actual_handles, &error);
+    // Should fail because we we pass in a max_handles < the actual number of handles.
+    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
+    EXPECT_EQ(actual_handles, 0);
+    // All handles should be closed, those before the error was encountered and those after.
+    for (uint32_t i = 0; i < ArrayCount(handle_pairs); ++i) {
+        zx_signals_t observed_signals;
+        EXPECT_EQ(zx_object_wait_one(handle_pairs[i][1],
+                                     ZX_EPAIR_PEER_CLOSED,
+                                     1, // deadline shouldn't matter, should return immediately.
+                                     &observed_signals),
+                   ZX_OK);
+        EXPECT_EQ(observed_signals & ZX_EPAIR_PEER_CLOSED, ZX_EPAIR_PEER_CLOSED);
+        EXPECT_EQ(zx_handle_close(handle_pairs[i][1]), ZX_OK); // [i][0] was closed by fidl_encode.
+    }
 
     END_TEST;
 }
@@ -1003,6 +1045,209 @@ bool encode_present_nullable_bounded_vector_of_handles_short_error() {
     END_TEST;
 }
 
+bool encode_present_nonnullable_vector_of_uint32() {
+    BEGIN_TEST;
+
+    unbounded_nonnullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, &message.uint32[0]};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&unbounded_nonnullable_vector_of_uint32_message_type, &message,
+                    sizeof(message), nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
+    EXPECT_EQ(actual_handles, 0u);
+
+    auto message_uint32 = reinterpret_cast<uint64_t>(message.inline_struct.vector.data);
+    EXPECT_EQ(message_uint32, FIDL_ALLOC_PRESENT);
+
+    END_TEST;
+}
+
+bool encode_present_nullable_vector_of_uint32() {
+    BEGIN_TEST;
+
+    unbounded_nullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, &message.uint32[0]};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&unbounded_nullable_vector_of_uint32_message_type, &message, sizeof(message),
+                    nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
+    EXPECT_EQ(actual_handles, 0u);
+
+    auto message_uint32 = reinterpret_cast<uint64_t>(message.inline_struct.vector.data);
+    EXPECT_EQ(message_uint32, FIDL_ALLOC_PRESENT);
+
+    END_TEST;
+}
+
+bool encode_absent_nonnullable_vector_of_uint32_error() {
+    BEGIN_TEST;
+
+    unbounded_nonnullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, nullptr};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&unbounded_nonnullable_vector_of_uint32_message_type, &message,
+                    sizeof(message), nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
+    EXPECT_NONNULL(error, error);
+
+    END_TEST;
+}
+
+bool encode_absent_nullable_vector_of_uint32() {
+    BEGIN_TEST;
+
+    unbounded_nullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, nullptr};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status = fidl_encode(&unbounded_nullable_vector_of_uint32_message_type, &message,
+                              sizeof(message.inline_struct), nullptr, 0u, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
+    EXPECT_EQ(actual_handles, 0u);
+
+    auto message_uint32 = reinterpret_cast<uint64_t>(message.inline_struct.vector.data);
+    EXPECT_EQ(message_uint32, FIDL_ALLOC_ABSENT);
+
+    END_TEST;
+}
+
+bool encode_present_nonnullable_bounded_vector_of_uint32() {
+    BEGIN_TEST;
+
+    bounded_32_nonnullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, &message.uint32[0]};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&bounded_32_nonnullable_vector_of_uint32_message_type, &message,
+                    sizeof(message), nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
+    EXPECT_EQ(actual_handles, 0u);
+
+    auto message_uint32 = reinterpret_cast<uint64_t>(message.inline_struct.vector.data);
+    EXPECT_EQ(message_uint32, FIDL_ALLOC_PRESENT);
+
+    END_TEST;
+}
+
+bool encode_present_nullable_bounded_vector_of_uint32() {
+    BEGIN_TEST;
+
+    bounded_32_nullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, &message.uint32[0]};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&bounded_32_nullable_vector_of_uint32_message_type, &message, sizeof(message),
+                    nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
+    EXPECT_EQ(actual_handles, 0u);
+
+    auto message_uint32 = reinterpret_cast<uint64_t>(message.inline_struct.vector.data);
+    EXPECT_EQ(message_uint32, FIDL_ALLOC_PRESENT);
+
+    END_TEST;
+}
+
+bool encode_absent_nonnullable_bounded_vector_of_uint32() {
+    BEGIN_TEST;
+
+    bounded_32_nonnullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, nullptr};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status = fidl_encode(&bounded_32_nonnullable_vector_of_uint32_message_type, &message,
+                              sizeof(message), nullptr, 0u, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
+    EXPECT_NONNULL(error);
+
+    END_TEST;
+}
+
+bool encode_absent_nullable_bounded_vector_of_uint32() {
+    BEGIN_TEST;
+
+    bounded_32_nullable_vector_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, nullptr};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status = fidl_encode(&bounded_32_nullable_vector_of_uint32_message_type, &message,
+                              sizeof(message.inline_struct), nullptr, 0u, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
+    EXPECT_EQ(actual_handles, 0u);
+
+    auto message_uint32 = reinterpret_cast<uint64_t>(message.inline_struct.vector.data);
+    EXPECT_EQ(message_uint32, FIDL_ALLOC_ABSENT);
+
+    END_TEST;
+}
+
+bool encode_present_nonnullable_bounded_vector_of_uint32_short_error() {
+    BEGIN_TEST;
+
+    multiple_nonnullable_vectors_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, &message.uint32[0]};
+    message.inline_struct.vector2 = fidl_vector_t{4, &message.uint32_2[0]};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&multiple_nonnullable_vectors_of_uint32_message_type, &message,
+                    sizeof(message), nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
+    EXPECT_NONNULL(error);
+
+    END_TEST;
+}
+
+bool encode_present_nullable_bounded_vector_of_uint32_short_error() {
+    BEGIN_TEST;
+
+    multiple_nullable_vectors_of_uint32_message_layout message = {};
+    message.inline_struct.vector = fidl_vector_t{4, &message.uint32[0]};
+    message.inline_struct.vector2 = fidl_vector_t{4, &message.uint32_2[0]};
+
+    const char* error = nullptr;
+    uint32_t actual_handles = 0u;
+    auto status =
+        fidl_encode(&multiple_nullable_vectors_of_uint32_message_type, &message, sizeof(message),
+                    nullptr, 0, &actual_handles, &error);
+
+    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
+    EXPECT_NONNULL(error);
+
+    END_TEST;
+}
+
 bool encode_bad_tagged_union_error() {
     BEGIN_TEST;
 
@@ -1381,93 +1626,103 @@ bool encode_nested_nullable_structs() {
     END_TEST;
 }
 
+void SetUpRecursionMessage(recursion_message_layout* message) {
+    message->inline_struct.inline_union.tag = maybe_recurse_union_kMore;
+    message->inline_struct.inline_union.more = &message->depth_0;
+    message->depth_0.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_0.inline_union.more = &message->depth_1;
+    message->depth_1.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_1.inline_union.more = &message->depth_2;
+    message->depth_2.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_2.inline_union.more = &message->depth_3;
+    message->depth_3.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_3.inline_union.more = &message->depth_4;
+    message->depth_4.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_4.inline_union.more = &message->depth_5;
+    message->depth_5.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_5.inline_union.more = &message->depth_6;
+    message->depth_6.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_6.inline_union.more = &message->depth_7;
+    message->depth_7.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_7.inline_union.more = &message->depth_8;
+    message->depth_8.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_8.inline_union.more = &message->depth_9;
+    message->depth_9.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_9.inline_union.more = &message->depth_10;
+    message->depth_10.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_10.inline_union.more = &message->depth_11;
+    message->depth_11.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_11.inline_union.more = &message->depth_12;
+    message->depth_12.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_12.inline_union.more = &message->depth_13;
+    message->depth_13.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_13.inline_union.more = &message->depth_14;
+    message->depth_14.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_14.inline_union.more = &message->depth_15;
+    message->depth_15.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_15.inline_union.more = &message->depth_16;
+    message->depth_16.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_16.inline_union.more = &message->depth_17;
+    message->depth_17.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_17.inline_union.more = &message->depth_18;
+    message->depth_18.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_18.inline_union.more = &message->depth_19;
+    message->depth_19.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_19.inline_union.more = &message->depth_20;
+    message->depth_20.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_20.inline_union.more = &message->depth_21;
+    message->depth_21.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_21.inline_union.more = &message->depth_22;
+    message->depth_22.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_22.inline_union.more = &message->depth_23;
+    message->depth_23.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_23.inline_union.more = &message->depth_24;
+    message->depth_24.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_24.inline_union.more = &message->depth_25;
+    message->depth_25.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_25.inline_union.more = &message->depth_26;
+    message->depth_26.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_26.inline_union.more = &message->depth_27;
+    message->depth_27.inline_union.tag = maybe_recurse_union_kMore;
+    message->depth_27.inline_union.more = &message->depth_28;
+}
+
 bool encode_nested_struct_recursion_too_deep_error() {
     BEGIN_TEST;
 
     recursion_message_layout message = {};
-    message.inline_struct.start.tag = maybe_recurse_union_kMore;
-    message.inline_struct.start.more = &message.depth_0;
-    message.depth_0.tag = maybe_recurse_union_kMore;
-    message.depth_0.more = &message.depth_1;
-    message.depth_1.tag = maybe_recurse_union_kMore;
-    message.depth_1.more = &message.depth_2;
-    message.depth_2.tag = maybe_recurse_union_kMore;
-    message.depth_2.more = &message.depth_3;
-    message.depth_3.tag = maybe_recurse_union_kMore;
-    message.depth_3.more = &message.depth_4;
-    message.depth_4.tag = maybe_recurse_union_kMore;
-    message.depth_4.more = &message.depth_5;
-    message.depth_5.tag = maybe_recurse_union_kMore;
-    message.depth_5.more = &message.depth_6;
-    message.depth_6.tag = maybe_recurse_union_kMore;
-    message.depth_6.more = &message.depth_7;
-    message.depth_7.tag = maybe_recurse_union_kMore;
-    message.depth_7.more = &message.depth_8;
-    message.depth_8.tag = maybe_recurse_union_kMore;
-    message.depth_8.more = &message.depth_9;
-    message.depth_9.tag = maybe_recurse_union_kMore;
-    message.depth_9.more = &message.depth_10;
-    message.depth_10.tag = maybe_recurse_union_kMore;
-    message.depth_10.more = &message.depth_11;
-    message.depth_11.tag = maybe_recurse_union_kMore;
-    message.depth_11.more = &message.depth_12;
-    message.depth_12.tag = maybe_recurse_union_kMore;
-    message.depth_12.more = &message.depth_13;
-    message.depth_13.tag = maybe_recurse_union_kMore;
-    message.depth_13.more = &message.depth_14;
-    message.depth_14.tag = maybe_recurse_union_kMore;
-    message.depth_14.more = &message.depth_15;
-    message.depth_15.tag = maybe_recurse_union_kMore;
-    message.depth_15.more = &message.depth_16;
-    message.depth_16.tag = maybe_recurse_union_kMore;
-    message.depth_16.more = &message.depth_17;
-    message.depth_17.tag = maybe_recurse_union_kMore;
-    message.depth_17.more = &message.depth_18;
-    message.depth_18.tag = maybe_recurse_union_kMore;
-    message.depth_18.more = &message.depth_19;
-    message.depth_19.tag = maybe_recurse_union_kMore;
-    message.depth_19.more = &message.depth_20;
-    message.depth_20.tag = maybe_recurse_union_kMore;
-    message.depth_20.more = &message.depth_21;
-    message.depth_21.tag = maybe_recurse_union_kMore;
-    message.depth_21.more = &message.depth_22;
-    message.depth_22.tag = maybe_recurse_union_kMore;
-    message.depth_22.more = &message.depth_23;
-    message.depth_23.tag = maybe_recurse_union_kMore;
-    message.depth_23.more = &message.depth_24;
-    message.depth_24.tag = maybe_recurse_union_kMore;
-    message.depth_24.more = &message.depth_25;
-    message.depth_25.tag = maybe_recurse_union_kMore;
-    message.depth_25.more = &message.depth_26;
-    message.depth_26.tag = maybe_recurse_union_kMore;
-    message.depth_26.more = &message.depth_27;
-    message.depth_27.tag = maybe_recurse_union_kMore;
-    message.depth_27.more = &message.depth_28;
-    message.depth_28.tag = maybe_recurse_union_kMore;
-    message.depth_28.more = &message.depth_29;
-    message.depth_29.tag = maybe_recurse_union_kMore;
-    message.depth_29.more = &message.depth_30;
-    message.depth_30.tag = maybe_recurse_union_kMore;
-    message.depth_30.more = &message.depth_31;
-    message.depth_31.tag = maybe_recurse_union_kMore;
-    message.depth_31.more = &message.depth_32;
-    message.depth_32.tag = maybe_recurse_union_kMore;
-    message.depth_32.more = &message.depth_33;
-    message.depth_33.tag = maybe_recurse_union_kMore;
-    message.depth_33.more = &message.depth_34;
-    message.depth_34.tag = maybe_recurse_union_kDone;
-    message.depth_34.done = &message.done;
-    message.done.handle = dummy_handle_0;
+    // First we check that FIDL_RECURSION_DEPTH - 1 levels of recursion is OK.
+    SetUpRecursionMessage(&message);
+    message.depth_28.inline_union.tag = maybe_recurse_union_kDone;
+    message.depth_28.inline_union.handle = dummy_handle_0;
 
     zx_handle_t handles[1] = {};
 
     const char* error = nullptr;
     uint32_t actual_handles = 0u;
-    auto status = fidl_encode(&recursion_message_type, &message, sizeof(message), handles,
-                              ArrayCount(handles), &actual_handles, &error);
+    auto status =
+        fidl_encode(&recursion_message_type, &message,
+                    // Tell it to ignore everything after we stop recursion.
+                    offsetof(recursion_message_layout, depth_29), handles,
+                    ArrayCount(handles), &actual_handles, &error);
+    EXPECT_EQ(status, ZX_OK);
+    EXPECT_NULL(error, error);
 
+    // Now add another level of recursion.
+    SetUpRecursionMessage(&message);
+    message.depth_28.inline_union.tag = maybe_recurse_union_kMore;
+    message.depth_28.inline_union.more = &message.depth_29;
+    message.depth_29.inline_union.tag = maybe_recurse_union_kDone;
+    message.depth_29.inline_union.handle = dummy_handle_0;
+
+    error = nullptr;
+    actual_handles = 0u;
+    status = fidl_encode(&recursion_message_type, &message, sizeof(message), handles,
+                         ArrayCount(handles), &actual_handles, &error);
     EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
     EXPECT_NONNULL(error);
+    const char expected_error_msg[] = "recursion depth exceeded encoding struct";
+    EXPECT_STR_EQ(expected_error_msg, error, "wrong error msg");
 
     END_TEST;
 }
@@ -1490,6 +1745,7 @@ RUN_TEST(encode_array_of_nullable_handles)
 RUN_TEST(encode_array_of_nullable_handles_with_insufficient_handles_error)
 RUN_TEST(encode_array_of_array_of_present_handles)
 RUN_TEST(encode_out_of_line_array_of_nonnullable_handles)
+RUN_TEST(encode_array_of_present_handles_error_closes_handles)
 END_TEST_CASE(arrays)
 
 BEGIN_TEST_CASE(strings)
@@ -1517,6 +1773,16 @@ RUN_TEST(encode_absent_nonnullable_bounded_vector_of_handles)
 RUN_TEST(encode_absent_nullable_bounded_vector_of_handles)
 RUN_TEST(encode_present_nonnullable_bounded_vector_of_handles_short_error)
 RUN_TEST(encode_present_nullable_bounded_vector_of_handles_short_error)
+RUN_TEST(encode_present_nonnullable_vector_of_uint32)
+RUN_TEST(encode_present_nullable_vector_of_uint32)
+RUN_TEST(encode_absent_nonnullable_vector_of_uint32_error)
+RUN_TEST(encode_absent_nullable_vector_of_uint32)
+RUN_TEST(encode_present_nonnullable_bounded_vector_of_uint32)
+RUN_TEST(encode_present_nullable_bounded_vector_of_uint32)
+RUN_TEST(encode_absent_nonnullable_bounded_vector_of_uint32)
+RUN_TEST(encode_absent_nullable_bounded_vector_of_uint32)
+RUN_TEST(encode_present_nonnullable_bounded_vector_of_uint32_short_error)
+RUN_TEST(encode_present_nullable_bounded_vector_of_uint32_short_error)
 END_TEST_CASE(vectors)
 
 BEGIN_TEST_CASE(unions)

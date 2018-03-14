@@ -49,13 +49,16 @@ zx_status_t sys_nanosleep(zx_time_t deadline) {
         return ZX_OK;
     }
 
-    // This syscall is declared as "blocking" in syscalls.sysgen, so a higher
+    // This syscall is declared as "blocking" in syscalls.abigen, so a higher
     // layer will automatically retry if we return ZX_ERR_INTERNAL_INTR_RETRY.
     return thread_sleep_etc(deadline, /*interruptable=*/true);
 }
 
 // This must be accessed atomically from any given thread.
-static fbl::atomic<int64_t> utc_offset;
+//
+// NOTE(abdulla): This is used by pvclock. If logic here is changed, please
+// update pvclock too.
+fbl::atomic<int64_t> utc_offset;
 
 uint64_t sys_clock_get(uint32_t clock_id) {
     switch (clock_id) {

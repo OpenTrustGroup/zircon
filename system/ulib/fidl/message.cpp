@@ -21,7 +21,7 @@ Message::Message(BytePart bytes, HandlePart handles)
 Message::~Message() {
     for (zx_handle_t handle : handles_)
         zx_handle_close(handle);
-    ClearHandles();
+    ClearHandlesUnsafe();
 }
 
 Message::Message(Message&& other)
@@ -51,16 +51,22 @@ zx_status_t Message::Decode(const fidl_type_t* type,
                                      handles_.data(), handles_.actual(),
                                      error_msg_out);
     if (status == ZX_OK)
-        ClearHandles();
+        ClearHandlesUnsafe();
     return status;
+}
+
+zx_status_t Message::Validate(const fidl_type_t* type,
+                              const char** error_msg_out) const {
+    return fidl_validate(type, bytes_.data(), bytes_.actual(),
+                         handles_.actual(), error_msg_out);
 }
 
 zx_status_t Message::Read(zx_handle_t channel, uint32_t flags) {
     uint32_t actual_bytes = 0u;
     uint32_t actual_handles = 0u;
     zx_status_t status = zx_channel_read(
-        channel, flags, bytes_.data(), handles_.data(), handles_.capacity(),
-        bytes_.capacity(), &actual_bytes, &actual_handles);
+        channel, flags, bytes_.data(), handles_.data(), bytes_.capacity(),
+        handles_.capacity(), &actual_bytes, &actual_handles);
     if (status == ZX_OK) {
         bytes_.set_actual(actual_bytes);
         handles_.set_actual(actual_handles);
@@ -73,7 +79,7 @@ zx_status_t Message::Write(zx_handle_t channel, uint32_t flags) {
                                           bytes_.actual(), handles_.data(),
                                           handles_.actual());
     if (status == ZX_OK)
-        ClearHandles();
+        ClearHandlesUnsafe();
     return status;
 }
 
@@ -94,9 +100,9 @@ zx_status_t Message::Call(zx_handle_t channel, uint32_t flags,
     zx_status_t status = zx_channel_call(channel, flags, deadline, &args,
                                          &actual_bytes, &actual_handles,
                                          read_status);
-    if (status == ZX_OK) {
-        ClearHandles();
-        if (*read_status == ZX_OK) {
+    if (status == ZX_OK || status == ZX_ERR_CALL_FAILED) {
+        ClearHandlesUnsafe();
+        if (status == ZX_OK) {
             response->bytes_.set_actual(actual_bytes);
             response->handles_.set_actual(actual_handles);
         }
@@ -104,8 +110,7 @@ zx_status_t Message::Call(zx_handle_t channel, uint32_t flags,
     return status;
 }
 
-void Message::ClearHandles() {
-    memset(handles_.data(), 0, sizeof(zx_handle_t) * handles_.actual());
+void Message::ClearHandlesUnsafe() {
     handles_.set_actual(0u);
 }
 

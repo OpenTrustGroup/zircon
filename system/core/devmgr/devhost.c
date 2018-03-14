@@ -21,6 +21,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/log.h>
 
+#include <fdio/io.fidl2.h>
 #include <fdio/util.h>
 #include <fdio/remoteio.h>
 
@@ -214,24 +215,6 @@ done:
     return drv->status;
 }
 
-static void dh_handle_open(zxrio_msg_t* msg, size_t len,
-                           zx_handle_t h, iostate_t* ios) {
-    if ((msg->hcount != 1) ||
-        (msg->datalen != (len - ZXRIO_HDR_SZ))) {
-        zx_handle_close(h);
-        log(ERROR, "devhost: malformed OPEN reques\n");
-        return;
-    }
-    msg->handle[0] = h;
-
-    zx_status_t r;
-    if ((r = devhost_rio_handler(msg, ios)) < 0) {
-        if (r != ERR_DISPATCHER_INDIRECT) {
-            log(ERROR, "devhost: OPEN failed: %d\n", r);
-        }
-    }
-}
-
 static void dh_send_status(zx_handle_t h, zx_status_t status) {
     dc_msg_t reply = {
         .txid = 0,
@@ -257,13 +240,43 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
     const char* path = mkdevpath(ios->dev, buffer, sizeof(buffer));
 
     // handle remoteio open messages only
-    if ((msize >= ZXRIO_HDR_SZ) && (msg.op == ZXRIO_OPEN)) {
+    if ((msize >= sizeof(fidl_message_header_t)) &&
+        ((msg.op == ZXRIO_OPEN) || (msg.op == ZXFIDL_OPEN))) {
         if (hcount != 1) {
+            log(ERROR, "devhost: Malformed open request (bad handle count)\n");
             r = ZX_ERR_INTERNAL;
             goto fail;
         }
+
+        DirectoryOpenMsg* request = (DirectoryOpenMsg*) &msg;
+        zxrio_msg_t* rmsg = (zxrio_msg_t*) &msg;
+
+        if (msg.op == ZXFIDL_OPEN) {
+            // Decode open request (FIDL2)
+            if ((msize < sizeof(DirectoryOpenMsg)) ||
+                (FIDL_ALIGN(sizeof(DirectoryOpenMsg)) + FIDL_ALIGN(request->path.size) != msize) ||
+                (request->object != FIDL_HANDLE_PRESENT) ||
+                (request->path.data != (char*) FIDL_ALLOC_PRESENT)) {
+                log(ERROR, "devhost: Malformed open request (bad message)\n");
+                r = ZX_ERR_IO;
+                goto fail;
+            }
+            request->object = hin[0];
+            request->path.data = (void*)((uintptr_t)(&msg) +
+                                         FIDL_ALIGN(sizeof(DirectoryOpenMsg)));
+        } else {
+            // Decode open request (RIO)
+            rmsg->hcount = 1;
+            rmsg->handle[0] = hin[0];
+        }
+
         log(RPC_RIO, "devhost[%s] remoteio OPEN\n", path);
-        dh_handle_open((void*) &msg, msize, hin[0], ios);
+        if ((r = devhost_rio_handler(rmsg, ios)) < 0) {
+            if (r != ERR_DISPATCHER_INDIRECT) {
+                log(ERROR, "devhost: OPEN failed: %d\n", r);
+            }
+        }
+
         return ZX_OK;
     }
 
@@ -300,7 +313,6 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
         dev->rpc = hin[0];
         dev->refcount = 1;
         list_initialize(&dev->children);
-        list_initialize(&dev->instances);
 
         newios->ph.handle = hin[0];
         newios->ph.waitfor = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
@@ -721,7 +733,7 @@ zx_status_t devhost_add(zx_device_t* parent, zx_device_t* child, const char* pro
     }
 
     dc_status_t rsp;
-    if ((r = dc_msg_rpc(parent->rpc, &msg, msglen, &hsend, 1, &rsp, sizeof(rsp))) < 0) {
+    if ((r = dc_msg_rpc(parent->rpc, &msg, msglen, &hsend, 1, &rsp, sizeof(rsp), NULL)) < 0) {
         log(ERROR, "devhost[%s] add '%s': rpc failed: %d\n", path, child->name, r);
     } else {
         ios->dev = child;
@@ -746,7 +758,8 @@ fail:
 
 static zx_status_t devhost_rpc(zx_device_t* dev, uint32_t op,
                                const char* args, const char* opname,
-                               dc_status_t* rsp, size_t rsp_len) {
+                               dc_status_t* rsp, size_t rsp_len,
+                               zx_handle_t* outhandle) {
     char buffer[512];
     const char* path = mkdevpath(dev, buffer, sizeof(buffer));
     log(RPC_OUT, "devhost[%s] %s args='%s'\n", path, opname, args ? args : "");
@@ -758,7 +771,7 @@ static zx_status_t devhost_rpc(zx_device_t* dev, uint32_t op,
     }
     msg.op = op;
     msg.protocol_id = 0;
-    if ((r = dc_msg_rpc(dev->rpc, &msg, msglen, NULL, 0, rsp, rsp_len)) < 0) {
+    if ((r = dc_msg_rpc(dev->rpc, &msg, msglen, NULL, 0, rsp, rsp_len, outhandle)) < 0) {
         log(ERROR, "devhost: rpc:%s failed: %d\n", opname, r);
     }
     return r;
@@ -766,7 +779,7 @@ static zx_status_t devhost_rpc(zx_device_t* dev, uint32_t op,
 
 void devhost_make_visible(zx_device_t* dev) {
     dc_status_t rsp;
-    devhost_rpc(dev, DC_OP_MAKE_VISIBLE, NULL, "make-visible", &rsp, sizeof(rsp));
+    devhost_rpc(dev, DC_OP_MAKE_VISIBLE, NULL, "make-visible", &rsp, sizeof(rsp), NULL);
 }
 
 // Send message to devcoordinator informing it that this device
@@ -795,7 +808,7 @@ zx_status_t devhost_remove(zx_device_t* dev) {
     dev->ios = NULL;
 
     dc_status_t rsp;
-    devhost_rpc(dev, DC_OP_REMOVE_DEVICE, NULL, "remove-device", &rsp, sizeof(rsp));
+    devhost_rpc(dev, DC_OP_REMOVE_DEVICE, NULL, "remove-device", &rsp, sizeof(rsp), NULL);
 
     // shut down our rpc channel
     zx_handle_close(dev->rpc);
@@ -830,7 +843,7 @@ zx_status_t devhost_get_topo_path(zx_device_t* dev, char* path, size_t max, size
     } reply;
     zx_status_t r;
     if ((r = devhost_rpc(remote_dev, DC_OP_GET_TOPO_PATH, NULL, "get-topo-path",
-                         &reply.rsp, sizeof(reply))) < 0) {
+                         &reply.rsp, sizeof(reply), NULL)) < 0) {
         return r;
     }
     reply.path[DC_PATH_MAX - 1] = 0;
@@ -847,7 +860,30 @@ zx_status_t devhost_get_topo_path(zx_device_t* dev, char* path, size_t max, size
 
 zx_status_t devhost_device_bind(zx_device_t* dev, const char* drv_libname) {
     dc_status_t rsp;
-    return devhost_rpc(dev, DC_OP_BIND_DEVICE, drv_libname, "bind-device", &rsp, sizeof(rsp));
+    return devhost_rpc(dev, DC_OP_BIND_DEVICE, drv_libname,
+                       "bind-device", &rsp, sizeof(rsp), NULL);
+}
+
+zx_status_t devhost_load_firmware(zx_device_t* dev, const char* path,
+                                  zx_handle_t* vmo, size_t* size) {
+    if ((vmo == NULL) || (size == NULL)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    struct {
+        dc_status_t rsp;
+        size_t size;
+    } reply;
+    zx_status_t r;
+    if ((r = devhost_rpc(dev, DC_OP_LOAD_FIRMWARE, path, "load-firmware",
+                         &reply.rsp, sizeof(reply), vmo)) < 0) {
+        return r;
+    }
+    if (*vmo == ZX_HANDLE_INVALID) {
+        return ZX_ERR_INTERNAL;
+    }
+    *size = reply.size;
+    return ZX_OK;
 }
 
 

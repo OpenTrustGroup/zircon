@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <ddk/debug.h>
+#include <hw/arch_ops.h>
 #include <hw/reg.h>
 #include <zircon/types.h>
 #include <zircon/syscalls.h>
@@ -21,10 +22,6 @@
 
 #define ROUNDUP_TO(x, multiple) ((x + multiple - 1) & ~(multiple - 1))
 #define PAGE_ROUNDUP(x) ROUNDUP_TO(x, PAGE_SIZE)
-
-#ifndef MIN
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#endif
 
 // The Interrupter Moderation Interval prevents the controller from sending interrupts too often.
 // According to XHCI Rev 1.1 4.17.2, the default is 4000 (= 1 ms). We set it to 1000 (= 250 us) to
@@ -173,10 +170,7 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
     volatile uint32_t* hccparams2 = &xhci->cap_regs->hccparams2;
 
     xhci->mode = mode;
-    uint32_t max_interrupters = XHCI_GET_BITS32(hcsparams1, HCSPARAMS1_MAX_INTRS_START,
-                                                HCSPARAMS1_MAX_INTRS_BITS);
-    max_interrupters = MIN(INTERRUPTER_COUNT, max_interrupters);
-    xhci->num_interrupts = MIN(max_interrupters, num_interrupts);
+    xhci->num_interrupts = num_interrupts;
 
     xhci->max_slots = XHCI_GET_BITS32(hcsparams1, HCSPARAMS1_MAX_SLOTS_START,
                                       HCSPARAMS1_MAX_SLOTS_BITS);
@@ -221,12 +215,14 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
     }
 
     // Allocate DMA memory for various things
-    result = io_buffer_init(&xhci->dcbaa_erst_buffer, PAGE_SIZE, IO_BUFFER_RW | IO_BUFFER_CONTIG);
+    result = io_buffer_init(&xhci->dcbaa_erst_buffer, PAGE_SIZE,
+                            IO_BUFFER_RW | IO_BUFFER_CONTIG | XHCI_IO_BUFFER_UNCACHED);
     if (result != ZX_OK) {
         zxlogf(ERROR, "io_buffer_init failed for xhci->dcbaa_erst_buffer\n");
         goto fail;
     }
-    result = io_buffer_init(&xhci->input_context_buffer, PAGE_SIZE, IO_BUFFER_RW | IO_BUFFER_CONTIG);
+    result = io_buffer_init(&xhci->input_context_buffer, PAGE_SIZE,
+                            IO_BUFFER_RW | IO_BUFFER_CONTIG | XHCI_IO_BUFFER_UNCACHED);
     if (result != ZX_OK) {
         zxlogf(ERROR, "io_buffer_init failed for xhci->input_context_buffer\n");
         goto fail;
@@ -244,7 +240,7 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         }
         size_t scratch_pad_index_size = PAGE_ROUNDUP(scratch_pad_bufs * sizeof(uint64_t));
         result = io_buffer_init(&xhci->scratch_pad_index_buffer, scratch_pad_index_size,
-                                IO_BUFFER_RW | IO_BUFFER_CONTIG);
+                                IO_BUFFER_RW | IO_BUFFER_CONTIG | XHCI_IO_BUFFER_UNCACHED);
         if (result != ZX_OK) {
             zxlogf(ERROR, "io_buffer_init failed for xhci->scratch_pad_index_buffer\n");
             goto fail;
@@ -339,8 +335,14 @@ fail:
     return result;
 }
 
+uint32_t xhci_get_max_interrupters(xhci_t* xhci) {
+    xhci_cap_regs_t* cap_regs = (xhci_cap_regs_t*)xhci->mmio;
+    volatile uint32_t* hcsparams1 = &cap_regs->hcsparams1;
+    return XHCI_GET_BITS32(hcsparams1, HCSPARAMS1_MAX_INTRS_START,
+                           HCSPARAMS1_MAX_INTRS_BITS);
+}
+
 int xhci_get_slot_ctx_state(xhci_slot_t* slot) {
-    xhci_cache_flush_invalidate(&slot->sc->sc3, sizeof(slot->sc->sc3));
     return XHCI_GET_BITS32(&slot->sc->sc3, SLOT_CTX_SLOT_STATE_START,
                            SLOT_CTX_CONTEXT_ENTRIES_BITS);
 }
@@ -349,7 +351,6 @@ int xhci_get_ep_ctx_state(xhci_slot_t* slot, xhci_endpoint_t* ep) {
     if (!ep->epc) {
         return EP_CTX_STATE_DISABLED;
     }
-    xhci_cache_flush_invalidate(&ep->epc->epc0, sizeof(ep->epc->epc0));
     return XHCI_GET_BITS32(&ep->epc->epc0, EP_CTX_EP_STATE_START, EP_CTX_EP_STATE_BITS);
 }
 
@@ -391,7 +392,6 @@ void xhci_wait_bits64(volatile uint64_t* ptr, uint64_t bits, uint64_t expected) 
 
 void xhci_set_dbcaa(xhci_t* xhci, uint32_t slot_id, zx_paddr_t paddr) {
     XHCI_WRITE64(&xhci->dcbaa[slot_id], paddr);
-    xhci_cache_flush(&xhci->dcbaa[slot_id], sizeof(xhci->dcbaa[slot_id]));
 }
 
 zx_status_t xhci_start(xhci_t* xhci) {
@@ -530,6 +530,7 @@ void xhci_post_command(xhci_t* xhci, uint32_t command, uint64_t ptr, uint32_t co
 
     xhci_increment_ring(cr);
 
+    hw_mb();
     XHCI_WRITE32(&xhci->doorbells[0], 0);
 
     mtx_unlock(&xhci->command_ring_lock);
@@ -584,9 +585,6 @@ uint64_t xhci_get_current_frame(xhci_t* xhci) {
 
 static void xhci_handle_events(xhci_t* xhci, int interrupter) {
     xhci_event_ring_t* er = &xhci->event_rings[interrupter];
-
-    // invalidate event ring before processing new events
-    xhci_cache_flush_invalidate(er->start, er->buffer.size);
 
     // process all TRBs with cycle bit matching our CCS
     while ((XHCI_READ32(&er->current->control) & TRB_C) == er->ccs) {

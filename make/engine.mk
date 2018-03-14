@@ -18,6 +18,7 @@ include make/macros.mk
 # default them to something so when they're referenced in the make instance they're not undefined
 BUILDROOT ?= .
 DEBUG ?= 2
+DEBUG_HARD ?= false
 ENABLE_BUILD_LISTFILES ?= false
 ENABLE_BUILD_SYSROOT ?= false
 ENABLE_BUILD_LISTFILES := $(call TOBOOL,$(ENABLE_BUILD_LISTFILES))
@@ -87,7 +88,8 @@ else
 project-name := $(firstword $(MAKECMDGOALS))
 
 ifneq ($(project-name),)
-ifneq ($(strip $(wildcard kernel/project/$(project-name).mk)),)
+ifneq ($(strip $(wildcard kernel/project/$(project-name).mk \
+			  kernel/project/alias/$(project-name).mk)),)
 do-nothing := 1
 $(MAKECMDGOALS) _all: make-make
 make-make:
@@ -111,6 +113,12 @@ $(error No project specified. Use 'make list' for a list of projects or 'make he
 endif
 endif
 
+# DEBUG_HARD enables limited optimizations and full debug symbols for use with gdb/lldb
+ifeq ($(call TOBOOL,$(DEBUG_HARD)),true)
+GLOBAL_DEBUGFLAGS := -O0 -g3
+endif
+GLOBAL_DEBUGFLAGS ?= -O2 -g
+
 BUILDDIR := $(BUILDROOT)/build-$(PROJECT)$(BUILDDIR_SUFFIX)
 GENERATED_INCLUDES:=$(BUILDDIR)/gen/global/include
 OUTLKBIN := $(BUILDDIR)/$(LKNAME).bin
@@ -121,7 +129,6 @@ USER_CONFIG_HEADER := $(BUILDDIR)/config-user.h
 HOST_CONFIG_HEADER := $(BUILDDIR)/config-host.h
 GLOBAL_INCLUDES := system/public system/private $(GENERATED_INCLUDES)
 GLOBAL_OPTFLAGS ?= $(ARCH_OPTFLAGS)
-GLOBAL_DEBUGFLAGS ?= -g
 # When embedding source file locations in debugging information, by default
 # the compiler will record the absolute path of the current directory and
 # make everything relative to that.  Instead, we tell the compiler to map
@@ -137,6 +144,7 @@ GLOBAL_COMPILEFLAGS += -fno-common
 # kernel/include/lib/counters.h and kernel.ld depend on -fdata-sections.
 GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
 ifeq ($(call TOBOOL,$(USE_CLANG)),true)
+GLOBAL_COMPILEFLAGS += -nostdlibinc
 GLOBAL_COMPILEFLAGS += -no-canonical-prefixes
 GLOBAL_COMPILEFLAGS += -Wno-address-of-packed-member
 GLOBAL_COMPILEFLAGS += -Wthread-safety
@@ -167,6 +175,7 @@ endif
 KERNEL_INCLUDES := $(BUILDDIR) kernel/include
 KERNEL_COMPILEFLAGS := -ffreestanding -include $(KERNEL_CONFIG_HEADER)
 KERNEL_COMPILEFLAGS += -Wformat=2 -Wvla
+# GCC supports "-Wformat-signedness" but Clang currently does not.
 ifeq ($(call TOBOOL,$(USE_CLANG)),false)
 KERNEL_COMPILEFLAGS += -Wformat-signedness
 endif
@@ -219,16 +228,12 @@ USER_COMPILEFLAGS += -fasynchronous-unwind-tables
 KERNEL_COMPILEFLAGS += -fno-exceptions -fno-unwind-tables
 
 ifeq ($(call TOBOOL,$(USE_CLANG)),true)
-SAFESTACK := -fsanitize=safe-stack -fstack-protector-strong
 NO_SAFESTACK := -fno-sanitize=safe-stack -fno-stack-protector
 NO_SANITIZERS := -fno-sanitize=all -fno-stack-protector
 else
-SAFESTACK :=
 NO_SAFESTACK :=
 NO_SANITIZERS :=
 endif
-
-USER_COMPILEFLAGS += $(SAFESTACK)
 
 USER_SCRT1_OBJ := $(BUILDDIR)/system/ulib/Scrt1.o
 
@@ -362,11 +367,12 @@ ALLEFI_LIBS :=
 # sysroot (exported libraries and headers)
 SYSROOT_DEPS :=
 
-# MDI source files used to generate the mdi.bin binary blob
-MDI_SRCS :=
-
 # MDI source files used to generate the mdi-defs.h header file
 MDI_INCLUDES := system/public/zircon/mdi/zircon.mdi
+
+# Header file for MDI definitions
+MDI_GEN_HEADER_DIR := $(BUILDDIR)/gen/global/include
+MDI_HEADER := $(MDI_GEN_HEADER_DIR)/mdi/mdi-defs.h
 
 # For now always enable frame pointers so kernel backtraces
 # can work and define WITH_PANIC_BACKTRACE to enable them in panics
@@ -394,7 +400,7 @@ BUILDID ?=
 TOOLS := $(BUILDDIR)/tools
 MDIGEN := $(TOOLS)/mdigen
 MKBOOTFS := $(TOOLS)/mkbootfs
-SYSGEN := $(TOOLS)/sysgen
+ABIGEN := $(TOOLS)/abigen
 
 # set V=1 in the environment if you want to see the full command line of every command
 ifeq ($(V),1)
@@ -408,9 +414,10 @@ endif
 FORCE:
 
 # try to include the project file
--include kernel/project/$(PROJECT).mk
+-include $(firstword $(wildcard kernel/project/$(PROJECT).mk \
+				kernel/project/alias/$(PROJECT).mk))
 ifndef TARGET
-$(error couldn't find project or project doesn't define target)
+$(error couldn't find project "$(PROJECT)" or project doesn't define target)
 endif
 include kernel/target/$(TARGET)/rules.mk
 ifndef PLATFORM
@@ -425,7 +432,7 @@ endif
 include system/host/rules.mk
 include kernel/arch/$(ARCH)/rules.mk
 include kernel/top/rules.mk
-include make/sysgen.mk
+include make/abigen.mk
 
 ifeq ($(call TOBOOL,$(USE_CLANG)),true)
 GLOBAL_COMPILEFLAGS += --target=$(CLANG_ARCH)-fuchsia
@@ -507,8 +514,18 @@ SAVED_USER_MANIFEST_LINES := $(USER_MANIFEST_LINES)
 include make/recurse.mk
 
 ifeq ($(call TOBOOL,$(ENABLE_ULIB_ONLY)),false)
-# rules for generating MDI header and binary
-include make/mdi.mk
+# rule for generating MDI header file for C/C++ code
+$(MDI_HEADER): $(MDIGEN) $(MDI_INCLUDES)
+	$(call BUILDECHO,generating $@)
+	@$(MKDIR)
+	$(NOECHO)$(MDIGEN) $(MDI_INCLUDES) -h $@
+
+GENERATED += $(MDI_HEADER)
+EXTRA_BUILDDEPS += $(MDI_HEADER)
+
+# Make sure $(MDI_HEADER) is generated before it is included by any source files
+TARGET_MODDEPS += $(MDI_HEADER)
+GLOBAL_INCLUDES += $(MDI_GEN_HEADER_DIR)
 endif
 
 ifneq ($(EXTRA_IDFILES),)
@@ -711,7 +728,9 @@ HOST_OBJCOPY := $(HOST_TOOLCHAIN_PREFIX)objcopy
 HOST_STRIP   := $(HOST_TOOLCHAIN_PREFIX)strip
 
 # Host compile flags
-HOST_COMPILEFLAGS := -Wall -g -O2 -Isystem/public -Isystem/private -I$(GENERATED_INCLUDES)
+HOST_COMPILEFLAGS := -g -O2 -Isystem/public -Isystem/private -I$(GENERATED_INCLUDES)
+HOST_COMPILEFLAGS += -Wall -Wextra
+HOST_COMPILEFLAGS += -Wno-unused-parameter -Wno-sign-compare
 HOST_CFLAGS := -std=c11
 HOST_CPPFLAGS := -std=c++14 -fno-exceptions -fno-rtti
 HOST_LDFLAGS :=

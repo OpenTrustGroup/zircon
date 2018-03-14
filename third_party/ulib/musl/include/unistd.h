@@ -68,7 +68,6 @@ int access(const char*, int);
 int faccessat(int, const char*, int, int);
 
 int chdir(const char*);
-int fchdir(int);
 char* getcwd(char*, size_t);
 
 unsigned alarm(unsigned);
@@ -132,7 +131,6 @@ size_t confstr(int, char*, size_t);
 #if defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 int lockf(int, int, off_t);
 long gethostid(void);
-int nice(int);
 void sync(void);
 int syncfs(int);
 pid_t setpgrp(void);
@@ -208,7 +206,7 @@ int eaccess(const char*, int);
 #define _POSIX_THREAD_SAFE_FUNCTIONS _POSIX_VERSION
 #define _POSIX_THREAD_ATTR_STACKADDR _POSIX_VERSION
 #define _POSIX_THREAD_ATTR_STACKSIZE _POSIX_VERSION
-#define _POSIX_THREAD_PRIORITY_SCHEDULING _POSIX_VERSION
+/* #define _POSIX_THREAD_PRIORITY_SCHEDULING -1 */
 #define _POSIX_THREAD_CPUTIME _POSIX_VERSION
 #define _POSIX_TIMERS _POSIX_VERSION
 #define _POSIX_TIMEOUTS _POSIX_VERSION

@@ -17,6 +17,7 @@
 
 #include <object/diagnostics.h>
 #include <object/handle.h>
+#include <object/bus_transaction_initiator_dispatcher.h>
 #include <object/job_dispatcher.h>
 #include <object/process_dispatcher.h>
 #include <object/resource_dispatcher.h>
@@ -541,6 +542,20 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
             return single_record_result(
                 _buffer, buffer_size, _actual, _avail, &info, sizeof(info));
         }
+        case ZX_INFO_BTI: {
+            fbl::RefPtr<BusTransactionInitiatorDispatcher> dispatcher;
+            auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &dispatcher);
+            if (status != ZX_OK)
+                return status;
+
+            zx_info_bti_t info = {
+                .minimum_contiguity = dispatcher->minimum_contiguity(),
+                .aspace_size = dispatcher->aspace_size(),
+            };
+
+            return single_record_result(
+                _buffer, buffer_size, _actual, _avail, &info, sizeof(info));
+        }
 
         default:
             return ZX_ERR_NOT_SUPPORTED;
@@ -644,7 +659,7 @@ zx_status_t sys_object_set_property(zx_handle_t handle_value, uint32_t property,
                 return ZX_ERR_INVALID_ARGS;
             return dispatcher->set_name(name, size);
         }
-#if ARCH_X86_64
+#if ARCH_X86
         case ZX_PROP_REGISTER_FS: {
             if (size < sizeof(uintptr_t))
                 return ZX_ERR_BUFFER_TOO_SMALL;

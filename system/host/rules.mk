@@ -5,7 +5,8 @@
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
 HOSTAPPS := \
-	$(LOCAL_DIR)/blobstore/rules.mk \
+	$(LOCAL_DIR)/abigen/rules.mk \
+	$(LOCAL_DIR)/blobfs/rules.mk \
 	$(LOCAL_DIR)/bootserver/rules.mk \
 	$(LOCAL_DIR)/fidl/compiler/rules.mk \
 	$(LOCAL_DIR)/fvm/rules.mk \
@@ -18,7 +19,6 @@ HOSTAPPS := \
 	$(LOCAL_DIR)/mkfs-msdosfs/rules.mk \
 	$(LOCAL_DIR)/mkkdtb/rules.mk \
 	$(LOCAL_DIR)/netprotocol/rules.mk \
-	$(LOCAL_DIR)/sysgen/rules.mk \
 	$(LOCAL_DIR)/h2md/rules.mk \
 
 include $(HOSTAPPS)

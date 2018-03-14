@@ -3,7 +3,7 @@
 #include "libc.h"
 #include "asan_impl.h"
 #include "zircon_impl.h"
-#include "pthread_impl.h"
+#include "threads_impl.h"
 #include "stdio_impl.h"
 #include <ctype.h>
 #include <dlfcn.h>
@@ -696,7 +696,7 @@ __NO_SAFESTACK NO_ASAN static zx_status_t map_library(zx_handle_t vmo,
     size_t i;
 
     size_t l;
-    zx_status_t status = _zx_vmo_read(vmo, &buf, 0, sizeof(buf), &l);
+    zx_status_t status = _zx_vmo_read_old(vmo, &buf, 0, sizeof(buf), &l);
     if (status != ZX_OK)
         return status;
     // We cannot support ET_EXEC in the general case, because its fixed
@@ -710,7 +710,7 @@ __NO_SAFESTACK NO_ASAN static zx_status_t map_library(zx_handle_t vmo,
     if (phsize > sizeof(buf.phdrs))
         goto noexec;
     if (eh->e_phoff + phsize > l) {
-        status = _zx_vmo_read(vmo, buf.phdrs, eh->e_phoff, phsize, &l);
+        status = _zx_vmo_read_old(vmo, buf.phdrs, eh->e_phoff, phsize, &l);
         if (status != ZX_OK)
             goto error;
         if (l != phsize)
@@ -811,9 +811,6 @@ __NO_SAFESTACK NO_ASAN static zx_status_t map_library(zx_handle_t vmo,
             continue;
 
         if (ph->p_flags & PF_W) {
-            // TODO(mcgrathr,ZX-698): When ZX-698 is fixed, we can clone to
-            // a size that's not whole pages, and then extending it with
-            // set_size will do the partial-page zeroing for us implicitly.
             size_t data_size =
                 ((ph->p_vaddr + ph->p_filesz + PAGE_SIZE - 1) & -PAGE_SIZE) -
                 this_min;
@@ -1469,6 +1466,11 @@ __NO_SAFESTACK struct pthread* __init_main_thread(zx_handle_t thread_self) {
         __builtin_trap();
 
     zxr_tp_set(thread_self, pthread_to_tp(td));
+
+    // Now that the thread descriptor is set up, it's safe to use the
+    // dlerror machinery.
+    runtime = 1;
+
     return td;
 }
 
@@ -1681,10 +1683,12 @@ __NO_SAFESTACK static void* dls3(zx_handle_t exec_vmo, int argc, char** argv) {
     if (ldso_fail)
         _exit(127);
 
-    /* Switch to runtime mode: any further failures in the dynamic
-     * linker are a reportable failure rather than a fatal startup
-     * error. */
-    runtime = 1;
+    // Logically we could now switch to "runtime mode", because
+    // startup-time dynamic linking work per se is done now.  However,
+    // the real concrete meaning of "runtime mode" is that the dlerror
+    // machinery is usable.  It's not usable until the thread descriptor
+    // has been set up.  So the switch to "runtime mode" happens in
+    // __init_main_thread instead.
 
     atomic_init(&unlogged_tail, (uintptr_t)tail);
 

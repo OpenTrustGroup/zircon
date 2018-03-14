@@ -31,32 +31,9 @@ typedef enum {
     ZX_INFO_KMEM_STATS                 = 17, // zx_info_kmem_stats_t[1]
     ZX_INFO_RESOURCE                   = 18, // zx_info_resource_t[1]
     ZX_INFO_HANDLE_COUNT               = 19, // zx_info_handle_count_t[1]
+    ZX_INFO_BTI                        = 20, // zx_info_bti_t[1]
     ZX_INFO_LAST
 } zx_object_info_topic_t;
-
-typedef enum {
-    ZX_OBJ_TYPE_NONE                = 0,
-    ZX_OBJ_TYPE_PROCESS             = 1,
-    ZX_OBJ_TYPE_THREAD              = 2,
-    ZX_OBJ_TYPE_VMO                 = 3,
-    ZX_OBJ_TYPE_CHANNEL             = 4,
-    ZX_OBJ_TYPE_EVENT               = 5,
-    ZX_OBJ_TYPE_PORT                = 6,
-    ZX_OBJ_TYPE_INTERRUPT           = 9,
-    ZX_OBJ_TYPE_PCI_DEVICE          = 11,
-    ZX_OBJ_TYPE_LOG                 = 12,
-    ZX_OBJ_TYPE_SOCKET              = 14,
-    ZX_OBJ_TYPE_RESOURCE            = 15,
-    ZX_OBJ_TYPE_EVENT_PAIR          = 16,
-    ZX_OBJ_TYPE_JOB                 = 17,
-    ZX_OBJ_TYPE_VMAR                = 18,
-    ZX_OBJ_TYPE_FIFO                = 19,
-    ZX_OBJ_TYPE_GUEST               = 20,
-    ZX_OBJ_TYPE_VCPU                = 21,
-    ZX_OBJ_TYPE_TIMER               = 22,
-    ZX_OBJ_TYPE_IOMMU               = 23,
-    ZX_OBJ_TYPE_LAST
-} zx_obj_type_t;
 
 typedef enum {
     ZX_OBJ_PROP_NONE            = 0,
@@ -120,7 +97,7 @@ typedef struct zx_info_thread {
 
 typedef struct zx_info_thread_stats {
     // Total accumulated running time of the thread.
-    zx_time_t total_runtime;
+    zx_duration_t total_runtime;
 } zx_info_thread_stats_t;
 
 // Statistics about resources (e.g., memory) used by a task. Can be relatively
@@ -158,6 +135,17 @@ typedef struct zx_info_vmar {
     // Length of the region, in bytes.
     size_t len;
 } zx_info_vmar_t;
+
+typedef struct zx_info_bti {
+    // zx_bti_pin will always be able to return addreses that are contiguous for at
+    // least this many bytes.  E.g. if this returns 1MB, then a call to
+    // zx_bti_pin() with a size of 2MB will return at most two physically-contiguous runs.
+    // If the size were 2.5MB, it will return at most three physically-contiguous runs.
+    uint64_t minimum_contiguity;
+
+    // The number of bytes in the device's address space (UINT64_MAX if 2^64).
+    uint64_t aspace_size;
+} zx_info_bti_t;
 
 
 // Types and values used by ZX_INFO_PROCESS_MAPS.
@@ -285,7 +273,7 @@ typedef struct zx_info_cpu_stats {
     uint32_t cpu_number;
     uint32_t flags;
 
-    zx_time_t idle_time;
+    zx_duration_t idle_time;
 
     // kernel scheduler counters
     uint64_t reschedules;

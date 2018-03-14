@@ -30,16 +30,16 @@ static bool test_printf(const char* expected, const char* format, ...) {
     }
     if (length != (int)strlen(expected) ||
         memcmp(buf, expected, length + 1) != 0) {
-        printf("expected: \"%s\" (length %d)\n",
-               expected, (int)strlen(expected));
-        printf("but got:  \"%s\" (length %d) with return value %d)\n",
+        printf("expected: \"%s\" (length %zu)\n",
+               expected, strlen(expected));
+        printf("but got:  \"%s\" (length %zu) with return value %d)\n",
                buf, strlen(buf), length);
         return false;
     }
     return true;
 }
 
-static bool printf_tests(void* context) {
+static bool printf_tests() {
     BEGIN_TEST;
 
     printf("numbers:\n");
@@ -157,7 +157,7 @@ static bool printf_tests(void* context) {
 }
 
 // Test snprintf() when the output is larger than the given buffer.
-static bool snprintf_truncation_test(void* context) {
+static bool snprintf_truncation_test() {
     BEGIN_TEST;
 
     char buf[32];
@@ -185,5 +185,4 @@ static bool snprintf_truncation_test(void* context) {
 UNITTEST_START_TESTCASE(printf_tests)
 UNITTEST("printf_tests", printf_tests)
 UNITTEST("snprintf_truncation_test", snprintf_truncation_test)
-UNITTEST_END_TESTCASE(printf_tests, "printf_tests", "printf_tests",
-                      nullptr, nullptr);
+UNITTEST_END_TESTCASE(printf_tests, "printf_tests", "printf_tests");

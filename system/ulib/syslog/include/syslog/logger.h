@@ -5,7 +5,8 @@
 //
 // This header contains definition for the logger object and protocol.
 
-#pragma once
+#ifndef ZIRCON_SYSTEM_ULIB_SYSLOG_INCLUDE_SYSLOG_LOGGER_H_
+#define ZIRCON_SYSTEM_ULIB_SYSLOG_INCLUDE_SYSLOG_LOGGER_H_
 
 #include <stdarg.h>
 #include <unistd.h>
@@ -15,19 +16,16 @@
 // Max no of tags associated with a logger.
 #define FX_LOG_MAX_TAGS (4)
 
-// Max individual tag lenght.
+// Max individual tag length including terminating character.
 #define FX_LOG_MAX_TAG_LEN (64)
 
 // Log entry severity.
 // Used for coarse filtering of log messages
-typedef enum {
-  FX_LOG_DEBUG = 0,
-  FX_LOG_INFO = 1,
-  FX_LOG_WARNING = 2,
-  FX_LOG_ERROR = 3,
-  FX_LOG_FATAL = 4,
-  FX_LOG_INVALID = 100,
-} fx_log_severity_t;
+typedef int fx_log_severity_t;
+#define FX_LOG_INFO (0)
+#define FX_LOG_WARNING (1)
+#define FX_LOG_ERROR (2)
+#define FX_LOG_FATAL (3)
 
 __BEGIN_CDECLS
 
@@ -35,27 +33,27 @@ __BEGIN_CDECLS
 // Specifies the destination to which log messages should be written.
 // Multiple destinations may be used concurrently.
 typedef struct fx_logger_config {
-  // The minimum log severity.
-  // Log messages with lower severity will be discarded.
-  fx_log_severity_t min_severity;
+    // The minimum log severity.
+    // Log messages with lower severity will be discarded.
+    fx_log_severity_t min_severity;
 
-  // The file descriptor to which formatted log messages should be written,
-  // or -1 if log messages should not be written to the console.
-  // logger takes ownership of this fd.
-  int console_fd;
+    // The file descriptor to which formatted log messages should be written,
+    // or -1 if log messages should not be written to the console.
+    // logger takes ownership of this fd.
+    int console_fd;
 
-  // The FIDL log service channel to which the logger should connect, or
-  // |ZX_HANDLE_INVALID| if the logger should not connect to the log service.
-  // logger takes ownership of this handle.
-  zx_handle_t log_service_channel;
+    // The FIDL log service channel to which the logger should connect, or
+    // |ZX_HANDLE_INVALID| if the logger should not connect to the log service.
+    // logger takes ownership of this handle.
+    zx_handle_t log_service_channel;
 
-  // An array of tag strings to associate with all messages written
-  // by this logger.  Tags will be truncated if they are (individually) longer
-  // than |FX_LOG_MAX_TAG_LEN|.
-  const char** tags;
+    // An array of tag strings to associate with all messages written
+    // by this logger.  Tags will be truncated if they are (individually) longer
+    // than |FX_LOG_MAX_TAG_LEN|.
+    const char** tags;
 
-  // Number of tag strings.  Must be no more than |FX_LOG_MAX_TAGS|.
-  size_t num_tags;
+    // Number of tag strings.  Must be no more than |FX_LOG_MAX_TAGS|.
+    size_t num_tags;
 } fx_logger_config_t;
 
 // Opaque type representing a logger object.
@@ -113,3 +111,5 @@ zx_status_t fx_logger_log(fx_logger_t* logger, fx_log_severity_t severity,
                           const char* tag, const char* msg);
 
 __END_CDECLS
+
+#endif // ZIRCON_SYSTEM_ULIB_SYSLOG_INCLUDE_SYSLOG_LOGGER_H_

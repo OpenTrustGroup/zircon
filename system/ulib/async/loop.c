@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <async/loop.h>
+#include <lib/async/loop.h>
 
 #include <assert.h>
 #include <stdatomic.h>
@@ -11,10 +11,12 @@
 #include <zircon/assert.h>
 #include <zircon/listnode.h>
 #include <zircon/syscalls.h>
+#include <zircon/syscalls/hypervisor.h>
 
-#include <async/receiver.h>
-#include <async/task.h>
-#include <async/wait.h>
+#include <lib/async/receiver.h>
+#include <lib/async/task.h>
+#include <lib/async/trap.h>
+#include <lib/async/wait.h>
 
 // The port wait key associated with the dispatcher's control messages.
 #define KEY_CONTROL (0u)
@@ -25,12 +27,14 @@ static zx_status_t async_loop_post_task(async_t* async, async_task_t* task);
 static zx_status_t async_loop_cancel_task(async_t* async, async_task_t* task);
 static zx_status_t async_loop_queue_packet(async_t* async, async_receiver_t* receiver,
                                            const zx_packet_user_t* data);
+static zx_status_t async_loop_set_guest_bell_trap(async_t* async, async_guest_bell_trap_t* trap);
 static const async_ops_t async_loop_ops = {
     .begin_wait = async_loop_begin_wait,
     .cancel_wait = async_loop_cancel_wait,
     .post_task = async_loop_post_task,
     .cancel_task = async_loop_cancel_task,
     .queue_packet = async_loop_queue_packet,
+    .set_guest_bell_trap = async_loop_set_guest_bell_trap,
 };
 
 typedef struct thread_record {
@@ -61,6 +65,9 @@ static zx_status_t async_loop_dispatch_wait(async_loop_t* loop, async_wait_t* wa
 static zx_status_t async_loop_dispatch_tasks(async_loop_t* loop);
 static zx_status_t async_loop_dispatch_packet(async_loop_t* loop, async_receiver_t* receiver,
                                               zx_status_t status, const zx_packet_user_t* data);
+static zx_status_t async_loop_dispatch_guest_bell_trap(async_loop_t* loop,
+                                                       async_guest_bell_trap_t* trap,
+                                                       const zx_packet_guest_bell_t* bell);
 static void async_loop_wake_threads(async_loop_t* loop);
 static zx_status_t async_loop_wait_async(async_loop_t* loop, async_wait_t* wait);
 static void async_loop_insert_task_locked(async_loop_t* loop, async_task_t* task);
@@ -246,10 +253,25 @@ static zx_status_t async_loop_run_once(async_loop_t* loop, zx_time_t deadline) {
             async_receiver_t* receiver = (void*)(uintptr_t)packet.key;
             return async_loop_dispatch_packet(loop, receiver, packet.status, &packet.user);
         }
+
+        // Handle guest bell trap packets.
+        if (packet.type == ZX_PKT_TYPE_GUEST_BELL) {
+            async_guest_bell_trap_t* trap = (void*)(uintptr_t)packet.key;
+            return async_loop_dispatch_guest_bell_trap(loop, trap, &packet.guest_bell);
+        }
     }
 
     ZX_DEBUG_ASSERT(false);
     return ZX_ERR_INTERNAL;
+}
+
+static zx_status_t async_loop_dispatch_guest_bell_trap(async_loop_t* loop,
+                                                       async_guest_bell_trap_t* trap,
+                                                       const zx_packet_guest_bell_t* bell) {
+    async_loop_invoke_prologue(loop);
+    trap->handler((async_t*)loop, trap, bell);
+    async_loop_invoke_epilogue(loop);
+    return ZX_OK;
 }
 
 static zx_status_t async_loop_dispatch_wait(async_loop_t* loop, async_wait_t* wait,
@@ -535,6 +557,18 @@ static zx_status_t async_loop_queue_packet(async_t* async, async_receiver_t* rec
     if (data)
         packet.user = *data;
     return zx_port_queue(loop->port, &packet, 0u);
+}
+
+static zx_status_t async_loop_set_guest_bell_trap(async_t* async, async_guest_bell_trap_t* trap) {
+    async_loop_t* loop = (async_loop_t*)async;
+    ZX_DEBUG_ASSERT(loop);
+    ZX_DEBUG_ASSERT(trap);
+
+    if (atomic_load_explicit(&loop->state, memory_order_acquire) == ASYNC_LOOP_SHUTDOWN)
+        return ZX_ERR_BAD_STATE;
+
+    return zx_guest_set_trap(trap->guest, ZX_GUEST_TRAP_BELL, trap->addr,
+                             trap->length, loop->port, (uintptr_t)trap);
 }
 
 static zx_status_t async_loop_wait_async(async_loop_t* loop, async_wait_t* wait) {

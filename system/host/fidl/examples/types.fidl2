@@ -1,8 +1,17 @@
 library types;
 
-struct this_is_a_struct {};
-union this_is_a_union {};
-interface this_is_an_interface {};
+struct this_is_a_struct { string s; };
+union this_is_a_union { string s; };
+interface this_is_an_interface {
+    23: Copy(string s, uint32 count) -> (string s);
+};
+
+struct interfaces_and_requests {
+    this_is_an_interface nonnullable_interface;
+    this_is_an_interface? nullable_interface;
+    request<this_is_an_interface> nonnullable_request;
+    request<this_is_an_interface>? nullable_request;
+};
 
 struct primitive_types {
     bool b;
@@ -16,6 +25,22 @@ struct primitive_types {
     uint64 u64;
     float32 f32;
     float64 f64;
+};
+
+struct default_values {
+    bool b1 = true;
+    bool b2 = false;
+    int8 i8 = -23;
+    int16 i16 = 34;
+    int32 i32 = -34595;
+    int64 i64 = 3948038;
+    uint8 u8 = 0;
+    uint16 u16 = 348;
+    uint32 u32 = 9038;
+    uint64 u64 = 19835;
+    float32 f32 = 1.30;
+    float64 f64 = 0.0000054;
+    string s = "hello";
 };
 
 struct arrays {
@@ -32,30 +57,33 @@ struct arrays {
     array<uint64>:1 u64_0;
     array<float32>:1 f32_0;
     array<float64>:1 f64_0;
+    array<handle>:1 handle_0;
 
-    array<bool>:size b_1;
-    array<int8>:size i8_1;
-    array<int16>:size i16_1;
-    array<int32>:size i32_1;
-    array<int64>:size i64_1;
-    array<uint8>:size u8_1;
-    array<uint16>:size u16_1;
-    array<uint32>:size u32_1;
-    array<uint64>:size u64_1;
-    array<float32>:size f32_1;
-    array<float64>:size f64_1;
+    array<bool>:arrays_size b_1;
+    array<int8>:arrays_size i8_1;
+    array<int16>:arrays_size i16_1;
+    array<int32>:arrays_size i32_1;
+    array<int64>:arrays_size i64_1;
+    array<uint8>:arrays_size u8_1;
+    array<uint16>:arrays_size u16_1;
+    array<uint32>:arrays_size u32_1;
+    array<uint64>:arrays_size u64_1;
+    array<float32>:arrays_size f32_1;
+    array<float64>:arrays_size f64_1;
+    array<handle>:arrays_size handle_1;
 
-    array<array<bool>:4>:size b_2;
-    array<array<int8>:4>:size i8_2;
-    array<array<int16>:4>:size i16_2;
-    array<array<int32>:4>:size i32_2;
-    array<array<int64>:4>:size i64_2;
-    array<array<uint8>:4>:size u8_2;
-    array<array<uint16>:4>:size u16_2;
-    array<array<uint32>:4>:size u32_2;
-    array<array<uint64>:4>:size u64_2;
-    array<array<float32>:4>:size f32_2;
-    array<array<float64>:4>:size f64_2;
+    array<array<bool>:4>:arrays_size b_2;
+    array<array<int8>:4>:arrays_size i8_2;
+    array<array<int16>:4>:arrays_size i16_2;
+    array<array<int32>:4>:arrays_size i32_2;
+    array<array<int64>:4>:arrays_size i64_2;
+    array<array<uint8>:4>:arrays_size u8_2;
+    array<array<uint16>:4>:arrays_size u16_2;
+    array<array<uint32>:4>:arrays_size u32_2;
+    array<array<uint64>:4>:arrays_size u64_2;
+    array<array<float32>:4>:arrays_size f32_2;
+    array<array<float64>:4>:arrays_size f64_2;
+    array<array<handle>:4>:arrays_size handle_2;
 };
 
 struct vectors {
@@ -72,6 +100,7 @@ struct vectors {
     vector<uint64>:1 u64_0;
     vector<float32>:1 f32_0;
     vector<float64>:1 f64_0;
+    vector<handle>:1 handle_0;
 
     vector<vector<bool>:4> b_1;
     vector<vector<int8>:4> i8_1;
@@ -84,6 +113,7 @@ struct vectors {
     vector<vector<uint64>:4> u64_1;
     vector<vector<float32>:4> f32_1;
     vector<vector<float64>:4> f64_1;
+    vector<vector<handle>:4> handle_1;
 
     vector<bool>:1 b_sized_0;
     vector<int8>:1 i8_sized_0;
@@ -96,30 +126,33 @@ struct vectors {
     vector<uint64>:1 u64_sized_0;
     vector<float32>:1 f32_sized_0;
     vector<float64>:1 f64_sized_0;
+    vector<handle>:1 handle_sized_0;
 
-    vector<bool>:size b_sized_1;
-    vector<int8>:size i8_sized_1;
-    vector<int16>:size i16_sized_1;
-    vector<int32>:size i32_sized_1;
-    vector<int64>:size i64_sized_1;
-    vector<uint8>:size u8_sized_1;
-    vector<uint16>:size u16_sized_1;
-    vector<uint32>:size u32_sized_1;
-    vector<uint64>:size u64_sized_1;
-    vector<float32>:size f32_sized_1;
-    vector<float64>:size f64_sized_1;
+    vector<bool>:vectors_size b_sized_1;
+    vector<int8>:vectors_size i8_sized_1;
+    vector<int16>:vectors_size i16_sized_1;
+    vector<int32>:vectors_size i32_sized_1;
+    vector<int64>:vectors_size i64_sized_1;
+    vector<uint8>:vectors_size u8_sized_1;
+    vector<uint16>:vectors_size u16_sized_1;
+    vector<uint32>:vectors_size u32_sized_1;
+    vector<uint64>:vectors_size u64_sized_1;
+    vector<float32>:vectors_size f32_sized_1;
+    vector<float64>:vectors_size f64_sized_1;
+    vector<handle>:vectors_size handle_sized_1;
 
-    vector<vector<bool>:4>:size b_sized_2;
-    vector<vector<int8>:4>:size i8_sized_2;
-    vector<vector<int16>:4>:size i16_sized_2;
-    vector<vector<int32>:4>:size i32_sized_2;
-    vector<vector<int64>:4>:size i64_sized_2;
-    vector<vector<uint8>:4>:size u8_sized_2;
-    vector<vector<uint16>:4>:size u16_sized_2;
-    vector<vector<uint32>:4>:size u32_sized_2;
-    vector<vector<uint64>:4>:size u64_sized_2;
-    vector<vector<float32>:4>:size f32_sized_2;
-    vector<vector<float64>:4>:size f64_sized_2;
+    vector<vector<bool>:4>:vectors_size b_sized_2;
+    vector<vector<int8>:4>:vectors_size i8_sized_2;
+    vector<vector<int16>:4>:vectors_size i16_sized_2;
+    vector<vector<int32>:4>:vectors_size i32_sized_2;
+    vector<vector<int64>:4>:vectors_size i64_sized_2;
+    vector<vector<uint8>:4>:vectors_size u8_sized_2;
+    vector<vector<uint16>:4>:vectors_size u16_sized_2;
+    vector<vector<uint32>:4>:vectors_size u32_sized_2;
+    vector<vector<uint64>:4>:vectors_size u64_sized_2;
+    vector<vector<float32>:4>:vectors_size f32_sized_2;
+    vector<vector<float64>:4>:vectors_size f64_sized_2;
+    vector<vector<handle>:4>:vectors_size handle_sized_2;
 
     vector<bool>:1? b_nullable_0;
     vector<int8>:1? i8_nullable_0;
@@ -132,6 +165,7 @@ struct vectors {
     vector<uint64>:1? u64_nullable_0;
     vector<float32>:1? f32_nullable_0;
     vector<float64>:1? f64_nullable_0;
+    vector<handle>:1? handle_nullable_0;
 
     vector<vector<bool>:4>? b_nullable_1;
     vector<vector<int8>:4>? i8_nullable_1;
@@ -144,6 +178,7 @@ struct vectors {
     vector<vector<uint64>:4>? u64_nullable_1;
     vector<vector<float32>:4>? f32_nullable_1;
     vector<vector<float64>:4>? f64_nullable_1;
+    vector<vector<handle>:4>? handle_nullable_1;
 
     vector<bool>:1? b_nullable_sized_0;
     vector<int8>:1? i8_nullable_sized_0;
@@ -156,32 +191,36 @@ struct vectors {
     vector<uint64>:1? u64_nullable_sized_0;
     vector<float32>:1? f32_nullable_sized_0;
     vector<float64>:1? f64_nullable_sized_0;
+    vector<handle>:1? handle_nullable_sized_0;
 
-    vector<bool>:size? b_nullable_sized_1;
-    vector<int8>:size? i8_nullable_sized_1;
-    vector<int16>:size? i16_nullable_sized_1;
-    vector<int32>:size? i32_nullable_sized_1;
-    vector<int64>:size? i64_nullable_sized_1;
-    vector<uint8>:size? u8_nullable_sized_1;
-    vector<uint16>:size? u16_nullable_sized_1;
-    vector<uint32>:size? u32_nullable_sized_1;
-    vector<uint64>:size? u64_nullable_sized_1;
-    vector<float32>:size? f32_nullable_sized_1;
-    vector<float64>:size? f64_nullable_sized_1;
+    vector<bool>:vectors_size? b_nullable_sized_1;
+    vector<int8>:vectors_size? i8_nullable_sized_1;
+    vector<int16>:vectors_size? i16_nullable_sized_1;
+    vector<int32>:vectors_size? i32_nullable_sized_1;
+    vector<int64>:vectors_size? i64_nullable_sized_1;
+    vector<uint8>:vectors_size? u8_nullable_sized_1;
+    vector<uint16>:vectors_size? u16_nullable_sized_1;
+    vector<uint32>:vectors_size? u32_nullable_sized_1;
+    vector<uint64>:vectors_size? u64_nullable_sized_1;
+    vector<float32>:vectors_size? f32_nullable_sized_1;
+    vector<float64>:vectors_size? f64_nullable_sized_1;
+    vector<handle>:vectors_size? handle_nullable_sized_1;
 
-    vector<vector<bool>:4>:size? b_nullable_sized_2;
-    vector<vector<int8>:4>:size? i8_nullable_sized_2;
-    vector<vector<int16>:4>:size? i16_nullable_sized_2;
-    vector<vector<int32>:4>:size? i32_nullable_sized_2;
-    vector<vector<int64>:4>:size? i64_nullable_sized_2;
-    vector<vector<uint8>:4>:size? u8_nullable_sized_2;
-    vector<vector<uint16>:4>:size? u16_nullable_sized_2;
-    vector<vector<uint32>:4>:size? u32_nullable_sized_2;
-    vector<vector<uint64>:4>:size? u64_nullable_sized_2;
-    vector<vector<float32>:4>:size? f32_nullable_sized_2;
-    vector<vector<float64>:4>:size? f64_nullable_sized_2;
+    vector<vector<bool>:4>:vectors_size? b_nullable_sized_2;
+    vector<vector<int8>:4>:vectors_size? i8_nullable_sized_2;
+    vector<vector<int16>:4>:vectors_size? i16_nullable_sized_2;
+    vector<vector<int32>:4>:vectors_size? i32_nullable_sized_2;
+    vector<vector<int64>:4>:vectors_size? i64_nullable_sized_2;
+    vector<vector<uint8>:4>:vectors_size? u8_nullable_sized_2;
+    vector<vector<uint16>:4>:vectors_size? u16_nullable_sized_2;
+    vector<vector<uint32>:4>:vectors_size? u32_nullable_sized_2;
+    vector<vector<uint64>:4>:vectors_size? u64_nullable_sized_2;
+    vector<vector<float32>:4>:vectors_size? f32_nullable_sized_2;
+    vector<vector<float64>:4>:vectors_size? f64_nullable_sized_2;
+    vector<vector<handle>:4>:vectors_size? handle_nullable_sized_2;
 };
 
+[Awesome]
 struct handles {
     handle handle_handle;
     handle<process> process_handle;
@@ -191,8 +230,6 @@ struct handles {
     handle<event> event_handle;
     handle<port> port_handle;
     handle<interrupt> interrupt_handle;
-    handle<iomap> iomap_handle;
-    handle<pci> pci_handle;
     handle<log> log_handle;
     handle<socket> socket_handle;
     handle<resource> resource_handle;
@@ -200,7 +237,6 @@ struct handles {
     handle<job> job_handle;
     handle<vmar> vmar_handle;
     handle<fifo> fifo_handle;
-    handle<hypervisor> hypervisor_handle;
     handle<guest> guest_handle;
     handle<timer> timer_handle;
 
@@ -212,8 +248,6 @@ struct handles {
     handle<event>? nullable_event_handle;
     handle<port>? nullable_port_handle;
     handle<interrupt>? nullable_interrupt_handle;
-    handle<iomap>? nullable_iomap_handle;
-    handle<pci>? nullable_pci_handle;
     handle<log>? nullable_log_handle;
     handle<socket>? nullable_socket_handle;
     handle<resource>? nullable_resource_handle;
@@ -221,7 +255,6 @@ struct handles {
     handle<job>? nullable_job_handle;
     handle<vmar>? nullable_vmar_handle;
     handle<fifo>? nullable_fifo_handle;
-    handle<hypervisor>? nullable_hypervisor_handle;
     handle<guest>? nullable_guest_handle;
     handle<timer>? nullable_timer_handle;
 };
@@ -232,9 +265,9 @@ struct strings {
     string s;
     string? nullable_s;
     string:4 size_0_s;
-    string:size size_1_s;
+    string:strings_size size_1_s;
     string:4? nullable_size_0_s;
-    string:size? nullable_size_1_s;
+    string:strings_size? nullable_size_1_s;
 };
 
 enum default_enum {};

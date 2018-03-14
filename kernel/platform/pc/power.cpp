@@ -53,6 +53,7 @@ void platform_halt_cpu(void) {
 }
 
 void platform_panic_start(void) {
+    platform_debug_panic_start();
     arch_disable_ints();
 
     if (atomic_swap(&panic_started, 1) == 0) {
@@ -65,6 +66,7 @@ void platform_panic_start(void) {
 }
 
 bool halt_on_panic = false;
+extern const char* manufacturer;
 
 void platform_halt(
     platform_halt_action suggested_action,
@@ -75,6 +77,9 @@ void platform_halt(
 
     switch (suggested_action) {
     case HALT_ACTION_SHUTDOWN:
+        if (strcmp("QEMU", manufacturer) == 0) {
+            outp(0xf4, 0x00);
+        }
         printf("Power off failed, halting\n");
         break;
     case HALT_ACTION_REBOOT:

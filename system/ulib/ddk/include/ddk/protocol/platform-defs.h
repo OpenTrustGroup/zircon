@@ -18,6 +18,10 @@ __BEGIN_CDECLS;
 #define PDEV_DID_USB_DWC2           5   // DWC2 USB Controller
 #define PDEV_DID_RTC_PL031          6   // ARM Primecell PL031 RTC
 #define PDEV_DID_DSI                7   // DSI
+#define PDEV_DID_BT_UART            8   // Bluetooth HCI over UART
+#define PDEV_DID_UART_TEST          9   // Simple UART test driver
+#define PDEV_DID_GPIO_TEST          10  // Simple GPIO test driver
+#define PDEV_DID_DW_I2C             11  // Designware I2C
 
 // QEMU emulator
 #define PDEV_VID_QEMU               1
@@ -27,8 +31,7 @@ __BEGIN_CDECLS;
 #define PDEV_VID_96BOARDS           2
 #define PDEV_PID_HIKEY960           1
 
-#define PDEV_DID_HIKEY960_GPIO_TEST 1
-#define PDEV_DID_HIKEY960_I2C_TEST  2
+#define PDEV_DID_HIKEY960_I2C_TEST  1
 
 // Google
 #define PDEV_VID_GOOGLE             3
@@ -45,15 +48,26 @@ __BEGIN_CDECLS;
 #define PDEV_PID_VIM2               2
 
 #define PDEV_DID_VIM_DISPLAY        1
-#define PDEV_DID_VIM_GPIO_TEST      2
 
 // Amlogic
 #define PDEV_VID_AMLOGIC            5
 #define PDEV_PID_AMLOGIC_A113       1
 #define PDEV_PID_AMLOGIC_S905X      2
 #define PDEV_PID_AMLOGIC_S912       3
+#define PDEV_PID_AMLOGIC_S905       4
 
 #define PDEV_DID_AMLOGIC_GPIO       1
 #define PDEV_DID_AMLOGIC_I2C        2
+#define PDEV_DID_AMLOGIC_UART       3
+#define PDEV_DID_AMLOGIC_AXG_CLK    4
+#define PDEV_DID_AMLOGIC_GXL_CLK    5
+
+// Broadcom
+#define PDEV_VID_BROADCOM           6
+#define PDEV_PID_BCM4356            1
+
+//Hardkernel
+#define PDEV_VID_HARDKERNEL         7
+#define PDEV_PID_ODROID_C2          1
 
 __END_CDECLS;

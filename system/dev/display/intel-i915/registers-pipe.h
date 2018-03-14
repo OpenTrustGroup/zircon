@@ -5,6 +5,7 @@
 #pragma once
 
 #include <hwreg/bitfields.h>
+#include <zircon/pixelformat.h>
 
 namespace registers {
 
@@ -52,8 +53,17 @@ public:
     static constexpr uint32_t kBaseAddr = 0x70188;
 
     DEF_FIELD(9, 0, stride);
-    // TODO(ZX-1413): this should be 64 bytes, not 16 4-byte pixels
-    static constexpr uint32_t kLinearStrideChunkSize = 16;
+    void set_linear_stride(uint32_t stride, zx_pixel_format_t format) {
+        set_stride(stride / (kLinearStrideChunkSize / ZX_PIXEL_FORMAT_BYTES(format)));
+    }
+
+    static uint32_t compute_linear_stride(uint32_t width, zx_pixel_format_t format) {
+        ZX_ASSERT(kLinearStrideChunkSize % ZX_PIXEL_FORMAT_BYTES(format) == 0);
+        return fbl::round_up(width, kLinearStrideChunkSize / ZX_PIXEL_FORMAT_BYTES(format));
+    }
+
+private:
+    static constexpr uint32_t kLinearStrideChunkSize = 64;
 };
 
 // PLANE_SIZE
@@ -137,9 +147,20 @@ public:
     DEF_FIELD(11, 0, y_size);
 };
 
+// DE_PIPE_INTERRUPT
+class PipeDeInterrupt : public hwreg::RegisterBase<PipeDeInterrupt, uint32_t> {
+public:
+    DEF_BIT(1, vsync);
+};
+
 // An instance of PipeRegs represents the registers for a particular pipe.
 class PipeRegs {
 public:
+    static constexpr uint32_t kStatusReg = 0x44400;
+    static constexpr uint32_t kMaskReg = 0x44404;
+    static constexpr uint32_t kIdentityReg = 0x44408;
+    static constexpr uint32_t kEnableReg = 0x4440c;
+
     PipeRegs(Pipe pipe) : pipe_(pipe) { }
 
     hwreg::RegisterAddr<registers::PipeSourceSize> PipeSourceSize() {
@@ -177,6 +198,10 @@ public:
     hwreg::RegisterAddr<registers::PipeScalerWinSize> PipeScalerWinSize(int num) {
         return hwreg::RegisterAddr<registers::PipeScalerWinSize>(
                 PipeScalerWinSize::kBaseAddr + 0x800 * pipe_ + num * 0x100);
+    }
+
+    hwreg::RegisterAddr<registers::PipeDeInterrupt> PipeDeInterrupt(uint32_t type) {
+        return hwreg::RegisterAddr<registers::PipeDeInterrupt>(type + 0x10 * pipe_);
     }
 
 private:

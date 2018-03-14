@@ -14,6 +14,8 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/protocol/platform-device.h>
+#include <ddk/protocol/serial.h>
+#include <ddk/protocol/clk.h>
 #include <ddk/protocol/usb-mode-switch.h>
 
 #include "platform-proxy.h"
@@ -308,6 +310,65 @@ static i2c_protocol_ops_t i2c_ops = {
     .get_channel_by_address = pdev_i2c_get_channel_by_address,
 };
 
+static zx_status_t pdev_serial_config(void* ctx, uint32_t port, uint32_t baud_rate,
+                                      uint32_t flags) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SERIAL_CONFIG,
+        .index = port,
+        .serial_config.baud_rate = baud_rate,
+        .serial_config.flags = flags,
+    };
+    pdev_resp_t resp;
+
+    return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp), NULL, 0, NULL);
+}
+
+static zx_status_t pdev_serial_open_socket(void* ctx, uint32_t port, zx_handle_t* out_handle) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SERIAL_OPEN_SOCKET,
+        .index = port,
+    };
+    pdev_resp_t resp;
+
+    return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp), out_handle, 1, NULL);
+}
+
+static serial_protocol_ops_t serial_ops = {
+    .config = pdev_serial_config,
+    .open_socket = pdev_serial_open_socket,
+};
+
+static zx_status_t pdev_clk_enable(void* ctx, uint32_t index) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_CLK_ENABLE,
+        .index = index,
+    };
+    pdev_resp_t resp;
+
+    return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp), NULL,
+                            0, NULL);
+}
+
+static zx_status_t pdev_clk_disable(void* ctx, uint32_t index) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_CLK_DISABLE,
+        .index = index,
+    };
+    pdev_resp_t resp;
+
+    return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp), NULL,
+                            0, NULL);
+}
+
+static clk_protocol_ops_t clk_ops = {
+    .enable = pdev_clk_enable,
+    .disable = pdev_clk_disable,
+};
+
 static zx_status_t platform_dev_map_mmio(void* ctx, uint32_t index, uint32_t cache_policy,
                                          void** vaddr, size_t* size, zx_handle_t* out_handle) {
     platform_proxy_t* proxy = ctx;
@@ -367,14 +428,26 @@ static zx_status_t platform_dev_map_interrupt(void* ctx, uint32_t index, zx_hand
     return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp), out_handle, 1, NULL);
 }
 
+static zx_status_t platform_dev_get_bti(void* ctx, uint32_t index, zx_handle_t* out_handle) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_GET_BTI,
+        .index = index,
+    };
+    pdev_resp_t resp;
+
+    return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp), out_handle, 1, NULL);
+}
+
 static zx_status_t platform_dev_alloc_contig_vmo(void* ctx, size_t size, uint32_t align_log2,
-                                                 zx_handle_t* out_handle) {
+                                                 uint32_t cache_policy, zx_handle_t* out_handle) {
     platform_proxy_t* dev = ctx;
     pdev_req_t req = {
         .op = PDEV_ALLOC_CONTIG_VMO,
         .contig_vmo = {
             .size = size,
             .align_log2 = align_log2,
+            .cache_policy = cache_policy,
         },
     };
     pdev_resp_t resp;
@@ -383,10 +456,12 @@ static zx_status_t platform_dev_alloc_contig_vmo(void* ctx, size_t size, uint32_
 }
 
 static zx_status_t platform_dev_map_contig_vmo(void* ctx, size_t size, uint32_t align_log2,
-                                               uint32_t map_flags, void** out_vaddr,
-                                               zx_paddr_t* out_paddr, zx_handle_t* out_handle) {
+                                               uint32_t map_flags, uint32_t cache_policy,
+                                               void** out_vaddr, zx_paddr_t* out_paddr,
+                                               zx_handle_t* out_handle) {
     zx_handle_t handle;
-    zx_status_t status = platform_dev_alloc_contig_vmo(ctx, size, align_log2, &handle);
+    zx_status_t status = platform_dev_alloc_contig_vmo(ctx, size, align_log2, cache_policy,
+                                                       &handle);
     if (status != ZX_OK) {
         return status;
     }
@@ -430,6 +505,7 @@ static zx_status_t platform_dev_get_device_info(void* ctx, pdev_device_info_t* o
 static platform_device_protocol_ops_t platform_dev_proto_ops = {
     .map_mmio = platform_dev_map_mmio,
     .map_interrupt = platform_dev_map_interrupt,
+    .get_bti = platform_dev_get_bti,
     .alloc_contig_vmo = platform_dev_alloc_contig_vmo,
     .map_contig_vmo = platform_dev_map_contig_vmo,
     .get_device_info = platform_dev_get_device_info,
@@ -459,6 +535,18 @@ static zx_status_t platform_dev_get_protocol(void* ctx, uint32_t proto_id, void*
         i2c_protocol_t* proto = out;
         proto->ctx = ctx;
         proto->ops = &i2c_ops;
+        return ZX_OK;
+    }
+    case ZX_PROTOCOL_SERIAL: {
+        serial_protocol_t* proto = out;
+        proto->ctx = ctx;
+        proto->ops = &serial_ops;
+        return ZX_OK;
+    }
+    case ZX_PROTOCOL_CLK: {
+        clk_protocol_t* proto = out;
+        proto->ctx = ctx;
+        proto->ops = &clk_ops;
         return ZX_OK;
     }
     default:

@@ -195,7 +195,7 @@ static void mbr_read_sync_complete(block_op_t* bop, zx_status_t status) {
 
 static zx_status_t vmo_read(zx_handle_t vmo, void* data, uint64_t off, size_t len) {
     size_t actual;
-    zx_status_t status = zx_vmo_read(vmo, data, off, len, &actual);
+    zx_status_t status = zx_vmo_read_old(vmo, data, off, len, &actual);
     if (status != ZX_OK) {
         return status;
     }
@@ -319,7 +319,7 @@ static int mbr_bind_thread(void* arg) {
                 .name = name,
                 .ctx = pdev,
                 .ops = &mbr_proto,
-                .proto_id = ZX_PROTOCOL_BLOCK_CORE,
+                .proto_id = ZX_PROTOCOL_BLOCK_IMPL,
                 .proto_ops = &block_ops,
             };
 
@@ -371,7 +371,7 @@ static zx_status_t mbr_bind(void* ctx, zx_device_t* parent) {
         .name = name,
         .ctx = device,
         .ops = &mbr_proto,
-        .proto_id = ZX_PROTOCOL_BLOCK_CORE,
+        .proto_id = ZX_PROTOCOL_BLOCK_IMPL,
         .proto_ops = &block_ops,
         .flags = DEVICE_ADD_INVISIBLE,
     };

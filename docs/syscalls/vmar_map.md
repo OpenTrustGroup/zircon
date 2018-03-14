@@ -26,8 +26,8 @@ closing the VMO handle does not remove the mapping added by this function.
   *vmar_offset* is an offset relative to the base address of the given VMAR.
   It is an error to specify a range that overlaps with another VMAR or mapping.
 - **ZX_VM_FLAG_SPECIFIC_OVERWRITE**  Same as **ZX_VM_FLAG_SPECIFIC**, but can
-  overlap another mapping.  It is still an error to overlap another VMAR.  If
-  the range meets these requirements, it will atomically (with respect to all
+  overlap another mapping.  It is still an error to partially-overlap another VMAR.
+  If the range meets these requirements, it will atomically (with respect to all
   other map/unmap/protect operations) replace existing mappings in the area.
 - **ZX_VM_FLAG_PERM_READ**  Map *vmo* as readable.  It is an error if *vmar*
   does not have *ZX_VM_FLAG_CAN_MAP_READ* permissions, the *vmar* handle does
@@ -42,7 +42,8 @@ closing the VMO handle does not remove the mapping added by this function.
   not have the *ZX_RIGHT_EXECUTE* right, or the *vmo* handle does not have the
   *ZX_RIGHT_EXECUTE* right.
 - **ZX_VM_FLAG_MAP_RANGE**  Immediately page into the new mapping all backed
-  regions of the VMO
+  regions of the VMO.  This cannot be specified if
+  *ZX_VM_FLAG_SPECIFIC_OVERWRITE* is used.
 
 *vmar_offset* must be 0 if *map_flags* does not have **ZX_VM_FLAG_SPECIFIC** or
 **ZX_VM_FLAG_SPECIFIC_OVERWRITE** set.  If neither of those flags are set, then
@@ -65,8 +66,9 @@ error value is returned.
 
 **ZX_ERR_INVALID_ARGS** *mapped_addr* or *map_flags* are not valid, *vmar_offset* is
 non-zero when neither **ZX_VM_FLAG_SPECIFIC** nor
-**ZX_VM_FLAG_SPECIFIC_OVERWRITE** are given, *vmar_offset* and *len*
-describe an unsatisfiable allocation due to exceeding the region bounds,
+**ZX_VM_FLAG_SPECIFIC_OVERWRITE** are given,
+**ZX_VM_FLAG_SPECIFIC_OVERWRITE** and **ZX_VM_FLAG_MAP_RANGE** are both given,
+*vmar_offset* and *len* describe an unsatisfiable allocation due to exceeding the region bounds,
 *vmar_offset* or *vmo_offset* are not page-aligned,
 *vmo_offset* + ROUNDUP(*len*, PAGE_SIZE) overflows, or *len* is 0.
 

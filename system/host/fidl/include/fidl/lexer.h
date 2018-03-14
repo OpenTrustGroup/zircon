@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#pragma once
+#ifndef ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_LEXER_H_
+#define ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_LEXER_H_
 
 #include <assert.h>
 #include <stdint.h>
@@ -48,8 +49,7 @@ private:
     Token LexIdentifier();
     Token LexEscapedIdentifier();
     Token LexStringLiteral();
-    Token LexCXXComment();
-    Token LexCComment();
+    Token LexComment();
 
     const SourceFile& source_file_;
     const IdentifierTable* identifier_table_;
@@ -60,3 +60,5 @@ private:
 };
 
 } // namespace fidl
+
+#endif // ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_LEXER_H_

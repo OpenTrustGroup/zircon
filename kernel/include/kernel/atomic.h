@@ -83,8 +83,20 @@ static inline int atomic_add_release(volatile int* ptr, int val) {
     return __atomic_fetch_add(ptr, val, __ATOMIC_RELEASE);
 }
 
+static inline void atomic_fence(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
 static inline void atomic_fence_acquire(void) {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
+}
+
+static inline uint32_t atomic_load_u32(volatile uint32_t* ptr) {
+    return __atomic_load_n(ptr, __ATOMIC_SEQ_CST);
+}
+
+static inline void atomic_store_relaxed_u32(volatile uint32_t* ptr, uint32_t newval) {
+    __atomic_store_n(ptr, newval, __ATOMIC_RELAXED);
 }
 
 // 64-bit versions. Assumes the compiler/platform is LLP so int is 32 bits.

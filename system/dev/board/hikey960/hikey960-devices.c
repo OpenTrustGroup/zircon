@@ -13,7 +13,7 @@
 
 // #define GPIO_TEST 1
 // #define I2C_TEST 1
-// #define DSI_ENABLE 1
+#define DSI_ENABLE 1
 
 static const pbus_mmio_t dwc3_mmios[] = {
     {
@@ -29,6 +29,13 @@ static const pbus_irq_t dwc3_irqs[] = {
     },
 };
 
+static const pbus_bti_t dwc3_btis[] = {
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_USB_DWC3,
+    },
+};
+
 static const pbus_dev_t dwc3_dev = {
     .name = "dwc3",
     .vid = PDEV_VID_GENERIC,
@@ -38,6 +45,8 @@ static const pbus_dev_t dwc3_dev = {
     .mmio_count = countof(dwc3_mmios),
     .irqs = dwc3_irqs,
     .irq_count = countof(dwc3_irqs),
+    .btis = dwc3_btis,
+    .bti_count = countof(dwc3_btis),
 };
 
 #ifdef DSI_ENABLE
@@ -79,6 +88,13 @@ static const pbus_gpio_t dsi_gpios[] = {
 
 };
 
+static const pbus_bti_t dsi_btis[] = {
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_DSI,
+    },
+};
+
 static const pbus_dev_t dsi_dev = {
     .name = "dsi",
     .vid = PDEV_VID_GENERIC,
@@ -90,6 +106,8 @@ static const pbus_dev_t dsi_dev = {
     .i2c_channel_count = countof(dsi_i2c_channels),
     .gpios = dsi_gpios,
     .gpio_count = countof(dsi_gpios),
+    .btis = dsi_btis,
+    .bti_count = countof(dsi_btis),
 };
 #endif
 
@@ -107,6 +125,13 @@ static const pbus_irq_t xhci_irqs[] = {
     },
 };
 
+static const pbus_bti_t xhci_btis[] = {
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_USB_XHCI,
+    },
+};
+
 static const pbus_dev_t xhci_dev = {
     .name = "dwc3-xhci",
     .vid = PDEV_VID_GENERIC,
@@ -116,6 +141,8 @@ static const pbus_dev_t xhci_dev = {
     .mmio_count = countof(xhci_mmios),
     .irqs = xhci_irqs,
     .irq_count = countof(xhci_irqs),
+    .btis = xhci_btis,
+    .bti_count = countof(xhci_btis),
 };
 
 static const pbus_mmio_t mali_mmios[] = {
@@ -140,6 +167,13 @@ static const pbus_irq_t mali_irqs[] = {
     },
 };
 
+static const pbus_bti_t mali_btis[] = {
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_MALI,
+    },
+};
+
 static const pbus_dev_t mali_dev = {
     .name = "mali",
     .vid = PDEV_VID_GENERIC,
@@ -149,18 +183,20 @@ static const pbus_dev_t mali_dev = {
     .mmio_count = countof(mali_mmios),
     .irqs = mali_irqs,
     .irq_count = countof(mali_irqs),
+    .btis = mali_btis,
+    .bti_count = countof(mali_btis),
 };
 
 #if GPIO_TEST
 static const pbus_gpio_t gpio_test_gpios[] = {
     {
+        .gpio = GPIO_USER_LED3,
+    },
+    {
         .gpio = GPIO_USER_LED1,
     },
     {
         .gpio = GPIO_USER_LED2,
-    },
-    {
-        .gpio = GPIO_USER_LED3,
     },
     {
         .gpio = GPIO_USER_LED4,
@@ -169,9 +205,9 @@ static const pbus_gpio_t gpio_test_gpios[] = {
 
 static const pbus_dev_t gpio_test_dev = {
     .name = "hikey960-gpio-test",
-    .vid = PDEV_VID_96BOARDS,
-    .pid = PDEV_PID_HIKEY960,
-    .did = PDEV_DID_HIKEY960_GPIO_TEST,
+    .vid = PDEV_VID_GENERIC,
+    .pid = PDEV_PID_GENERIC,
+    .did = PDEV_DID_GPIO_TEST,
     .gpios = gpio_test_gpios,
     .gpio_count = countof(gpio_test_gpios),
 };

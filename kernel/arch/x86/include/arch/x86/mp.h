@@ -16,9 +16,9 @@
 //      ZX_TLS_UNSAFE_SP_OFFSET        0x18
 #define PERCPU_SAVED_USER_SP_OFFSET    0x20
 #define PERCPU_IN_IRQ_OFFSET           0x28
-#define PERCPU_GPF_RETURN_OFFSET       0x30
-#define PERCPU_CPU_NUM_OFFSET          0x38
-#define PERCPU_DEFAULT_TSS_OFFSET      0x40
+#define PERCPU_GPF_RETURN_OFFSET       0x40
+#define PERCPU_CPU_NUM_OFFSET          0x48
+#define PERCPU_DEFAULT_TSS_OFFSET      0x50
 
 /* offset of default_tss.rsp0 */
 #define PERCPU_KERNEL_SP_OFFSET        (PERCPU_DEFAULT_TSS_OFFSET + 4)
@@ -57,6 +57,9 @@ struct x86_percpu {
 
     /* are we currently in an irq handler */
     uint32_t in_irq;
+
+    /* Memory for IPI-free rescheduling of idle CPUs with monitor/mwait. */
+    volatile uint8_t* monitor;
 
     /* local APIC id */
     uint32_t apic_id;
@@ -116,15 +119,11 @@ static uint arch_max_num_cpus(void)
     return x86_num_cpus;
 }
 
-static bool arch_in_int_handler(void)
-{
-    return (bool)x86_read_gs_offset32(PERCPU_IN_IRQ_OFFSET);
-}
+#define READ_PERCPU_FIELD32(field) \
+    x86_read_gs_offset32(offsetof(struct x86_percpu, field))
 
-static void arch_set_in_int_handler(bool in_irq)
-{
-    x86_write_gs_offset32(PERCPU_IN_IRQ_OFFSET, in_irq);
-}
+#define WRITE_PERCPU_FIELD32(field, value) \
+    x86_write_gs_offset32(offsetof(struct x86_percpu, field), (value))
 
 void x86_ipi_generic_handler(void);
 void x86_ipi_reschedule_handler(void);

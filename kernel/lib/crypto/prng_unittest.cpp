@@ -12,7 +12,7 @@
 namespace crypto {
 
 namespace {
-bool instantiate(void*) {
+bool instantiate() {
     BEGIN_TEST;
 
     { PRNG prng("", 0); }
@@ -20,7 +20,7 @@ bool instantiate(void*) {
     END_TEST;
 }
 
-bool non_thread_safe_prng_same_behavior(void*) {
+bool non_thread_safe_prng_same_behavior() {
     BEGIN_TEST;
 
     static const char kSeed1[32] = {'1', '2', '3'};
@@ -35,8 +35,8 @@ bool non_thread_safe_prng_same_behavior(void*) {
     EXPECT_FALSE(prng1.is_thread_safe(), "unexpected PRNG state");
     EXPECT_TRUE(prng2.is_thread_safe(), "unexpected PRNG state");
 
-    uint8_t out1[kDrawSize];
-    uint8_t out2[kDrawSize];
+    uint8_t out1[kDrawSize] = {0};
+    uint8_t out2[kDrawSize] = {0};
     prng1.Draw(out1, sizeof(out1));
     prng2.Draw(out2, sizeof(out2));
     EXPECT_EQ(0, memcmp(out1, out2, sizeof(out1)), "inconsistent prng");
@@ -61,7 +61,7 @@ bool non_thread_safe_prng_same_behavior(void*) {
     END_TEST;
 }
 
-bool prng_output(void*) {
+bool prng_output() {
     BEGIN_TEST;
 
     static const char kSeed1[32] = {'a', 'b', 'c'};
@@ -69,11 +69,11 @@ bool prng_output(void*) {
     static const int kDrawSize = 13;
 
     PRNG prng1(kSeed1, kSeed1Size);
-    uint8_t out1[kDrawSize];
+    uint8_t out1[kDrawSize] = {0};
     prng1.Draw(out1, sizeof(out1));
 
     PRNG prng2(kSeed1, kSeed1Size);
-    uint8_t out2[kDrawSize];
+    uint8_t out2[kDrawSize] = {0};
     prng2.Draw(out2, sizeof(out2));
 
     EXPECT_EQ(0, memcmp(out1, out2, sizeof(out1)), "inconsistent prng");
@@ -93,14 +93,14 @@ bool prng_output(void*) {
     EXPECT_EQ(0, memcmp(out1, out2, sizeof(out1)), "inconsistent prng");
 
     // Now verify that different seeds produce different outputs.
-    static const char kSeed2[33] = { 'b', 'l', 'a', 'h' };
+    static const char kSeed2[33] = {'b', 'l', 'a', 'h'};
     PRNG prng3(kSeed2, sizeof(kSeed2));
-    uint8_t out3[kDrawSize];
+    uint8_t out3[kDrawSize] = {0};
     prng3.Draw(out3, sizeof(out3));
 
-    static const char kSeed3[33] = { 'b', 'l', 'e', 'h' };
+    static const char kSeed3[33] = {'b', 'l', 'e', 'h'};
     PRNG prng4(kSeed3, sizeof(kSeed3));
-    uint8_t out4[kDrawSize];
+    uint8_t out4[kDrawSize] = {0};
     prng3.Draw(out4, sizeof(out4));
 
     EXPECT_NE(0, memcmp(out3, out4, sizeof(out3)), "prng output is constant");
@@ -108,7 +108,7 @@ bool prng_output(void*) {
     END_TEST;
 }
 
-bool prng_randint(void*) {
+bool prng_randint() {
     BEGIN_TEST;
 
     static const char kSeed[32] = {'a', 'b', 'c'};
@@ -131,7 +131,7 @@ bool prng_randint(void*) {
 
     bool high_bit = false;
     for (int i = 0; i < 100; ++i) {
-        high_bit |= !!(prng.RandInt(UINT64_MAX) & (1ull<<63));
+        high_bit |= !!(prng.RandInt(UINT64_MAX) & (1ull << 63));
     }
     EXPECT_TRUE(high_bit, "RandInt(UINT64_MAX) should have high bit set sometimes");
 
@@ -146,7 +146,6 @@ UNITTEST("NonThreadSafeMode", non_thread_safe_prng_same_behavior)
 UNITTEST("Test Output", prng_output)
 UNITTEST("Test RandInt", prng_randint)
 UNITTEST_END_TESTCASE(prng_tests, "prng",
-                      "Test pseudo-random number generator implementation.",
-                      nullptr, nullptr);
+                      "Test pseudo-random number generator implementation.");
 
 } // namespace crypto

@@ -24,7 +24,7 @@ USER_ASPACE_SIZE   ?= 0x00007ffffefff000UL
 LOCAL_BUILDDIR := $(call TOBUILDDIR,$(LOCAL_DIR))
 
 KERNEL_DEFINES += \
-	ARCH_$(SUBARCH)=1 \
+	ARCH_$(ARCH)=1 \
 	KERNEL_BASE=$(KERNEL_BASE) \
 	KERNEL_SIZE=$(KERNEL_SIZE) \
 	KERNEL_LOAD_OFFSET=$(KERNEL_LOAD_OFFSET)
@@ -62,6 +62,7 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/ops.S \
 	$(LOCAL_DIR)/perf_mon.cpp \
 	$(LOCAL_DIR)/proc_trace.cpp \
+	$(LOCAL_DIR)/pvclock.cpp \
 	$(LOCAL_DIR)/registers.cpp \
 	$(LOCAL_DIR)/start.S \
 	$(LOCAL_DIR)/syscall.S \
@@ -134,7 +135,6 @@ KERNEL_COMPILEFLAGS += -mno-red-zone
 ifeq ($(call TOBOOL,$(USE_CLANG)),true)
 KERNEL_COMPILEFLAGS += -mcmodel=kernel
 endif
-KERNEL_COMPILEFLAGS += $(SAFESTACK)
 
 # optimization: since fpu is disabled, do not pass flag in rax to varargs routines
 # that floating point args are in use.
@@ -145,8 +145,6 @@ endif
 ifeq ($(call TOBOOL,$(ENABLE_NEW_BOOTDATA)),true)
 MODULE_DEFINES += ENABLE_NEW_BOOTDATA=1
 endif
-
-ARCH_OPTFLAGS := -O2
 
 LINKER_SCRIPT += $(LOCAL_BUILDDIR)/kernel.ld
 

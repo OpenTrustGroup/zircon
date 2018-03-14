@@ -12,12 +12,12 @@
 #define PF_NOPUB 1
 #endif
 DDK_PROTOCOL_DEF(BLOCK,          'pBLK', "block", 0)
-DDK_PROTOCOL_DEF(BLOCK_CORE,     'pBKC', "block-core", 0)
+DDK_PROTOCOL_DEF(BLOCK_IMPL,     'pBKC', "block-impl", 0)
 DDK_PROTOCOL_DEF(CONSOLE,        'pCON', "console", 0)
 DDK_PROTOCOL_DEF(DEVICE,         'pDEV', "device", 0)
 DDK_PROTOCOL_DEF(DISPLAY,        'pDIS', "display", 0)
 DDK_PROTOCOL_DEF(ETHERNET,       'pETH', "ethernet", 0)
-DDK_PROTOCOL_DEF(ETHERMAC,       'pEMA', "ethermac", 0)
+DDK_PROTOCOL_DEF(ETHERNET_IMPL,  'pEMA', "ethernet-impl", 0)
 DDK_PROTOCOL_DEF(FRAMEBUFFER,    'pFRB', "framebuffer", 0)
 DDK_PROTOCOL_DEF(GPIO,           'pGPI', "gpio", 0)
 DDK_PROTOCOL_DEF(HIDBUS,         'pHID', "hidbus", 0)
@@ -60,6 +60,11 @@ DDK_PROTOCOL_DEF(TEST,           'pTST', "test", 0)
 DDK_PROTOCOL_DEF(PLATFORM_BUS,   'pPBU', "platform-bus", 0)
 DDK_PROTOCOL_DEF(PLATFORM_DEV,   'pPDV', "platform-dev", 0)
 DDK_PROTOCOL_DEF(I2C_HID,        'pIHD', "i2c-hid", 0)
+DDK_PROTOCOL_DEF(SERIAL,         'pSer', "serial", 0)
+DDK_PROTOCOL_DEF(SERIAL_IMPL,    'pSri', "serial-impl", 0)
+DDK_PROTOCOL_DEF(CLK,            'pCLK', "clock", 0)
+DDK_PROTOCOL_DEF(INTEL_GPU_CORE, 'pIGC', "intel-gpu-core", 0)
+DDK_PROTOCOL_DEF(IOMMU,          'pIOM', "iommu", 0)
 // Protocol definition at garnet/magma/src/magma_util/platform/zircon/zircon_platform_ioctl.h
 DDK_PROTOCOL_DEF(GPU,            'pGPU', "gpu", 0)
 #undef DDK_PROTOCOL_DEF

@@ -19,12 +19,11 @@
 
 #include <fs/block-txn.h>
 #include <fs/mapped-vmo.h>
-
+#include <fs/queue.h>
 #include <fs/vfs.h>
 
 #include <minfs/bcache.h>
 #include <minfs/format.h>
-#include <minfs/queue.h>
 
 namespace minfs {
 
@@ -51,7 +50,7 @@ class WritebackBuffer;
 // ulib/fs WriteTxn under the hood.
 class WriteTxn {
 public:
-    DISALLOW_COPY_AND_ASSIGN_ALLOW_MOVE(WriteTxn);
+    DISALLOW_COPY_ASSIGN_AND_MOVE(WriteTxn);
     explicit WriteTxn(Bcache* bc) : bc_(bc) {}
     ~WriteTxn() {
         ZX_DEBUG_ASSERT_MSG(count_ == 0, "WriteTxn still has pending requests");
@@ -181,8 +180,8 @@ private:
     // It allows them to take turns putting data into the buffer when it is
     // mostly full.
     struct Waiter : public fbl::SinglyLinkedListable<Waiter*> {};
-    using WorkQueue = Queue<fbl::unique_ptr<WritebackWork>>;
-    using ProducerQueue = Queue<Waiter*>;
+    using WorkQueue = fs::Queue<fbl::unique_ptr<WritebackWork>>;
+    using ProducerQueue = fs::Queue<Waiter*>;
 
     // Signalled when the writeback buffer can be consumed by the background
     // thread.
