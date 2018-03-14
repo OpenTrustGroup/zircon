@@ -7,9 +7,9 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#include <blobstore/format.h>
-#include <blobstore/fsck.h>
-#include <blobstore/host.h>
+#include <blobfs/format.h>
+#include <blobfs/fsck.h>
+#include <blobfs/host.h>
 #include <fbl/unique_fd.h>
 #include <fs-management/mount.h>
 #include <fvm/fvm.h>
@@ -27,6 +27,22 @@
     do {                \
     } while (0)
 #endif
+
+// File system names
+static constexpr char kMinfsName[] = "minfs";
+static constexpr char kBlobfsName[] = "blobfs";
+
+// Guid type names
+static constexpr char kDefaultTypeName[] = "default";
+static constexpr char kDataTypeName[] = "data";
+static constexpr char kSystemTypeName[] = "system";
+static constexpr char kBlobTypeName[] = "blob";
+
+// Guid type values
+static constexpr uint8_t kDefaultType[] = GUID_EMPTY_VALUE;
+static constexpr uint8_t kDataType[] = GUID_DATA_VALUE;
+static constexpr uint8_t kSystemType[] = GUID_SYSTEM_VALUE;
+static constexpr uint8_t kBlobType[] = GUID_BLOB_VALUE;
 
 typedef struct {
     size_t vslice_start;
@@ -142,7 +158,7 @@ public:
     void Name(char* name) const final;
     uint32_t BlockSize() const final;
     uint32_t BlocksPerSlice() const final;
-    uint8_t datablk[blobstore::kBlobstoreBlockSize];
+    uint8_t datablk[blobfs::kBlobfsBlockSize];
 
 private:
     fbl::unique_fd fd_;
@@ -150,13 +166,13 @@ private:
 
     // Input superblock
     union {
-        char blk_[blobstore::kBlobstoreBlockSize];
-        blobstore::blobstore_info_t info_;
+        char blk_[blobfs::kBlobfsBlockSize];
+        blobfs::blobfs_info_t info_;
     };
 
     // Output superblock
     union {
-        char fvm_blk_[blobstore::kBlobstoreBlockSize];
-        blobstore::blobstore_info_t fvm_info_;
+        char fvm_blk_[blobfs::kBlobfsBlockSize];
+        blobfs::blobfs_info_t fvm_info_;
     };
 };

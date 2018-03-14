@@ -9,8 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "coded_ast.h"
-#include "library.h"
+#include "flat_ast.h"
 #include "string_view.h"
 
 namespace fidl {
@@ -27,23 +26,12 @@ namespace fidl {
 
 class CGenerator {
 public:
-    explicit CGenerator(Library* library) : library_(library) {}
+    explicit CGenerator(flat::Library* library)
+        : library_(library) {}
 
     ~CGenerator() = default;
 
-    void ProduceCStructs(std::ostringstream* header_file_out);
-
-    enum struct IntegerConstantType {
-        kStatus,
-        kInt8,
-        kInt16,
-        kInt32,
-        kInt64,
-        kUint8,
-        kUint16,
-        kUint32,
-        kUint64,
-    };
+    std::ostringstream Produce();
 
     struct Member {
         std::string type;
@@ -51,7 +39,7 @@ public:
         std::vector<uint32_t> array_counts;
     };
 
- private:
+private:
     struct NamedConst {
         std::string name;
         const flat::Const& const_info;
@@ -68,6 +56,15 @@ public:
         const std::vector<flat::Interface::Method::Parameter>& parameters;
     };
 
+    struct NamedMethod {
+        std::unique_ptr<NamedMessage> request;
+        std::unique_ptr<NamedMessage> response;
+    };
+
+    struct NamedInterface {
+        std::vector<NamedMethod> methods;
+    };
+
     struct NamedStruct {
         std::string c_name;
         std::string coded_name;
@@ -82,36 +79,34 @@ public:
     void GeneratePrologues();
     void GenerateEpilogues();
 
-    void GenerateIntegerDefine(StringView name, IntegerConstantType type, StringView value);
-    void GenerateIntegerTypedef(IntegerConstantType type, StringView name);
+    void GenerateIntegerDefine(StringView name, types::PrimitiveSubtype subtype, StringView value);
+    void GenerateIntegerTypedef(types::PrimitiveSubtype subtype, StringView name);
     void GenerateStructTypedef(StringView name);
 
     void GenerateStructDeclaration(StringView name, const std::vector<Member>& members);
     void GenerateTaggedUnionDeclaration(StringView name, const std::vector<Member>& members);
 
-    void MaybeProduceCodingField(std::string field_name, uint32_t offset, const ast::Type* type,
-                                 std::vector<coded::Field>* fields);
-
-    std::vector<NamedConst> NameConsts(const std::vector<flat::Const>& const_infos);
-    std::vector<NamedEnum> NameEnums(const std::vector<flat::Enum>& enum_infos);
-    std::vector<NamedMessage> NameInterfaces(const std::vector<flat::Interface>& interface_infos);
-    std::vector<NamedStruct> NameStructs(const std::vector<flat::Struct>& struct_infos);
-    std::vector<NamedUnion> NameUnions(const std::vector<flat::Union>& union_infos);
+    std::map<const flat::Decl*, NamedConst> NameConsts(const std::vector<std::unique_ptr<flat::Const>>& const_infos);
+    std::map<const flat::Decl*, NamedEnum> NameEnums(const std::vector<std::unique_ptr<flat::Enum>>& enum_infos);
+    std::map<const flat::Decl*, NamedInterface> NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& interface_infos);
+    std::map<const flat::Decl*, NamedStruct> NameStructs(const std::vector<std::unique_ptr<flat::Struct>>& struct_infos);
+    std::map<const flat::Decl*, NamedUnion> NameUnions(const std::vector<std::unique_ptr<flat::Union>>& union_infos);
 
     void ProduceConstForwardDeclaration(const NamedConst& named_const);
     void ProduceEnumForwardDeclaration(const NamedEnum& named_enum);
-    void ProduceMessageForwardDeclaration(const NamedMessage& named_message);
+    void ProduceInterfaceForwardDeclaration(const NamedInterface& named_interface);
     void ProduceStructForwardDeclaration(const NamedStruct& named_struct);
     void ProduceUnionForwardDeclaration(const NamedUnion& named_union);
 
-    void ProduceMessageExternDeclaration(const NamedMessage& named_message);
+    void ProduceInterfaceExternDeclaration(const NamedInterface& named_interface);
 
     void ProduceConstDeclaration(const NamedConst& named_const);
     void ProduceMessageDeclaration(const NamedMessage& named_message);
+    void ProduceInterfaceDeclaration(const NamedInterface& named_interface);
     void ProduceStructDeclaration(const NamedStruct& named_struct);
     void ProduceUnionDeclaration(const NamedUnion& named_union);
 
-    Library* library_;
+    flat::Library* library_;
     std::ostringstream header_file_;
 };
 

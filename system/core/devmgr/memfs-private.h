@@ -32,12 +32,15 @@ typedef struct VnodeDir VnodeDir;
 __BEGIN_CDECLS
 
 void vfs_global_init(VnodeDir* root);
+void vfs_watch_exit(zx_handle_t event);
 
 // generate mxremoteio handles
 zx_status_t vfs_create_global_root_handle(zx_handle_t* out);
 zx_status_t vfs_connect_global_root_handle(zx_handle_t h);
 zx_status_t vfs_create_root_handle(VnodeMemfs* vn, zx_handle_t* out);
 zx_status_t vfs_connect_root_handle(VnodeMemfs* vn, zx_handle_t h);
+
+zx_status_t vfs_install_fs(const char* path, zx_handle_t h);
 
 // device fs
 zx_status_t devfs_mount(zx_handle_t h);

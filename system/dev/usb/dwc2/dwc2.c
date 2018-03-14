@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
+#include <unistd.h>
 
 // DDK includes
 #include <ddk/binding.h>
@@ -191,7 +192,7 @@ static void release_channel(uint ch, dwc_usb_t* dwc);
 static const uint8_t dwc_language_list[] =
     {4, /* bLength */ USB_DT_STRING, 0x09, 0x04, /* language ID */};
 static const uint8_t dwc_manufacturer_string[] = // "Zircon"
-    {18, /* bLength */ USB_DT_STRING, 'M', 0, 'a', 0, 'g', 0, 'e', 0, 'n', 0, 't', 0, 'a', 0, 0, 0};
+    {16, /* bLength */ USB_DT_STRING, 'Z', 0, 'i', 0, 'r', 0, 'c', 0, 'o', 0, 'n', 0, 0, 0};
 static const uint8_t dwc_product_string_2[] = // "USB 2.0 Root Hub"
     {
         36, /* bLength */ USB_DT_STRING, 'U', 0, 'S', 0, 'B', 0, ' ', 0, '2', 0, '.', 0, '0', 0, ' ', 0,
@@ -356,15 +357,25 @@ static void dwc_host_port_power_on(void) {
     regs->host_port_ctrlstatus = hw_status;
 }
 
+static zx_status_t wait_bits(volatile uint32_t* ptr, uint32_t bits, uint32_t expected) {
+    for (int i = 0; i < 100; i++) {
+        if ((*ptr & bits) == expected) {
+            return ZX_OK;
+        }
+        usleep(1000);
+    }
+    return ZX_ERR_TIMED_OUT;
+}
+
 static zx_status_t usb_dwc_softreset_core(void) {
-    while (!(regs->core_reset & DWC_AHB_MASTER_IDLE))
-        ;
+    zx_status_t status = wait_bits(&regs->core_reset, DWC_AHB_MASTER_IDLE, DWC_AHB_MASTER_IDLE);
+    if (status != ZX_OK) {
+        return status;
+    }
 
     regs->core_reset = DWC_SOFT_RESET;
-    while (regs->core_reset & DWC_SOFT_RESET)
-        ;
 
-    return ZX_OK;
+    return wait_bits(&regs->core_reset, DWC_SOFT_RESET, 0);
 }
 
 static zx_status_t usb_dwc_setupcontroller(void) {
@@ -1171,12 +1182,16 @@ static void dwc_start_transfer(uint8_t chan, dwc_usb_transfer_request_t* req,
     if (usb_ep_type(&ep->desc) == USB_ENDPOINT_CONTROL) {
 
         switch (req->ctrl_phase) {
-        case CTRL_PHASE_SETUP:
+        case CTRL_PHASE_SETUP: {
             assert(req->setup_req);
             characteristics.endpoint_direction = DWC_EP_OUT;
 
+            phys_iter_t iter;
+            zx_paddr_t phys;
             usb_request_physmap(req->setup_req);
-            data = (void*)usb_request_phys(req->setup_req);
+            usb_request_phys_iter_init(&iter, req->setup_req, PAGE_SIZE);
+            usb_request_phys_iter_next(&iter, &phys);
+            data = (void*)phys;
 
             // Quick sanity check to make sure that we're actually tying to
             // transfer the correct number of bytes.
@@ -1186,12 +1201,17 @@ static void dwc_start_transfer(uint8_t chan, dwc_usb_transfer_request_t* req,
 
             transfer.packet_id = DWC_TOGGLE_SETUP;
             break;
-        case CTRL_PHASE_DATA:
+        }
+        case CTRL_PHASE_DATA: {
             characteristics.endpoint_direction =
                 usb_req->setup.bmRequestType >> 7;
 
+            phys_iter_t iter;
+            zx_paddr_t phys;
             usb_request_physmap(usb_req);
-            data = ((void*)usb_request_phys(usb_req)) + req->bytes_transferred;
+            usb_request_phys_iter_init(&iter, usb_req, PAGE_SIZE);
+            usb_request_phys_iter_next(&iter, &phys);
+            data = (void*)phys + req->bytes_transferred;
 
             transfer.size = usb_req->header.length - req->bytes_transferred;
 
@@ -1204,6 +1224,7 @@ static void dwc_start_transfer(uint8_t chan, dwc_usb_transfer_request_t* req,
             }
 
             break;
+        }
         case CTRL_PHASE_STATUS:
             // If there was no DATA phase, the status transaction is IN to the
             // host. If there was a DATA phase, the status phase is in the
@@ -1225,8 +1246,12 @@ static void dwc_start_transfer(uint8_t chan, dwc_usb_transfer_request_t* req,
         characteristics.endpoint_direction =
             (ep->ep_address & USB_ENDPOINT_DIR_MASK) >> 7;
 
+        phys_iter_t iter;
+        zx_paddr_t phys;
         usb_request_physmap(usb_req);
-        data = ((void*)usb_request_phys(usb_req)) + req->bytes_transferred;
+        usb_request_phys_iter_init(&iter, usb_req, PAGE_SIZE);
+        usb_request_phys_iter_next(&iter, &phys);
+        data = (void*)phys + req->bytes_transferred;
 
         transfer.size = usb_req->header.length - req->bytes_transferred;
         transfer.packet_id = req->next_data_toggle;
@@ -1712,6 +1737,7 @@ static zx_status_t usb_dwc_bind(void* ctx, zx_device_t* dev) {
     usb_dwc->free_channels = ALL_CHANNELS_FREE;
     usb_dwc->next_device_address = 1;
     usb_dwc->DBG_reqid = 0x1;
+    usb_request_pool_init(&usb_dwc->free_usb_reqs);
 
     // Carve out some address space for this device.
     size_t mmio_size;
@@ -1737,10 +1763,6 @@ static zx_status_t usb_dwc_bind(void* ctx, zx_device_t* dev) {
     mtx_lock(&usb_dwc->free_req_mtx);
     list_initialize(&usb_dwc->free_reqs);
     mtx_unlock(&usb_dwc->free_req_mtx);
-
-    // TODO(gkalsi):
-    // The BCM Mailbox Driver currently turns on USB power but it should be
-    // done here instead.
 
     if ((st = usb_dwc_softreset_core()) != ZX_OK) {
         zxlogf(ERROR, "usb_dwc: failed to reset core.\n");

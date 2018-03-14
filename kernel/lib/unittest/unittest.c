@@ -141,13 +141,6 @@ static bool run_unittest(const unittest_testcase_registration_t* testcase) {
                     testcase->test_cnt,
                     testcase->test_cnt == 1 ? "" : "s");
 
-    void* context = NULL;
-    zx_status_t init_res = testcase->init ? testcase->init(&context) : ZX_OK;
-    if (init_res != ZX_OK) {
-        printf("%s : FAILED to initialize testcase! (status %d)", testcase->name, init_res);
-        return false;
-    }
-
     zx_time_t testcase_start = current_time();
 
     for (size_t i = 0; i < testcase->test_cnt; ++i) {
@@ -156,7 +149,7 @@ static bool run_unittest(const unittest_testcase_registration_t* testcase) {
         printf(fmt_string, test->name ? test->name : "");
 
         zx_time_t test_start = current_time();
-        bool good = test->fn ? test->fn(context) : false;
+        bool good = test->fn ? test->fn() : false;
         zx_duration_t test_runtime = current_time() - test_start;
 
         if (good) {

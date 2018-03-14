@@ -1141,6 +1141,49 @@ static void __NO_RETURN trigger_hw_bkpt(void)
     trigger_unsupported();
 }
 
+// ARM does not trap on integer divide-by-zero.
+#if defined(__x86_64__)
+static void __NO_RETURN trigger_integer_divide_by_zero(void)
+{
+    // Use an x86 division instruction (rather than doing division from C)
+    // to ensure that the compiler does not convert the division into
+    // something else.
+    uint32_t result;
+    __asm__ volatile("idivb %1"
+                     : "=a"(result)
+                     : "r"((uint8_t) 0), "a"((uint16_t) 1));
+    trigger_unsupported();
+}
+
+static void __NO_RETURN trigger_sse_divide_by_zero(void)
+{
+    // Unmask all exceptions for SSE operations.
+    uint32_t mxcsr = 0;
+    __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr));
+
+    double a = 1;
+    double b = 0;
+    __asm__ volatile("divsd %1, %0" : "+x"(a) : "x"(b));
+    trigger_unsupported();
+}
+
+static void __NO_RETURN trigger_x87_divide_by_zero(void)
+{
+    // Unmask all exceptions for x87 operations.
+    uint16_t control_word = 0;
+    __asm__ volatile("fldcw %0" : : "m"(control_word));
+
+    double a = 1;
+    double b = 0;
+    __asm__ volatile("fldl %0\n"
+                     "fdivl %1\n"
+                     // Check for the pending exception.
+                     "fwait\n"
+                     : : "m"(a), "m"(b));
+    trigger_unsupported();
+}
+#endif
+
 static const struct {
     zx_excp_type_t type;
     const char* name;
@@ -1152,6 +1195,11 @@ static const struct {
     { ZX_EXCP_UNDEFINED_INSTRUCTION, "undefined-insn", true, trigger_undefined_insn },
     { ZX_EXCP_SW_BREAKPOINT, "sw-bkpt", true, trigger_sw_bkpt },
     { ZX_EXCP_HW_BREAKPOINT, "hw-bkpt", false, trigger_hw_bkpt },
+#if defined(__x86_64__)
+    { ZX_EXCP_GENERAL, "integer-divide-by-zero", true, trigger_integer_divide_by_zero },
+    { ZX_EXCP_GENERAL, "sse-divide-by-zero", true, trigger_sse_divide_by_zero },
+    { ZX_EXCP_GENERAL, "x87-divide-by-zero", true, trigger_x87_divide_by_zero },
+#endif
 };
 
 static void __NO_RETURN trigger_exception(const char* excp_name)

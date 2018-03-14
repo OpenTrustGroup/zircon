@@ -57,8 +57,8 @@ static bool local_migrate_if_needed(thread_t* curr_thread);
 /* compute the effective priority of a thread */
 static void compute_effec_priority(thread_t* t) {
     int ep = t->base_priority + t->priority_boost;
-    if (t->inheirited_priority > ep)
-        ep = t->inheirited_priority;
+    if (t->inherited_priority > ep)
+        ep = t->inherited_priority;
 
     DEBUG_ASSERT(ep >= LOWEST_PRIORITY && ep <= HIGHEST_PRIORITY);
 
@@ -253,7 +253,7 @@ static thread_t* sched_get_top_thread(cpu_num_t cpu) {
 void sched_init_thread(thread_t* t, int priority) {
     t->base_priority = priority;
     t->priority_boost = 0;
-    t->inheirited_priority = -1;
+    t->inherited_priority = -1;
     compute_effec_priority(t);
 }
 
@@ -314,7 +314,7 @@ bool sched_unblock(thread_t* t) {
     find_cpu_and_insert(t, &local_resched, &mask);
 
     if (mask)
-        mp_reschedule(MP_IPI_TARGET_MASK, mask, 0);
+        mp_reschedule(mask, 0);
     return local_resched;
 }
 
@@ -341,7 +341,7 @@ bool sched_unblock_list(struct list_node* list) {
     }
 
     if (accum_cpu_mask)
-        mp_reschedule(MP_IPI_TARGET_MASK, accum_cpu_mask, 0);
+        mp_reschedule(accum_cpu_mask, 0);
 
     return local_resched;
 }
@@ -463,11 +463,11 @@ static void migrate_current_thread(thread_t* current_thread) {
     current_thread->state = THREAD_READY;
     find_cpu_and_insert(current_thread, &local_resched, &accum_cpu_mask);
     if (accum_cpu_mask)
-        mp_reschedule(MP_IPI_TARGET_MASK, accum_cpu_mask, 0);
+        mp_reschedule(accum_cpu_mask, 0);
     sched_resched_internal();
 }
 
-/* migrate all threads assigned to |old_cpu| to other queues */
+/* migrate all non-pinned threads assigned to |old_cpu| to other queues */
 void sched_transition_off_cpu(cpu_num_t old_cpu) {
     DEBUG_ASSERT(spin_lock_held(&thread_lock));
 
@@ -477,13 +477,27 @@ void sched_transition_off_cpu(cpu_num_t old_cpu) {
     thread_t* t;
     bool local_resched = false;
     cpu_mask_t accum_cpu_mask = 0;
+    cpu_mask_t pinned_mask = cpu_num_to_mask(old_cpu);
+    list_node_t pinned_threads = LIST_INITIAL_VALUE(pinned_threads);
     while (!thread_is_idle(t = sched_get_top_thread(old_cpu))) {
-        find_cpu_and_insert(t, &local_resched, &accum_cpu_mask);
-        DEBUG_ASSERT(!local_resched);
+        // Threads pinned to old_cpu can't run anywhere else, so put them
+        // into a temporary list and deal with them later.
+        if (t->cpu_affinity != pinned_mask) {
+            find_cpu_and_insert(t, &local_resched, &accum_cpu_mask);
+            DEBUG_ASSERT(!local_resched);
+        } else {
+            DEBUG_ASSERT(!list_in_list(&t->queue_node));
+            list_add_head(&pinned_threads, &t->queue_node);
+        }
+    }
+
+    // Put pinned threads back on old_cpu's queue.
+    while ((t = list_remove_head_type(&pinned_threads, thread_t, queue_node)) != NULL) {
+        insert_in_run_queue_head(old_cpu, t);
     }
 
     if (accum_cpu_mask) {
-        mp_reschedule(MP_IPI_TARGET_MASK, accum_cpu_mask, 0);
+        mp_reschedule(accum_cpu_mask, 0);
     }
 }
 
@@ -555,27 +569,27 @@ void sched_migrate(thread_t* t) {
 
     // send some ipis based on the previous code
     if (accum_cpu_mask) {
-        mp_reschedule(MP_IPI_TARGET_MASK, accum_cpu_mask, 0);
+        mp_reschedule(accum_cpu_mask, 0);
     }
     if (local_resched) {
         sched_reschedule();
     }
 }
 
-/* set the priority to the higher value of what it was before and the newly inheirited value */
-/* pri < 0 disables priority inheiritance and goes back to the naturally computed values */
-void sched_inheirit_priority(thread_t* t, int pri, bool *local_resched) {
+/* set the priority to the higher value of what it was before and the newly inherited value */
+/* pri < 0 disables priority inheritance and goes back to the naturally computed values */
+void sched_inherit_priority(thread_t* t, int pri, bool *local_resched) {
     DEBUG_ASSERT(spin_lock_held(&thread_lock));
 
     if (pri > HIGHEST_PRIORITY)
         pri = HIGHEST_PRIORITY;
 
     // if we're setting it to something real and it's less than the current, skip
-    if (pri >= 0 && pri <= t->inheirited_priority)
+    if (pri >= 0 && pri <= t->inherited_priority)
         return;
 
     // adjust the priority and remember the old value
-    t->inheirited_priority = pri;
+    t->inherited_priority = pri;
     int old_ep = t->effec_priority;
     compute_effec_priority(t);
     if (old_ep == t->effec_priority) {
@@ -627,7 +641,7 @@ void sched_inheirit_priority(thread_t* t, int pri, bool *local_resched) {
 
     // send some ipis based on the previous code
     if (accum_cpu_mask) {
-        mp_reschedule(MP_IPI_TARGET_MASK, accum_cpu_mask, 0);
+        mp_reschedule(accum_cpu_mask, 0);
     }
 }
 
@@ -696,9 +710,14 @@ void sched_resched_internal(void) {
     newthread->state = THREAD_RUNNING;
 
     thread_t* oldthread = current_thread;
+    oldthread->preempt_pending = false;
 
     LOCAL_KTRACE2("resched old pri", (uint32_t)oldthread->user_tid, effec_priority(oldthread));
     LOCAL_KTRACE2("resched new pri", (uint32_t)newthread->user_tid, effec_priority(newthread));
+
+    /* call this even if we're not changing threads, to handle the case where another
+     * core rescheduled us but the work disappeared before we got to run. */
+    mp_prepare_current_cpu_idle_state(thread_is_idle(newthread));
 
     /* if it's the same thread as we're already running, exit */
     if (newthread == oldthread)

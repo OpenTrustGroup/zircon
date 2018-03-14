@@ -23,12 +23,13 @@ MODULE_LIBS := \
     system/ulib/zxcrypt \
 
 MODULE_STATIC_LIBS := \
-    third_party/ulib/safeint \
     system/ulib/ddk \
     system/ulib/ddktl \
     system/ulib/fbl \
     system/ulib/pretty \
     system/ulib/zx \
     system/ulib/zxcpp \
+
+MODULE_COMPILEFLAGS := -fsanitize=integer-divide-by-zero,signed-integer-overflow -fsanitize-undefined-trap-on-error
 
 include make/module.mk

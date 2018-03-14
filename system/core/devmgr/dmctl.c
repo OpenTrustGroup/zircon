@@ -13,7 +13,6 @@
 #include "devcoordinator.h"
 
 #include <zircon/device/dmctl.h>
-#include <launchpad/loader-service.h>
 
 static zx_device_t* dmctl_dev;
 
@@ -26,7 +25,7 @@ static zx_status_t dmctl_cmd(uint32_t op, const char* cmd, size_t cmdlen,
     }
     msg.op = op;
     dc_status_t rsp;
-    return dc_msg_rpc(dmctl_dev->rpc, &msg, msglen, h, hcount, &rsp, sizeof(rsp));
+    return dc_msg_rpc(dmctl_dev->rpc, &msg, msglen, h, hcount, &rsp, sizeof(rsp), NULL);
 }
 
 static zx_status_t dmctl_write(void* ctx, const void* buf, size_t count, zx_off_t off,

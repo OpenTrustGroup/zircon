@@ -493,7 +493,7 @@ bool map_over_destroyed_test() {
     {
         uint8_t buf = 5;
         size_t len;
-        ASSERT_EQ(zx_vmo_write(vmo, &buf, 0, 1, &len), ZX_OK);
+        ASSERT_EQ(zx_vmo_write_old(vmo, &buf, 0, 1, &len), ZX_OK);
         EXPECT_EQ(len, 1U);
 
         buf = 0;
@@ -682,6 +682,13 @@ bool invalid_args_test() {
               ZX_ERR_INVALID_ARGS);
     EXPECT_EQ(zx_vmar_map(vmar, PAGE_SIZE, vmo, 0,
                           4 * PAGE_SIZE, ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
+                          &map_addr),
+              ZX_ERR_INVALID_ARGS);
+
+    // Using MAP_RANGE with SPECIFIC_OVERWRITE
+    EXPECT_EQ(zx_vmar_map(vmar, PAGE_SIZE, vmo, 0, 4 * PAGE_SIZE,
+                          ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_SPECIFIC_OVERWRITE |
+                          ZX_VM_FLAG_MAP_RANGE,
                           &map_addr),
               ZX_ERR_INVALID_ARGS);
 
@@ -1432,9 +1439,9 @@ bool map_specific_overwrite_test() {
     // which.
     for (size_t i = 0; i < mapping_size / PAGE_SIZE; ++i) {
         buf[0] = 1;
-        ASSERT_EQ(zx_vmo_write(vmo, buf, i * PAGE_SIZE, 1, &len), ZX_OK);
+        ASSERT_EQ(zx_vmo_write_old(vmo, buf, i * PAGE_SIZE, 1, &len), ZX_OK);
         buf[0] = 2;
-        ASSERT_EQ(zx_vmo_write(vmo2, buf, i * PAGE_SIZE, 1, &len), ZX_OK);
+        ASSERT_EQ(zx_vmo_write_old(vmo2, buf, i * PAGE_SIZE, 1, &len), ZX_OK);
     }
 
     // Create a single mapping and overwrite it
@@ -1932,6 +1939,56 @@ bool partial_unmap_and_write() {
     END_TEST;
 }
 
+bool partial_unmap_with_vmar_offset() {
+    BEGIN_TEST;
+
+    constexpr size_t kOffset = 0x1000;
+    constexpr size_t kVmoSize = PAGE_SIZE * 10;
+    // Map a VMO, using an offset into the VMO.
+    zx_handle_t vmo;
+    ASSERT_EQ(zx_vmo_create(kVmoSize, 0, &vmo), ZX_OK);
+    uintptr_t mapping_addr;
+    ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(), 0, vmo, kOffset, kVmoSize - kOffset,
+                          ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
+                          &mapping_addr),
+              ZX_OK);
+    EXPECT_EQ(zx_handle_close(vmo), ZX_OK);
+
+    char* ptr = (char*)mapping_addr;
+    memset(ptr, 0, kVmoSize - kOffset);
+
+    // Make sure both reads and writes to both the beginning and the end are allowed.
+    char buffer[kVmoSize - kOffset];
+    size_t actual;
+    EXPECT_EQ(zx_process_write_memory(zx_process_self(), mapping_addr, buffer, kVmoSize - kOffset, &actual), ZX_OK);
+    EXPECT_EQ(actual, kVmoSize - kOffset);
+
+    EXPECT_EQ(zx_process_read_memory(zx_process_self(), mapping_addr, buffer, kVmoSize - kOffset, &actual), ZX_OK);
+    EXPECT_EQ(actual, kVmoSize - kOffset);
+
+    // That reads and writes right at the end are OK.
+    EXPECT_EQ(zx_process_write_memory(zx_process_self(), mapping_addr + kVmoSize - kOffset - 1, buffer, 1, &actual),
+              ZX_OK);
+    EXPECT_EQ(zx_process_read_memory(zx_process_self(), mapping_addr + kVmoSize - kOffset - 1, buffer, 1, &actual),
+              ZX_OK);
+
+    // That reads and writes one past the end fail.
+    EXPECT_EQ(zx_process_write_memory(zx_process_self(), mapping_addr + kVmoSize - kOffset, buffer, 1, &actual),
+              ZX_ERR_NO_MEMORY);
+    EXPECT_EQ(zx_process_read_memory(zx_process_self(), mapping_addr + kVmoSize - kOffset, buffer, 1, &actual),
+              ZX_ERR_NO_MEMORY);
+
+    // And crossing the boundary works as expected.
+    EXPECT_EQ(zx_process_write_memory(zx_process_self(), mapping_addr + kVmoSize - kOffset - 1, buffer, 2, &actual),
+              ZX_OK);
+    EXPECT_EQ(actual, 1);
+    EXPECT_EQ(zx_process_read_memory(zx_process_self(), mapping_addr + kVmoSize - kOffset - 1, buffer, 2, &actual),
+              ZX_OK);
+    EXPECT_EQ(actual, 1);
+
+    END_TEST;
+}
+
 } // namespace
 
 BEGIN_TEST_CASE(vmar_tests)
@@ -1961,6 +2018,7 @@ RUN_TEST(protect_large_uncommitted_test);
 RUN_TEST(unmap_large_uncommitted_test);
 RUN_TEST(partial_unmap_and_read);
 RUN_TEST(partial_unmap_and_write);
+RUN_TEST(partial_unmap_with_vmar_offset);
 END_TEST_CASE(vmar_tests)
 
 #ifndef BUILD_COMBINED_TESTS

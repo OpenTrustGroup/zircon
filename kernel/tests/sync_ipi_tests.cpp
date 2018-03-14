@@ -77,7 +77,7 @@ cleanup:
     event_destroy(&gate);
 };
 
-static bool sync_ipi_tests(void* context) {
+static bool sync_ipi_tests() {
     BEGIN_TEST;
 
     uint num_cpus = arch_max_num_cpus();
@@ -126,5 +126,4 @@ static bool sync_ipi_tests(void* context) {
 
 UNITTEST_START_TESTCASE(sync_ipi_tests)
 UNITTEST("sync_ipi_tests", sync_ipi_tests)
-UNITTEST_END_TESTCASE(sync_ipi_tests, "sync_ipi_tests", "sync_ipi_tests",
-                      nullptr, nullptr);
+UNITTEST_END_TESTCASE(sync_ipi_tests, "sync_ipi_tests", "sync_ipi_tests");

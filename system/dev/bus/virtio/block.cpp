@@ -16,7 +16,6 @@
 #include <zircon/compiler.h>
 
 #include "trace.h"
-#include "utils.h"
 
 #define LOCAL_TRACE 0
 
@@ -99,10 +98,6 @@ zx_status_t BlockDevice::virtio_block_ioctl(void* ctx, uint32_t op, const void* 
         *out_actual = sizeof(*info);
         return ZX_OK;
     }
-    case IOCTL_BLOCK_RR_PART: {
-        // rebind to reread the partition table
-        return device_rebind(bd->device());
-    }
     case IOCTL_DEVICE_SYNC:
         return ZX_OK;
     default:
@@ -113,10 +108,12 @@ zx_status_t BlockDevice::virtio_block_ioctl(void* ctx, uint32_t op, const void* 
 BlockDevice::BlockDevice(zx_device_t* bus_device, fbl::unique_ptr<Backend> backend)
     : Device(bus_device, fbl::move(backend)) {
     completion_reset(&txn_signal_);
+
+    memset(&blk_req_buf_, 0, sizeof(blk_req_buf_));
 }
 
 BlockDevice::~BlockDevice() {
-    // TODO: clean up allocated physical memory
+    io_buffer_release(&blk_req_buf_);
 }
 
 zx_status_t BlockDevice::Init() {
@@ -155,16 +152,18 @@ zx_status_t BlockDevice::Init() {
     // allocate a queue of block requests
     size_t size = sizeof(virtio_blk_req_t) * blk_req_count + sizeof(uint8_t) * blk_req_count;
 
-    zx_status_t r = map_contiguous_memory(size, (uintptr_t*)&blk_req_, &blk_req_pa_);
-    if (r < 0) {
-        zxlogf(ERROR, "cannot alloc blk_req buffers %d\n", r);
-        return r;
+    zx_status_t status = io_buffer_init(&blk_req_buf_, size, IO_BUFFER_RW | IO_BUFFER_CONTIG);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "cannot alloc blk_req buffers %d\n", status);
+        return status;
     }
+    blk_req_ = static_cast<virtio_blk_req_t*>(io_buffer_virt(&blk_req_buf_));
 
-    LTRACEF("allocated blk request at %p, physical address %#" PRIxPTR "\n", blk_req_, blk_req_pa_);
+    LTRACEF("allocated blk request at %p, physical address %#" PRIxPTR "\n", blk_req_,
+            io_buffer_phys(&blk_req_buf_));
 
     // responses are 32 words at the end of the allocated block
-    blk_res_pa_ = blk_req_pa_ + sizeof(virtio_blk_req_t) * blk_req_count;
+    blk_res_pa_ = io_buffer_phys(&blk_req_buf_) + sizeof(virtio_blk_req_t) * blk_req_count;
     blk_res_ = (uint8_t*)((uintptr_t)blk_req_ + sizeof(virtio_blk_req_t) * blk_req_count);
 
     LTRACEF("allocated blk responses at %p, physical address %#" PRIxPTR "\n", blk_res_, blk_res_pa_);
@@ -188,11 +187,11 @@ zx_status_t BlockDevice::Init() {
     args.name = "virtio-block";
     args.ctx = this;
     args.ops = &device_ops_;
-    args.proto_id = ZX_PROTOCOL_BLOCK_CORE;
+    args.proto_id = ZX_PROTOCOL_BLOCK_IMPL;
     args.proto_ops = &block_ops_;
 
-    auto status = device_add(bus_device_, &args, &device_);
-    if (status < 0) {
+    status = device_add(bus_device_, &args, &device_);
+    if (status != ZX_OK) {
         device_ = nullptr;
         return status;
     }
@@ -208,22 +207,25 @@ void BlockDevice::IrqRingUpdate() {
         uint32_t i = (uint16_t)used_elem->id;
         struct vring_desc* desc = vring_.DescFromIndex((uint16_t)i);
         auto head_desc = desc; // save the first element
-        for (;;) {
-            int next;
-            LTRACE_DO(virtio_dump_desc(desc));
-            if (desc->flags & VRING_DESC_F_NEXT) {
-                next = desc->next;
-            } else {
-                /* end of chain */
-                next = -1;
+        {
+            fbl::AutoLock lock(&ring_lock_);
+            for (;;) {
+                int next;
+                LTRACE_DO(virtio_dump_desc(desc));
+                if (desc->flags & VRING_DESC_F_NEXT) {
+                    next = desc->next;
+                } else {
+                    /* end of chain */
+                    next = -1;
+                }
+
+                vring_.FreeDesc((uint16_t)i);
+
+                if (next < 0)
+                    break;
+                i = next;
+                desc = vring_.DescFromIndex((uint16_t)i);
             }
-
-            vring_.FreeDesc((uint16_t)i);
-
-            if (next < 0)
-                break;
-            i = next;
-            desc = vring_.DescFromIndex((uint16_t)i);
         }
 
         bool need_signal = false;
@@ -304,7 +306,11 @@ zx_status_t BlockDevice::QueueTxn(block_txn_t* txn, bool write, size_t bytes,
 
     /* put together a transfer */
     uint16_t i;
-    auto desc = vring_.AllocDescChain((uint16_t)(2u + pagecount), &i);
+    vring_desc *desc;
+    {
+        fbl::AutoLock lock(&ring_lock_);
+        desc = vring_.AllocDescChain((uint16_t)(2u + pagecount), &i);
+    }
     if (!desc) {
         LTRACEF("failed to allocate descriptor chain of length %zu\n", 2u + pagecount);
         fbl::AutoLock lock(&txn_lock_);
@@ -318,7 +324,7 @@ zx_status_t BlockDevice::QueueTxn(block_txn_t* txn, bool write, size_t bytes,
     txn->desc = desc;
 
     /* set up the descriptor pointing to the head */
-    desc->addr = blk_req_pa_ + index * sizeof(virtio_blk_req_t);
+    desc->addr = io_buffer_phys(&blk_req_buf_) + index * sizeof(virtio_blk_req_t);
     desc->len = sizeof(virtio_blk_req_t);
     desc->flags = VRING_DESC_F_NEXT;
     LTRACE_DO(virtio_dump_desc(desc));

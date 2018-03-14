@@ -48,15 +48,15 @@ static zx_status_t create_vmo(size_t vmo_size, fbl::RefPtr<VmObject>* vmo_out) {
 }
 
 static zx_status_t create_gpas(fbl::RefPtr<VmObject> guest_phys_mem,
-                               fbl::unique_ptr<GuestPhysicalAddressSpace>* gpas) {
+                               fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace>* gpas) {
 #ifdef ARCH_ARM64
-    return GuestPhysicalAddressSpace::Create(guest_phys_mem, 1 /* vmid */, gpas);
-#elif ARCH_X86_64
-    return GuestPhysicalAddressSpace::Create(guest_phys_mem, gpas);
+    return hypervisor::GuestPhysicalAddressSpace::Create(guest_phys_mem, 1 /* vmid */, gpas);
+#elif ARCH_X86
+    return hypervisor::GuestPhysicalAddressSpace::Create(guest_phys_mem, gpas);
 #endif
 }
 
-static bool guest_physical_address_space_unmap_range(void* context) {
+static bool guest_physical_address_space_unmap_range() {
     BEGIN_TEST;
 
     if (!hypervisor_supported()) {
@@ -67,7 +67,7 @@ static bool guest_physical_address_space_unmap_range(void* context) {
     fbl::RefPtr<VmObject> vmo;
     zx_status_t status = create_vmo(PAGE_SIZE, &vmo);
     EXPECT_EQ(ZX_OK, status, "Failed to setup vmo.\n");
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas;
     status = create_gpas(vmo, &gpas);
     EXPECT_EQ(ZX_OK, status, "Failed to create GuestPhysicalAddressSpace.\n");
 
@@ -83,7 +83,7 @@ static bool guest_physical_address_space_unmap_range(void* context) {
     END_TEST;
 }
 
-static bool guest_physical_address_space_get_page_not_present(void* context) {
+static bool guest_physical_address_space_get_page_not_present() {
     BEGIN_TEST;
 
     if (!hypervisor_supported()) {
@@ -94,7 +94,7 @@ static bool guest_physical_address_space_get_page_not_present(void* context) {
     fbl::RefPtr<VmObject> vmo;
     zx_status_t status = create_vmo(PAGE_SIZE, &vmo);
     EXPECT_EQ(ZX_OK, status, "Failed to setup vmo.\n");
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas;
     status = create_gpas(vmo, &gpas);
     EXPECT_EQ(ZX_OK, status, "Failed to create GuestPhysicalAddressSpace.\n");
 
@@ -107,7 +107,7 @@ static bool guest_physical_address_space_get_page_not_present(void* context) {
     END_TEST;
 }
 
-static bool guest_physical_address_space_get_page(void* context) {
+static bool guest_physical_address_space_get_page() {
     BEGIN_TEST;
 
     if (!hypervisor_supported()) {
@@ -118,7 +118,7 @@ static bool guest_physical_address_space_get_page(void* context) {
     fbl::RefPtr<VmObject> vmo;
     zx_status_t status = create_vmo(PAGE_SIZE, &vmo);
     EXPECT_EQ(ZX_OK, status, "Failed to setup vmo.\n");
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas;
     status = create_gpas(vmo, &gpas);
     EXPECT_EQ(ZX_OK, status, "Failed to create GuestPhysicalAddressSpace.\n");
 
@@ -138,7 +138,7 @@ static bool guest_physical_address_space_get_page(void* context) {
     END_TEST;
 }
 
-static bool guest_physical_address_space_get_page_complex(void* context) {
+static bool guest_physical_address_space_get_page_complex() {
     BEGIN_TEST;
 
     if (!hypervisor_supported()) {
@@ -169,7 +169,7 @@ static bool guest_physical_address_space_get_page_complex(void* context) {
     fbl::RefPtr<VmObject> vmo;
     zx_status_t status = create_vmo(ROOT_VMO_SIZE, &vmo);
     EXPECT_EQ(ZX_OK, status, "Failed to setup vmo.\n");
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas;
     status = create_gpas(vmo, &gpas);
     EXPECT_EQ(ZX_OK, status, "Failed to create GuestPhysicalAddressSpace.\n");
 
@@ -210,7 +210,7 @@ static bool guest_physical_address_space_get_page_complex(void* context) {
     END_TEST;
 }
 
-static bool guest_physical_address_space_map_interrupt_controller(void* context) {
+static bool guest_physical_address_space_map_interrupt_controller() {
     BEGIN_TEST;
 
     if (!hypervisor_supported()) {
@@ -224,7 +224,7 @@ static bool guest_physical_address_space_map_interrupt_controller(void* context)
     EXPECT_NONNULL(vmo, "Failed to allocate VMO\n");
 
     // Setup GuestPhysicalAddressSpace.
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas;
     status = create_gpas(vmo, &gpas);
     EXPECT_EQ(ZX_OK, status, "Failed to create GuestPhysicalAddressSpace\n");
 
@@ -252,5 +252,4 @@ HYPERVISOR_UNITTEST(guest_physical_address_space_get_page)
 HYPERVISOR_UNITTEST(guest_physical_address_space_get_page_complex)
 HYPERVISOR_UNITTEST(guest_physical_address_space_get_page_not_present)
 HYPERVISOR_UNITTEST(guest_physical_address_space_map_interrupt_controller)
-UNITTEST_END_TESTCASE(hypervisor_tests, "hypervisor_tests", "Hypervisor unit tests.", nullptr,
-                      nullptr);
+UNITTEST_END_TESTCASE(hypervisor_tests, "hypervisor_tests", "Hypervisor unit tests.");

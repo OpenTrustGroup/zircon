@@ -263,10 +263,6 @@ module Libc [system] {
       header "tar.h"
       export *
     }
-    module ulimit { // POSIX
-      header "ulimit.h"
-      export *
-    }
     module unistd { // POSIX
       header "unistd.h"
       export *
@@ -410,10 +406,6 @@ module Libc [system] {
         header "sys/msg.h"
         export *
       }
-      module resource {
-        header "sys/resource.h"
-        export *
-      }
       module select {
         header "sys/select.h"
         export *
@@ -495,10 +487,6 @@ module NonLibc [extern_c] {
   }
   module grp { // POSIX
     header "grp.h" // Non-functional in Fuchsia
-    export *
-  }
-  module libintl { // GNU extension (gettext)
-    header "libintl.h"
     export *
   }
   module mntent { // Unimplemented - common header

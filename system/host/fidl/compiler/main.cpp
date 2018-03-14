@@ -13,29 +13,39 @@
 #include <vector>
 
 #include <fidl/c_generator.h>
+#include <fidl/flat_ast.h>
 #include <fidl/identifier_table.h>
 #include <fidl/json_generator.h>
 #include <fidl/lexer.h>
-#include <fidl/library.h>
 #include <fidl/parser.h>
 #include <fidl/source_manager.h>
+#include <fidl/tables_generator.h>
 
 namespace {
 
 [[noreturn]] void Usage() {
-    std::cout << "fidl usage:\n";
-    std::cout << "    fidl c-structs HEADER_PATH [FIDL_FILE...]\n";
-    std::cout << "        Parses the FIDL_FILEs and generates C structures\n";
-    std::cout << "        into HEADER_PATH.\n";
-    std::cout << "\n";
-    std::cout << "    fidl json JSON_PATH [FIDL_FILE...]\n";
-    std::cout << "        Parses the FIDL_FILEs and generates JSON intermediate data\n";
-    std::cout << "        into JSON_PATH.\n";
-    std::cout << "\n";
-    std::cout << "The [FIDL_FILE...] arguments can also be provided via a response\n";
-    std::cout << "    file, denoted as `@filepath'. The contents of the file at\n";
-    std::cout << "    `filepath' will be interpreted as a whitespace-delimited list\n";
-    std::cout << "    of files to parse.\n";
+    std::cout << "fidl usage:\n"
+                 "    fidl [--c-header HEADER_PATH]\n"
+                 "         [--tables TABLES_PATH]\n"
+                 "         [--json JSON_PATH]\n"
+                 "         [--files [FIDL_FILE...]...]\n"
+                 "    * If no output types are provided, the FIDL_FILES are parsed and\n"
+                 "      compiled, but no output is produced. Otherwise:\n"
+                 "    * If --c-header is provided, C structures are generated\n"
+                 "        into HEADER_PATH.\n"
+                 "    * If --tables is provided, coding tables are generated\n"
+                 "        into TABLES_PATH.\n"
+                 "    * If --json is provided, JSON intermediate data is generated\n"
+                 "        into JSON_PATH.\n"
+                 "    Each `--file [FIDL_FILE...]` chunk of arguments describes a library, all\n"
+                 "    of which must share the same top-level library name declaration. Libraries\n"
+                 "    must be presented in dependency order, with latter libraries able to use\n"
+                 "    declarations from preceding libraries but not vice versa.\n Output is only\n"
+                 "    generated for the final library, not for each of its dependencies.\n"
+                 "    All of the arguments can also be provided via a response file, denoted as\n"
+                 "    `@responsefile'. The contents of the file at `responsefile' will be\n"
+                 "    interpreted as a whitespace-delimited list of arguments. Response files\n"
+                 "    cannot be nested, and must be the only argument.\n";
     std::cout.flush();
     exit(1);
 }
@@ -88,7 +98,8 @@ private:
 
 class ResponseFileArguments : public Arguments {
 public:
-    ResponseFileArguments(fidl::StringView filename) : file_(Open(filename, std::ios::in)) {
+    ResponseFileArguments(fidl::StringView filename)
+        : file_(Open(filename, std::ios::in)) {
         ConsumeWhitespace();
     }
 
@@ -128,66 +139,34 @@ private:
 };
 
 enum struct Behavior {
-    CStructs,
+    CHeader,
+    Tables,
     JSON,
 };
 
-bool Parse(Arguments* args, fidl::SourceManager* source_manager,
-           fidl::IdentifierTable* identifier_table, fidl::ErrorReporter* error_reporter,
-           fidl::Library* library) {
-    while (args->Remaining()) {
-        std::string filename = args->Claim();
-        const fidl::SourceFile* source = source_manager->CreateSource(filename.data());
-        if (source == nullptr) {
-            fprintf(stderr, "Couldn't read in source data from %s\n", filename.data());
-            return false;
-        }
-
-        fidl::Lexer lexer(*source, identifier_table);
-        fidl::Parser parser(&lexer, error_reporter);
-        auto ast = parser.Parse();
-        if (!parser.Ok()) {
-            error_reporter->PrintReports();
-            return false;
-        }
-
-        if (!library->ConsumeFile(std::move(ast))) {
-            fprintf(stderr, "Parse failed!\n");
-            return false;
-        }
+bool Parse(const fidl::SourceFile& source_file, fidl::IdentifierTable* identifier_table,
+           fidl::ErrorReporter* error_reporter, fidl::flat::Library* library) {
+    fidl::Lexer lexer(source_file, identifier_table);
+    fidl::Parser parser(&lexer, error_reporter);
+    auto ast = parser.Parse();
+    if (!parser.Ok()) {
+        error_reporter->PrintReports();
+        return false;
     }
 
-    if (!library->Resolve()) {
-        fprintf(stderr, "Library resolution failed!\n");
+    if (!library->ConsumeFile(std::move(ast))) {
+        fprintf(stderr, "Parse failed!\n");
         return false;
     }
 
     return true;
 }
 
-bool GenerateC(fidl::Library* library, std::fstream header_output) {
-    std::ostringstream header_file;
-    fidl::CGenerator c_generator(library);
-
-    c_generator.ProduceCStructs(&header_file);
-
-    header_output << "// header file\n";
-    header_output << header_file.str();
-    header_output.flush();
-
-    return true;
-}
-
-bool GenerateJSON(fidl::Library* library, std::fstream json_output) {
-    std::ostringstream json_file;
-    fidl::JSONGenerator json_generator(library);
-
-    json_generator.ProduceJSON(&json_file);
-
-    json_output << json_file.str();
-    json_output.flush();
-
-    return true;
+template <typename Generator>
+void Generate(Generator* generator, std::fstream file) {
+    auto generated_output = generator->Produce();
+    file << generated_output.str();
+    file.flush();
 }
 
 } // namespace
@@ -198,59 +177,98 @@ int main(int argc, char* argv[]) {
     // Parse the program name.
     argv_args->Claim();
 
-    std::string behavior_argument = argv_args->Claim();
-    Behavior behavior;
-    std::fstream output_file;
-    if (behavior_argument == "c-structs") {
-        behavior = Behavior::CStructs;
-        // Parse a file name to write output to.
-        if (argc < 2) {
-            return 1;
-        }
-        output_file = Open(argv_args->Claim(), std::ios::out);
-    } else if (behavior_argument == "json") {
-        behavior = Behavior::JSON;
-        // Parse a file name to write output to.
-        if (argc < 2) {
-            return 1;
-        }
-        output_file = Open(argv_args->Claim(), std::ios::out);
-    } else {
-        Usage();
-    }
-
-    // Either continue with the list of fidl files to compile, or else
-    // with a response file.
-    std::unique_ptr<ResponseFileArguments> response_file_args;
+    // Check for a response file. After this, |args| is either argv or
+    // the response file contents.
     Arguments* args = argv_args.get();
+    std::unique_ptr<ResponseFileArguments> response_file_args;
     if (argv_args->HeadIsResponseFile()) {
-        std::string response = argv_args->Claim();
+        std::string response = args->Claim();
+        if (argv_args->Remaining()) {
+            // Response file must be the last argument.
+            Usage();
+        }
         // Drop the leading '@'.
         fidl::StringView response_file = response.data() + 1;
         response_file_args = std::make_unique<ResponseFileArguments>(response_file);
         args = response_file_args.get();
     }
 
-    fidl::SourceManager source_manager;
-    fidl::IdentifierTable identifier_table;
-    fidl::ErrorReporter error_reporter;
-    fidl::Library library;
-    if (!Parse(args, &source_manager, &identifier_table, &error_reporter, &library)) {
-        return 1;
+    std::map<Behavior, std::fstream> outputs;
+    while (args->Remaining()) {
+        // Try to parse an output type.
+        std::string behavior_argument = args->Claim();
+        std::fstream output_file;
+        if (behavior_argument == "--c-header") {
+            outputs.emplace(Behavior::CHeader, Open(args->Claim(), std::ios::out));
+        } else if (behavior_argument == "--tables") {
+            outputs.emplace(Behavior::Tables, Open(args->Claim(), std::ios::out));
+        } else if (behavior_argument == "--json") {
+            outputs.emplace(Behavior::JSON, Open(args->Claim(), std::ios::out));
+        } else if (behavior_argument == "--files") {
+            // Start parsing filenames.
+            break;
+        } else {
+            Usage();
+        }
     }
 
-    switch (behavior) {
-    case Behavior::CStructs: {
-        if (!GenerateC(&library, std::move(output_file))) {
+    // Parse libraries.
+    std::vector<fidl::SourceManager> source_managers;
+    source_managers.push_back(fidl::SourceManager());
+    while (args->Remaining()) {
+        std::string arg = args->Claim();
+        if (arg == "--files") {
+            source_managers.emplace_back();
+        } else {
+            const fidl::SourceFile* source = source_managers.back().CreateSource(arg.data());
+            if (source == nullptr) {
+                fprintf(stderr, "Couldn't read in source data from %s\n", arg.data());
+                return 1;
+            }
+        }
+    }
+
+    fidl::IdentifierTable identifier_table;
+    fidl::ErrorReporter error_reporter;
+    std::vector<fidl::flat::Library> libraries;
+    for (const auto& source_manager : source_managers) {
+        libraries.emplace_back();
+        for (const auto& source_file : source_manager.sources()) {
+            if (!Parse(source_file, &identifier_table, &error_reporter, &libraries.back())) {
+                return 1;
+            }
+        }
+    }
+    for (auto& library : libraries) {
+        if (!library.Resolve()) {
+            fprintf(stderr, "flat::Library resolution failed!\n");
             return 1;
         }
-        break;
     }
-    case Behavior::JSON: {
-        if (!GenerateJSON(&library, std::move(output_file))) {
-            return 1;
+
+    // We recompile dependencies, and only emit output for the final
+    // library.
+    fidl::flat::Library* library = &libraries.back();
+    for (auto& output : outputs) {
+        auto& behavior = output.first;
+        auto& output_file = output.second;
+
+        switch (behavior) {
+        case Behavior::CHeader: {
+            fidl::CGenerator generator(library);
+            Generate(&generator, std::move(output_file));
+            break;
         }
-        break;
-    }
+        case Behavior::Tables: {
+            fidl::TablesGenerator generator(library);
+            Generate(&generator, std::move(output_file));
+            break;
+        }
+        case Behavior::JSON: {
+            fidl::JSONGenerator generator(library);
+            Generate(&generator, std::move(output_file));
+            break;
+        }
+        }
     }
 }

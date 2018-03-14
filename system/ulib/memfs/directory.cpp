@@ -41,7 +41,7 @@ zx_status_t VnodeDir::WatchDir(fs::Vfs* vfs, const vfs_watch_dir_t* cmd) {
     return watcher_.WatchDir(vfs, this, cmd);
 }
 
-zx_status_t VnodeDir::Mmap(int flags, size_t len, size_t* off, zx_handle_t* out) {
+zx_status_t VnodeDir::GetVmo(int flags, zx_handle_t* out) {
     return ZX_ERR_ACCESS_DENIED;
 }
 
@@ -162,6 +162,10 @@ zx_status_t VnodeDir::Rename(fbl::RefPtr<fs::Vnode> _newdir, fbl::StringPiece ol
 
     if (!olddn->IsDirectory() && (src_must_be_dir || dst_must_be_dir)) {
         return ZX_ERR_NOT_DIR;
+    } else if ((newdir->ino() == ino_) && (oldname == newname)) {
+        // Renaming a file or directory to itself?
+        // Shortcut success case
+        return ZX_OK;
     }
 
     // Verify that the destination is not a subdirectory of the source (if

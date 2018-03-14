@@ -58,5 +58,8 @@
 #define DWC3_MMIO_BASE      0xff500000
 #define DWC3_MMIO_LENGTH    0x100000
 #define DWC3_IRQ            62
-
 #define USB_PHY_IRQ         48
+
+// Clock Control
+#define AXG_HIU_BASE_PHYS 0xff63c000
+

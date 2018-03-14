@@ -15,37 +15,22 @@
 #include <hypervisor/guest_physical_address_space.h>
 #include <hypervisor/id_allocator.h>
 #include <hypervisor/interrupt_tracker.h>
+#include <hypervisor/page.h>
 #include <hypervisor/trap_map.h>
 #include <kernel/event.h>
 #include <kernel/spinlock.h>
 #include <kernel/timer.h>
 #include <zircon/types.h>
 
-typedef struct vm_page vm_page_t;
-
-class GuestPhysicalAddressSpace;
 class VmObject;
 struct VmxInfo;
 
-class VmxPage {
+class VmxPage : public hypervisor::Page {
 public:
-    VmxPage() = default;
-    ~VmxPage();
-    DISALLOW_COPY_ASSIGN_AND_MOVE(VmxPage);
-
     zx_status_t Alloc(const VmxInfo& info, uint8_t fill);
-    zx_paddr_t PhysicalAddress() const;
-    void* VirtualAddress() const;
-
-    template <typename T>
-    T* VirtualAddress() const {
-        return static_cast<T*>(VirtualAddress());
-    }
-
-    bool IsAllocated() const { return pa_ != 0; }
 
 private:
-    zx_paddr_t pa_ = 0;
+    using hypervisor::Page::Alloc;
 };
 
 // Represents a guest within the hypervisor.
@@ -58,16 +43,16 @@ public:
     zx_status_t SetTrap(uint32_t kind, zx_vaddr_t addr, size_t len,
                         fbl::RefPtr<PortDispatcher> port, uint64_t key);
 
-    GuestPhysicalAddressSpace* AddressSpace() const { return gpas_.get(); }
-    TrapMap* Traps() { return &traps_; }
+    hypervisor::GuestPhysicalAddressSpace* AddressSpace() const { return gpas_.get(); }
+    hypervisor::TrapMap* Traps() { return &traps_; }
     zx_paddr_t MsrBitmapsAddress() const { return msr_bitmaps_page_.PhysicalAddress(); }
 
     zx_status_t AllocVpid(uint16_t* vpid);
     zx_status_t FreeVpid(uint16_t vpid);
 
 private:
-    fbl::unique_ptr<GuestPhysicalAddressSpace> gpas_;
-    TrapMap traps_;
+    fbl::unique_ptr<hypervisor::GuestPhysicalAddressSpace> gpas_;
+    hypervisor::TrapMap traps_;
     VmxPage msr_bitmaps_page_;
 
     fbl::Mutex vcpu_mutex_;
@@ -89,6 +74,15 @@ struct LocalApicState {
     uint32_t lvt_divide_config;
 };
 
+// System time is time since boot time and boot time is some fixed point in the past. This
+// structure keeps track of the state required to update system time in guest.
+struct pvclock_system_time;
+struct PvClockState {
+    uint32_t version = 0;
+    pvclock_system_time* system_time = nullptr;
+    hypervisor::GuestPtr guest_ptr;
+};
+
 // Represents a virtual CPU within a guest.
 class Vcpu {
 public:
@@ -107,6 +101,7 @@ private:
     const thread_t* thread_;
     fbl::atomic_bool running_;
     LocalApicState local_apic_state_;
+    PvClockState pvclock_state_;
     VmxState vmx_state_;
     VmxPage host_msr_page_;
     VmxPage guest_msr_page_;

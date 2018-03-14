@@ -193,7 +193,11 @@ static zx_status_t blkdev_fifo_close_locked(blkdev_t* bdev) {
     return ZX_OK;
 }
 
-// implement device protocol:
+static zx_status_t blkdev_rebind(blkdev_t* bdev) {
+    // remove our existing children, ask to bind new children
+    return device_rebind(bdev->zxdev);
+}
+
 
 static zx_status_t blkdev_ioctl(void* ctx, uint32_t op, const void* cmd,
                             size_t cmdlen, void* reply, size_t max, size_t* out_actual) {
@@ -213,6 +217,8 @@ static zx_status_t blkdev_ioctl(void* ctx, uint32_t op, const void* cmd,
         mtx_unlock(&blkdev->lock);
         return status;
     }
+    case IOCTL_BLOCK_RR_PART:
+        return blkdev_rebind(blkdev);
     default:
         return device_ioctl(blkdev->parent, op, cmd, cmdlen, reply, max, out_actual);
     }
@@ -251,7 +257,7 @@ static zx_status_t blkdev_io(blkdev_t* bdev, void* buf, size_t count,
 
     size_t actual;
     if (write) {
-        if ((zx_vmo_write(bdev->iovmo, buf, 0, count, &actual) != ZX_OK) ||
+        if ((zx_vmo_write_old(bdev->iovmo, buf, 0, count, &actual) != ZX_OK) ||
             (count != actual)) {
             return ZX_ERR_INTERNAL;
         }
@@ -272,7 +278,7 @@ static zx_status_t blkdev_io(blkdev_t* bdev, void* buf, size_t count,
     completion_wait(&bdev->iosignal, ZX_TIME_INFINITE);
 
     if (!write && (bdev->iostatus == ZX_OK)) {
-        if ((zx_vmo_read(bdev->iovmo, buf, 0, count, &actual) != ZX_OK) ||
+        if ((zx_vmo_read_old(bdev->iovmo, buf, 0, count, &actual) != ZX_OK) ||
             (count != actual)) {
             return ZX_ERR_INTERNAL;
         }
@@ -367,7 +373,7 @@ static zx_status_t block_driver_bind(void* ctx, zx_device_t* dev) {
     mtx_init(&bdev->lock, mtx_plain);
     bdev->parent = dev;
 
-    if (device_get_protocol(dev, ZX_PROTOCOL_BLOCK_CORE, &bdev->bp) != ZX_OK) {
+    if (device_get_protocol(dev, ZX_PROTOCOL_BLOCK_IMPL, &bdev->bp) != ZX_OK) {
         printf("ERROR: block device '%s': does not support block protocol\n",
                device_get_name(dev));
         free(bdev);
@@ -417,5 +423,5 @@ static zx_driver_ops_t block_driver_ops = {
 };
 
 ZIRCON_DRIVER_BEGIN(block, block_driver_ops, "zircon", "0.1", 1)
-    BI_MATCH_IF(EQ, BIND_PROTOCOL, ZX_PROTOCOL_BLOCK_CORE),
+    BI_MATCH_IF(EQ, BIND_PROTOCOL, ZX_PROTOCOL_BLOCK_IMPL),
 ZIRCON_DRIVER_END(block)

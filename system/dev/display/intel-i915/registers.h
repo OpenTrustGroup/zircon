@@ -60,6 +60,9 @@ class MasterInterruptControl : public hwreg::RegisterBase<MasterInterruptControl
 public:
     DEF_BIT(31, enable_mask);
     DEF_BIT(23, sde_int_pending);
+    DEF_BIT(18, de_pipe_c_int_pending);
+    DEF_BIT(17, de_pipe_b_int_pending);
+    DEF_BIT(16, de_pipe_a_int_pending);
 
     static auto Get() { return hwreg::RegisterAddr<MasterInterruptControl>(0x44200); }
 };
@@ -213,12 +216,75 @@ public:
     }
 };
 
-// HDPORT_STATE
-class HdportState : public hwreg::RegisterBase<HdportState, uint32_t> {
+// SBLC_PWM_CTL1
+class SouthBacklightCtl1 : public hwreg::RegisterBase<SouthBacklightCtl1, uint32_t> {
 public:
-    DEF_BIT(15, dpll2_used);
+    DEF_BIT(31, enable);
+    DEF_RSVDZ_BIT(30);
+    DEF_BIT(29, polarity);
+    DEF_RSVDZ_FIELD(28, 0);
 
-    static auto Get() { return hwreg::RegisterAddr<HdportState>(0x45050); }
+    static auto Get() { return hwreg::RegisterAddr<SouthBacklightCtl1>(0xc8250); }
+};
+
+// SBLC_PWM_CTL2
+class SouthBacklightCtl2 : public hwreg::RegisterBase<SouthBacklightCtl2, uint32_t> {
+public:
+    DEF_FIELD(31, 16, modulation_freq);
+    DEF_FIELD(15, 0, duty_cycle);
+
+    static auto Get() { return hwreg::RegisterAddr<SouthBacklightCtl2>(0xc8254); }
+};
+
+// SCHICKEN_1
+class SChicken1 : public hwreg::RegisterBase<SChicken1, uint32_t> {
+public:
+    static auto Get() { return hwreg::RegisterAddr<SChicken1>(0xc2000); }
+};
+
+// PP_CONTROL
+class PanelPowerCtrl : public hwreg::RegisterBase<PanelPowerCtrl, uint32_t> {
+public:
+    DEF_RSVDZ_FIELD(15, 4);
+    DEF_BIT(3, vdd_override);
+    DEF_BIT(2, backlight_enable);
+    DEF_BIT(1, pwr_down_on_reset);
+    DEF_BIT(0, power_state_target);
+
+    static auto Get() { return hwreg::RegisterAddr<PanelPowerCtrl>(0xc7204); }
+};
+
+// PP_DIVISOR
+class PanelPowerDivisor : public hwreg::RegisterBase<PanelPowerDivisor, uint32_t> {
+public:
+    static auto Get() { return hwreg::RegisterAddr<PanelPowerDivisor>(0xc7210); }
+};
+
+// PP_OFF_DELAYS
+class PanelPowerOffDelay: public hwreg::RegisterBase<PanelPowerOffDelay, uint32_t> {
+public:
+    static auto Get() { return hwreg::RegisterAddr<PanelPowerOffDelay>(0xc720c); }
+};
+
+// PP_ON_DELAYS
+class PanelPowerOnDelay: public hwreg::RegisterBase<PanelPowerOnDelay, uint32_t> {
+public:
+    static auto Get() { return hwreg::RegisterAddr<PanelPowerOnDelay>(0xc7208); }
+};
+
+// PP_STATUS
+class PanelPowerStatus: public hwreg::RegisterBase<PanelPowerStatus, uint32_t> {
+public:
+    DEF_BIT(31, on_status);
+    DEF_RSVDZ_BIT(30);
+    DEF_FIELD(29, 28, pwr_seq_progress);
+    static constexpr uint32_t kPrwSeqNone = 0;
+    static constexpr uint32_t kPrwSeqPwrUp = 1;
+    static constexpr uint32_t kPrwSeqPwrDown = 2;
+    DEF_BIT(27, pwr_cycle_delay_active);
+    DEF_RSVDZ_FIELD(26, 4);
+
+    static auto Get() { return hwreg::RegisterAddr<PanelPowerStatus>(0xc7200); }
 };
 
 } // namespace registers

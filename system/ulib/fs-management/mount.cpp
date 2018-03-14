@@ -100,12 +100,29 @@ zx_status_t Mounter::MakeDirAndMount(const mount_options_t& options) {
         UnmountHandle(root_, options.wait_until_ready);
     });
 
-    unique_fd device(open("/", O_RDONLY | O_DIRECTORY | O_ADMIN));
-    if (!device) {
+    // Open the parent path as O_ADMIN, and sent the mkdir+mount command
+    // to that directory.
+    char parent_path[PATH_MAX];
+    const char* name;
+    strcpy(parent_path, path_);
+    char *last_slash = strrchr(parent_path, '/');
+    if (last_slash == NULL) {
+        strcpy(parent_path, ".");
+        name = path_;
+    } else {
+        *last_slash = '\0';
+        name = last_slash + 1;
+        if (*name == '\0') {
+            return ZX_ERR_INVALID_ARGS;
+        }
+    }
+
+    unique_fd parent(open(parent_path, O_RDONLY | O_DIRECTORY | O_ADMIN));
+    if (!parent) {
         return ZX_ERR_IO;
     }
 
-    size_t config_size = sizeof(mount_mkdir_config_t) + strlen(path_) + 1;
+    size_t config_size = sizeof(mount_mkdir_config_t) + strlen(name) + 1;
     fbl::AllocChecker checker;
     fbl::unique_ptr<char[]> config_buffer(new(&checker) char[config_size]);
     mount_mkdir_config_t* config = reinterpret_cast<mount_mkdir_config_t*>(config_buffer.get());
@@ -114,12 +131,12 @@ zx_status_t Mounter::MakeDirAndMount(const mount_options_t& options) {
     }
     config->fs_root = root_;
     config->flags = flags_;
-    strcpy(config->name, path_);
+    strcpy(config->name, name);
 
     cleanup.cancel();
 
     // Ioctl will close root for us if an error occurs
-    return static_cast<zx_status_t>(ioctl_vfs_mount_mkdir_fs(device.get(), config, config_size));
+    return static_cast<zx_status_t>(ioctl_vfs_mount_mkdir_fs(parent.get(), config, config_size));
 }
 
 // Calls the 'launch callback' and mounts the remote handle to the target vnode, if successful.
@@ -165,10 +182,21 @@ zx_status_t Mounter::MountNativeFs(const char* binary, unique_fd device,
         printf("fs_mount: Launching %s\n", binary);
     }
 
-    const char* argv[3] = {binary};
+    // 1. binary
+    // 2. (optional) readonly
+    // 3. (optional) verbose
+    // 4. (optional) metrics
+    // 5. command
+    const char* argv[5] = {binary};
     int argc = 1;
     if (options.readonly) {
         argv[argc++] = "--readonly";
+    }
+    if (options.verbose_mount) {
+        argv[argc++] = "--verbose";
+    }
+    if (options.collect_metrics) {
+        argv[argc++] = "--metrics";
     }
     argv[argc++] = "mount";
     return LaunchAndMount(cb, options, argv, argc);
@@ -205,7 +233,7 @@ zx_status_t Mounter::Mount(unique_fd device, disk_format_t format,
     case DISK_FORMAT_MINFS:
         return MountNativeFs("/boot/bin/minfs", fbl::move(device), options, cb);
     case DISK_FORMAT_BLOBFS:
-        return MountNativeFs("/boot/bin/blobstore", fbl::move(device), options, cb);
+        return MountNativeFs("/boot/bin/blobfs", fbl::move(device), options, cb);
     case DISK_FORMAT_FAT:
         return MountFat(fbl::move(device), options, cb);
     default:
@@ -234,7 +262,7 @@ disk_format_t detect_disk_format(int fd) {
         return DISK_FORMAT_MINFS;
     }
 
-    if (!memcmp(data, blobstore_magic, sizeof(blobstore_magic))) {
+    if (!memcmp(data, blobfs_magic, sizeof(blobfs_magic))) {
         return DISK_FORMAT_BLOBFS;
     }
 

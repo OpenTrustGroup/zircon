@@ -74,6 +74,20 @@ static const fidl_type_t bounded_2_nonnullable_vector_of_handles = fidl_type_t(
 static const fidl_type_t bounded_2_nullable_vector_of_handles = fidl_type_t(
     fidl::FidlCodedVector(&nonnullable_handle, 2, sizeof(zx_handle_t), fidl::kNullable));
 
+static const fidl_type_t unbounded_nonnullable_vector_of_uint32 =
+    fidl_type_t(fidl::FidlCodedVector(nullptr, FIDL_MAX_SIZE, sizeof(uint32_t),
+                                      fidl::kNonnullable));
+static const fidl_type_t unbounded_nullable_vector_of_uint32 = fidl_type_t(fidl::FidlCodedVector(
+    nullptr, FIDL_MAX_SIZE, sizeof(uint32_t), fidl::kNullable));
+static const fidl_type_t bounded_32_nonnullable_vector_of_uint32 = fidl_type_t(
+    fidl::FidlCodedVector(nullptr, 32, sizeof(uint32_t), fidl::kNonnullable));
+static const fidl_type_t bounded_32_nullable_vector_of_uint32 = fidl_type_t(
+    fidl::FidlCodedVector(nullptr, 32, sizeof(uint32_t), fidl::kNullable));
+static const fidl_type_t bounded_2_nonnullable_vector_of_uint32 = fidl_type_t(
+    fidl::FidlCodedVector(nullptr, 2, sizeof(uint32_t), fidl::kNonnullable));
+static const fidl_type_t bounded_2_nullable_vector_of_uint32 = fidl_type_t(
+    fidl::FidlCodedVector(nullptr, 2, sizeof(uint32_t), fidl::kNullable));
+
 } // namespace
 
 // Handle messages.
@@ -320,12 +334,84 @@ const fidl_type_t multiple_nullable_vectors_of_handles_message_type =
                                       ArrayCount(multiple_nullable_vectors_of_handles_fields),
                                       sizeof(multiple_nullable_vectors_of_handles_inline_data)));
 
+static const fidl::FidlField unbounded_nonnullable_vector_of_uint32_fields[] = {
+    fidl::FidlField(
+        &unbounded_nonnullable_vector_of_uint32,
+        offsetof(unbounded_nonnullable_vector_of_uint32_message_layout, inline_struct.vector)),
+
+};
+const fidl_type_t unbounded_nonnullable_vector_of_uint32_message_type =
+    fidl_type_t(fidl::FidlCodedStruct(unbounded_nonnullable_vector_of_uint32_fields,
+                                      ArrayCount(unbounded_nonnullable_vector_of_uint32_fields),
+                                      sizeof(unbounded_nonnullable_vector_of_uint32_inline_data)));
+
+static const fidl::FidlField unbounded_nullable_vector_of_uint32_fields[] = {
+    fidl::FidlField(
+        &unbounded_nullable_vector_of_uint32,
+        offsetof(unbounded_nullable_vector_of_uint32_message_layout, inline_struct.vector)),
+
+};
+const fidl_type_t unbounded_nullable_vector_of_uint32_message_type =
+    fidl_type_t(fidl::FidlCodedStruct(unbounded_nullable_vector_of_uint32_fields,
+                                      ArrayCount(unbounded_nullable_vector_of_uint32_fields),
+                                      sizeof(unbounded_nullable_vector_of_uint32_inline_data)));
+
+static const fidl::FidlField bounded_32_nonnullable_vector_of_uint32_fields[] = {
+    fidl::FidlField(
+        &bounded_32_nonnullable_vector_of_uint32,
+        offsetof(bounded_32_nonnullable_vector_of_uint32_message_layout, inline_struct.vector)),
+
+};
+const fidl_type_t bounded_32_nonnullable_vector_of_uint32_message_type = fidl_type_t(
+    fidl::FidlCodedStruct(bounded_32_nonnullable_vector_of_uint32_fields,
+                          ArrayCount(bounded_32_nonnullable_vector_of_uint32_fields),
+                          sizeof(bounded_32_nonnullable_vector_of_uint32_inline_data)));
+
+static const fidl::FidlField bounded_32_nullable_vector_of_uint32_fields[] = {
+    fidl::FidlField(
+        &bounded_32_nullable_vector_of_uint32,
+        offsetof(bounded_32_nullable_vector_of_uint32_message_layout, inline_struct.vector)),
+
+};
+const fidl_type_t bounded_32_nullable_vector_of_uint32_message_type =
+    fidl_type_t(fidl::FidlCodedStruct(bounded_32_nullable_vector_of_uint32_fields,
+                                      ArrayCount(bounded_32_nullable_vector_of_uint32_fields),
+                                      sizeof(bounded_32_nullable_vector_of_uint32_inline_data)));
+
+static const fidl::FidlField multiple_nonnullable_vectors_of_uint32_fields[] = {
+    fidl::FidlField(
+        &bounded_2_nonnullable_vector_of_uint32,
+        offsetof(multiple_nonnullable_vectors_of_uint32_message_layout, inline_struct.vector)),
+    fidl::FidlField(
+        &unbounded_nonnullable_vector_of_uint32,
+        offsetof(multiple_nonnullable_vectors_of_uint32_message_layout, inline_struct.vector2)),
+};
+const fidl_type_t multiple_nonnullable_vectors_of_uint32_message_type =
+    fidl_type_t(fidl::FidlCodedStruct(multiple_nonnullable_vectors_of_uint32_fields,
+                                      ArrayCount(multiple_nonnullable_vectors_of_uint32_fields),
+                                      sizeof(multiple_nonnullable_vectors_of_uint32_inline_data)));
+
+static const fidl::FidlField multiple_nullable_vectors_of_uint32_fields[] = {
+    fidl::FidlField(
+        &bounded_2_nullable_vector_of_uint32,
+        offsetof(multiple_nullable_vectors_of_uint32_message_layout, inline_struct.vector)),
+    fidl::FidlField(
+        &unbounded_nullable_vector_of_uint32,
+        offsetof(multiple_nullable_vectors_of_uint32_message_layout, inline_struct.vector2)),
+};
+const fidl_type_t multiple_nullable_vectors_of_uint32_message_type =
+    fidl_type_t(fidl::FidlCodedStruct(multiple_nullable_vectors_of_uint32_fields,
+                                      ArrayCount(multiple_nullable_vectors_of_uint32_fields),
+                                      sizeof(multiple_nullable_vectors_of_uint32_inline_data)));
+
 // Union messages.
 static const fidl_type_t* nonnullable_handle_union_members[] = {
     &nonnullable_handle,
 };
 static const fidl_type_t nonnullable_handle_union_type = fidl_type_t(fidl::FidlCodedUnion(
-    nonnullable_handle_union_members, ArrayCount(nonnullable_handle_union_members),
+    nonnullable_handle_union_members,
+    ArrayCount(nonnullable_handle_union_members),
+    offsetof(nonnullable_handle_union, handle),
     sizeof(nonnullable_handle_union)));
 static const fidl::FidlField nonnullable_handle_union_fields[] = {
     fidl::FidlField(&nonnullable_handle_union_type,
@@ -340,10 +426,11 @@ static const fidl_type_t* array_of_nonnullable_handles_union_members[] = {
     &array_of_two_nonnullable_handles,
     &array_of_two_arrays_of_two_nonnullable_handles,
 };
-static const fidl_type_t array_of_nonnullable_handles_union_type =
-    fidl_type_t(fidl::FidlCodedUnion(array_of_nonnullable_handles_union_members,
-                                     ArrayCount(array_of_nonnullable_handles_union_members),
-                                     sizeof(array_of_nonnullable_handles_union)));
+static const fidl_type_t array_of_nonnullable_handles_union_type = fidl_type_t(
+    fidl::FidlCodedUnion(array_of_nonnullable_handles_union_members,
+                         ArrayCount(array_of_nonnullable_handles_union_members),
+                         offsetof(array_of_nonnullable_handles_union, handle),
+                         sizeof(array_of_nonnullable_handles_union)));
 static const fidl::FidlField array_of_nonnullable_handles_union_fields[] = {
     fidl::FidlField(
         &array_of_nonnullable_handles_union_type,
@@ -461,19 +548,17 @@ const fidl_type_t nested_struct_ptrs_message_type = fidl_type_t(
                           sizeof(nested_struct_ptrs_inline_data)));
 
 // Recursive struct pointer messages.
-static const fidl::FidlField recursion_done_fields[] = {
-    fidl::FidlField(&nonnullable_handle, offsetof(recursion_done, handle)),
-};
-static const fidl_type_t recursion_done_type = fidl_type_t(fidl::FidlCodedStruct(
-    recursion_done_fields, ArrayCount(recursion_done_fields), sizeof(recursion_done)));
+const fidl_type_t recursion_message_ptr_type = fidl_type_t(fidl::FidlCodedStructPointer(
+    &recursion_message_type.coded_struct));
 static const fidl_type_t* maybe_recurse_union_members[] = {
-    &recursion_done_type,
-    &maybe_recurse_type,
+    &nonnullable_handle,
+    &recursion_message_ptr_type,
 };
 const fidl_type_t maybe_recurse_type = fidl_type_t(fidl::FidlCodedUnion(
-    maybe_recurse_union_members, ArrayCount(maybe_recurse_union_members), sizeof(maybe_recurse)));
+    maybe_recurse_union_members, ArrayCount(maybe_recurse_union_members),
+    offsetof(maybe_recurse, handle), sizeof(maybe_recurse)));
 static const fidl::FidlField recursion_fields[] = {
-    fidl::FidlField(&maybe_recurse_type, offsetof(recursion_inline_data, start)),
+    fidl::FidlField(&maybe_recurse_type, offsetof(recursion_inline_data, inline_union)),
 };
 const fidl_type_t recursion_message_type = fidl_type_t(fidl::FidlCodedStruct(
     recursion_fields, ArrayCount(recursion_fields), sizeof(recursion_inline_data)));

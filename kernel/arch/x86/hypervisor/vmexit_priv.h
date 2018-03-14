@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <hypervisor/guest_physical_address_space.h>
+#include <hypervisor/trap_map.h>
 #include <zircon/types.h>
 
 // clang-format off
@@ -198,14 +200,12 @@ enum class X2ApicMsr : uint64_t {
     SELF_IPI            = 0x83f,
 };
 
-// Interprocess interrupt delivery mode.
 enum class InterruptDeliveryMode : uint8_t {
-    IPI_FIXED           = 0,
-    IPI_LOWEST_PRIORITY = 1,
-    IPI_SMI             = 2,
-    IPI_NMI             = 4,
-    IPI_INIT            = 5,
-    IPI_START_UP        = 6,
+    FIXED               = 0,
+    SMI                 = 2,
+    NMI                 = 4,
+    INIT                = 5,
+    STARTUP             = 6,
 };
 
 enum class InterruptDestinationMode : bool {
@@ -213,15 +213,21 @@ enum class InterruptDestinationMode : bool {
     LOGICAL             = 1,
 };
 
+enum class InterruptDestinationShorthand : uint8_t {
+    NO_SHORTHAND        = 0,
+    SELF                = 1,
+    ALL_INCLUDING_SELF  = 2,
+    ALL_EXCLUDING_SELF  = 3,
+};
+
 // clang-format on
 
 typedef struct zx_port_packet zx_port_packet_t;
 
 class AutoVmcs;
-class GuestPhysicalAddressSpace;
 struct GuestState;
 struct LocalApicState;
-class TrapMap;
+struct PvClockState;
 
 // Stores VM exit info from VMCS fields.
 struct ExitInfo {
@@ -269,11 +275,13 @@ struct InterruptCommandRegister {
     uint32_t destination;
     enum InterruptDestinationMode destination_mode;
     enum InterruptDeliveryMode delivery_mode;
-    uint32_t addr;
+    enum InterruptDestinationShorthand destination_shorthand;
+    uint8_t vector;
 
     InterruptCommandRegister(uint32_t hi, uint32_t lo);
 };
 
 zx_status_t vmexit_handler(AutoVmcs* vmcs, GuestState* guest_state,
-                           LocalApicState* local_apic_state, GuestPhysicalAddressSpace* gpas,
-                           TrapMap* traps, zx_port_packet_t* packet);
+                           LocalApicState* local_apic_state, PvClockState* pvclock,
+                           hypervisor::GuestPhysicalAddressSpace* gpas, hypervisor::TrapMap* traps,
+                           zx_port_packet_t* packet);

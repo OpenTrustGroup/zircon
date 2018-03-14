@@ -19,12 +19,13 @@ MODULE_LIBS := \
     system/ulib/zircon \
 
 MODULE_STATIC_LIBS := \
-    third_party/ulib/safeint \
     third_party/ulib/uboringssl \
     system/ulib/ddk \
     system/ulib/fbl \
     system/ulib/pretty \
     system/ulib/sync \
     system/ulib/zx \
+
+MODULE_COMPILEFLAGS := -fsanitize=integer-divide-by-zero,signed-integer-overflow -fsanitize-undefined-trap-on-error
 
 include make/module.mk

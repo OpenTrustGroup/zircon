@@ -16,15 +16,12 @@
 #include <ddk/driver.h>
 #include <ddk/protocol/platform-defs.h>
 
-#include <soc/aml-common/aml-i2c.h>
-
 #include <zircon/assert.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 
 #include "gauss.h"
 #include "gauss-hw.h"
-
 
 #define GAUSS_TDM_SAMPLE_RATE (48000)
 #define GAUSS_TDM_BITS_PER_SLOT (32)
@@ -118,6 +115,11 @@ static int gauss_start_thread(void* arg) {
     gauss_bus_t* bus = arg;
     zx_status_t status;
 
+    if ((status = gauss_clk_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "gauss_clk_init failed: %d\n", status);
+        goto fail;
+    }
+
     if ((status = gauss_gpio_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "gauss_gpio_init failed: %d\n", status);
         goto fail;
@@ -197,14 +199,20 @@ fail:
 }
 
 static zx_status_t gauss_bus_bind(void* ctx, zx_device_t* parent) {
-    zx_status_t status;
-
     gauss_bus_t* bus = calloc(1, sizeof(gauss_bus_t));
     if (!bus) {
         return ZX_ERR_NO_MEMORY;
     }
 
-    if ((status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &bus->pbus)) != ZX_OK) {
+    zx_status_t status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &bus->pbus);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
+    // get default BTI from the dummy IOMMU implementation in the platform bus
+    status = device_get_protocol(parent, ZX_PROTOCOL_IOMMU, &bus->iommu);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "gauss_bus_bind: could not get ZX_PROTOCOL_IOMMU\n");
         goto fail;
     }
 

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <fidl/cpp/message_part.h>
 #include <fidl/coding.h>
+#include <fidl/cpp/message_part.h>
 #include <zircon/fidl.h>
 
 namespace fidl {
@@ -47,11 +47,15 @@ public:
     const fidl_message_header_t& header() const {
         return *reinterpret_cast<fidl_message_header_t*>(bytes_.data());
     }
+    fidl_message_header_t& header() {
+        return *reinterpret_cast<fidl_message_header_t*>(bytes_.data());
+    }
 
     // The transaction ID in the message header.
     //
     // Valid only if has_header().
     zx_txid_t txid() const { return header().txid; }
+    void set_txid(zx_txid_t txid) { header().txid = txid; }
 
     // The flags in the message header.
     //
@@ -74,7 +78,7 @@ public:
     // The message payload that follows the header interpreted as the given type.
     //
     // Valid only if has_header().
-    template<typename T>
+    template <typename T>
     T* GetPayloadAs() const {
         return reinterpret_cast<T*>(bytes_.data() + sizeof(fidl_message_header_t));
     }
@@ -105,6 +109,14 @@ public:
     // |Encode| method.
     zx_status_t Decode(const fidl_type_t* type, const char** error_msg_out);
 
+    // Validates the message in-place.
+    //
+    // The message must already be in an encoded state, for example, either by
+    // being read from a zx_channel_t or having been created in that state.
+    //
+    // Does not modify the message.
+    zx_status_t Validate(const fidl_type_t* type, const char** error_msg_out) const;
+
     // Read a message from the given channel.
     //
     // The bytes read from the channel are stored in bytes() and the handles
@@ -133,9 +145,15 @@ public:
     zx_status_t Call(zx_handle_t channel, uint32_t flags, zx_time_t deadline,
                      zx_status_t* read_status, Message* response);
 
-private:
-    void ClearHandles();
+    // Stop tracking the handles in stored in handles(), without closing them.
+    //
+    // Typically, these handles will be extracted during decode or the
+    // message's destructor, so this function will be unnecessary. However,
+    // for clients of ulib/fidl which decode message manually, this function
+    // is necessary to prevent extracted handles from being closed.
+    void ClearHandlesUnsafe();
 
+private:
     BytePart bytes_;
     HandlePart handles_;
 };

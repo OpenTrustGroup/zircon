@@ -12,7 +12,7 @@
 #include <vm/arch_vm_aspace.h>
 #include <zircon/types.h>
 
-static bool mmu_tests(void* context) {
+static bool mmu_tests() {
     BEGIN_TEST;
     unittest_printf("creating large un-aligned vm region, and unmap it without mapping, make sure no leak (ZX-315)\n");
     {
@@ -155,4 +155,4 @@ static bool mmu_tests(void* context) {
 
 UNITTEST_START_TESTCASE(x86_mmu_tests)
 UNITTEST("mmu tests", mmu_tests)
-UNITTEST_END_TESTCASE(x86_mmu_tests, "x86_mmu", "x86 mmu tests", nullptr, nullptr);
+UNITTEST_END_TESTCASE(x86_mmu_tests, "x86_mmu", "x86 mmu tests");

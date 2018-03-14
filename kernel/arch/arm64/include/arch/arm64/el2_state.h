@@ -24,6 +24,8 @@
 #define HCR_EL2_IMO         BIT_64(4)
 #define HCR_EL2_AMO         BIT_64(5)
 #define HCR_EL2_VI          BIT_64(7)
+#define HCR_EL2_FB          BIT_64(9)
+#define HCR_EL2_BSU_IS      BIT_64(10)
 #define HCR_EL2_DC          BIT_64(12)
 #define HCR_EL2_TWI         BIT_64(13)
 #define HCR_EL2_TWE         BIT_64(14)
@@ -96,12 +98,13 @@
 
 #ifndef __ASSEMBLER__
 
+#include <arch/defines.h>
 #include <zircon/types.h>
 
 typedef uint32_t __ALIGNED(8) algn32_t;
 
 struct FpState {
-    long double q[FS_NUM_REGS];
+    __uint128_t q[FS_NUM_REGS];
     algn32_t fpsr;
     algn32_t fpcr;
 };
@@ -161,6 +164,8 @@ struct El2State {
     GuestState guest_state;
     HostState host_state;
 };
+
+static_assert(sizeof(El2State) <= PAGE_SIZE, "");
 
 static_assert(__offsetof(FpState, q) == FS_Q0, "");
 static_assert(__offsetof(FpState, q[FS_NUM_REGS - 1]) == FS_Q(FS_NUM_REGS - 1), "");

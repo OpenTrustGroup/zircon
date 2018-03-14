@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,6 +26,9 @@
 #include "devmgr.h"
 #include "log.h"
 #include "memfs-private.h"
+
+#define BOOT_FIRMWARE_DIR "/boot/lib/firmware"
+#define SYSTEM_FIRMWARE_DIR "/system/lib/firmware"
 
 extern zx_handle_t virtcon_open;
 
@@ -252,7 +257,7 @@ zx_status_t devmgr_set_platform_id(zx_handle_t vmo, zx_off_t offset, size_t leng
     bootdata_platform_id_t platform_id;
     size_t actual;
 
-    zx_status_t status = zx_vmo_read(vmo, &platform_id, offset, sizeof(platform_id), &actual);
+    zx_status_t status = zx_vmo_read_old(vmo, &platform_id, offset, sizeof(platform_id), &actual);
     if ((status < 0) || (actual != sizeof(platform_id))) {
         return status;
     }
@@ -553,15 +558,15 @@ static zx_status_t dc_launch_devhost(devhost_t* host,
     // Inherit devmgr's environment (including kernel cmdline)
     launchpad_clone(lp, LP_CLONE_ENVIRON);
 
-    const char* nametable[2] = { "/", "/svc", };
+    const char* nametable[2] = { "/boot", "/svc", };
     size_t name_count = 0;
 
     //TODO: eventually devhosts should not have vfs access
-    launchpad_add_handle(lp, fs_root_clone(),
+    launchpad_add_handle(lp, fs_clone("boot"),
                          PA_HND(PA_NS_DIR, name_count++));
 
     //TODO: constrain to /svc/device
-    if ((h = svc_root_clone()) != ZX_HANDLE_INVALID) {
+    if ((h = fs_clone("svc")) != ZX_HANDLE_INVALID) {
         launchpad_add_handle(lp, h, PA_HND(PA_NS_DIR, name_count++));
     }
 
@@ -950,13 +955,46 @@ static zx_status_t dc_bind_device(device_t* dev, const char* drvlibname) {
                 log(SPEW, "devcoord: drv='%s' bindable to dev='%s'\n",
                     drv->name, dev->name);
                 dc_attempt_bind(drv, dev);
-                break;
+                return ZX_OK;
             }
         }
     }
 
+    // Notify observers that this device is available again
+    // Needed for non-auto-binding drivers like GPT against block, etc
+    if (autobind) {
+        devfs_advertise_modified(dev);
+    }
+
     return ZX_OK;
 };
+
+static zx_status_t dc_load_firmware(device_t* dev, const char* path,
+                                    zx_handle_t* vmo, size_t* size) {
+    static const char* fwdirs[] = {
+        BOOT_FIRMWARE_DIR,
+        SYSTEM_FIRMWARE_DIR,
+    };
+
+    int fd, fwfd;
+    for (unsigned n = 0; n < countof(fwdirs); n++) {
+        if ((fd = open(fwdirs[n], O_RDONLY, O_DIRECTORY)) < 0) {
+            continue;
+        }
+        fwfd = openat(fd, path, O_RDONLY);
+        close(fd);
+        if (fwfd >= 0) {
+            *size = lseek(fwfd, 0, SEEK_END);
+            zx_status_t r = fdio_get_vmo(fwfd, vmo);
+            close(fwfd);
+            return r;
+        }
+        if (errno != ENOENT) {
+            return ZX_ERR_IO;
+        }
+    }
+    return ZX_ERR_NOT_FOUND;
+}
 
 static zx_status_t dc_handle_device_read(device_t* dev) {
     dc_msg_t msg;
@@ -1110,6 +1148,26 @@ static zx_status_t dc_handle_device_read(device_t* dev) {
         reply.rsp.status = ZX_OK;
         reply.rsp.txid = msg.txid;
         if ((r = zx_channel_write(dev->hrpc, 0, &reply, sizeof(reply), NULL, 0)) < 0) {
+            return r;
+        }
+        return ZX_OK;
+    }
+    case DC_OP_LOAD_FIRMWARE: {
+        if (hcount != 0) {
+            goto fail_wrong_hcount;
+        }
+        zx_handle_t vmo;
+        struct {
+            dc_status_t rsp;
+            size_t size;
+        } reply;
+        if ((r = dc_load_firmware(dev, args, &vmo, &reply.size)) < 0) {
+            break;
+        }
+        reply.rsp.status = ZX_OK;
+        reply.rsp.txid = msg.txid;
+        if ((r = zx_channel_write(dev->hrpc, 0, &reply, sizeof(reply), &vmo, 1)) < 0) {
+            zx_handle_close(vmo);
             return r;
         }
         return ZX_OK;
@@ -1752,8 +1810,9 @@ void dc_bind_driver(driver_t* drv) {
     } else if (dc_running) {
         device_t* dev;
         list_for_every_entry(&list_devices, dev, device_t, anode) {
-            if (dev->flags & (DEV_CTX_BOUND | DEV_CTX_DEAD | DEV_CTX_ZOMBIE)) {
-                // if device is already bound or being destroyed, skip it
+            if (dev->flags & (DEV_CTX_BOUND | DEV_CTX_DEAD |
+                              DEV_CTX_ZOMBIE | DEV_CTX_INVISIBLE)) {
+                // if device is already bound or being destroyed or invisible, skip it
                 continue;
             }
             if (dc_is_bindable(drv, dev->protocol_id,

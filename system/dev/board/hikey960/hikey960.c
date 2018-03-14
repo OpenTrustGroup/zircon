@@ -14,11 +14,13 @@
 #include <ddk/debug.h>
 #include <ddk/device.h>
 #include <ddk/driver.h>
+#include <ddk/protocol/i2c.h>
 #include <ddk/protocol/platform-defs.h>
 
+#include <zircon/assert.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
-#include <zircon/assert.h>
+#include <zircon/threads.h>
 
 #include "hikey960.h"
 #include "hikey960-hw.h"
@@ -79,21 +81,69 @@ static zx_protocol_device_t hikey960_device_protocol = {
     .release = hikey960_release,
 };
 
+
+static int hikey960_start_thread(void* arg) {
+    hikey960_t* hikey = arg;
+
+    hikey->usb_mode_switch.ops = &usb_mode_switch_ops;
+    hikey->usb_mode_switch.ctx = hikey;
+
+    zx_status_t status = pbus_set_protocol(&hikey->pbus, ZX_PROTOCOL_USB_MODE_SWITCH,
+                                           &hikey->usb_mode_switch);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
+    gpio_protocol_t gpio;
+    status = hi3660_get_protocol(hikey->hi3660, ZX_PROTOCOL_GPIO, &gpio);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+    status = pbus_set_protocol(&hikey->pbus, ZX_PROTOCOL_GPIO, &gpio);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
+    status = hikey960_i2c_init(hikey);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
+    // must be after hikey960_i2c_init
+    status = hi3660_dsi_init(hikey->hi3660);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
+    if ((status = hikey960_add_devices(hikey)) != ZX_OK) {
+        zxlogf(ERROR, "hikey960_bind: hi3660_add_devices failed!\n");;
+    }
+
+    return ZX_OK;
+
+fail:
+    zxlogf(ERROR, "hikey960_start_thread failed, not all devices have been initialized\n");
+    return status;
+}
+
 static zx_status_t hikey960_bind(void* ctx, zx_device_t* parent) {
     hikey960_t* hikey = calloc(1, sizeof(hikey960_t));
     if (!hikey) {
         return ZX_ERR_NO_MEMORY;
     }
 
-    if (device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &hikey->pbus) != ZX_OK) {
+    zx_status_t status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &hikey->pbus);
+    if (status != ZX_OK) {
         free(hikey);
         return ZX_ERR_NOT_SUPPORTED;
     }
+
+    hikey->parent = parent;
     hikey->usb_mode = USB_MODE_NONE;
 
     // TODO(voydanoff) get from platform bus driver somehow
     zx_handle_t resource = get_root_resource();
-    zx_status_t status = hi3660_init(resource, &hikey->hi3660);
+    status = hi3660_init(resource, &hikey->hi3660);
     if (status != ZX_OK) {
         zxlogf(ERROR, "hikey960_bind: hi3660_init failed %d\n", status);
         goto fail;
@@ -114,38 +164,12 @@ static zx_status_t hikey960_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    hikey->usb_mode_switch.ops = &usb_mode_switch_ops;
-    hikey->usb_mode_switch.ctx = hikey;
-
-    status = pbus_set_protocol(&hikey->pbus, ZX_PROTOCOL_USB_MODE_SWITCH, &hikey->usb_mode_switch);
-    if (status != ZX_OK) {
+    thrd_t t;
+    int thrd_rc = thrd_create_with_name(&t, hikey960_start_thread, hikey, "hikey960_start_thread");
+    if (thrd_rc != thrd_success) {
+        status = thrd_status_to_zx_status(thrd_rc);
         goto fail;
     }
-
-    gpio_protocol_t gpio;
-    status = hi3660_get_protocol(hikey->hi3660, ZX_PROTOCOL_GPIO, &gpio);
-    if (status != ZX_OK) {
-        goto fail;
-    }
-    status = pbus_set_protocol(&hikey->pbus, ZX_PROTOCOL_GPIO, &gpio);
-    if (status != ZX_OK) {
-        goto fail;
-    }
-
-    i2c_protocol_t i2c;
-    status = hi3660_get_protocol(hikey->hi3660, ZX_PROTOCOL_I2C, &i2c);
-    if (status != ZX_OK) {
-        goto fail;
-    }
-    status = pbus_set_protocol(&hikey->pbus, ZX_PROTOCOL_I2C, &i2c);
-    if (status != ZX_OK) {
-        goto fail;
-    }
-
-    if ((status = hikey960_add_devices(hikey)) != ZX_OK) {
-        zxlogf(ERROR, "hikey960_bind: hi3660_add_devices failed!\n");;
-    }
-
     return ZX_OK;
 
 fail:

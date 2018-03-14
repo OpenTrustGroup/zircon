@@ -13,7 +13,6 @@
 #include <fbl/auto_lock.h>
 #include <inttypes.h>
 #include <pow2.h>
-#include <safeint/safe_math.h>
 #include <trace.h>
 #include <vm/vm.h>
 #include <vm/vm_aspace.h>
@@ -106,11 +105,8 @@ zx_status_t VmAddressRegion::CreateSubVmarInternal(size_t offset, size_t size, u
         return ZX_ERR_INVALID_ARGS;
     }
 
-    // Check to see if a cache policy exists if a VMO is passed in. VMOs that are not physical
-    // return ERR_UNSUPPORTED, anything aside from that and ZX_OK is an error.
-    // TODO(cja): explore whether it makes sense to add a default PAGED value to VmObjectPaged
-    // and allow them to be treated the same, since by default we're mapping those objects that
-    // way anyway.
+    // Check to see if a cache policy exists if a VMO is passed in. VMOs that do not support
+    // cache policy return ERR_UNSUPPORTED, anything aside from that and ZX_OK is an error.
     if (vmo) {
         uint32_t cache_policy;
         zx_status_t status = vmo->GetMappingCachePolicy(&cache_policy);
@@ -313,30 +309,45 @@ zx_status_t VmAddressRegion::DestroyLocked() {
     DEBUG_ASSERT(is_mutex_held(aspace_->lock()));
     LTRACEF("%p '%s'\n", this, name_);
 
-    // Take a reference to ourself, so that we do not get destructed after
-    // dropping our last reference in this method (e.g. when calling
-    // subregions_.erase below).
-    fbl::RefPtr<VmAddressRegion> self(this);
+    // The cur reference prevents regions from being destructed after dropping
+    // the last reference to them when removing from their parent.
+    fbl::RefPtr<VmAddressRegion> cur(this);
+    while (cur) {
+        // Iterate through children destroying mappings. If we find a
+        // subregion, stop so we can traverse down.
+        fbl::RefPtr<VmAddressRegion> child_region = nullptr;
+        while (!cur->subregions_.is_empty() && !child_region) {
+            VmAddressRegionOrMapping* child = &cur->subregions_.front();
+            if (child->is_mapping()) {
+                // DestroyLocked should remove this child from our list on success.
+                zx_status_t status = child->DestroyLocked();
+                if (status != ZX_OK) {
+                    // TODO(teisenbe): Do we want to handle this case differently?
+                    return status;
+                }
+            } else {
+                child_region = child->as_vm_address_region();
+            }
+        }
 
-    while (!subregions_.is_empty()) {
-        fbl::RefPtr<VmAddressRegionOrMapping> child(&subregions_.front());
+        if (child_region) {
+            // If we found a child region, traverse down the tree.
+            cur = child_region;
+        } else {
+            // All children are destroyed, so now destroy the current node.
+            if (cur->parent_) {
+                DEBUG_ASSERT(cur->subregion_list_node_.InContainer());
+                cur->parent_->RemoveSubregion(cur.get());
+            }
+            cur->state_ = LifeCycleState::DEAD;
+            VmAddressRegion* cur_parent = cur->parent_;
+            cur->parent_ = nullptr;
 
-        // DestroyLocked should remove this child from our list on success
-        zx_status_t status = child->DestroyLocked();
-        if (status != ZX_OK) {
-            // TODO(teisenbe): Do we want to handle this case differently?
-            return status;
+            // If we destroyed the original node, stop. Otherwise traverse
+            // up the tree and keep destroying.
+            cur.reset((cur.get() == this) ? nullptr : cur_parent);
         }
     }
-
-    // Detach the now dead region from the parent
-    if (parent_) {
-        DEBUG_ASSERT(subregion_list_node_.InContainer());
-        parent_->RemoveSubregion(this);
-    }
-
-    parent_ = nullptr;
-    state_ = LifeCycleState::DEAD;
     return ZX_OK;
 }
 
@@ -406,17 +417,21 @@ bool VmAddressRegion::IsRangeAvailableLocked(vaddr_t base, size_t size) {
     auto next = prev--;
 
     if (prev.IsValid()) {
-        safeint::CheckedNumeric<vaddr_t> prev_last_byte = prev->base();
-        prev_last_byte += prev->size() - 1;
-        if (!prev_last_byte.IsValid() || prev_last_byte.ValueOrDie() >= base) {
+        vaddr_t prev_last_byte;
+        if (add_overflow(prev->base(), prev->size() - 1, &prev_last_byte)) {
+            return false;
+        }
+        if (prev_last_byte >= base) {
             return false;
         }
     }
 
     if (next.IsValid() && next != subregions_.end()) {
-        safeint::CheckedNumeric<vaddr_t> last_byte = base;
-        last_byte += size - 1;
-        if (!last_byte.IsValid() || next->base() <= last_byte.ValueOrDie()) {
+        vaddr_t last_byte;
+        if (add_overflow(base, size - 1, &last_byte)) {
+            return false;
+        }
+        if (next->base() <= last_byte) {
             return false;
         }
     }
@@ -429,10 +444,8 @@ bool VmAddressRegion::CheckGapLocked(const ChildList::iterator& prev,
                                      size_t region_size, size_t min_gap, uint arch_mmu_flags) {
     DEBUG_ASSERT(is_mutex_held(aspace_->lock()));
 
-    safeint::CheckedNumeric<vaddr_t> gap_beg; // first byte of a gap
-    safeint::CheckedNumeric<vaddr_t> gap_end; // last byte of a gap
-    vaddr_t real_gap_beg = 0;
-    vaddr_t real_gap_end = 0;
+    vaddr_t gap_beg; // first byte of a gap
+    vaddr_t gap_end; // last byte of a gap
 
     uint prev_arch_mmu_flags;
     uint next_arch_mmu_flags;
@@ -441,47 +454,43 @@ bool VmAddressRegion::CheckGapLocked(const ChildList::iterator& prev,
 
     // compute the starting address of the gap
     if (prev.IsValid()) {
-        gap_beg = prev->base();
-        gap_beg += prev->size();
-        gap_beg += min_gap;
+        if (add_overflow(prev->base(),prev->size(), &gap_beg) ||
+            add_overflow(gap_beg, min_gap, &gap_beg)) {
+            goto not_found;
+        }
     } else {
         gap_beg = base_;
     }
 
-    if (!gap_beg.IsValid())
-        goto not_found;
-    real_gap_beg = gap_beg.ValueOrDie();
-
     // compute the ending address of the gap
     if (next.IsValid()) {
-        if (real_gap_beg == next->base())
+        if (gap_beg == next->base())
             goto next_gap; // no gap between regions
-        gap_end = next->base();
-        gap_end -= 1;
-        gap_end -= min_gap;
+        if (sub_overflow(next->base(), 1, &gap_end) ||
+            sub_overflow(gap_end, min_gap, &gap_end)) {
+            goto not_found;
+        }
     } else {
-        if (real_gap_beg == base_ + size_)
+        if (gap_beg == base_ + size_) {
             goto not_found; // no gap at the end of address space. Stop search
-        gap_end = base_;
-        gap_end += size_ - 1;
+        }
+        if (add_overflow(base_, size_ - 1, &gap_end)) {
+            goto not_found;
+        }
     }
 
-    if (!gap_end.IsValid())
-        goto not_found;
-    real_gap_end = gap_end.ValueOrDie();
-
-    DEBUG_ASSERT(real_gap_end > real_gap_beg);
+    DEBUG_ASSERT(gap_end > gap_beg);
 
     // trim it to the search range
-    if (real_gap_end <= search_base)
+    if (gap_end <= search_base)
         return false;
-    if (real_gap_beg < search_base)
-        real_gap_beg = search_base;
+    if (gap_beg < search_base)
+        gap_beg = search_base;
 
-    DEBUG_ASSERT(real_gap_end > real_gap_beg);
+    DEBUG_ASSERT(gap_end > gap_beg);
 
-    LTRACEF_LEVEL(2, "search base %#" PRIxPTR " real_gap_beg %#" PRIxPTR " end %#" PRIxPTR "\n",
-                  search_base, real_gap_beg, real_gap_end);
+    LTRACEF_LEVEL(2, "search base %#" PRIxPTR " gap_beg %#" PRIxPTR " end %#" PRIxPTR "\n",
+                  search_base, gap_beg, gap_end);
 
     prev_arch_mmu_flags = (prev.IsValid() && prev->is_mapping())
                               ? prev->as_vm_mapping()->arch_mmu_flags()
@@ -491,12 +500,12 @@ bool VmAddressRegion::CheckGapLocked(const ChildList::iterator& prev,
                               ? next->as_vm_mapping()->arch_mmu_flags()
                               : ARCH_MMU_FLAG_INVALID;
 
-    *pva = aspace_->arch_aspace().PickSpot(real_gap_beg, prev_arch_mmu_flags, real_gap_end,
+    *pva = aspace_->arch_aspace().PickSpot(gap_beg, prev_arch_mmu_flags, gap_end,
                                            next_arch_mmu_flags, align, region_size, arch_mmu_flags);
-    if (*pva < real_gap_beg)
+    if (*pva < gap_beg)
         goto not_found; // address wrapped around
 
-    if (*pva < real_gap_end && ((real_gap_end - *pva + 1) >= region_size)) {
+    if (*pva < gap_end && ((gap_end - *pva + 1) >= region_size)) {
         // we have enough room
         return true; // found spot, stop search
     }
@@ -931,27 +940,25 @@ zx_status_t VmAddressRegion::CompactRandomizedRegionAllocatorLocked(size_t size,
                 before_iter = subregions_.end();
                 after_iter = subregions_.begin();
 
-                safeint::CheckedNumeric<vaddr_t> base = after_iter->base();
-                base -= size;
-                base -= PAGE_SIZE * gap_pages;
-                if (!base.IsValid()) {
+                vaddr_t base;
+                if (sub_overflow(after_iter->base(), size, &base) ||
+                    sub_overflow(base, PAGE_SIZE * gap_pages, &base)) {
                     continue;
                 }
 
-                chosen_base = base.ValueOrDie();
+                chosen_base = base;
             } else {
                 before_iter = --subregions_.end();
                 after_iter = subregions_.end();
                 DEBUG_ASSERT(before_iter.IsValid());
 
-                safeint::CheckedNumeric<vaddr_t> base = before_iter->base();
-                base += before_iter->size();
-                base += PAGE_SIZE * gap_pages;
-                if (!base.IsValid()) {
+                vaddr_t base;
+                if (add_overflow(before_iter->base(), before_iter->size(), &base) ||
+                    add_overflow(base, PAGE_SIZE * gap_pages, &base)) {
                     continue;
                 }
 
-                chosen_base = base.ValueOrDie();
+                chosen_base = base;
             }
 
             if (CheckGapLocked(before_iter, after_iter, spot, chosen_base, align, size, 0,

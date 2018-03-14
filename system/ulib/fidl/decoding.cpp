@@ -10,6 +10,7 @@
 
 #include <fidl/internal.h>
 #include <zircon/assert.h>
+#include <zircon/syscalls.h>
 
 // TODO(kulakowski) Design zx_status_t error values.
 
@@ -35,6 +36,12 @@ private:
     zx_status_t WithError(const char* error_msg) {
         if (error_msg_out_ != nullptr) {
             *error_msg_out_ = error_msg;
+        }
+        if (handles_) {
+            for (uint32_t i = 0; i < num_handles_; ++i) {
+                // Return value intentionally ignored: this is best-effort cleanup.
+                zx_handle_close(handles_[i]);
+            }
         }
         return ZX_ERR_INVALID_ARGS;
     }
@@ -87,6 +94,7 @@ private:
                 state = kStateUnion;
                 union_state.types = fidl_type->coded_union.types;
                 union_state.type_count = fidl_type->coded_union.type_count;
+                union_state.data_offset = fidl_type->coded_union.data_offset;
                 break;
             case fidl::kFidlTypeUnionPointer:
                 state = kStateUnionPointer;
@@ -127,6 +135,7 @@ private:
             state = kStateUnion;
             union_state.types = coded_union->types;
             union_state.type_count = coded_union->type_count;
+            union_state.data_offset = coded_union->data_offset;
         }
 
         Frame(const fidl_type_t* element, uint32_t array_size, uint32_t element_size,
@@ -192,6 +201,7 @@ private:
             struct {
                 const fidl_type_t* const* types;
                 uint32_t type_count;
+                uint32_t data_offset;
             } union_state;
             struct {
                 const fidl::FidlCodedUnion* union_type;
@@ -339,7 +349,7 @@ zx_status_t FidlDecoder::DecodeMessage() {
                 return WithError("Tried to decode a bad union discriminant");
             }
             const fidl_type_t* member = frame->union_state.types[union_tag];
-            frame->offset += static_cast<uint32_t>(sizeof(union_tag));
+            frame->offset += frame->union_state.data_offset;
             *frame = Frame(member, frame->offset);
             continue;
         }
@@ -356,7 +366,7 @@ zx_status_t FidlDecoder::DecodeMessage() {
             }
             if (!ClaimOutOfLineStorage(frame->union_pointer_state.union_type->size,
                                        &frame->offset)) {
-                return WithError("messange wanted to store too large of a nullable union");
+                return WithError("message wanted to store too large of a nullable union");
             }
             *union_ptr_ptr = TypedAt<fidl_union_tag_t>(frame->offset);
             const fidl::FidlCodedUnion* coded_union = frame->union_pointer_state.union_type;
@@ -393,7 +403,8 @@ zx_status_t FidlDecoder::DecodeMessage() {
                 Pop();
                 continue;
             default:
-                return WithError("message tried to decode a non-present string");
+                return WithError(
+                    "message tried to decode a string that is neither present nor absent");
             }
             uint64_t bound = frame->string_state.max_size;
             uint64_t size = string_ptr->size;
@@ -458,14 +469,24 @@ zx_status_t FidlDecoder::DecodeMessage() {
                 return WithError("message wanted to store too large of a vector");
             }
             vector_ptr->data = TypedAt<void>(frame->offset);
-            // Continue by decoding the vector elements as an array.
-            *frame = Frame(frame->vector_state.element, size,
-                           static_cast<uint32_t>(vector_ptr->count), frame->offset);
+            if (frame->vector_state.element) {
+                // Continue by decoding the vector elements as an array.
+                *frame = Frame(frame->vector_state.element, size,
+                               static_cast<uint32_t>(vector_ptr->count), frame->offset);
+            } else {
+                // If there is no element type pointer, there is
+                // nothing to decode in the vector secondary
+                // payload. So just continue.
+                Pop();
+            }
             continue;
         }
         case Frame::kStateDone: {
             if (out_of_line_offset_ != num_bytes_) {
                 return WithError("message did not decode all provided bytes");
+            }
+            if (handle_idx_ != num_handles_) {
+                return WithError("message did not contain the specified number of handles");
             }
             return ZX_OK;
         }

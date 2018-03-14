@@ -151,6 +151,7 @@ struct dc_driver {
 zx_status_t devfs_publish(device_t* parent, device_t* dev);
 void devfs_unpublish(device_t* dev);
 void devfs_advertise(device_t* dev);
+void devfs_advertise_modified(device_t* dev);
 
 device_t* coordinator_init(zx_handle_t root_job);
 void coordinator(void);
@@ -211,6 +212,7 @@ typedef struct {
 #define DC_OP_MAKE_VISIBLE          0x10000014
 #define DC_OP_BIND_DEVICE           0x10000015
 #define DC_OP_GET_TOPO_PATH         0x10000016
+#define DC_OP_LOAD_FIRMWARE         0x10000017
 
 // Host->Coord Ops for DmCtl
 #define DC_OP_DM_COMMAND            0x10000020
@@ -226,6 +228,7 @@ zx_status_t dc_msg_unpack(dc_msg_t* msg, size_t len, const void** data,
                           const char** name, const char** args);
 zx_status_t dc_msg_rpc(zx_handle_t h, dc_msg_t* msg, size_t msglen,
                        zx_handle_t* handles, size_t hcount,
-                       dc_status_t* rsp, size_t rsp_len);
+                       dc_status_t* rsp, size_t rsp_len,
+                       zx_handle_t* outhandle);
 
 extern bool dc_asan_drivers;

@@ -19,7 +19,6 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/exceptions_c.cpp \
 	$(LOCAL_DIR)/feature.cpp \
 	$(LOCAL_DIR)/fpu.cpp \
-	$(LOCAL_DIR)/header.S \
 	$(LOCAL_DIR)/mexec.S \
 	$(LOCAL_DIR)/mmu.cpp \
 	$(LOCAL_DIR)/spinlock.cpp \
@@ -54,8 +53,6 @@ KERNEL_DEFINES += \
 	SMP_CPU_MAX_CLUSTERS=$(SMP_CPU_MAX_CLUSTERS) \
 	SMP_CPU_MAX_CLUSTER_CPUS=$(SMP_CPU_MAX_CLUSTER_CPUS) \
 
-ARCH_OPTFLAGS := -O2
-
 KERNEL_ASPACE_BASE ?= 0xffff000000000000
 KERNEL_ASPACE_SIZE ?= 0x0001000000000000
 USER_ASPACE_BASE   ?= 0x0000000001000000
@@ -69,11 +66,9 @@ GLOBAL_DEFINES += \
 
 # kernel is linked to run at the arbitrary address of -4GB
 KERNEL_BASE := 0xffffffff00000000
-KERNEL_LOAD_OFFSET ?= 0
 
 KERNEL_DEFINES += \
 	KERNEL_BASE=$(KERNEL_BASE) \
-	KERNEL_LOAD_OFFSET=$(KERNEL_LOAD_OFFSET)
 
 # try to find the toolchain
 include $(LOCAL_DIR)/toolchain.mk
@@ -99,30 +94,14 @@ KEEP_FRAME_POINTER_COMPILEFLAGS += -mno-omit-leaf-frame-pointer
 
 KERNEL_COMPILEFLAGS += -fPIE -include kernel/include/hidden.h
 
-ifeq ($(call TOBOOL,$(USE_CLANG)),true)
-
 # Clang needs -mcmodel=kernel to tell it to use the right safe-stack ABI for
 # the kernel.
+ifeq ($(call TOBOOL,$(USE_CLANG)),true)
 KERNEL_COMPILEFLAGS += -mcmodel=kernel
-
-# Clang now supports -fsanitize=safe-stack with -mcmodel=kernel.
-KERNEL_COMPILEFLAGS += $(SAFESTACK)
-
 endif
 
 # tell the compiler to leave x18 alone so we can use it to point
 # at the current cpu structure
 KERNEL_COMPILEFLAGS += -ffixed-x18
-
-include make/module.mk
-
-
-# The EFI code is its own module because it needs special compilation flags.
-
-MODULE := $(LOCAL_DIR).efi
-
-MODULE_SRCS := $(LOCAL_DIR)/efi.cpp
-
-MODULE_COMPILEFLAGS += $(NO_SAFESTACK)
 
 include make/module.mk

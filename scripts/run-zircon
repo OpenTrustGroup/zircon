@@ -8,7 +8,7 @@
 
 function HELP {
     echo "help:"
-    echo "-a <arch>            : arm64, or x86"
+    echo "-a <arch>            : arm64, or x64"
     echo "-b                   : build first"
     echo "-c <text>            : add item to kernel commandline"
     echo "-C                   : use Clang build"
@@ -35,6 +35,7 @@ function HELP {
     echo "-x <bootdata>        : use specified bootdata"
     echo "--audio[=<host_drv>] : use Intel HD Audio"
     echo "                     : <host_drv> should be one of (alsa, pa, wav, none)"
+    echo "--debugger           : Enable gdb stub and wait for connection"
     echo "--vnc=<display>      : use vnc based display"
     echo "--wavfile=<file>     : When audio host_drv == wav, output to the specified WAV file"
     echo "-h for help"
@@ -50,6 +51,7 @@ AUDIO=
 AUDIO_WAVFILE="/tmp/qemu.wav"
 BUILD=0
 CLANG=0
+DEBUGGER=0
 DISK=0
 DISKFILE="blk.bin"
 DISKTYPE=
@@ -113,6 +115,7 @@ while getopts "Aa:bc:CdD:gG:I:kLlm:nNo:q:rs:u:Vx:h-:" FLAG; do
             audio) AUDIO=none;;
             audio=*) AUDIO=${OPTARG#*=};;
             wavfile=*) AUDIO_WAVFILE=${OPTARG#*=};;
+            debugger) DEBUGGER=1;;
             disktype=*) DISKTYPE=${OPTARG#*=};;
             diskfmt=*) DISKFMT=${OPTARG#*=};;
             vnc=*) VNC=${OPTARG#*=};;
@@ -139,22 +142,21 @@ BUILD_ARGS=
 
 if (( $ASAN )); then
     BUILDDIR_SUFFIX+=-asan
-    # at the moment asan implies clang
-    BUILD_ARGS+=' USE_ASAN=true USE_CLANG=true'
+    BUILD_ARGS+=' -A'
 elif (( $LTO )); then
     BUILDDIR_SUFFIX+=-lto
-    BUILD_ARGS+=' USE_LTO=true'
+    BUILD_ARGS+=' -L'
 elif (( $THINLTO )); then
     BUILDDIR_SUFFIX+=-thinlto
-    BUILD_ARGS+=' USE_THINLTO=true'
+    BUILD_ARGS+=' -l'
 elif (( $CLANG )); then
     BUILDDIR_SUFFIX+=-clang
-    BUILD_ARGS+=' USE_CLANG=true'
+    BUILD_ARGS+=' -C'
 fi
 
 if (( $RELEASE )); then
     BUILDDIR_SUFFIX+=-release
-    BUILD_ARGS+=' DEBUG=0'
+    BUILD_ARGS+=' -r'
 fi
 
 # build the project if asked for
@@ -193,7 +195,7 @@ if (( !$GRAPHICS  )); then
     ARGS+=" -nographic"
 else
     ARGS+=" -serial stdio"
-    if [[ "$ARCH" == "x86" && $VIRTIO == 0 ]]; then
+    if [[ "$ARCH" == "x64" && $VIRTIO == 0 ]]; then
         # Enable Bochs VBE device, which Zircon has a device for
         ARGS+=" -vga std"
     else
@@ -269,7 +271,7 @@ if (( $NET )); then
         SUFFIX=$(for i in {0..2}; do echo -n :${HASH:$(( 2 * $i )):2}; done)
         MAC=",mac=52:54:00$SUFFIX"
     fi
-    if [[ "$ARCH" == "x86" ]] && [[ $VIRTIO == 0 ]]; then
+    if [[ "$ARCH" == "x64" ]] && [[ $VIRTIO == 0 ]]; then
         ARGS+=" -device e1000,netdev=net0${MAC}"
     else
         ARGS+=" -device virtio-net-pci,netdev=net0${MAC}"
@@ -299,7 +301,7 @@ fi
 
 if [[ $SMP != 1 ]]; then
     ARGS+=" -smp $SMP"
-    if [[ "$ARCH" == "x86" ]]; then
+    if [[ "$ARCH" == "x64" ]]; then
         ARGS+=",threads=2"
     fi
 fi
@@ -310,6 +312,10 @@ if (( $VIRTIO )); then
     ARGS+=" -device virtio-rng-pci"
     ARGS+=" -device virtio-mouse-pci"
     ARGS+=" -device virtio-keyboard-pci"
+fi
+
+if (( $DEBUGGER )); then
+    ARGS+=" -s -S"
 fi
 
 case $ARCH in
@@ -331,9 +337,10 @@ case $ARCH in
             ARGS+=",gic_version=${GIC}"
         fi
         ;;
-    x86)
+    x64)
         QEMU=${QEMUDIR}qemu-system-x86_64
         ARGS+=" -machine q35 -kernel $BUILDDIR/zircon.bin"
+        ARGS+=" -device isa-debug-exit,iobase=0xf4,iosize=0x04"
         if (( $DO_KVM )); then
           ARGS+=" -enable-kvm -cpu host,migratable=no"
         else

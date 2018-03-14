@@ -144,9 +144,6 @@ static zx_status_t gpt_ioctl(void* ctx, uint32_t op, const void* cmd, size_t cmd
         // Propagate sync to parent device
         return device_ioctl(device->parent, IOCTL_DEVICE_SYNC, NULL, 0, NULL, 0, NULL);
     }
-    case IOCTL_BLOCK_RR_PART: {
-        return device_rebind(device->zxdev);
-    }
     default:
         return ZX_ERR_NOT_SUPPORTED;
     }
@@ -227,7 +224,7 @@ static void gpt_read_sync_complete(block_op_t* bop, zx_status_t status) {
 
 static zx_status_t vmo_read(zx_handle_t vmo, void* data, uint64_t off, size_t len) {
     size_t actual;
-    zx_status_t status = zx_vmo_read(vmo, data, off, len, &actual);
+    zx_status_t status = zx_vmo_read_old(vmo, data, off, len, &actual);
     if (status != ZX_OK) {
         return status;
     }
@@ -399,7 +396,7 @@ static int gpt_bind_thread(void* arg) {
                 .name = name,
                 .ctx = device,
                 .ops = &gpt_proto,
-                .proto_id = ZX_PROTOCOL_BLOCK_CORE,
+                .proto_id = ZX_PROTOCOL_BLOCK_IMPL,
                 .proto_ops = &block_ops,
             };
 
@@ -447,7 +444,7 @@ static zx_status_t gpt_bind(void* ctx, zx_device_t* parent) {
         .name = name,
         .ctx = device,
         .ops = &gpt_proto,
-        .proto_id = ZX_PROTOCOL_BLOCK_CORE,
+        .proto_id = ZX_PROTOCOL_BLOCK_IMPL,
         .proto_ops = &block_ops,
         .flags = DEVICE_ADD_INVISIBLE,
     };

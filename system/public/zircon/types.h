@@ -151,6 +151,9 @@ typedef uint32_t zx_signals_t;
 // Timer
 #define ZX_TIMER_SIGNALED           __ZX_OBJECT_SIGNALED
 
+// VMO
+#define ZX_VMO_ZERO_CHILDREN        __ZX_OBJECT_SIGNALED
+
 // global kernel object id.
 typedef uint64_t zx_koid_t;
 #define ZX_KOID_INVALID ((uint64_t) 0)
@@ -198,12 +201,16 @@ typedef uint32_t zx_rights_t;
 #define ZX_RIGHT_SIGNAL           ((zx_rights_t)1u << 12)
 #define ZX_RIGHT_SIGNAL_PEER      ((zx_rights_t)1u << 13)
 #define ZX_RIGHT_WAIT             ((zx_rights_t)1u << 14)
-
+#define ZX_RIGHT_INSPECT          ((zx_rights_t)1u << 15)
+#define ZX_RIGHT_MANAGE_JOB       ((zx_rights_t)1u << 16)
+#define ZX_RIGHT_MANAGE_PROCESS   ((zx_rights_t)1u << 17)
+#define ZX_RIGHT_MANAGE_THREAD    ((zx_rights_t)1u << 18)
 #define ZX_RIGHT_SAME_RIGHTS      ((zx_rights_t)1u << 31)
 
 // Convenient names for commonly grouped rights
 #define ZX_RIGHTS_BASIC \
-    (ZX_RIGHT_TRANSFER | ZX_RIGHT_DUPLICATE | ZX_RIGHT_WAIT)
+    (ZX_RIGHT_TRANSFER | ZX_RIGHT_DUPLICATE |\
+     ZX_RIGHT_WAIT | ZX_RIGHT_INSPECT)
 
 #define ZX_RIGHTS_IO \
     (ZX_RIGHT_READ | ZX_RIGHT_WRITE)
@@ -252,6 +259,8 @@ typedef uintptr_t zx_vaddr_t;
 
 // physical address
 typedef uintptr_t zx_paddr_t;
+// low mem physical address
+typedef uint32_t  zx_paddr32_t;
 
 // offset
 typedef uint64_t zx_off_t;
@@ -304,14 +313,11 @@ typedef uint64_t zx_off_t;
 #define ZX_SOCKET_CONTROL                   (1u << 2)
 
 // Flags which can be used to to control cache policy for APIs which map memory.
-typedef enum {
-    ZX_CACHE_POLICY_CACHED          = 0,
-    ZX_CACHE_POLICY_UNCACHED        = 1,
-    ZX_CACHE_POLICY_UNCACHED_DEVICE = 2,
-    ZX_CACHE_POLICY_WRITE_COMBINING = 3,
-
-    ZX_CACHE_POLICY_MASK            = 0x3,
-} zx_cache_policy_t;
+#define ZX_CACHE_POLICY_CACHED              0u
+#define ZX_CACHE_POLICY_UNCACHED            1u
+#define ZX_CACHE_POLICY_UNCACHED_DEVICE     2u
+#define ZX_CACHE_POLICY_WRITE_COMBINING     3u
+#define ZX_CACHE_POLICY_MASK                3u
 
 // Flag bits for zx_cache_flush.
 #define ZX_CACHE_FLUSH_INSN         (1u << 0)
@@ -323,6 +329,43 @@ typedef enum {
 #define ZX_TIMER_SLACK_EARLY        1u
 #define ZX_TIMER_SLACK_LATE         2u
 
+// Bus Transaction Initiatior options.
+#define ZX_BTI_PERM_READ          (1u << 0)
+#define ZX_BTI_PERM_WRITE         (1u << 1)
+#define ZX_BTI_PERM_EXECUTE       (1u << 2)
+#define ZX_BTI_COMPRESS           (1u << 3)
+
+typedef uint32_t zx_obj_type_t;
+
+#define ZX_OBJ_TYPE_NONE            ((zx_obj_type_t)0u)
+#define ZX_OBJ_TYPE_PROCESS         ((zx_obj_type_t)1u)
+#define ZX_OBJ_TYPE_THREAD          ((zx_obj_type_t)2u)
+#define ZX_OBJ_TYPE_VMO             ((zx_obj_type_t)3u)
+#define ZX_OBJ_TYPE_CHANNEL         ((zx_obj_type_t)4u)
+#define ZX_OBJ_TYPE_EVENT           ((zx_obj_type_t)5u)
+#define ZX_OBJ_TYPE_PORT            ((zx_obj_type_t)6u)
+#define ZX_OBJ_TYPE_INTERRUPT       ((zx_obj_type_t)9u)
+#define ZX_OBJ_TYPE_PCI_DEVICE      ((zx_obj_type_t)11u)
+#define ZX_OBJ_TYPE_LOG             ((zx_obj_type_t)12u)
+#define ZX_OBJ_TYPE_SOCKET          ((zx_obj_type_t)14u)
+#define ZX_OBJ_TYPE_RESOURCE        ((zx_obj_type_t)15u)
+#define ZX_OBJ_TYPE_EVENT_PAIR      ((zx_obj_type_t)16u)
+#define ZX_OBJ_TYPE_JOB             ((zx_obj_type_t)17u)
+#define ZX_OBJ_TYPE_VMAR            ((zx_obj_type_t)18u)
+#define ZX_OBJ_TYPE_FIFO            ((zx_obj_type_t)19u)
+#define ZX_OBJ_TYPE_GUEST           ((zx_obj_type_t)20u)
+#define ZX_OBJ_TYPE_VCPU            ((zx_obj_type_t)21u)
+#define ZX_OBJ_TYPE_TIMER           ((zx_obj_type_t)22u)
+#define ZX_OBJ_TYPE_IOMMU           ((zx_obj_type_t)23u)
+#define ZX_OBJ_TYPE_BTI             ((zx_obj_type_t)24u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)25u)
+
+typedef struct {
+    zx_handle_t handle;
+    zx_obj_type_t type;
+    zx_rights_t rights;
+    uint32_t unused;
+} zx_handle_info_t;
 
 #ifdef __cplusplus
 // We cannot use <stdatomic.h> with C++ code as _Atomic qualifier defined by

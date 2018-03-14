@@ -575,21 +575,23 @@ static ssize_t eth_set_iobuf_locked(ethdev_t* edev, const void* in_buf, size_t i
         goto fail;
     }
 
+    // If the driver indicates that it will be doing DMA to/from the vmo,
+    // we pin the memory and cache the physical address list
     if (edev->edev0->info.features & ETHMAC_FEATURE_DMA) {
-        size_t paddr_map_size = (ROUNDUP(size, PAGE_SIZE) / PAGE_SIZE) * sizeof(zx_paddr_t);
-        edev->paddr_map = malloc(paddr_map_size);
+        size_t pages = ROUNDUP(size, PAGE_SIZE) / PAGE_SIZE;
+        edev->paddr_map = malloc(pages * sizeof(zx_paddr_t));
         if (!edev->paddr_map) {
             status = ZX_ERR_NO_MEMORY;
             goto fail;
         }
-        // TODO: pin memory
-        if ((status = zx_vmo_op_range(edev->io_vmo, ZX_VMO_OP_LOOKUP, 0, size, &edev->paddr_map,
-                                      paddr_map_size)) != ZX_OK) {
-            zxlogf(ERROR, "eth [%s]: vmo_op_range failed, can't determine phys addr\n", edev->name);
+        zx_handle_t bti = edev->edev0->mac.ops->get_bti(edev->edev0->mac.ctx);
+        if ((status = zx_bti_pin(bti, ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE,
+                                 vmo, 0, size, edev->paddr_map, pages)) != ZX_OK) {
+            zxlogf(ERROR, "eth [%s]: bti_pin failed, can't pin vmo: %d\n",
+                   edev->name, status);
             goto fail;
         }
     }
-
     edev->io_vmo = vmo;
     edev->io_size = size;
 
@@ -849,8 +851,14 @@ static void eth_kill_locked(ethdev_t* edev) {
         zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)edev->io_buf, 0);
         edev->io_buf = NULL;
     }
-    free(edev->paddr_map);
-    edev->paddr_map = NULL;
+    if (edev->paddr_map != NULL) {
+        zx_handle_t bti = edev->edev0->mac.ops->get_bti(edev->edev0->mac.ctx);
+        if (zx_bti_unpin(bti, edev->paddr_map[0]) != ZX_OK) {
+            zxlogf(ERROR, "eth [%s]: cannot unpin vmo?!\n", edev->name);
+        }
+        free(edev->paddr_map);
+        edev->paddr_map = NULL;
+    }
     zxlogf(TRACE, "eth [%s]: all resources released\n", edev->name);
 }
 
@@ -959,7 +967,7 @@ static zx_status_t eth_bind(void* ctx, zx_device_t* dev) {
     }
 
     zx_status_t status;
-    if (device_get_protocol(dev, ZX_PROTOCOL_ETHERMAC, &edev0->mac)) {
+    if (device_get_protocol(dev, ZX_PROTOCOL_ETHERNET_IMPL, &edev0->mac)) {
         zxlogf(ERROR, "eth: bind: no ethermac protocol\n");
         status = ZX_ERR_INTERNAL;
         goto fail;
@@ -976,6 +984,14 @@ static zx_status_t eth_bind(void* ctx, zx_device_t* dev) {
 
     if ((status = edev0->mac.ops->query(edev0->mac.ctx, 0, &edev0->info)) < 0) {
         zxlogf(ERROR, "eth: bind: ethermac query failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((edev0->info.features & ETHMAC_FEATURE_DMA) &&
+        (ops->get_bti == NULL)) {
+        zxlogf(ERROR, "eth: bind: device '%s': does not implement ops->get_bti()\n",
+               device_get_name(dev));
+        status = ZX_ERR_NOT_SUPPORTED;
         goto fail;
     }
 
@@ -1010,5 +1026,5 @@ static zx_driver_ops_t eth_driver_ops = {
 };
 
 ZIRCON_DRIVER_BEGIN(ethernet, eth_driver_ops, "zircon", "0.1", 1)
-    BI_MATCH_IF(EQ, BIND_PROTOCOL, ZX_PROTOCOL_ETHERMAC),
+    BI_MATCH_IF(EQ, BIND_PROTOCOL, ZX_PROTOCOL_ETHERNET_IMPL),
 ZIRCON_DRIVER_END(ethernet)

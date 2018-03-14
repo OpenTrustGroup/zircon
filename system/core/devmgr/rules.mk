@@ -30,14 +30,18 @@ MODULE_HEADER_DEPS := \
     system/ulib/ddk
 
 MODULE_STATIC_LIBS := \
+    system/ulib/fidl \
     system/ulib/gpt \
     system/ulib/bootdata \
+    system/ulib/loader-service \
     system/ulib/memfs \
+    system/ulib/async.loop \
     third_party/ulib/lz4 \
     system/ulib/port \
     system/ulib/driver-info \
 
 MODULE_LIBS := \
+    system/ulib/async.default \
     system/ulib/launchpad \
     system/ulib/fdio \
     system/ulib/zircon \
@@ -63,6 +67,7 @@ MODULE_SRCS := \
 MODULE_STATIC_LIBS := \
     system/ulib/memfs \
     system/ulib/fs \
+    system/ulib/loader-service \
     system/ulib/async.cpp \
     system/ulib/async \
     system/ulib/async.loop-cpp \

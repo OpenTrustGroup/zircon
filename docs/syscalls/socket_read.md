@@ -26,9 +26,10 @@ via *actual*.
 
 If a NULL *actual* is passed in, it will be ignored.
 
-If the socket was created with **ZX_SOCKET_DATAGRAM** and *buffer*
-is too small for the packet, then the packet will be truncated,
-and any remaining bytes in the packet are discarded.
+If the socket was created with **ZX_SOCKET_DATAGRAM**, this syscall reads
+only the first available datagram in the socket (if one is present).
+If *buffer* is too small for the datagram, then the read will be
+truncated, and any remaining bytes in the datagram will be discarded.
 
 If *options* is set to **ZX_SOCKET_CONTROL**, then **socket_read**()
 attempts to read from the socket control plane.
@@ -59,8 +60,6 @@ or if *options* is not either zero or **ZX_SOCKET_CONTROL*.
 readable.
 
 **ZX_ERR_BAD_STATE**  Reading has been disabled for this socket endpoint.
-
-**ZX_ERR_NO_MEMORY**  (Temporary) Failure due to lack of memory.
 
 ## SEE ALSO
 

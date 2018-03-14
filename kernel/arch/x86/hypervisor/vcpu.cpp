@@ -12,20 +12,22 @@
 #include <hypervisor/cpu.h>
 #include <kernel/mp.h>
 #include <vm/fault.h>
-#include <vm/physmap.h>
 #include <vm/pmm.h>
 #include <vm/vm_object.h>
 #include <zircon/syscalls/hypervisor.h>
 
+#include "pvclock_priv.h"
 #include "vcpu_priv.h"
 #include "vmexit_priv.h"
 #include "vmx_cpu_state_priv.h"
 
 extern uint8_t _gdt[];
 
-static const uint32_t kInterruptInfoValid = 1u << 31;
-static const uint32_t kInterruptInfoDeliverErrorCode = 1u << 11;
-static const uint32_t kInterruptTypeHardwareException = 3u << 8;
+static constexpr uint32_t kInterruptInfoValid = 1u << 31;
+static constexpr uint32_t kInterruptInfoDeliverErrorCode = 1u << 11;
+static constexpr uint32_t kInterruptTypeHardwareException = 3u << 8;
+static constexpr uint32_t kInterruptTypeSoftwareException = 6u << 8;
+static constexpr uint16_t kBaseProcessorVpid = 1;
 
 static zx_status_t vmptrld(paddr_t pa) {
     uint8_t err;
@@ -125,8 +127,14 @@ static bool has_error_code(uint32_t vector) {
 void AutoVmcs::IssueInterrupt(uint32_t vector) {
     DEBUG_ASSERT(vmcs_address_ != 0);
     uint32_t interrupt_info = kInterruptInfoValid | (vector & UINT8_MAX);
-    if (vector <= X86_INT_MAX_INTEL_DEFINED)
+    if (vector == X86_INT_BREAKPOINT || vector == X86_INT_OVERFLOW) {
+        // From Volume 3, Section 24.8.3. A VMM should use type hardware exception for all
+        // exceptions other than breakpoints and overflows, which should be software exceptions.
+        interrupt_info |= kInterruptTypeSoftwareException;
+    } else if (vector < X86_INT_PLATFORM_BASE) {
+        // From Volume 3, Section 6.15. Vectors from 0 to 32 (X86_INT_PLATFORM_BASE) are exceptions.
         interrupt_info |= kInterruptTypeHardwareException;
+    }
     if (has_error_code(vector)) {
         interrupt_info |= kInterruptInfoDeliverErrorCode;
         Write(VmcsField32::ENTRY_EXCEPTION_ERROR_CODE, 0);
@@ -206,7 +214,7 @@ zx_status_t AutoVmcs::SetControl(VmcsField32 controls, uint64_t true_msr, uint64
 }
 
 AutoPin::AutoPin(uint16_t vpid)
-    : prev_cpu_mask_(get_current_thread()->cpu_affinity), thread_(pin_thread(vpid)) {}
+    : prev_cpu_mask_(get_current_thread()->cpu_affinity), thread_(hypervisor::pin_thread(vpid)) {}
 
 AutoPin::~AutoPin() {
     thread_set_cpu_affinity(thread_, prev_cpu_mask_);
@@ -268,7 +276,9 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
                                  kProcbasedCtls2x2Apic |
                                  // Associate cached translations of linear
                                  // addresses with a virtual processor ID.
-                                 kProcbasedCtls2Vpid,
+                                 kProcbasedCtls2Vpid |
+                                 // Enable unrestricted guest.
+                                 kProcbasedCtls2UnrestrictedGuest,
                              0);
     if (status != ZX_OK)
         return status;
@@ -306,6 +316,8 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
                                  kProcbasedCtlsIoExiting |
                                  // Enable use of MSR bitmaps.
                                  kProcbasedCtlsMsrBitmaps |
+                                 // Enable VM exit on pause instruction.
+                                 kProcbasedCtlsPauseExiting |
                                  // Enable secondary processor-based controls.
                                  kProcbasedCtlsProcbasedCtls2,
                              // Disable VM exit on CR3 load.
@@ -346,17 +358,16 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
         return status;
 
     // Setup VM-entry VMCS controls.
+    // Load the guest IA32_PAT MSR and IA32_EFER MSR on entry.
+    uint32_t entry_ctls = kEntryCtlsLoadIa32Pat | kEntryCtlsLoadIa32Efer;
+    if (vpid == kBaseProcessorVpid) {
+        // On the BSP, go straight to IA32E mode on entry.
+        entry_ctls |= kEntryCtlsIa32eMode;
+    }
     status = vmcs.SetControl(VmcsField32::ENTRY_CTLS,
                              read_msr(X86_MSR_IA32_VMX_TRUE_ENTRY_CTLS),
                              read_msr(X86_MSR_IA32_VMX_ENTRY_CTLS),
-                             // After VM entry, logical processor is in IA-32e
-                             // mode and IA32_EFER.LMA is set to true.
-                             kEntryCtlsIa32eMode |
-                                 // Load the guest IA32_PAT MSR on entry.
-                                 kEntryCtlsLoadIa32Pat |
-                                 // Load the guest IA32_EFER MSR on entry.
-                                 kEntryCtlsLoadIa32Efer,
-                             0);
+                             entry_ctls, 0);
     if (status != ZX_OK)
         return status;
 
@@ -469,10 +480,19 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     if (cr_is_invalid(cr0, X86_MSR_IA32_VMX_CR0_FIXED0, X86_MSR_IA32_VMX_CR0_FIXED1)) {
         return ZX_ERR_BAD_STATE;
     }
+    if (vpid != kBaseProcessorVpid) {
+        // Disable protected mode and paging on secondary VCPUs.
+        // From Volume 3, Section 26.3.1.1: CR0 is now invalid according to
+        // X86_MSR_IA32_VMX_CR0_FIXED1 but this does not apply to unrestricted guests.
+        cr0 &= ~(X86_CR0_PE | X86_CR0_PG);
+    }
     vmcs.Write(VmcsFieldXX::GUEST_CR0, cr0);
 
-    uint64_t cr4 = X86_CR4_PAE | // Enable PAE paging
-                   X86_CR4_VMXE; // Enable VMX
+    uint64_t cr4 = X86_CR4_VMXE; // Enable VMX
+    if (vpid == kBaseProcessorVpid) {
+        // Enable the PAE bit on the BSP for 64-bit paging.
+        cr4 |= X86_CR4_PAE;
+    }
     if (cr_is_invalid(cr4, X86_MSR_IA32_VMX_CR4_FIXED0, X86_MSR_IA32_VMX_CR4_FIXED1)) {
         return ZX_ERR_BAD_STATE;
     }
@@ -484,33 +504,65 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     vmcs.Write(VmcsFieldXX::CR4_READ_SHADOW, 0);
 
     vmcs.Write(VmcsField64::GUEST_IA32_PAT, read_msr(X86_MSR_IA32_PAT));
-    vmcs.Write(VmcsField64::GUEST_IA32_EFER, read_msr(X86_MSR_IA32_EFER));
 
-    vmcs.Write(VmcsField32::GUEST_CS_ACCESS_RIGHTS,
-               kGuestXxAccessRightsTypeA |
-                   kGuestXxAccessRightsTypeW |
-                   kGuestXxAccessRightsTypeE |
-                   kGuestXxAccessRightsTypeCode |
-                   kGuestXxAccessRightsS |
-                   kGuestXxAccessRightsP |
-                   kGuestXxAccessRightsL);
+    uint64_t guest_efer = read_msr(X86_MSR_IA32_EFER);
+    if (vpid != kBaseProcessorVpid) {
+        // Disable LME and LMA on all but the BSP.
+        guest_efer &= ~(X86_EFER_LME | X86_EFER_LMA);
+    }
+    vmcs.Write(VmcsField64::GUEST_IA32_EFER, guest_efer);
+
+    uint32_t cs_access_rights = kGuestXxAccessRightsDefault |
+                                kGuestXxAccessRightsTypeE |
+                                kGuestXxAccessRightsTypeCode;
+    if (vpid == kBaseProcessorVpid) {
+        // Ensure that the BSP starts with a 64-bit code segment.
+        cs_access_rights |= kGuestXxAccessRightsL;
+    }
+    vmcs.Write(VmcsField32::GUEST_CS_ACCESS_RIGHTS, cs_access_rights);
 
     vmcs.Write(VmcsField32::GUEST_TR_ACCESS_RIGHTS,
-               kGuestTrAccessRightsTssBusy |
-                   kGuestXxAccessRightsP);
+               kGuestTrAccessRightsTssBusy | kGuestXxAccessRightsP);
 
-    // Disable all other segment selectors until we have a guest that uses them.
-    vmcs.Write(VmcsField32::GUEST_SS_ACCESS_RIGHTS, kGuestXxAccessRightsUnusable);
-    vmcs.Write(VmcsField32::GUEST_DS_ACCESS_RIGHTS, kGuestXxAccessRightsUnusable);
-    vmcs.Write(VmcsField32::GUEST_ES_ACCESS_RIGHTS, kGuestXxAccessRightsUnusable);
-    vmcs.Write(VmcsField32::GUEST_FS_ACCESS_RIGHTS, kGuestXxAccessRightsUnusable);
-    vmcs.Write(VmcsField32::GUEST_GS_ACCESS_RIGHTS, kGuestXxAccessRightsUnusable);
-    vmcs.Write(VmcsField32::GUEST_LDTR_ACCESS_RIGHTS, kGuestXxAccessRightsUnusable);
+    vmcs.Write(VmcsField32::GUEST_SS_ACCESS_RIGHTS, kGuestXxAccessRightsDefault);
+    vmcs.Write(VmcsField32::GUEST_DS_ACCESS_RIGHTS, kGuestXxAccessRightsDefault);
+    vmcs.Write(VmcsField32::GUEST_ES_ACCESS_RIGHTS, kGuestXxAccessRightsDefault);
+    vmcs.Write(VmcsField32::GUEST_FS_ACCESS_RIGHTS, kGuestXxAccessRightsDefault);
+    vmcs.Write(VmcsField32::GUEST_GS_ACCESS_RIGHTS, kGuestXxAccessRightsDefault);
 
+    vmcs.Write(VmcsField32::GUEST_LDTR_ACCESS_RIGHTS,
+               kGuestXxAccessRightsTypeW | kGuestXxAccessRightsP);
+
+    if (vpid == kBaseProcessorVpid) {
+        // Use GUEST_RIP to set the entry point on the BSP.
+        vmcs.Write(VmcsFieldXX::GUEST_CS_BASE, 0);
+        vmcs.Write(VmcsField16::GUEST_CS_SELECTOR, 0);
+        vmcs.Write(VmcsFieldXX::GUEST_RIP, entry);
+    } else {
+        // Use CS to set the entry point on APs.
+        vmcs.Write(VmcsFieldXX::GUEST_CS_BASE, entry);
+        vmcs.Write(VmcsField16::GUEST_CS_SELECTOR, static_cast<uint16_t>(entry >> 4));
+        vmcs.Write(VmcsFieldXX::GUEST_RIP, 0);
+    }
+    vmcs.Write(VmcsField32::GUEST_CS_LIMIT, 0xffff);
+    vmcs.Write(VmcsFieldXX::GUEST_TR_BASE, 0);
+    vmcs.Write(VmcsField16::GUEST_TR_SELECTOR, 0);
+    vmcs.Write(VmcsField32::GUEST_TR_LIMIT, 0xffff);
+    vmcs.Write(VmcsFieldXX::GUEST_DS_BASE, 0);
+    vmcs.Write(VmcsField32::GUEST_DS_LIMIT, 0xffff);
+    vmcs.Write(VmcsFieldXX::GUEST_SS_BASE, 0);
+    vmcs.Write(VmcsField32::GUEST_SS_LIMIT, 0xffff);
+    vmcs.Write(VmcsFieldXX::GUEST_ES_BASE, 0);
+    vmcs.Write(VmcsField32::GUEST_ES_LIMIT, 0xffff);
+    vmcs.Write(VmcsFieldXX::GUEST_FS_BASE, 0);
+    vmcs.Write(VmcsField32::GUEST_FS_LIMIT, 0xffff);
+    vmcs.Write(VmcsFieldXX::GUEST_GS_BASE, 0);
+    vmcs.Write(VmcsField32::GUEST_GS_LIMIT, 0xffff);
+    vmcs.Write(VmcsField32::GUEST_LDTR_LIMIT, 0xffff);
     vmcs.Write(VmcsFieldXX::GUEST_GDTR_BASE, 0);
-    vmcs.Write(VmcsField32::GUEST_GDTR_LIMIT, 0);
+    vmcs.Write(VmcsField32::GUEST_GDTR_LIMIT, 0xffff);
     vmcs.Write(VmcsFieldXX::GUEST_IDTR_BASE, 0);
-    vmcs.Write(VmcsField32::GUEST_IDTR_LIMIT, 0);
+    vmcs.Write(VmcsField32::GUEST_IDTR_LIMIT, 0xffff);
 
     // Set all reserved RFLAGS bits to their correct values
     vmcs.Write(VmcsFieldXX::GUEST_RFLAGS, X86_FLAGS_RESERVED_ONES);
@@ -526,7 +578,6 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     vmcs.Write(VmcsField32::GUEST_IA32_SYSENTER_CS, 0);
 
     vmcs.Write(VmcsFieldXX::GUEST_RSP, 0);
-    vmcs.Write(VmcsFieldXX::GUEST_RIP, entry);
     vmcs.Write(VmcsFieldXX::GUEST_CR3, 0);
 
     // From Volume 3, Section 24.4.2: If the “VMCS shadowing” VM-execution
@@ -546,7 +597,7 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
 
 // static
 zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* out) {
-    GuestPhysicalAddressSpace* gpas = guest->AddressSpace();
+    hypervisor::GuestPhysicalAddressSpace* gpas = guest->AddressSpace();
     if (entry >= gpas->size())
         return ZX_ERR_INVALID_ARGS;
 
@@ -570,7 +621,7 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
     // 2. The state of the VMCS associated with the VCPU is cached within the
     //    CPU. To move to a different CPU, we must perform an explicit migration
     //    which will cost us performance.
-    thread_t* thread = pin_thread(vpid);
+    thread_t* thread = hypervisor::pin_thread(vpid);
 
     fbl::AllocChecker ac;
     fbl::unique_ptr<Vcpu> vcpu(new (&ac) Vcpu(guest, vpid, thread));
@@ -598,9 +649,9 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
 
     VmxRegion* region = vcpu->vmcs_page_.VirtualAddress<VmxRegion>();
     region->revision_id = vmx_info.revision_id;
-    status = vmcs_init(vcpu->vmcs_page_.PhysicalAddress(), vpid, entry,
-                       guest->MsrBitmapsAddress(), gpas->table_phys(), &vcpu->vmx_state_,
-                       &vcpu->host_msr_page_, &vcpu->guest_msr_page_);
+    zx_paddr_t table = gpas->aspace()->arch_aspace().arch_table_phys();
+    status = vmcs_init(vcpu->vmcs_page_.PhysicalAddress(), vpid, entry, guest->MsrBitmapsAddress(),
+                       table, &vcpu->vmx_state_, &vcpu->host_msr_page_, &vcpu->guest_msr_page_);
     if (status != ZX_OK)
         return status;
 
@@ -624,36 +675,43 @@ Vcpu::~Vcpu() {
 }
 
 // Injects an interrupt into the guest, if there is one pending.
-static void local_apic_maybe_interrupt(AutoVmcs* vmcs, LocalApicState* local_apic_state) {
+static zx_status_t local_apic_maybe_interrupt(AutoVmcs* vmcs, LocalApicState* local_apic_state) {
     uint32_t vector;
     zx_status_t status = local_apic_state->interrupt_tracker.Pop(&vector);
     if (status != ZX_OK) {
-        return;
+        return status == ZX_ERR_NOT_FOUND ? ZX_OK : status;
     }
 
-    if (vector <= X86_INT_MAX_INTEL_DEFINED || vmcs->Read(VmcsFieldXX::GUEST_RFLAGS) & X86_FLAGS_IF) {
-        // If the vector is non-maskable or interrupts are enabled, we inject
-        // an interrupt.
+    if (vector < X86_INT_PLATFORM_BASE || vmcs->Read(VmcsFieldXX::GUEST_RFLAGS) & X86_FLAGS_IF) {
+        // If the vector is non-maskable or interrupts are enabled, we inject an interrupt.
         vmcs->IssueInterrupt(vector);
     } else {
         local_apic_state->interrupt_tracker.Track(vector);
         // If interrupts are disabled, we set VM exit on interrupt enable.
         vmcs->InterruptWindowExiting(true);
     }
+    return ZX_OK;
 }
 
 zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
-    if (!check_pinned_cpu_invariant(vpid_, thread_))
+    if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     zx_status_t status;
     do {
         AutoVmcs vmcs(vmcs_page_.PhysicalAddress());
-        local_apic_maybe_interrupt(&vmcs, &local_apic_state_);
+        status = local_apic_maybe_interrupt(&vmcs, &local_apic_state_);
+        if (status != ZX_OK) {
+            return status;
+        }
         if (x86_feature_test(X86_FEATURE_XSAVE)) {
             // Save the host XCR0, and load the guest XCR0.
             vmx_state_.host_state.xcr0 = x86_xgetbv(0);
             x86_xsetbv(0, vmx_state_.guest_state.xcr0);
         }
+
+        // Updates guest system time if the guest subscribed to updates.
+        pvclock_update_system_time(&pvclock_state_, guest_->AddressSpace());
+
         running_.store(true);
         status = vmx_enter(&vmx_state_);
         running_.store(false);
@@ -668,7 +726,8 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
         } else {
             vmx_state_.resume = true;
             status = vmexit_handler(&vmcs, &vmx_state_.guest_state, &local_apic_state_,
-                                    guest_->AddressSpace(), guest_->Traps(), packet);
+                                    &pvclock_state_, guest_->AddressSpace(), guest_->Traps(),
+                                    packet);
         }
     } while (status == ZX_OK);
     return status == ZX_ERR_NEXT ? ZX_OK : status;
@@ -694,7 +753,7 @@ zx_status_t Vcpu::Interrupt(uint32_t vector) {
     if (status != ZX_OK) {
         return status;
     } else if (!signaled && running_.load()) {
-        mp_reschedule(MP_IPI_TARGET_MASK, cpu_num_to_mask(cpu_of(vpid_)), 0);
+        mp_reschedule(cpu_num_to_mask(hypervisor::cpu_of(vpid_)), MP_RESCHEDULE_FLAG_USE_IPI);
     }
     return ZX_OK;
 }
@@ -719,7 +778,7 @@ static void register_copy(Out* out, const In& in) {
 }
 
 zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
-    if (!check_pinned_cpu_invariant(vpid_, thread_))
+    if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
     case ZX_VCPU_STATE: {
@@ -737,7 +796,7 @@ zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
 }
 
 zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
-    if (!check_pinned_cpu_invariant(vpid_, thread_))
+    if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
     case ZX_VCPU_STATE: {

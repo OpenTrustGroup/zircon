@@ -9,7 +9,8 @@
 #include <sys/stat.h>
 #include <threads.h>
 
-#include <async/cpp/loop.h>
+#include <lib/async/cpp/loop.h>
+#include <lib/async/cpp/wait.h>
 #include <fs/vfs.h>
 #include <zircon/device/device.h>
 #include <zircon/device/vfs.h>
@@ -34,6 +35,7 @@ namespace {
 Vfs root_vfs;
 Vfs system_vfs;
 fbl::unique_ptr<async::Loop> global_loop;
+async::Wait global_shutdown;
 
 }  // namespace
 
@@ -147,6 +149,22 @@ zx_status_t systemfs_add_file(const char* path, zx_handle_t vmo, zx_off_t off, s
     return add_vmofile(SystemfsRoot(), path, vmo, off, len);
 }
 
+static const char* mount_points[] = {
+    "/data", "/volume", "/system", "/install", "/blob", "/pkgfs"
+};
+static fbl::RefPtr<fs::Vnode> mount_nodes[countof(mount_points)];
+
+zx_status_t vfs_install_fs(const char* path, zx_handle_t h) {
+    for (unsigned n = 0; n < countof(mount_points); n++) {
+        if (!strcmp(path, mount_points[n])) {
+            return memfs::root_vfs.InstallRemote(mount_nodes[n], fs::MountChannel(h));
+        }
+    }
+    zx_handle_close(h);
+    return ZX_ERR_NOT_FOUND;
+}
+
+
 // Hardcoded initialization function to create/access global root directory
 VnodeDir* vfs_create_global_root() {
     if (memfs::global_root == nullptr) {
@@ -160,12 +178,14 @@ VnodeDir* vfs_create_global_root() {
         memfs::root_vfs.MountSubtree(memfs::global_root.get(), BootfsRoot());
         memfs::root_vfs.MountSubtree(memfs::global_root.get(), MemfsRoot());
 
-        fbl::RefPtr<fs::Vnode> vn;
-        fbl::StringPiece pathout;
-        ZX_ASSERT(memfs::root_vfs.Open(memfs::global_root, &vn, fbl::StringPiece("/data"), &pathout,
-                                       ZX_FS_RIGHT_READABLE | ZX_FS_FLAG_CREATE, S_IFDIR) == ZX_OK);
-        ZX_ASSERT(memfs::root_vfs.Open(memfs::global_root, &vn, fbl::StringPiece("/volume"), &pathout,
-                                       ZX_FS_RIGHT_READABLE | ZX_FS_FLAG_CREATE, S_IFDIR) == ZX_OK);
+        for (unsigned n = 0; n < countof(mount_points); n++) {
+            fbl::StringPiece pathout;
+
+            r = memfs::root_vfs.Open(memfs::global_root, &mount_nodes[n],
+                                     fbl::StringPiece(mount_points[n]), &pathout,
+                                     ZX_FS_RIGHT_READABLE | ZX_FS_FLAG_CREATE, S_IFDIR);
+            ZX_ASSERT(r == ZX_OK);
+        }
 
         memfs::global_loop.reset(new async::Loop());
         memfs::global_loop->StartThread("root-dispatcher");
@@ -173,11 +193,6 @@ VnodeDir* vfs_create_global_root() {
         memfs::system_vfs.set_async(memfs::global_loop->async());
     }
     return memfs::global_root.get();
-}
-
-void devmgr_vfs_exit() {
-    memfs::root_vfs.UninstallAll(zx_deadline_after(ZX_SEC(5)));
-    memfs::system_vfs.UninstallAll(zx_deadline_after(ZX_SEC(5)));
 }
 
 zx_status_t memfs_mount(VnodeDir* parent, const char* name, VnodeDir* subtree) {
@@ -213,6 +228,21 @@ zx_status_t vfs_connect_root_handle(VnodeMemfs* vn, zx_handle_t h) {
 // Initialize the global root VFS node
 void vfs_global_init(VnodeDir* root) {
     memfs::global_vfs_root = root;
+}
+
+void vfs_watch_exit(zx_handle_t event) {
+    memfs::global_shutdown.set_handler([event](async_t* async,
+                                               zx_status_t status,
+                                               const zx_packet_signal_t* signal) {
+        memfs::root_vfs.UninstallAll(ZX_TIME_INFINITE);
+        memfs::system_vfs.UninstallAll(ZX_TIME_INFINITE);
+        zx_object_signal(event, 0, FSHOST_SIGNAL_EXIT_DONE);
+        return ASYNC_WAIT_FINISHED;
+    });
+
+    memfs::global_shutdown.set_object(event);
+    memfs::global_shutdown.set_trigger(FSHOST_SIGNAL_EXIT);
+    memfs::global_shutdown.Begin(memfs::global_loop->async());
 }
 
 // Return a RIO handle to the global root

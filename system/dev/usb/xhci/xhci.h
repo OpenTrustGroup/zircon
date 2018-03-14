@@ -35,6 +35,14 @@
 
 #define ISOCH_INTERRUPTER 1
 
+#if __x86_64__
+// cache is coherent on x86, so we always use cached buffers
+#define XHCI_IO_BUFFER_UNCACHED 0
+#else
+#define XHCI_IO_BUFFER_UNCACHED IO_BUFFER_UNCACHED
+#endif
+
+// cache is coherent on x86
 // state for endpoint's current transfer
 typedef struct {
     phys_iter_t         phys_iter;
@@ -200,21 +208,10 @@ struct xhci {
     usb_request_pool_t free_reqs;
 };
 
-#if __x86_64__
-// cache is coherent on x86
-static inline void xhci_cache_flush(volatile const void* addr, size_t len) {}
-static inline void xhci_cache_flush_invalidate(volatile const void* addr, size_t len) {}
-#else
-static inline void xhci_cache_flush(volatile const void* addr, size_t len) {
-    zx_cache_flush((void *)addr, len, ZX_CACHE_FLUSH_DATA);
-}
-
-static inline void xhci_cache_flush_invalidate(volatile const void* addr, size_t len) {
-    zx_cache_flush((void *)addr, len, ZX_CACHE_FLUSH_DATA | ZX_CACHE_FLUSH_INVALIDATE);
-}
-#endif
-
 zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts);
+// Returns the max number of interrupters supported by the xhci.
+// This is different to xhci->num_interrupts.
+uint32_t xhci_get_max_interrupters(xhci_t* xhci);
 int xhci_get_slot_ctx_state(xhci_slot_t* slot);
 int xhci_get_ep_ctx_state(xhci_slot_t* slot, xhci_endpoint_t* ep);
 void xhci_set_dbcaa(xhci_t* xhci, uint32_t slot_id, zx_paddr_t paddr);

@@ -22,7 +22,7 @@
 
 static ssize_t zxsio_read_stream(fdio_t* io, void* data, size_t len) {
     zxrio_t* rio = (zxrio_t*)io;
-    int nonblock = rio->io.flags & FDIO_FLAG_NONBLOCK;
+    int nonblock = rio->io.ioflag & IOFLAG_NONBLOCK;
 
     // TODO: let the generic read() to do this loop
     for (;;) {
@@ -84,7 +84,7 @@ static ssize_t zxsio_recvfrom(fdio_t* io, void* data, size_t len, int flags, str
 
 static ssize_t zxsio_write_stream(fdio_t* io, const void* data, size_t len) {
     zxrio_t* rio = (zxrio_t*)io;
-    int nonblock = rio->io.flags & FDIO_FLAG_NONBLOCK;
+    int nonblock = rio->io.ioflag & IOFLAG_NONBLOCK;
 
     // TODO: let the generic write() to do this loop
     for (;;) {
@@ -136,7 +136,7 @@ static ssize_t zxsio_recvmsg_stream(fdio_t* io, struct msghdr* msg, int flags) {
         // TODO: support MSG_OOB
         return ZX_ERR_NOT_SUPPORTED;
     }
-    if (!(io->flags & FDIO_FLAG_SOCKET_CONNECTED)) {
+    if (!(io->ioflag & IOFLAG_SOCKET_CONNECTED)) {
         return ZX_ERR_BAD_STATE;
     }
     // we ignore msg_name and msg_namelen members.
@@ -162,7 +162,7 @@ static ssize_t zxsio_sendmsg_stream(fdio_t* io, const struct msghdr* msg, int fl
         return ZX_ERR_NOT_SUPPORTED;
     }
     // TODO: support flags and control messages
-    if (io->flags & FDIO_FLAG_SOCKET_CONNECTED) {
+    if (io->ioflag & IOFLAG_SOCKET_CONNECTED) {
         // if connected, can't specify address
         if (msg->msg_name != NULL || msg->msg_namelen != 0) {
             return ZX_ERR_ALREADY_EXISTS;
@@ -190,7 +190,7 @@ static ssize_t zxsio_sendmsg_stream(fdio_t* io, const struct msghdr* msg, int fl
 
 static zx_status_t zxsio_clone_stream(fdio_t* io, zx_handle_t* handles, uint32_t* types) {
     // TODO: support unconnected sockets
-    if (!(io->flags & FDIO_FLAG_SOCKET_CONNECTED)) {
+    if (!(io->ioflag & IOFLAG_SOCKET_CONNECTED)) {
         return ZX_ERR_BAD_STATE;
     }
     zxrio_t* rio = (void*)io;
@@ -202,16 +202,16 @@ static zx_status_t zxsio_clone_stream(fdio_t* io, zx_handle_t* handles, uint32_t
     }
     handles[0] = h;
     types[0] = PA_FDIO_SOCKET;
-    if (info.handle != ZX_HANDLE_INVALID) {
-        handles[1] = info.handle;
+    if (zxrio_object_extract_handle(&info.extra, &handles[1]) == ZX_OK) {
         types[1] = PA_FDIO_SOCKET;
+        return 2;
     }
-    return (info.handle != ZX_HANDLE_INVALID) ? 2 : 1;
+    return 1;
 }
 
 static zx_status_t zxsio_unwrap_stream(fdio_t* io, zx_handle_t* handles, uint32_t* types) {
     // TODO: support unconnected sockets
-    if (!(io->flags & FDIO_FLAG_SOCKET_CONNECTED)) {
+    if (!(io->ioflag & IOFLAG_SOCKET_CONNECTED)) {
         return ZX_ERR_BAD_STATE;
     }
     zxrio_t* rio = (void*)io;
@@ -225,7 +225,6 @@ static zx_status_t zxsio_unwrap_stream(fdio_t* io, zx_handle_t* handles, uint32_
     } else {
         r = 1;
     }
-    free(io);
     return r;
 }
 
@@ -233,7 +232,7 @@ static void zxsio_wait_begin_stream(fdio_t* io, uint32_t events, zx_handle_t* ha
     zxrio_t* rio = (void*)io;
     *handle = rio->h2;
     // TODO: locking for flags/state
-    if (io->flags & FDIO_FLAG_SOCKET_CONNECTING) {
+    if (io->ioflag & IOFLAG_SOCKET_CONNECTING) {
         // check the connection state
         zx_signals_t observed;
         zx_status_t r;
@@ -241,13 +240,13 @@ static void zxsio_wait_begin_stream(fdio_t* io, uint32_t events, zx_handle_t* ha
                                &observed);
         if (r == ZX_OK || r == ZX_ERR_TIMED_OUT) {
             if (observed & ZXSIO_SIGNAL_CONNECTED) {
-                io->flags &= ~FDIO_FLAG_SOCKET_CONNECTING;
-                io->flags |= FDIO_FLAG_SOCKET_CONNECTED;
+                io->ioflag &= ~IOFLAG_SOCKET_CONNECTING;
+                io->ioflag |= IOFLAG_SOCKET_CONNECTED;
             }
         }
     }
     zx_signals_t signals = ZXSIO_SIGNAL_ERROR;
-    if (io->flags & FDIO_FLAG_SOCKET_CONNECTED) {
+    if (io->ioflag & IOFLAG_SOCKET_CONNECTED) {
         // if socket is connected
         if (events & POLLIN) {
             signals |= ZX_SOCKET_READABLE | ZX_SOCKET_READ_DISABLED | ZX_SOCKET_PEER_CLOSED;
@@ -276,14 +275,14 @@ static void zxsio_wait_begin_stream(fdio_t* io, uint32_t events, zx_handle_t* ha
 
 static void zxsio_wait_end_stream(fdio_t* io, zx_signals_t signals, uint32_t* _events) {
     // check the connection state
-    if (io->flags & FDIO_FLAG_SOCKET_CONNECTING) {
+    if (io->ioflag & IOFLAG_SOCKET_CONNECTING) {
         if (signals & ZXSIO_SIGNAL_CONNECTED) {
-            io->flags &= ~FDIO_FLAG_SOCKET_CONNECTING;
-            io->flags |= FDIO_FLAG_SOCKET_CONNECTED;
+            io->ioflag &= ~IOFLAG_SOCKET_CONNECTING;
+            io->ioflag |= IOFLAG_SOCKET_CONNECTED;
         }
     }
     uint32_t events = 0;
-    if (io->flags & FDIO_FLAG_SOCKET_CONNECTED) {
+    if (io->ioflag & IOFLAG_SOCKET_CONNECTED) {
         if (signals & (ZX_SOCKET_READABLE | ZX_SOCKET_READ_DISABLED | ZX_SOCKET_PEER_CLOSED)) {
             events |= POLLIN;
         }
@@ -438,7 +437,7 @@ static ssize_t zxsio_sendmsg_dgram(fdio_t* io, const struct msghdr* msg, int fla
         return ZX_ERR_NOT_SUPPORTED;
     }
     // TODO: support flags and control messages
-    if (io->flags & FDIO_FLAG_SOCKET_CONNECTED) {
+    if (io->ioflag & IOFLAG_SOCKET_CONNECTED) {
         // if connected, can't specify address
         if (msg->msg_name != NULL || msg->msg_namelen != 0) {
             return ZX_ERR_ALREADY_EXISTS;
@@ -561,7 +560,7 @@ fdio_t* fdio_socket_create(zx_handle_t h, zx_handle_t s, int flags) {
     rio->io.ops = &fdio_socket_stream_ops; // default is stream
     rio->io.magic = FDIO_MAGIC;
     rio->io.refcount = 1;
-    rio->io.flags = FDIO_FLAG_SOCKET | flags;
+    rio->io.ioflag = IOFLAG_SOCKET | flags;
     rio->h = h;
     rio->h2 = s;
     return &rio->io;
@@ -578,7 +577,7 @@ void fdio_socket_set_dgram_ops(fdio_t* io) {
 }
 
 zx_status_t fdio_socket_shutdown(fdio_t* io, int how) {
-    if (!(io->flags & FDIO_FLAG_SOCKET_CONNECTED)) {
+    if (!(io->ioflag & IOFLAG_SOCKET_CONNECTED)) {
         return ZX_ERR_BAD_STATE;
     }
     zxrio_t* rio = (zxrio_t*)io;

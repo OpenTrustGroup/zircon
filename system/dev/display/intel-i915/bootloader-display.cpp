@@ -9,9 +9,10 @@
 namespace i915 {
 
 BootloaderDisplay::BootloaderDisplay(Controller* controller,
-        registers::Ddi ddi, registers::Pipe pipe) : DisplayDevice(controller, ddi, pipe) {}
+                                     registers::Ddi ddi, registers::Pipe pipe)
+        : DisplayDevice(controller, ddi, registers::TRANS_A, pipe) {}
 
-bool BootloaderDisplay::Init(zx_display_info_t* di) {
+bool BootloaderDisplay::QueryDevice(zx_display_info_t* di) {
     uint32_t format, width, height, stride;
     zx_status_t status = zx_bootloader_fb_get_info(&format, &width, &height, &stride);
     if (status == ZX_OK) {
@@ -31,6 +32,12 @@ bool BootloaderDisplay::Init(zx_display_info_t* di) {
         return false;
     }
 
+    return true;
+}
+
+bool BootloaderDisplay::DefaultModeset() {
+    // We don't support doing anything, so just hope something already set
+    // the hardware up.
     return true;
 }
 

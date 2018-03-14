@@ -164,7 +164,8 @@ bool i2c_send_byte(hwreg::RegisterIo* mmio_space, registers::Ddi ddi, uint8_t by
 namespace i915 {
 
 HdmiDisplay::HdmiDisplay(Controller* controller, registers::Ddi ddi, registers::Pipe pipe)
-        : DisplayDevice(controller, ddi, pipe) { }
+        : DisplayDevice(controller, ddi, static_cast<registers::Trans>(pipe), pipe)
+        , edid_(this) { }
 
 // Per the GMBUS Controller Programming Interface section of the Intel docs, GMBUS does not
 // directly support segment pointer addressing. Instead, the segment pointer needs to be
@@ -450,7 +451,7 @@ static bool calculate_params(uint32_t symbol_clock_khz,
 
 namespace i915 {
 
-bool HdmiDisplay::Init(zx_display_info* info) {
+bool HdmiDisplay::QueryDevice(zx_display_info* info) {
     // HDMI isn't supported on these DDIs
     if (ddi_to_pin(ddi()) == -1) {
         return false;
@@ -460,95 +461,115 @@ bool HdmiDisplay::Init(zx_display_info* info) {
     registers::GMBus0::Get().FromValue(0).WriteTo(mmio_space());
     registers::GMBus4::Get().FromValue(0).WriteTo(mmio_space());
 
-    if (!ResetPipe() || !ResetDdi()) {
-        return false;
-    }
-
-    edid::Edid edid(this);
     edid::timing_params_t timing_params;
-    bool is_hdmi;
-    if (!edid.Init() || !edid.GetPreferredTiming(&timing_params)
-            || !edid.CheckForHdmi(&is_hdmi) || !EnablePowerWell2()) {
+    if (!edid_.Init() || !edid_.GetPreferredTiming(&timing_params)
+            || !edid_.CheckForHdmi(&is_hdmi_display_)) {
         return false;
     }
-    zxlogf(TRACE, "Found a %s monitor\n", is_hdmi ? "hdmi" : "dvi");
+    zxlogf(TRACE, "Found a %s monitor\n", is_hdmi_display_ ? "hdmi" : "dvi");
 
-    // Set the the DPLL control settings
-    auto dpll_ctrl1 = registers::DpllControl1::Get().ReadFrom(mmio_space());
-    dpll_ctrl1.dpll_hdmi_mode(dpll()).set(1);
-    dpll_ctrl1.dpll_override(dpll()).set(1);
-    dpll_ctrl1.dpll_ssc_enable(dpll()).set(0);
-    dpll_ctrl1.WriteTo(mmio_space());
-    dpll_ctrl1.ReadFrom(mmio_space());
+    info->width = timing_params.horizontal_addressable;
+    info->height = timing_params.vertical_addressable;
+    info->format = ZX_PIXEL_FORMAT_ARGB_8888;
+    info->stride = registers::PlaneSurfaceStride::compute_linear_stride(info->width, info->format);
+    info->pixelsize = ZX_PIXEL_FORMAT_BYTES(info->format);
 
-    // Calculate and the HDMI DPLL parameters
-    uint8_t p0, p1, p2;
-    uint32_t dco_central_freq_khz;
-    uint64_t dco_freq_khz;
-    if (!calculate_params(timing_params.pixel_freq_10khz * 10,
-                          &dco_freq_khz, &dco_central_freq_khz, &p0, &p1, &p2)) {
-        zxlogf(ERROR, "hdmi: failed to calculate clock params\n");
+    return true;
+}
+
+bool HdmiDisplay::DefaultModeset() {
+    ResetPipe();
+    if (!ResetTrans() || !ResetDdi()) {
         return false;
     }
 
-    // Set the DCO frequency
-    auto dpll_cfg1 = registers::DpllConfig1::Get(dpll()).FromValue(0);
-    uint16_t dco_int = static_cast<uint16_t>((dco_freq_khz / 1000) / 24);
-    uint16_t dco_frac = static_cast<uint16_t>(
-            ((dco_freq_khz * (1 << 15) / 24) - ((dco_int * 1000L) * (1 << 15))) / 1000);
-    dpll_cfg1.set_frequency_enable(1);
-    dpll_cfg1.set_dco_integer(dco_int);
-    dpll_cfg1.set_dco_fraction(dco_frac);
-    dpll_cfg1.WriteTo(mmio_space());
-    dpll_cfg1.ReadFrom(mmio_space());
+    edid::timing_params_t timing_params;
+    edid_.GetPreferredTiming(&timing_params);
 
-    // Set the divisors and central frequency
-    auto dpll_cfg2 = registers::DpllConfig2::Get(dpll()).FromValue(0);
-    dpll_cfg2.set_qdiv_ratio(p1);
-    dpll_cfg2.set_qdiv_mode(p1 != 1);
-    if (p2 == 5) {
-        dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv5);
-    } else if (p2 == 2) {
-        dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv2);
-    } else if (p2 == 3) {
-        dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv3);
-    } else { // p2 == 1
-        dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv1);
-    }
-    if (p0 == 1) {
-        dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv1);
-    } else if (p0 == 2) {
-        dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv2);
-    } else if (p0 == 3) {
-        dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv3);
-    } else { // p0 == 7
-        dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv7);
-    }
-    if (dco_central_freq_khz == 9600000) {
-        dpll_cfg2.set_central_freq(dpll_cfg2.k9600Mhz);
-    } else if (dco_central_freq_khz == 9000000) {
-        dpll_cfg2.set_central_freq(dpll_cfg2.k9000Mhz);
-    } else { // dco_central_freq == 8400000
-        dpll_cfg2.set_central_freq(dpll_cfg2.k8400Mhz);
-    }
-    dpll_cfg2.WriteTo(mmio_space());
-    dpll_cfg2.ReadFrom(mmio_space()); // Posting read
-
-    // Enable and wait for the DPLL
-    auto dpll_enable = registers::DpllEnable::Get(dpll()).ReadFrom(mmio_space());
-    dpll_enable.set_enable_dpll(1);
-    dpll_enable.WriteTo(mmio_space());
-    if (!WAIT_ON_MS(registers::DpllStatus
-            ::Get().ReadFrom(mmio_space()).dpll_lock(dpll()).get(), 5)) {
-        zxlogf(ERROR, "hdmi: DPLL failed to lock\n");
+    registers::Dpll dpll = controller()->SelectDpll(false /* is_edp */, true /* is_hdmi */,
+                                                    timing_params.pixel_freq_10khz);
+    if (dpll == registers::DPLL_INVALID) {
         return false;
+    }
+
+    auto dpll_enable = registers::DpllEnable::Get(dpll).ReadFrom(mmio_space());
+    if (!dpll_enable.enable_dpll()) {
+        // Set the the DPLL control settings
+        auto dpll_ctrl1 = registers::DpllControl1::Get().ReadFrom(mmio_space());
+        dpll_ctrl1.dpll_hdmi_mode(dpll).set(1);
+        dpll_ctrl1.dpll_override(dpll).set(1);
+        dpll_ctrl1.dpll_ssc_enable(dpll).set(0);
+        dpll_ctrl1.WriteTo(mmio_space());
+        dpll_ctrl1.ReadFrom(mmio_space());
+
+        // Calculate and the HDMI DPLL parameters
+        uint8_t p0, p1, p2;
+        uint32_t dco_central_freq_khz;
+        uint64_t dco_freq_khz;
+        if (!calculate_params(timing_params.pixel_freq_10khz * 10,
+                              &dco_freq_khz, &dco_central_freq_khz, &p0, &p1, &p2)) {
+            zxlogf(ERROR, "hdmi: failed to calculate clock params\n");
+            return false;
+        }
+
+        // Set the DCO frequency
+        auto dpll_cfg1 = registers::DpllConfig1::Get(dpll).FromValue(0);
+        uint16_t dco_int = static_cast<uint16_t>((dco_freq_khz / 1000) / 24);
+        uint16_t dco_frac = static_cast<uint16_t>(
+                ((dco_freq_khz * (1 << 15) / 24) - ((dco_int * 1000L) * (1 << 15))) / 1000);
+        dpll_cfg1.set_frequency_enable(1);
+        dpll_cfg1.set_dco_integer(dco_int);
+        dpll_cfg1.set_dco_fraction(dco_frac);
+        dpll_cfg1.WriteTo(mmio_space());
+        dpll_cfg1.ReadFrom(mmio_space());
+
+        // Set the divisors and central frequency
+        auto dpll_cfg2 = registers::DpllConfig2::Get(dpll).FromValue(0);
+        dpll_cfg2.set_qdiv_ratio(p1);
+        dpll_cfg2.set_qdiv_mode(p1 != 1);
+        if (p2 == 5) {
+            dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv5);
+        } else if (p2 == 2) {
+            dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv2);
+        } else if (p2 == 3) {
+            dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv3);
+        } else { // p2 == 1
+            dpll_cfg2.set_kdiv_ratio(dpll_cfg2.kKdiv1);
+        }
+        if (p0 == 1) {
+            dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv1);
+        } else if (p0 == 2) {
+            dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv2);
+        } else if (p0 == 3) {
+            dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv3);
+        } else { // p0 == 7
+            dpll_cfg2.set_pdiv_ratio(dpll_cfg2.kPdiv7);
+        }
+        if (dco_central_freq_khz == 9600000) {
+            dpll_cfg2.set_central_freq(dpll_cfg2.k9600Mhz);
+        } else if (dco_central_freq_khz == 9000000) {
+            dpll_cfg2.set_central_freq(dpll_cfg2.k9000Mhz);
+        } else { // dco_central_freq == 8400000
+            dpll_cfg2.set_central_freq(dpll_cfg2.k8400Mhz);
+        }
+        dpll_cfg2.WriteTo(mmio_space());
+        dpll_cfg2.ReadFrom(mmio_space()); // Posting read
+
+        // Enable and wait for the DPLL
+        dpll_enable.set_enable_dpll(1);
+        dpll_enable.WriteTo(mmio_space());
+        if (!WAIT_ON_MS(registers::DpllStatus
+                ::Get().ReadFrom(mmio_space()).dpll_lock(dpll).get(), 5)) {
+            zxlogf(ERROR, "hdmi: DPLL failed to lock\n");
+            return false;
+        }
     }
 
     // Direct the DPLL to the DDI
     auto dpll_ctrl2 = registers::DpllControl2::Get().ReadFrom(mmio_space());
     dpll_ctrl2.ddi_select_override(ddi()).set(1);
     dpll_ctrl2.ddi_clock_off(ddi()).set(0);
-    dpll_ctrl2.ddi_clock_select(ddi()).set(dpll());
+    dpll_ctrl2.ddi_clock_select(ddi()).set(dpll);
     dpll_ctrl2.WriteTo(mmio_space());
 
     // Enable DDI IO power and wait for it
@@ -561,7 +582,7 @@ bool HdmiDisplay::Init(zx_display_info* info) {
         return false;
     }
 
-    registers::TranscoderRegs trans_regs(pipe());
+    registers::TranscoderRegs trans_regs(trans());
 
     // Configure Transcoder Clock Select
     auto trans_clk_sel = trans_regs.ClockSelect().ReadFrom(mmio_space());
@@ -604,7 +625,7 @@ bool HdmiDisplay::Init(zx_display_info* info) {
     auto ddi_func = trans_regs.DdiFuncControl().ReadFrom(mmio_space());
     ddi_func.set_trans_ddi_function_enable(1);
     ddi_func.set_ddi_select(ddi());
-    ddi_func.set_trans_ddi_mode_select(is_hdmi ? ddi_func.kModeHdmi : ddi_func.kModeDvi);
+    ddi_func.set_trans_ddi_mode_select(is_hdmi_display_ ? ddi_func.kModeHdmi : ddi_func.kModeDvi);
     ddi_func.set_bits_per_color(ddi_func.k8bbc);
     ddi_func.set_sync_polarity(timing_params.vertical_sync_polarity << 1
                                 | timing_params.horizontal_sync_polarity);
@@ -625,7 +646,7 @@ bool HdmiDisplay::Init(zx_display_info* info) {
 
     // kUseDefaultIdx always fails the idx-in-bounds check, so no additional handling is needed
     uint8_t idx = controller()->igd_opregion().GetHdmiBufferTranslationIndex(ddi());
-    uint8_t i_boost_override = controller()->igd_opregion().GetIBoost(ddi());
+    uint8_t i_boost_override = controller()->igd_opregion().GetIBoost(ddi(), false /* is_dp */);
 
     const ddi_buf_trans_entry* entries;
     uint8_t default_iboost;
@@ -679,12 +700,6 @@ bool HdmiDisplay::Init(zx_display_info* info) {
     plane_size.set_width_minus_1(h_active);
     plane_size.set_height_minus_1(v_active);
     plane_size.WriteTo(mmio_space());
-
-    info->width = timing_params.horizontal_addressable;
-    info->height = timing_params.vertical_addressable;
-    info->stride = ROUNDUP(info->width, registers::PlaneSurfaceStride::kLinearStrideChunkSize);
-    info->format = ZX_PIXEL_FORMAT_ARGB_8888;
-    info->pixelsize = ZX_PIXEL_FORMAT_BYTES(info->format);
 
     return true;
 }

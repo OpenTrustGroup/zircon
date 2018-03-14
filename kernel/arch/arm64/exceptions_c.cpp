@@ -54,6 +54,20 @@ KCOUNTER(exceptions_unhandled, "kernel.exceptions.unhandled");
 KCOUNTER(exceptions_user, "kernel.exceptions.user");
 KCOUNTER(exceptions_unknown, "kernel.exceptions.unknown");
 
+static void set_single_step_state(const thread_t* thread) {
+    // The value of MDSCR_EL1 register (Machine Debug State Control Register), SS bit (Single Step)
+    // controls how the program stat's SS bit it set upon interrupt return. The SS bit is the low
+    // order bit in MDSCR_EL1.
+    constexpr uint64_t kSSMask = 1;  // SS (="Single Step") is bit 0 in MDSCR_EL1.
+    uint64_t mdscr = ARM64_READ_SYSREG(mdscr_el1);
+    if (unlikely(thread->single_step)) {
+        mdscr |= kSSMask;
+    } else {
+        mdscr &= ~kSSMask;
+    }
+    ARM64_WRITE_SYSREG(mdscr_el1, mdscr);
+}
+
 static zx_status_t try_dispatch_user_data_fault_exception(
     zx_excp_type_t type, struct arm64_iframe_long* iframe,
     uint32_t esr, uint64_t far) {
@@ -70,6 +84,8 @@ static zx_status_t try_dispatch_user_data_fault_exception(
     zx_status_t status = dispatch_user_exception(type, &context);
     thread->arch.suspended_general_regs = nullptr;
     arch_disable_ints();
+
+    set_single_step_state(thread);
     return status;
 }
 
@@ -111,6 +127,16 @@ static void arm64_brk_handler(struct arm64_iframe_long* iframe, uint exception_f
         exception_die(iframe, esr);
     }
     try_dispatch_user_exception(ZX_EXCP_SW_BREAKPOINT, iframe, esr);
+}
+
+static void arm64_step_handler(struct arm64_iframe_long* iframe, uint exception_flags,
+                               uint32_t esr) {
+    if (unlikely((exception_flags & ARM64_EXCEPTION_FLAG_LOWER_EL) == 0)) {
+        /* trapped inside the kernel, this is bad */
+        printf("software step in kernel: PC at %#" PRIx64 "\n", iframe->elr);
+        exception_die(iframe, esr);
+    }
+    try_dispatch_user_exception(ZX_EXCP_HW_BREAKPOINT, iframe, esr);
 }
 
 static void arm64_fpu_handler(struct arm64_iframe_long* iframe, uint exception_flags,
@@ -272,6 +298,10 @@ extern "C" void arm64_sync_exception(
     case 0b100101: /* data abort from same level */
         arm64_data_abort_handler(iframe, exception_flags, esr);
         break;
+    case 0b110010: /* software step from lower level */
+    case 0b110011: /* software step from same level */
+        arm64_step_handler(iframe, exception_flags, esr);
+        break;
     default: {
         /* TODO: properly decode more of these */
         if (unlikely((exception_flags & ARM64_EXCEPTION_FLAG_LOWER_EL) == 0)) {
@@ -317,7 +347,14 @@ extern "C" uint32_t arm64_irq(struct arm64_iframe_short* iframe, uint exception_
     kcounter_add(exceptions_irq, 1u);
     platform_irq(iframe);
 
-    bool preempt_pending = thread_preempt_reenable();
+    bool preempt_pending = false;
+    /* This logic is similar to thread_preempt_reenable() except that we
+     * call thread_preempt() below instead of thread_reschedule(). */
+    thread_t* current_thread = get_current_thread();
+    DEBUG_ASSERT(current_thread->preempt_disable > 0);
+    if (--current_thread->preempt_disable == 0) {
+        preempt_pending = current_thread->preempt_pending;
+    }
     arch_set_in_int_handler(false);
 
     /* if we came from user space, check to see if we have any signals to handle */

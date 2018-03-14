@@ -8,6 +8,7 @@
 #include <driver/usb.h>
 #include <fbl/vector.h>
 #include <zircon/compiler.h>
+#include <zircon/device/camera-proto.h>
 #include <zircon/hw/usb-video.h>
 #include <zircon/hw/usb.h>
 
@@ -18,13 +19,19 @@ namespace usb {
 // supported by frame-based formats.
 struct UsbVideoFrameDesc {
     uint8_t index;
+
+    camera::camera_proto::CaptureType capture_type;
+    // Specified in 100ns units.
     uint32_t default_frame_interval;
     uint16_t width;
     uint16_t height;
+    // The number of bytes per line of video.
+    uint32_t stride;
 };
 
 struct UsbVideoFormat {
     uint8_t index;
+    camera::camera_proto::PixelFormat pixel_format;
     uint8_t bits_per_pixel;
 
     fbl::Vector<UsbVideoFrameDesc> frame_descs;
@@ -38,6 +45,9 @@ struct UsbVideoStreamingSetting {
 
     uint8_t transactions_per_microframe;
     uint16_t max_packet_size;
+
+    // USB_ENDPOINT_BULK or USB_ENDPOINT_ISOCHRONOUS
+    int ep_type;
 };
 
 inline uint32_t setting_bandwidth(const UsbVideoStreamingSetting& setting) {
