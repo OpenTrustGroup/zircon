@@ -1,8 +1,10 @@
- // Copyright 2018 The Fuchsia Authors. All rights reserved.
+// Copyright 2018 The Fuchsia Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "fidl/c_generator.h"
+
+#include "fidl/names.h"
 
 namespace fidl {
 
@@ -13,133 +15,6 @@ namespace {
 // computing strings from these or AST values.
 
 constexpr const char* kIndent = "    ";
-
-std::string ShortName(const std::unique_ptr<ast::Identifier>& name) {
-    // TODO(TO-704) C name escaping and ergonomics.
-    return name->location.data();
-}
-
-std::string LongName(const flat::Name& name) {
-    // TODO(TO-701) Handle complex names.
-    return name.get()->location.data();
-}
-
-std::string UnionTagName(StringView union_name,
-                         const std::unique_ptr<ast::Identifier>& member_name) {
-    return std::string(union_name) + "_tag_" + ShortName(member_name);
-}
-
-std::string PrimitiveTypeName(const ast::PrimitiveType* type) {
-    switch (type->subtype) {
-    case ast::PrimitiveType::Subtype::Int8:
-        return "int8_t";
-    case ast::PrimitiveType::Subtype::Int16:
-        return "int16_t";
-    case ast::PrimitiveType::Subtype::Int32:
-        return "int32_t";
-    case ast::PrimitiveType::Subtype::Int64:
-        return "int64_t";
-    case ast::PrimitiveType::Subtype::Uint8:
-        return "uint8_t";
-    case ast::PrimitiveType::Subtype::Uint16:
-        return "uint16_t";
-    case ast::PrimitiveType::Subtype::Uint32:
-        return "uint32_t";
-    case ast::PrimitiveType::Subtype::Uint64:
-        return "uint64_t";
-    case ast::PrimitiveType::Subtype::Bool:
-        return "bool";
-    case ast::PrimitiveType::Subtype::Status:
-        return "zx_status_t";
-    case ast::PrimitiveType::Subtype::Float32:
-        return "float";
-    case ast::PrimitiveType::Subtype::Float64:
-        return "double";
-    }
-}
-
-std::string IntegerCTypedefName(CGenerator::IntegerConstantType type) {
-    switch (type) {
-    case CGenerator::IntegerConstantType::kStatus:
-        return "zx_status_t";
-    case CGenerator::IntegerConstantType::kInt8:
-        return "int8_t";
-    case CGenerator::IntegerConstantType::kInt16:
-        return "int16_t";
-    case CGenerator::IntegerConstantType::kInt32:
-        return "int32_t";
-    case CGenerator::IntegerConstantType::kInt64:
-        return "int64_t";
-    case CGenerator::IntegerConstantType::kUint8:
-        return "uint8_t";
-    case CGenerator::IntegerConstantType::kUint16:
-        return "uint16_t";
-    case CGenerator::IntegerConstantType::kUint32:
-        return "uint32_t";
-    case CGenerator::IntegerConstantType::kUint64:
-        return "uint64_t";
-    }
-}
-
-std::string IntegerCConstantMacro(CGenerator::IntegerConstantType type) {
-    switch (type) {
-    case CGenerator::IntegerConstantType::kInt8:
-        return "INT8_C";
-    case CGenerator::IntegerConstantType::kInt16:
-        return "INT16_C";
-    case CGenerator::IntegerConstantType::kInt32:
-    case CGenerator::IntegerConstantType::kStatus:
-        return "INT32_C";
-    case CGenerator::IntegerConstantType::kInt64:
-        return "INT64_C";
-    case CGenerator::IntegerConstantType::kUint8:
-        return "UINT8_C";
-    case CGenerator::IntegerConstantType::kUint16:
-        return "UINT16_C";
-    case CGenerator::IntegerConstantType::kUint32:
-        return "UINT32_C";
-    case CGenerator::IntegerConstantType::kUint64:
-        return "UINT64_C";
-    }
-}
-
-std::string TypeName(const ast::Type* type) {
-    for (;;) {
-        switch (type->kind) {
-        case ast::Type::Kind::Handle:
-        case ast::Type::Kind::Request:
-            return "zx_handle_t";
-
-        case ast::Type::Kind::Vector:
-            return "fidl_vector_t";
-        case ast::Type::Kind::String:
-            return "fidl_string_t";
-
-        case ast::Type::Kind::Primitive: {
-            auto primitive_type = static_cast<const ast::PrimitiveType*>(type);
-            return PrimitiveTypeName(primitive_type);
-        }
-
-        case ast::Type::Kind::Array: {
-            auto array_type = static_cast<const ast::ArrayType*>(type);
-            type = array_type->element_type.get();
-            continue;
-        }
-
-        case ast::Type::Kind::Identifier: {
-            auto identifier_type = static_cast<const ast::IdentifierType*>(type);
-            // TODO(TO-701) Handle longer names.
-            const auto& components = identifier_type->identifier->components;
-            assert(components.size() == 1);
-            std::string name = components[0]->location.data();
-            if (identifier_type->nullability == ast::Nullability::Nullable) {
-                name.push_back('*');
-            }
-            return name;
-        }
-        }
-    }
-}
 
 CGenerator::Member MessageHeader() {
     return {"fidl_message_header_t", "hdr", {}};
@@ -176,42 +51,14 @@ void EmitBlank(std::ostream* file) {
 
 // Various computational helper routines.
 
-CGenerator::IntegerConstantType EnumType(ast::PrimitiveType::Subtype type) {
-    switch (type) {
-    case ast::PrimitiveType::Subtype::Int8:
-        return CGenerator::IntegerConstantType::kInt8;
-    case ast::PrimitiveType::Subtype::Int16:
-        return CGenerator::IntegerConstantType::kInt16;
-    case ast::PrimitiveType::Subtype::Int32:
-        return CGenerator::IntegerConstantType::kInt32;
-    case ast::PrimitiveType::Subtype::Int64:
-        return CGenerator::IntegerConstantType::kInt64;
-    case ast::PrimitiveType::Subtype::Uint8:
-        return CGenerator::IntegerConstantType::kUint8;
-    case ast::PrimitiveType::Subtype::Uint16:
-        return CGenerator::IntegerConstantType::kUint16;
-    case ast::PrimitiveType::Subtype::Uint32:
-        return CGenerator::IntegerConstantType::kUint32;
-    case ast::PrimitiveType::Subtype::Uint64:
-        return CGenerator::IntegerConstantType::kUint64;
-    case ast::PrimitiveType::Subtype::Bool:
-    case ast::PrimitiveType::Subtype::Status:
-    case ast::PrimitiveType::Subtype::Float32:
-    case ast::PrimitiveType::Subtype::Float64:
-    default:
-        assert(false && "bad primitive type for an enum");
-        break;
-    }
-}
-
-void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
-               Library* library, std::string* out_value) {
+void EnumValue(types::PrimitiveSubtype type, const raw::Constant* constant,
+               flat::Library* library, std::string* out_value) {
     // TODO(kulakowski) Move this into library resolution.
 
     std::ostringstream member_value;
 
     switch (type) {
-    case ast::PrimitiveType::Subtype::Int8: {
+    case types::PrimitiveSubtype::Int8: {
         int8_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -222,7 +69,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << static_cast<int>(value);
         break;
     }
-    case ast::PrimitiveType::Subtype::Int16: {
+    case types::PrimitiveSubtype::Int16: {
         int16_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -231,7 +78,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << value;
         break;
     }
-    case ast::PrimitiveType::Subtype::Int32: {
+    case types::PrimitiveSubtype::Int32: {
         int32_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -240,7 +87,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << value;
         break;
     }
-    case ast::PrimitiveType::Subtype::Int64: {
+    case types::PrimitiveSubtype::Int64: {
         int64_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -249,7 +96,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << value;
         break;
     }
-    case ast::PrimitiveType::Subtype::Uint8: {
+    case types::PrimitiveSubtype::Uint8: {
         uint8_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -260,7 +107,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << static_cast<unsigned int>(value);
         break;
     }
-    case ast::PrimitiveType::Subtype::Uint16: {
+    case types::PrimitiveSubtype::Uint16: {
         uint16_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -269,7 +116,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << value;
         break;
     }
-    case ast::PrimitiveType::Subtype::Uint32: {
+    case types::PrimitiveSubtype::Uint32: {
         uint32_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -278,7 +125,7 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << value;
         break;
     }
-    case ast::PrimitiveType::Subtype::Uint64: {
+    case types::PrimitiveSubtype::Uint64: {
         uint64_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -287,10 +134,10 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
         member_value << value;
         break;
     }
-    case ast::PrimitiveType::Subtype::Bool:
-    case ast::PrimitiveType::Subtype::Status:
-    case ast::PrimitiveType::Subtype::Float32:
-    case ast::PrimitiveType::Subtype::Float64:
+    case types::PrimitiveSubtype::Bool:
+    case types::PrimitiveSubtype::Status:
+    case types::PrimitiveSubtype::Float32:
+    case types::PrimitiveSubtype::Float64:
         assert(false && "bad primitive type for an enum");
         break;
     }
@@ -298,21 +145,15 @@ void EnumValue(ast::PrimitiveType::Subtype type, const ast::Constant* constant,
     *out_value = member_value.str();
 }
 
-std::vector<uint32_t> ArrayCounts(Library* library, const ast::Type* type) {
+std::vector<uint32_t> ArrayCounts(flat::Library* library, const flat::Type* type) {
     std::vector<uint32_t> array_counts;
     for (;;) {
         switch (type->kind) {
         default: { return array_counts; }
-        case ast::Type::Kind::Array: {
-            auto array_type = static_cast<const ast::ArrayType*>(type);
-            const ast::Constant* count_constant = array_type->element_count.get();
-            uint32_t array_count;
-            bool success = library->ParseIntegerConstant(count_constant, &array_count);
-            // TODO(TO-702) Better error handling around failure to validate constants.
-            if (!success) {
-                // __builtin_trap();
-            }
-            array_counts.push_back(array_count);
+        case flat::Type::Kind::Array: {
+            auto array_type = static_cast<const flat::ArrayType*>(type);
+            uint32_t element_count = array_type->element_count.Value();
+            array_counts.push_back(element_count);
             type = array_type->element_type.get();
             continue;
         }
@@ -320,19 +161,19 @@ std::vector<uint32_t> ArrayCounts(Library* library, const ast::Type* type) {
     }
 }
 
-CGenerator::Member CreateMember(Library* library, const ast::Type* type, StringView name) {
-    auto type_name = TypeName(type);
+CGenerator::Member CreateMember(flat::Library* library, const flat::Type* type, StringView name) {
+    auto type_name = NameFlatCType(type);
     std::vector<uint32_t> array_counts = ArrayCounts(library, type);
     return CGenerator::Member{type_name, name, std::move(array_counts)};
 }
 
 std::vector<CGenerator::Member>
-GenerateMembers(Library* library, const std::vector<flat::Union::Member>& union_members) {
+GenerateMembers(flat::Library* library, const std::vector<flat::Union::Member>& union_members) {
     std::vector<CGenerator::Member> members;
     members.reserve(union_members.size());
     for (const auto& union_member : union_members) {
-        const ast::Type* union_member_type = union_member.type.get();
-        auto union_member_name = ShortName(union_member.name);
+        const flat::Type* union_member_type = union_member.type.get();
+        auto union_member_name = NameIdentifier(union_member.name);
         members.push_back(CreateMember(library, union_member_type, union_member_name));
     }
     return members;
@@ -358,14 +199,14 @@ void CGenerator::GenerateEpilogues() {
     EmitEndExternC(&header_file_);
 }
 
-void CGenerator::GenerateIntegerDefine(StringView name, IntegerConstantType type,
+void CGenerator::GenerateIntegerDefine(StringView name, types::PrimitiveSubtype subtype,
                                        StringView value) {
-    std::string literal_macro = IntegerCConstantMacro(type);
+    std::string literal_macro = NamePrimitiveIntegerCConstantMacro(subtype);
     header_file_ << "#define " << name << " " << literal_macro << "(" << value << ")\n";
 }
 
-void CGenerator::GenerateIntegerTypedef(IntegerConstantType type, StringView name) {
-    std::string underlying_type = IntegerCTypedefName(type);
+void CGenerator::GenerateIntegerTypedef(types::PrimitiveSubtype subtype, StringView name) {
+    std::string underlying_type = NamePrimitiveCType(subtype);
     header_file_ << "typedef " << underlying_type << " " << name << ";\n";
 }
 
@@ -403,64 +244,69 @@ void CGenerator::GenerateTaggedUnionDeclaration(StringView name,
 
 // TODO(TO-702) These should maybe check for global name
 // collisions? Otherwise, is there some other way they should fail?
-std::vector<CGenerator::NamedConst> CGenerator::NameConsts(const std::vector<flat::Const>& const_infos) {
-    std::vector<CGenerator::NamedConst> named_consts;
+std::map<const flat::Decl*, CGenerator::NamedConst> CGenerator::NameConsts(const std::vector<std::unique_ptr<flat::Const>>& const_infos) {
+    std::map<const flat::Decl*, NamedConst> named_consts;
     for (const auto& const_info : const_infos) {
-        named_consts.push_back({"", const_info});
+        named_consts.emplace(const_info.get(), NamedConst{"", *const_info});
     }
     return named_consts;
 }
 
-std::vector<CGenerator::NamedEnum> CGenerator::NameEnums(const std::vector<flat::Enum>& enum_infos) {
-    std::vector<CGenerator::NamedEnum> named_enums;
+std::map<const flat::Decl*, CGenerator::NamedEnum> CGenerator::NameEnums(const std::vector<std::unique_ptr<flat::Enum>>& enum_infos) {
+    std::map<const flat::Decl*, NamedEnum> named_enums;
     for (const auto& enum_info : enum_infos) {
-        std::string enum_name = LongName(enum_info.name);
-        named_enums.push_back({std::move(enum_name), enum_info});
+        std::string enum_name = NameName(enum_info->name);
+        named_enums.emplace(enum_info.get(), NamedEnum{std::move(enum_name), *enum_info});
     }
     return named_enums;
 }
 
-std::vector<CGenerator::NamedMessage> CGenerator::NameInterfaces(const std::vector<flat::Interface>& interface_infos) {
-    std::vector<CGenerator::NamedMessage> named_messages;
+std::map<const flat::Decl*, CGenerator::NamedInterface> CGenerator::NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& interface_infos) {
+    std::map<const flat::Decl*, NamedInterface> named_interfaces;
     for (const auto& interface_info : interface_infos) {
-        for (const auto& method : interface_info.methods) {
-            std::string name = LongName(interface_info.name) + ShortName(method.name);
-            if (method.has_request) {
-                std::string c_name = name + "Msg";
-                std::string coded_name = name + "ReqCoded";
-                named_messages.push_back({std::move(c_name), std::move(coded_name), method.maybe_request});
+        NamedInterface named_interface;
+        std::string interface_name = NameInterface(*interface_info);
+        for (const auto& method : interface_info->methods) {
+            NamedMethod named_method;
+            std::string method_name = NameMethod(interface_name, method);
+            if (method.maybe_request != nullptr) {
+                std::string c_name = NameMessage(method_name, types::MessageKind::kRequest);
+                std::string coded_name = NameTable(c_name);
+                named_method.request = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_request->parameters});
             }
-            if (method.has_response) {
-                if (!method.has_request) {
-                    std::string c_name = name + "Evt";
-                    std::string coded_name = name + "EvtCoded";
-                    named_messages.push_back({std::move(c_name), std::move(coded_name), method.maybe_response});
+            if (method.maybe_response != nullptr) {
+                if (method.maybe_request == nullptr) {
+                    std::string c_name = NameMessage(method_name, types::MessageKind::kEvent);
+                    std::string coded_name = NameTable(c_name);
+                    named_method.response = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_response->parameters});
                 } else {
-                    std::string c_name = name + "Rsp";
-                    std::string coded_name = name + "RspCoded";
-                    named_messages.push_back({std::move(c_name), std::move(coded_name), method.maybe_response});
+                    std::string c_name = NameMessage(method_name, types::MessageKind::kResponse);
+                    std::string coded_name = NameTable(c_name);
+                    named_method.response = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_response->parameters});
                 }
             }
+            named_interface.methods.push_back(std::move(named_method));
         }
+        named_interfaces.emplace(interface_info.get(), std::move(named_interface));
     }
-    return named_messages;
+    return named_interfaces;
 }
 
-std::vector<CGenerator::NamedStruct> CGenerator::NameStructs(const std::vector<flat::Struct>& struct_infos) {
-    std::vector<CGenerator::NamedStruct> named_structs;
+std::map<const flat::Decl*, CGenerator::NamedStruct> CGenerator::NameStructs(const std::vector<std::unique_ptr<flat::Struct>>& struct_infos) {
+    std::map<const flat::Decl*, NamedStruct> named_structs;
     for (const auto& struct_info : struct_infos) {
-        std::string c_name = LongName(struct_info.name);
-        std::string coded_name = LongName(struct_info.name) + "Coded";
-        named_structs.push_back({std::move(c_name), std::move(coded_name), struct_info});
+        std::string c_name = NameName(struct_info->name);
+        std::string coded_name = NameName(struct_info->name) + "Coded";
+        named_structs.emplace(struct_info.get(), NamedStruct{std::move(c_name), std::move(coded_name), *struct_info});
     }
     return named_structs;
 }
 
-std::vector<CGenerator::NamedUnion> CGenerator::NameUnions(const std::vector<flat::Union>& union_infos) {
-    std::vector<CGenerator::NamedUnion> named_unions;
+std::map<const flat::Decl*, CGenerator::NamedUnion> CGenerator::NameUnions(const std::vector<std::unique_ptr<flat::Union>>& union_infos) {
+    std::map<const flat::Decl*, NamedUnion> named_unions;
     for (const auto& union_info : union_infos) {
-        std::string union_name = LongName(union_info.name);
-        named_unions.push_back({std::move(union_name), union_info});
+        std::string union_name = NameName(union_info->name);
+        named_unions.emplace(union_info.get(), NamedUnion{std::move(union_name), *union_info});
     }
     return named_unions;
 }
@@ -470,21 +316,26 @@ void CGenerator::ProduceConstForwardDeclaration(const NamedConst& named_const) {
 }
 
 void CGenerator::ProduceEnumForwardDeclaration(const NamedEnum& named_enum) {
-    IntegerConstantType literal_type = EnumType(named_enum.enum_info.type->subtype);
-    GenerateIntegerTypedef(literal_type, named_enum.name);
+    types::PrimitiveSubtype subtype = named_enum.enum_info.type;
+    GenerateIntegerTypedef(subtype, named_enum.name);
     for (const auto& member : named_enum.enum_info.members) {
-        std::string member_name = named_enum.name + "_" + LongName(member.name);
+        std::string member_name = named_enum.name + "_" + NameIdentifier(member.name);
         std::string member_value;
-        EnumValue(named_enum.enum_info.type->subtype, member.value.get(),
+        EnumValue(named_enum.enum_info.type, member.value.get(),
                   library_, &member_value);
-        GenerateIntegerDefine(member_name, literal_type, std::move(member_value));
+        GenerateIntegerDefine(member_name, subtype, std::move(member_value));
     }
 
     EmitBlank(&header_file_);
 }
 
-void CGenerator::ProduceMessageForwardDeclaration(const NamedMessage& named_message) {
-    GenerateStructTypedef(named_message.c_name);
+void CGenerator::ProduceInterfaceForwardDeclaration(const NamedInterface& named_interface) {
+    for (const auto& method_info : named_interface.methods) {
+        if (method_info.request)
+            GenerateStructTypedef(method_info.request->c_name);
+        if (method_info.response)
+            GenerateStructTypedef(method_info.response->c_name);
+    }
 }
 
 void CGenerator::ProduceStructForwardDeclaration(const NamedStruct& named_struct) {
@@ -495,8 +346,13 @@ void CGenerator::ProduceUnionForwardDeclaration(const NamedUnion& named_union) {
     GenerateStructTypedef(named_union.name);
 }
 
-void CGenerator::ProduceMessageExternDeclaration(const NamedMessage& named_message) {
-    header_file_ << "extern const fidl_type_t " << named_message.coded_name << ";\n";
+void CGenerator::ProduceInterfaceExternDeclaration(const NamedInterface& named_interface) {
+    for (const auto& method_info : named_interface.methods) {
+        if (method_info.request)
+            header_file_ << "extern const fidl_type_t " << method_info.request->coded_name << ";\n";
+        if (method_info.response)
+            header_file_ << "extern const fidl_type_t " << method_info.response->coded_name << ";\n";
+    }
 }
 
 void CGenerator::ProduceConstDeclaration(const NamedConst& named_const) {
@@ -506,28 +362,35 @@ void CGenerator::ProduceConstDeclaration(const NamedConst& named_const) {
     EmitBlank(&header_file_);
 }
 
-void CGenerator::ProduceMessageDeclaration(const NamedMessage& message) {
+void CGenerator::ProduceMessageDeclaration(const NamedMessage& named_message) {
     std::vector<CGenerator::Member> members;
-    members.reserve(1 + message.parameters.size());
+    members.reserve(1 + named_message.parameters.size());
     members.push_back(MessageHeader());
-    for (const auto& parameter : message.parameters) {
-        const ast::Type* parameter_type = parameter.type.get();
-        auto parameter_name = ShortName(parameter.name);
-        members.push_back(CreateMember(library_, parameter_type, parameter_name));
+    for (const auto& parameter : named_message.parameters) {
+        auto parameter_name = NameIdentifier(parameter.name);
+        members.push_back(CreateMember(library_, parameter.type.get(), parameter_name));
     }
 
-    GenerateStructDeclaration(message.c_name, members);
+    GenerateStructDeclaration(named_message.c_name, members);
 
     EmitBlank(&header_file_);
+}
+
+void CGenerator::ProduceInterfaceDeclaration(const NamedInterface& named_interface) {
+    for (const auto& method_info : named_interface.methods) {
+        if (method_info.request)
+            ProduceMessageDeclaration(*method_info.request);
+        if (method_info.response)
+            ProduceMessageDeclaration(*method_info.response);
+    }
 }
 
 void CGenerator::ProduceStructDeclaration(const NamedStruct& named_struct) {
     std::vector<CGenerator::Member> members;
     members.reserve(named_struct.struct_info.members.size());
     for (const auto& struct_member : named_struct.struct_info.members) {
-        const ast::Type* struct_member_type = struct_member.type.get();
-        auto struct_member_name = ShortName(struct_member.name);
-        members.push_back(CreateMember(library_, struct_member_type, struct_member_name));
+        auto struct_member_name = NameIdentifier(struct_member.name);
+        members.push_back(CreateMember(library_, struct_member.type.get(), struct_member_name));
     }
 
     GenerateStructDeclaration(named_struct.c_name, members);
@@ -541,8 +404,8 @@ void CGenerator::ProduceUnionDeclaration(const NamedUnion& named_union) {
 
     uint32_t tag = 0u;
     for (const auto& member : named_union.union_info.members) {
-        std::string tag_name = UnionTagName(named_union.name, member.name);
-        auto union_tag_type = CGenerator::IntegerConstantType::kUint32;
+        std::string tag_name = NameUnionTag(named_union.name, member);
+        auto union_tag_type = types::PrimitiveSubtype::Uint32;
         std::ostringstream value;
         value << tag;
         GenerateIntegerDefine(std::move(tag_name), union_tag_type, value.str());
@@ -552,58 +415,85 @@ void CGenerator::ProduceUnionDeclaration(const NamedUnion& named_union) {
     EmitBlank(&header_file_);
 }
 
-void CGenerator::ProduceCStructs(std::ostringstream* header_file_out) {
-
+std::ostringstream CGenerator::Produce() {
     GeneratePrologues();
 
-    std::vector<NamedConst> named_consts = NameConsts(library_->const_declarations_);
-    std::vector<NamedEnum> named_enums = NameEnums(library_->enum_declarations_);
-    std::vector<NamedMessage> named_messages = NameInterfaces(library_->interface_declarations_);
-    std::vector<NamedStruct> named_structs = NameStructs(library_->struct_declarations_);
-    std::vector<NamedUnion> named_unions = NameUnions(library_->union_declarations_);
+    std::map<const flat::Decl*, NamedConst> named_consts = NameConsts(library_->const_declarations_);
+    std::map<const flat::Decl*, NamedEnum> named_enums = NameEnums(library_->enum_declarations_);
+    std::map<const flat::Decl*, NamedInterface> named_interfaces = NameInterfaces(library_->interface_declarations_);
+    std::map<const flat::Decl*, NamedStruct> named_structs = NameStructs(library_->struct_declarations_);
+    std::map<const flat::Decl*, NamedUnion> named_unions = NameUnions(library_->union_declarations_);
 
     header_file_ << "\n// Forward declarations\n\n";
-    for (const auto& named_const : named_consts) {
-        ProduceConstForwardDeclaration(named_const);
-    }
-    for (const auto& named_enum : named_enums) {
-        ProduceEnumForwardDeclaration(named_enum);
-    }
-    for (const auto& named_message : named_messages) {
-        ProduceMessageForwardDeclaration(named_message);
-    }
-    for (const auto& named_struct : named_structs) {
-        ProduceStructForwardDeclaration(named_struct);
-    }
-    for (const auto& named_union : named_unions) {
-        ProduceUnionForwardDeclaration(named_union);
+
+    for (const auto* decl : library_->declaration_order_) {
+        switch (decl->kind) {
+        case flat::Decl::Kind::kConst:
+            ProduceConstForwardDeclaration(named_consts.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kEnum:
+            ProduceEnumForwardDeclaration(named_enums.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kInterface:
+            ProduceInterfaceForwardDeclaration(named_interfaces.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kStruct:
+            ProduceStructForwardDeclaration(named_structs.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kUnion:
+            ProduceUnionForwardDeclaration(named_unions.find(decl)->second);
+            break;
+        default:
+            abort();
+        }
     }
 
-    // Only messages have extern fidl_type_t declarations.
     header_file_ << "\n// Extern declarations\n\n";
-    for (const auto& named_message : named_messages) {
-        ProduceMessageExternDeclaration(named_message);
+
+    for (const auto* decl : library_->declaration_order_) {
+        switch (decl->kind) {
+        case flat::Decl::Kind::kConst:
+        case flat::Decl::Kind::kEnum:
+        case flat::Decl::Kind::kStruct:
+        case flat::Decl::Kind::kUnion:
+            // Only messages have extern fidl_type_t declarations.
+            break;
+        case flat::Decl::Kind::kInterface:
+            ProduceInterfaceExternDeclaration(named_interfaces.find(decl)->second);
+            break;
+        default:
+            abort();
+        }
     }
 
     header_file_ << "\n// Declarations\n\n";
-    for (const auto& named_const : named_consts) {
-        ProduceConstDeclaration(named_const);
-    }
-    // Enums can be entirely forward declared, as they have no
-    // dependencies other than standard headers.
-    for (const auto& message : named_messages) {
-        ProduceMessageDeclaration(message);
-    }
-    for (const auto& named_struct : named_structs) {
-        ProduceStructDeclaration(named_struct);
-    }
-    for (const auto& named_union : named_unions) {
-        ProduceUnionDeclaration(named_union);
+
+    for (const auto* decl : library_->declaration_order_) {
+        switch (decl->kind) {
+        case flat::Decl::Kind::kConst:
+            ProduceConstDeclaration(named_consts.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kEnum:
+            // Enums can be entirely forward declared, as they have no
+            // dependencies other than standard headers.
+            break;
+        case flat::Decl::Kind::kInterface:
+            ProduceInterfaceDeclaration(named_interfaces.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kStruct:
+            ProduceStructDeclaration(named_structs.find(decl)->second);
+            break;
+        case flat::Decl::Kind::kUnion:
+            ProduceUnionDeclaration(named_unions.find(decl)->second);
+            break;
+        default:
+            abort();
+        }
     }
 
     GenerateEpilogues();
 
-    *header_file_out = std::move(header_file_);
+    return std::move(header_file_);
 }
 
 } // namespace fidl

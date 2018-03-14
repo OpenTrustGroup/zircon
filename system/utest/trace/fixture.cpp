@@ -11,7 +11,7 @@
 
 #include <zircon/assert.h>
 
-#include <async/cpp/loop.h>
+#include <lib/async/cpp/loop.h>
 #include <zx/event.h>
 #include <fbl/algorithm.h>
 #include <fbl/array.h>
@@ -213,7 +213,7 @@ bool fixture_compare_records(const char* expected) {
         }
         buf.Append('\n');
     }
-    EXPECT_STR_EQ(expected, buf.c_str(), strlen(expected) + 1u, "unequal cstr");
+    EXPECT_STR_EQ(expected, buf.c_str(), "unequal cstr");
     regfree(&regex);
 
     END_HELPER;

@@ -96,7 +96,7 @@ static bool test_runner(const platform_test_case_t test, size_t mem_limit) {
         total_platform_size += test.ranges[i].size;
         zx_status_t status = mem_limit_get_iovs(&ctx, test.ranges[i].base, test.ranges[i].size, vecs, &used);
 
-        REQUIRE_EQ(ZX_OK, status, "checking mem_limit_get_iovs status");
+        ASSERT_EQ(ZX_OK, status, "checking mem_limit_get_iovs status");
 
         for (size_t j = 0; j < used; j++) {
             size += vecs[j].iov_len;
@@ -127,7 +127,7 @@ const platform_test_case_t test_cases[] = {
 
 // Test that the memory limit is expanded if the ramdisk would otherwise be
 // truncated for being too large.
-static bool ml_test_large_ramdisk(void* context) {
+static bool ml_test_large_ramdisk() {
     BEGIN_TEST;
     mem_limit_ctx_t ctx = nuc_ctx;
     size_t memory_limit = 64 * MB;
@@ -156,7 +156,7 @@ static bool ml_test_large_ramdisk(void* context) {
 // a full range of configuration setups.
 #define ML_TEST_NAME(platform_name, limit) ml_test_##platform_name##_##limit
 #define ML_TEST_GEN(platform_name, test_case, limit) \
-    static bool ML_TEST_NAME(platform_name, limit)(void*) { \
+    static bool ML_TEST_NAME(platform_name, limit)() { \
         BEGIN_TEST; \
         return test_runner(test_case, limit * MB); \
         END_TEST; \
@@ -234,4 +234,4 @@ ML_UNITTEST(rpi3, 1536)
 ML_UNITTEST(rpi3, 2048)
 ML_UNITTEST(rpi3, 3072)
 ML_UNITTEST(rpi3, 4096)
-UNITTEST_END_TESTCASE(memlimit_tests, "memlim_tests", "Memory limit tests", nullptr, nullptr);
+UNITTEST_END_TESTCASE(memlimit_tests, "memlim_tests", "Memory limit tests");

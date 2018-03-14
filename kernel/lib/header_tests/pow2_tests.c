@@ -8,7 +8,7 @@
 #include <pow2.h>
 #include <unittest.h>
 
-static bool pow2_test(void* context)
+static bool pow2_test(void)
 {
     const size_t num_uint_bits = sizeof(uint) * CHAR_BIT;
     const size_t num_ulong_bits = sizeof(ulong) * CHAR_BIT;
@@ -78,4 +78,4 @@ static bool pow2_test(void* context)
 
 UNITTEST_START_TESTCASE(pow2_tests)
 UNITTEST("pow2 lib tests", pow2_test)
-UNITTEST_END_TESTCASE(pow2_tests, "pow2", "pow2 lib tests", NULL, NULL);
+UNITTEST_END_TESTCASE(pow2_tests, "pow2", "pow2 lib tests");

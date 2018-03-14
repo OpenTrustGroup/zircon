@@ -18,9 +18,16 @@ MODULE_NAME := dlfcn-test
 # we use launchpad_vmo_from_file to load it!  So link it statically.
 MODULE_STATIC_LIBS := \
     system/ulib/launchpad \
+    system/ulib/loader-service \
+    system/ulib/async.loop \
     system/ulib/ldmsg \
     system/ulib/elfload \
 
-MODULE_LIBS := system/ulib/unittest system/ulib/fdio system/ulib/zircon system/ulib/c
+MODULE_LIBS := \
+    system/ulib/unittest \
+    system/ulib/async.default \
+    system/ulib/fdio \
+    system/ulib/zircon \
+    system/ulib/c \
 
 include make/module.mk

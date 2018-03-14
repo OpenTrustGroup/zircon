@@ -8,6 +8,11 @@
 namespace fidl {
 namespace types {
 
+enum struct Nullability {
+    Nullable,
+    Nonnullable,
+};
+
 enum struct HandleSubtype {
     Handle,
     Process,
@@ -17,8 +22,6 @@ enum struct HandleSubtype {
     Event,
     Port,
     Interrupt,
-    Iomap,
-    Pci,
     Log,
     Socket,
     Resource,
@@ -26,9 +29,29 @@ enum struct HandleSubtype {
     Job,
     Vmar,
     Fifo,
-    Hypervisor,
     Guest,
     Timer,
+};
+
+enum struct PrimitiveSubtype {
+    Bool,
+    Status,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
+    Float32,
+    Float64,
+};
+
+enum struct MessageKind {
+    kRequest,
+    kResponse,
+    kEvent,
 };
 
 } // namespace types

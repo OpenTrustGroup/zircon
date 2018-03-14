@@ -13,7 +13,6 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/hi3660-gpios.c \
     $(LOCAL_DIR)/hi3660-usb.c \
     $(LOCAL_DIR)/hi3660-i2c.c \
-    $(LOCAL_DIR)/i2c-dw.c \
     $(LOCAL_DIR)/hi3660-dsi.c \
 
 MODULE_STATIC_LIBS := \

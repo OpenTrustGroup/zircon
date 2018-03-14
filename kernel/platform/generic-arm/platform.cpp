@@ -33,7 +33,6 @@
 #include <arch/arm64.h>
 #include <arch/arm64/mmu.h>
 #include <arch/arm64/mp.h>
-#include <arch/efi.h>
 #include <arch/mp.h>
 
 #include <vm/vm_aspace.h>
@@ -342,14 +341,6 @@ static void platform_cpu_init(void) {
     }
 }
 
-static inline bool is_zircon_boot_header(void* addr) {
-    DEBUG_ASSERT(addr);
-
-    efi_zircon_hdr_t* header = (efi_zircon_hdr_t*)addr;
-
-    return header->magic == EFI_ZIRCON_MAGIC;
-}
-
 static inline bool is_bootdata_container(void* addr) {
     DEBUG_ASSERT(addr);
 
@@ -543,12 +534,6 @@ void platform_early_init(void) {
         boot_structure_type = "bootdata container";
         ramdisk_from_bootdata_container(boot_structure_kvaddr, &ramdisk_base,
                                         &ramdisk_size);
-    } else if (is_zircon_boot_header(boot_structure_kvaddr)) {
-        boot_structure_type = "efi header";
-        efi_zircon_hdr_t* hdr = (efi_zircon_hdr_t*)boot_structure_kvaddr;
-        cmdline_append(hdr->cmd_line);
-        ramdisk_base = paddr_to_physmap(hdr->ramdisk_base_phys);
-        ramdisk_size = hdr->ramdisk_size;
     } else {
         boot_structure_type = "FDT";
         // on qemu we read arena size from the device tree
@@ -631,14 +616,12 @@ static void platform_init_postvm(uint level) {
 
 LK_INIT_HOOK(platform_postvm, platform_init_postvm, LK_INIT_LEVEL_VM);
 
-void platform_dputs(const char* str, size_t len) {
-    while (len-- > 0) {
-        char c = *str++;
-        if (c == '\n') {
-            uart_putc('\r');
-        }
-        uart_putc(c);
-    }
+void platform_dputs_thread(const char* str, size_t len) {
+    uart_puts(str, len, true, true);
+}
+
+void platform_dputs_irq(const char* str, size_t len) {
+    uart_puts(str, len, false, true);
 }
 
 int platform_dgetc(char* c, bool wait) {

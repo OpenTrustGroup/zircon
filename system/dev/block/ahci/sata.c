@@ -96,7 +96,7 @@ static zx_status_t sata_device_identify(sata_device_t* dev, ahci_device_t* contr
     int flags = 0;
     uint16_t devinfo[512 / sizeof(uint16_t)];
     size_t actual = 0;
-    status = zx_vmo_read(vmo, devinfo, 0, sizeof(devinfo), &actual);
+    status = zx_vmo_read_old(vmo, devinfo, 0, sizeof(devinfo), &actual);
     if ((status != ZX_OK) || (actual != sizeof(devinfo))) {
         zxlogf(ERROR, "sata: error %d in vmo_read, actual %zd\n", status, actual);
         return ZX_ERR_INTERNAL;
@@ -201,10 +201,6 @@ static zx_status_t sata_ioctl(void* ctx, uint32_t op, const void* cmd, size_t cm
         *out_actual = sizeof(*info);
         return ZX_OK;
     }
-    case IOCTL_BLOCK_RR_PART: {
-        // rebind to reread the partition table
-        return device_rebind(device->zxdev);
-    }
     case IOCTL_DEVICE_SYNC: {
         zxlogf(TRACE, "sata: IOCTL_DEVICE_SYNC\n");
         return ZX_OK;
@@ -305,7 +301,7 @@ zx_status_t sata_bind(ahci_device_t* controller, zx_device_t* parent, int port) 
         .name = name,
         .ctx = device,
         .ops = &sata_device_proto,
-        .proto_id = ZX_PROTOCOL_BLOCK_CORE,
+        .proto_id = ZX_PROTOCOL_BLOCK_IMPL,
         .proto_ops = &sata_block_proto,
     };
 

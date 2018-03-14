@@ -22,7 +22,7 @@ zx_status_t Vnode::Serve(fs::Vfs* vfs, zx::channel channel, uint32_t flags) {
 
 zx_status_t Vnode::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
                               zxrio_object_info_t* extra) {
-    *type = FDIO_PROTOCOL_REMOTE;
+    *type = FDIO_PROTOCOL_SERVICE;
     return ZX_OK;
 }
 
@@ -100,7 +100,7 @@ zx_status_t Vnode::Link(fbl::StringPiece name, fbl::RefPtr<Vnode> target) {
     return ZX_ERR_NOT_SUPPORTED;
 }
 
-zx_status_t Vnode::Mmap(int flags, size_t len, size_t* off, zx_handle_t* out) {
+zx_status_t Vnode::GetVmo(int flags, zx_handle_t* out) {
     return ZX_ERR_NOT_SUPPORTED;
 }
 

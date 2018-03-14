@@ -64,7 +64,6 @@ static struct list_node thread_list = LIST_INITIAL_VALUE(thread_list);
 spin_lock_t thread_lock = SPIN_LOCK_INITIAL_VALUE;
 
 /* local routines */
-static int idle_thread_routine(void*) __NO_RETURN;
 static void thread_exit_locked(thread_t* current_thread, int retcode) __NO_RETURN;
 static void thread_do_suspend(void);
 
@@ -356,7 +355,7 @@ zx_status_t thread_suspend(thread_t* t) {
         /* The following call is not essential.  It just makes the
              * thread suspension happen sooner rather than at the next
              * timer interrupt or syscall. */
-        mp_reschedule(MP_IPI_TARGET_MASK, cpu_num_to_mask(t->curr_cpu), 0);
+        mp_reschedule(cpu_num_to_mask(t->curr_cpu), 0);
         break;
     case THREAD_SUSPENDED:
         /* thread is suspended already */
@@ -605,7 +604,7 @@ void thread_kill(thread_t* t) {
         /* The following call is not essential.  It just makes the
              * thread termination happen sooner rather than at the next
              * timer interrupt or syscall. */
-        mp_reschedule(MP_IPI_TARGET_MASK, cpu_num_to_mask(t->curr_cpu), 0);
+        mp_reschedule(cpu_num_to_mask(t->curr_cpu), 0);
         break;
     case THREAD_SUSPENDED:
         /* thread is suspended, resume it so it can get the kill signal */
@@ -751,11 +750,6 @@ void thread_process_pending_signals(void) {
     }
 }
 
-__NO_RETURN static int idle_thread_routine(void* arg) {
-    for (;;)
-        arch_idle();
-}
-
 /**
  * @brief Yield the cpu to another thread
  *
@@ -825,6 +819,25 @@ void thread_reschedule(void) {
     sched_reschedule();
 
     THREAD_UNLOCK(state);
+}
+
+void thread_check_preempt_pending(void) {
+    thread_t* current_thread = get_current_thread();
+
+    // First check preempt_pending without the expense of taking the lock.
+    // At this point, interrupts could be enabled, so an interrupt handler
+    // might preempt us and set preempt_pending to false after we read it.
+    if (unlikely(current_thread->preempt_pending)) {
+        THREAD_LOCK(state);
+        // Recheck preempt_pending just in case it got set to false after
+        // our earlier check.  Its value now cannot change because
+        // interrupts are now disabled.
+        if (likely(current_thread->preempt_pending)) {
+            // This will set preempt_pending = false for us.
+            sched_reschedule();
+        }
+        THREAD_UNLOCK(state);
+    }
 }
 
 /* timer callback to wake up a sleeping thread */
@@ -1085,7 +1098,7 @@ void thread_become_idle(void) {
     arch_enable_ints();
     thread_reschedule();
 
-    idle_thread_routine(NULL);
+    arch_idle_thread_routine(NULL);
 }
 
 /**
@@ -1124,7 +1137,7 @@ thread_t* thread_create_idle_thread(cpu_num_t cpu_num) {
 
     thread_t* t = thread_create_etc(
         &percpu[cpu_num].idle_thread, name,
-        idle_thread_routine, NULL,
+        arch_idle_thread_routine, NULL,
         IDLE_PRIORITY,
         NULL, NULL, DEFAULT_STACK_SIZE,
         NULL);
@@ -1198,7 +1211,7 @@ void dump_thread(thread_t* t, bool full_dump) {
                       "remaining time slice %" PRIu64 "\n",
                 thread_state_to_str(t->state), (int)t->curr_cpu, (int)t->last_cpu, t->cpu_affinity,
                 t->effec_priority, t->base_priority,
-                t->priority_boost, t->inheirited_priority, t->remaining_time_slice);
+                t->priority_boost, t->inherited_priority, t->remaining_time_slice);
         dprintf(INFO, "\truntime_ns %" PRIu64 ", runtime_s %" PRIu64 "\n",
                 runtime, runtime / 1000000000);
         dprintf(INFO, "\tstack %p, stack_size %zu\n", t->stack, t->stack_size);
@@ -1218,7 +1231,7 @@ void dump_thread(thread_t* t, bool full_dump) {
     } else {
         printf("thr %p st %4s m %d pri %2d [%d:%d,%d] pid %" PRIu64 " tid %" PRIu64 " (%s:%s)\n",
                t, thread_state_to_str(t->state), t->mutexes_held, t->effec_priority, t->base_priority,
-               t->priority_boost, t->inheirited_priority, t->user_pid,
+               t->priority_boost, t->inherited_priority, t->user_pid,
                t->user_tid, oname, t->name);
     }
 }

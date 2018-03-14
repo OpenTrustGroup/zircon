@@ -23,6 +23,17 @@
 
 #define LOCAL_TRACE 0
 
+static_assert(ZX_CACHE_POLICY_CACHED == ARCH_MMU_FLAG_CACHED,
+              "Cache policy constant mismatch - CACHED");
+static_assert(ZX_CACHE_POLICY_UNCACHED == ARCH_MMU_FLAG_UNCACHED,
+              "Cache policy constant mismatch - UNCACHED");
+static_assert(ZX_CACHE_POLICY_UNCACHED_DEVICE == ARCH_MMU_FLAG_UNCACHED_DEVICE,
+              "Cache policy constant mismatch - UNCACHED_DEVICE");
+static_assert(ZX_CACHE_POLICY_WRITE_COMBINING == ARCH_MMU_FLAG_WRITE_COMBINING,
+              "Cache policy constant mismatch - WRITE_COMBINING");
+static_assert(ZX_CACHE_POLICY_MASK == ARCH_MMU_FLAG_CACHE_MASK,
+              "Cache policy constant mismatch - CACHE_MASK");
+
 zx_status_t sys_vmo_create(uint64_t size, uint32_t options,
                            user_out_handle* out) {
     LTRACEF("size %#" PRIx64 "\n", size);
@@ -54,6 +65,11 @@ zx_status_t sys_vmo_create(uint64_t size, uint32_t options,
 
 zx_status_t sys_vmo_read(zx_handle_t handle, user_out_ptr<void> _data,
                          uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
+    return sys_vmo_read_old(handle, _data, offset, len, _actual);
+}
+
+zx_status_t sys_vmo_read_old(zx_handle_t handle, user_out_ptr<void> _data,
+                             uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
     LTRACEF("handle %x, data %p, offset %#" PRIx64 ", len %#zx\n",
             handle, _data.get(), offset, len);
 
@@ -96,6 +112,11 @@ zx_status_t sys_vmo_read(zx_handle_t handle, user_out_ptr<void> _data,
 
 zx_status_t sys_vmo_write(zx_handle_t handle, user_in_ptr<const void> _data,
                           uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
+    return sys_vmo_write_old(handle, _data, offset, len, _actual);
+}
+
+zx_status_t sys_vmo_write_old(zx_handle_t handle, user_in_ptr<const void> _data,
+                              uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
     LTRACEF("handle %x, data %p, offset %#" PRIx64 ", len %#zx\n",
             handle, _data.get(), offset, len);
 

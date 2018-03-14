@@ -110,10 +110,6 @@ static zx_status_t sdmmc_ioctl(void* ctx, uint32_t op, const void* cmd,
         return ZX_ERR_NOT_SUPPORTED;
 #endif
     }
-    case IOCTL_BLOCK_RR_PART: {
-        sdmmc_device_t* dev = ctx;
-        return device_rebind(dev->zxdev);
-    }
     case IOCTL_DEVICE_SYNC:
         return ZX_OK;
     default:
@@ -469,7 +465,7 @@ static zx_status_t sdmmc_bind(void* ctx, zx_device_t* parent) {
         .name = "sdmmc",
         .ctx = dev,
         .ops = &sdmmc_device_proto,
-        .proto_id = ZX_PROTOCOL_BLOCK_CORE,
+        .proto_id = ZX_PROTOCOL_BLOCK_IMPL,
         .proto_ops = &block_proto,
         .flags = DEVICE_ADD_INVISIBLE,
     };

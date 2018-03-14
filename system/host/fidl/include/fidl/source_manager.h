@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#pragma once
+#ifndef ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_SOURCE_MANAGER_H_
+#define ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_SOURCE_MANAGER_H_
 
 #include <vector>
 
@@ -16,8 +17,12 @@ public:
     // Returns nullptr if |filename| could not be read.
     const SourceFile* CreateSource(StringView filename);
 
+    const std::vector<SourceFile>& sources() const { return sources_; }
+
 private:
     std::vector<SourceFile> sources_;
 };
 
 } // namespace fidl
+
+#endif // ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_SOURCE_MANAGER_H_

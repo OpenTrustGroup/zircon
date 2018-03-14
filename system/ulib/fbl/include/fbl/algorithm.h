@@ -72,6 +72,76 @@ constexpr const T round_down(const T& val, const U& multiple) {
                 (val / multiple) * multiple;
 }
 
+// Returns an iterator to the maximum element in the range [|first|, |last|).
+//
+// |first| and |last| must be forward iterators.
+//
+// Similar to: <http://en.cppreference.com/w/cpp/algorithm/max_element>
+template<class FwIterator>
+FwIterator max_element(FwIterator first, FwIterator last) {
+    FwIterator max = first;
+    while (first < last) {
+        if (*first > *max) {
+            max = first;
+        }
+        first++;
+    }
+    return max;
+}
+
+// Returns an iterator to the maximum element in the range [|first|, |last|).
+// using |comp| to compare elements instead of operator>
+//
+// |first| and |last| must be forward iterators.
+//
+// Similar to: <http://en.cppreference.com/w/cpp/algorithm/max_element>
+template<class FwIterator, class Compare>
+FwIterator max_element(FwIterator first, FwIterator last, Compare comp) {
+    FwIterator max = first;
+    while (first < last) {
+        if (comp(*first, *max)) {
+            max = first;
+        }
+        first++;
+    }
+    return max;
+}
+
+// Returns an iterator to the minimum element in the range [|first|, |last|).
+//
+// |first| and |last| must be forward iterators.
+//
+// Similar to: <http://en.cppreference.com/w/cpp/algorithm/min_element>
+template<class FwIterator>
+FwIterator min_element(FwIterator first, FwIterator last) {
+    FwIterator min = first;
+    while (first < last) {
+        if (*first < *min) {
+            min = first;
+        }
+        first++;
+    }
+    return min;
+}
+
+// Returns an iterator to the minimum element in the range [|first|, |last|)
+// using |comp| to compare elements instead of operator<
+//
+// |first| and |last| must be forward iterators.
+//
+// Similar to: <http://en.cppreference.com/w/cpp/algorithm/min_element>
+template<class FwIterator, class Compare>
+FwIterator min_element(FwIterator first, FwIterator last, Compare comp) {
+    FwIterator min = first;
+    while (first < last) {
+        if (comp(*first, *min)) {
+            min = first;
+        }
+        first++;
+    }
+    return min;
+}
+
 // Returns a pointer to the first element that is not less than |value|, or
 // |last| if no such element is found.
 //
@@ -145,6 +215,36 @@ T lcm(T first, T second) {
 
     // If function need not support uint8 or uint16, static_cast can be removed
     return static_cast<T>((first / gcd(first, second)) * second);
+}
+
+// Accumulates the elements in the range [|first|, |last|) with |initial_value|.
+// Returns the accumulated value.
+//
+// |first| and |last| must be InputIterators.
+//
+// Similar to <http://en.cppreference.com/w/cpp/algorithm/accumulate>.
+template <class InputIterator, class T>
+T accumulate(InputIterator first, InputIterator last, T initial_value) {
+    while(first < last) {
+        initial_value += *first;
+        first++;
+    }
+    return initial_value;
+}
+
+// Accumulates the elements in the range [|first|, |last|) with |initial_value|
+// using |op| instead of operator+.  Returns the accumulated value.
+//
+// |first| and |last| must be InputIterators.
+//
+// Similar to <http://en.cppreference.com/w/cpp/algorithm/accumulate>.
+template <class InputIterator, class T, class BinaryOp>
+T accumulate(InputIterator first, InputIterator last, T initial_value, BinaryOp op) {
+    while(first < last) {
+        initial_value = op(initial_value, *first);
+        first++;
+    }
+    return initial_value;
 }
 
 }  // namespace fbl

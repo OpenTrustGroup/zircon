@@ -9,6 +9,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/types.h>
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -16,10 +17,11 @@
 __BEGIN_CDECLS;
 
 // Sentinel value for io_buffer_t's |phys| field for when it is not valid.
-#define IO_BUFFER_INVALID_PHYS UINT64_MAX
+#define IO_BUFFER_INVALID_PHYS 0
 
 typedef struct {
-    zx_handle_t vmo_handle;
+    zx_handle_t bti_handle; // borrowed by library
+    zx_handle_t vmo_handle; // owned by library
     size_t size;
     zx_off_t offset;
     void* virt;
@@ -36,28 +38,46 @@ typedef struct {
 } io_buffer_t;
 
 enum {
-    IO_BUFFER_RO         = (0 << 0),
-    IO_BUFFER_RW         = (1 << 0),
-    IO_BUFFER_CONTIG     = (1 << 1),
-    IO_BUFFER_FLAGS_MASK = IO_BUFFER_RW | IO_BUFFER_CONTIG,
+    IO_BUFFER_RO         = (0 << 0),    // map buffer read-only
+    IO_BUFFER_RW         = (1 << 0),    // map buffer read/write
+    IO_BUFFER_CONTIG     = (1 << 1),    // allocate physically contiguous buffer
+    IO_BUFFER_UNCACHED   = (1 << 2),    // map buffer with ZX_CACHE_POLICY_UNCACHED
+    IO_BUFFER_FLAGS_MASK = IO_BUFFER_RW | IO_BUFFER_CONTIG | IO_BUFFER_UNCACHED,
 };
 
 // Initializes a new io_buffer.  If this call fails, it is still safe to call
-// io_buffer_release on |buffer|.
-zx_status_t io_buffer_init(io_buffer_t* buffer, size_t size, uint32_t flags);
+// io_buffer_release on |buffer|.  |bti| is borrowed by the io_buffer and may be
+// used throughout the lifetime of the io_buffer.
+zx_status_t io_buffer_init_with_bti(io_buffer_t* buffer, zx_handle_t bti,
+                                    size_t size, uint32_t flags);
 // An alignment of zero is interpreted as requesting page alignment.
 // Requesting a specific alignment is not supported for non-contiguous buffers,
-// pass zero for |alignment_log2| if not passing IO_BUFFER_CONTIG.
-zx_status_t io_buffer_init_aligned(io_buffer_t* buffer, size_t size, uint32_t alignment_log2, uint32_t flags);
+// pass zero for |alignment_log2| if not passing IO_BUFFER_CONTIG.  |bti| is borrowed
+// by the io_buffer and may be used throughout the lifetime of the io_buffer.
+zx_status_t io_buffer_init_aligned_with_bti(io_buffer_t* buffer, zx_handle_t bti, size_t size,
+                                            uint32_t alignment_log2, uint32_t flags);
 
 // Initializes an io_buffer base on an existing VMO.
 // duplicates the provided vmo_handle - does not take ownership
-zx_status_t io_buffer_init_vmo(io_buffer_t* buffer, zx_handle_t vmo_handle,
-                               zx_off_t offset, uint32_t flags);
+// |bti| is borrowed by the io_buffer and may be used throughout the lifetime of the io_buffer.
+
+zx_status_t io_buffer_init_vmo_with_bti(io_buffer_t* buffer, zx_handle_t bti,
+                                        zx_handle_t vmo_handle, zx_off_t offset, uint32_t flags);
 
 // Initializes an io_buffer that maps a given physical address
+// |bti| is borrowed by the io_buffer and may be used throughout the lifetime of the io_buffer.
+zx_status_t io_buffer_init_physical_with_bti(io_buffer_t* buffer, zx_handle_t bti,
+                                             zx_paddr_t addr, size_t size,
+                                             zx_handle_t resource, uint32_t cache_policy);
+
+// Legacy variants of the above
+zx_status_t io_buffer_init(io_buffer_t* buffer, size_t size, uint32_t flags) __DEPRECATE;
+zx_status_t io_buffer_init_aligned(io_buffer_t* buffer, size_t size, uint32_t alignment_log2,
+                                   uint32_t flags) __DEPRECATE;
+zx_status_t io_buffer_init_vmo(io_buffer_t* buffer, zx_handle_t vmo_handle,
+                               zx_off_t offset, uint32_t flags) __DEPRECATE;
 zx_status_t io_buffer_init_physical(io_buffer_t* buffer, zx_paddr_t addr, size_t size,
-                                    zx_handle_t resource, uint32_t cache_policy);
+                                    zx_handle_t resource, uint32_t cache_policy) __DEPRECATE;
 
 zx_status_t io_buffer_cache_op(io_buffer_t* buffer, const uint32_t op,
                                const zx_off_t offset, const size_t size);
@@ -74,6 +94,10 @@ zx_status_t io_buffer_cache_flush_invalidate(io_buffer_t* buffer, zx_off_t offse
 // The 'phys_list' and 'phys_count' fields are set if this function succeeds.
 zx_status_t io_buffer_physmap(io_buffer_t* buffer);
 
+zx_status_t io_buffer_physmap_range(io_buffer_t* buffer, zx_off_t offset,
+                                    size_t length, size_t phys_count,
+                                    zx_paddr_t* physmap);
+
 // Releases an io_buffer
 void io_buffer_release(io_buffer_t* buffer);
 
@@ -88,13 +112,6 @@ static inline void* io_buffer_virt(io_buffer_t* buffer) {
 static inline zx_paddr_t io_buffer_phys(io_buffer_t* buffer) {
     ZX_DEBUG_ASSERT(buffer->phys != IO_BUFFER_INVALID_PHYS);
     return buffer->phys + buffer->offset;
-}
-
-static inline zx_status_t io_buffer_physmap_range(io_buffer_t* buffer, zx_off_t offset,
-                                                  size_t length, size_t phys_count,
-                                                  zx_paddr_t* physmap) {
-    return zx_vmo_op_range(buffer->vmo_handle, ZX_VMO_OP_LOOKUP, offset, length,
-                           physmap, phys_count * sizeof(*physmap));
 }
 
 // Returns the buffer size available after the given offset, relative to the

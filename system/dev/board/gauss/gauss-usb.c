@@ -30,6 +30,13 @@ static const pbus_irq_t dwc3_irqs[] = {
     },
 };
 
+static const pbus_bti_t usb_btis[] = {
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_USB_XHCI,
+    },
+};
+
 static const pbus_dev_t dwc3_dev = {
     .name = "dwc3",
     .vid = PDEV_VID_GENERIC,
@@ -39,6 +46,8 @@ static const pbus_dev_t dwc3_dev = {
     .mmio_count = countof(dwc3_mmios),
     .irqs = dwc3_irqs,
     .irq_count = countof(dwc3_irqs),
+    .btis = usb_btis,
+    .bti_count = countof(usb_btis),
 };
 
 static const pbus_dev_t xhci_dev = {
@@ -50,6 +59,8 @@ static const pbus_dev_t xhci_dev = {
     .mmio_count = countof(dwc3_mmios),
     .irqs = dwc3_irqs,
     .irq_count = countof(dwc3_irqs),
+    .btis = usb_btis,
+    .bti_count = countof(usb_btis),
 };
 
 // based on code from phy-aml-new-usb3.c
@@ -69,7 +80,7 @@ static int phy_irq_thread(void* arg) {
             zxlogf(ERROR, "phy_irq_thread: zx_interrupt_wait returned %d\n", status);
             break;
         }
-        if (slots & ZX_INTERRUPT_SLOT_USER) {
+        if (slots & (1ul << ZX_INTERRUPT_SLOT_USER)) {
             break;
         }
 
@@ -130,12 +141,17 @@ static int phy_irq_thread(void* arg) {
 }
 
 zx_status_t gauss_usb_init(gauss_bus_t* bus) {
-    zx_status_t status;
-
-    status = io_buffer_init_physical(&bus->usb_phy, 0xffe09000, 4096, get_root_resource(),
-                                     ZX_CACHE_POLICY_UNCACHED_DEVICE);
+    zx_handle_t bti;
+    zx_status_t status = iommu_get_bti(&bus->iommu, 0, BTI_BOARD, &bti);
     if (status != ZX_OK) {
-        zxlogf(ERROR, "gauss_usb_init io_buffer_init_physical failed %d\n", status);
+        zxlogf(ERROR, "gauss_usb_init: iommu_get_bti failed: %d\n", status);
+        return status;
+    }
+    status = io_buffer_init_physical_with_bti(&bus->usb_phy, bti, 0xffe09000, 4096,
+                                              get_root_resource(), ZX_CACHE_POLICY_UNCACHED_DEVICE);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "gauss_usb_init io_buffer_init_physical_with_bti failed %d\n", status);
+        zx_handle_close(bti);
         return status;
     }
 

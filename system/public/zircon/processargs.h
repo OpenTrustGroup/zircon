@@ -147,16 +147,13 @@ struct zx_proc_args {
 
 // Server endpoint for remoteio "/svc" directory provided
 // to enable handling of inbound connections to services
-#define PA_SERVICE_REQUEST       0x3B
+#define PA_DIRECTORY_REQUEST     0x3B
 
 // Used by devmgr and devhosts
 #define PA_RESOURCE              0x3F
 
 
 // --- Various ---
-
-// Handle types used by the application model
-#define PA_APP_SERVICES          0x43
 
 // Handle types for one-off use and prototyping
 #define PA_USER0                 0xF0

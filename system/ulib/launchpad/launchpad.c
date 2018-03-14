@@ -7,11 +7,11 @@
 #include "elf.h"
 
 #include <zircon/assert.h>
+#include <zircon/dlfcn.h>
 #include <zircon/process.h>
 #include <zircon/processargs.h>
 #include <zircon/stack.h>
 #include <zircon/syscalls.h>
-#include <launchpad/loader-service.h>
 #include <ldmsg/ldmsg.h>
 #include <fdio/io.h>
 #include <assert.h>
@@ -477,7 +477,7 @@ static zx_status_t setup_loader_svc(launchpad_t* lp) {
         return ZX_OK;
 
     zx_handle_t loader_svc;
-    zx_status_t status = loader_service_get_default(&loader_svc);
+    zx_status_t status = dl_clone_loader_service(&loader_svc);
     if (status < 0)
         return status;
 
@@ -676,7 +676,7 @@ zx_status_t launchpad_file_load(launchpad_t* lp, zx_handle_t vmo) {
 
     while (1) {
         // Read enough to get the interpreter specification of a script
-        status = zx_vmo_read(vmo, first_line, 0, sizeof(first_line),
+        status = zx_vmo_read_old(vmo, first_line, 0, sizeof(first_line),
                              &chars_read);
 
         // This is not a script -- load as an ELF file
@@ -1029,7 +1029,7 @@ static zx_status_t prepare_start(launchpad_t* lp, const char* thread_name,
                                  zx_handle_t to_child,
                                  zx_handle_t* thread, uintptr_t* sp) {
     if (lp->entry == 0)
-        return ZX_ERR_BAD_STATE;
+        return lp_error(lp, ZX_ERR_BAD_STATE, "prepare start bad state");
 
     zx_status_t status = zx_thread_create(lp_proc(lp), thread_name,
                                           strlen(thread_name), 0, thread);
@@ -1048,7 +1048,7 @@ static zx_status_t prepare_start(launchpad_t* lp, const char* thread_name,
         status = launchpad_add_handle(lp, thread_copy, PA_THREAD_SELF);
         if (status != ZX_OK) {
             zx_handle_close(*thread);
-            return status;
+            return lp_error(lp, status, "cannot add thread self handle");
         }
     }
 

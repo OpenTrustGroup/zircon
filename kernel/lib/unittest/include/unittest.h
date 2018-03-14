@@ -24,9 +24,7 @@
  *
  *  UNITTEST_END_TESTCASE(foo_tests,
  *                        "footest",
- *                        "Test to be sure that your foos have proper bars",
- *                        init_foo_test_env,
- *                        cleanup_foo_test_env);
+ *                        "Test to be sure that your foos have proper bars");
  *
  * This creates an entry in the global unittest table and registers it with the
  * unit test framework.
@@ -35,7 +33,7 @@
  * the beginning and end of the test and the EXPECT_* macros to
  * validate test results, as shown:
  *
- * static bool test_foo(void* context)
+ * static bool test_foo()
  * {
  *      BEGIN_TEST;
  *
@@ -48,29 +46,6 @@
  *      EXPECT_NE(ZX_ERR_TIMED_OUT, foo_event(), "event timed out");
  *
  *      END_TEST;
- * }
- *
- * A test case may have an init and cleanup function registered with it in order
- * to set up a shared test environment.  A pointer to the shared environment
- * will be passed as the "context" parameter to each unittest.
- *
- * The init function might look something like...
- *
- * static zx_status_t init_foo_test_env(void** context)
- * {
- *      *context = new FooTestEnvironment(...);
- *
- *      if (!(*context))
- *          return ZX_ERR_NO_MEMORY;
- *
- *      return ZX_OK;
- * }
- *
- * While the cleanup function might look like...
- *
- * static void cleanup_foo_test_env(void* context)
- * {
- *      delete static_cast<FooTestEnvironment*>(context);
  * }
  *
  * To your rules.mk file, add lib/unittest to MODULE_DEPS:
@@ -124,7 +99,7 @@ int unittest_printf(const char* format, ...);
 
 /*
  * UTCHECK_* macros are used to check test results.  Generally, one should
- * prefer to use either the EXPECT_* (non-terminating) or REQUIRE_*
+ * prefer to use either the EXPECT_* (non-terminating) or ASSERT_*
  * (terminating) forms of the macros.  See below.
  */
 #define UTCHECK_EQ(expected, actual, msg, term)                                \
@@ -263,23 +238,23 @@ int unittest_printf(const char* format, ...);
 #define EXPECT_NULL(actual, msg)                       UTCHECK_NULL(actual, msg, false)
 #define EXPECT_NONNULL(actual, msg)                    UTCHECK_NONNULL(actual, msg, false)
 
-/* REQUIRE_* macros check the condition and will print a message and immediately
+/* ASSERT_* macros check the condition and will print a message and immediately
  * abort a test with a filure status if the condition fails.
  */
-#define REQUIRE_EQ(expected, actual, msg)               UTCHECK_EQ(expected, actual, msg, true)
-#define REQUIRE_NE(expected, actual, msg)               UTCHECK_NE(expected, actual, msg, true)
-#define REQUIRE_LE(expected, actual, msg)               UTCHECK_LE(expected, actual, msg, true)
-#define REQUIRE_LT(expected, actual, msg)               UTCHECK_LT(expected, actual, msg, true)
-#define REQUIRE_GE(expected, actual, msg)               UTCHECK_GE(expected, actual, msg, true)
-#define REQUIRE_GT(expected, actual, msg)               UTCHECK_GT(expected, actual, msg, true)
-#define REQUIRE_TRUE(actual, msg)                       UTCHECK_TRUE(actual, msg, true)
-#define REQUIRE_FALSE(actual, msg)                      UTCHECK_FALSE(actual, msg, true)
-#define REQUIRE_BYTES_EQ(expected, actual, length, msg) UTCHECK_BYTES_EQ(expected, actual, length, msg, true)
-#define REQUIRE_BYTES_NE(bytes1, bytes2, length, msg)   UTCHECK_BYTES_NE(bytes1, bytes2, length, msg, true)
-#define REQUIRE_EQ_LL(expected, actual, msg)            UTCHECK_EQ_LL(expected, actual, msg, true)
-#define REQUIRE_EQ_LL(expected, actual, msg)            UTCHECK_EQ_LL(expected, actual, msg, true)
-#define REQUIRE_NULL(actual, msg)                       UTCHECK_NULL(actual, msg, true)
-#define REQUIRE_NONNULL(actual, msg)                    UTCHECK_NONNULL(actual, msg, true)
+#define ASSERT_EQ(expected, actual, msg)               UTCHECK_EQ(expected, actual, msg, true)
+#define ASSERT_NE(expected, actual, msg)               UTCHECK_NE(expected, actual, msg, true)
+#define ASSERT_LE(expected, actual, msg)               UTCHECK_LE(expected, actual, msg, true)
+#define ASSERT_LT(expected, actual, msg)               UTCHECK_LT(expected, actual, msg, true)
+#define ASSERT_GE(expected, actual, msg)               UTCHECK_GE(expected, actual, msg, true)
+#define ASSERT_GT(expected, actual, msg)               UTCHECK_GT(expected, actual, msg, true)
+#define ASSERT_TRUE(actual, msg)                       UTCHECK_TRUE(actual, msg, true)
+#define ASSERT_FALSE(actual, msg)                      UTCHECK_FALSE(actual, msg, true)
+#define ASSERT_BYTES_EQ(expected, actual, length, msg) UTCHECK_BYTES_EQ(expected, actual, length, msg, true)
+#define ASSERT_BYTES_NE(bytes1, bytes2, length, msg)   UTCHECK_BYTES_NE(bytes1, bytes2, length, msg, true)
+#define ASSERT_EQ_LL(expected, actual, msg)            UTCHECK_EQ_LL(expected, actual, msg, true)
+#define ASSERT_EQ_LL(expected, actual, msg)            UTCHECK_EQ_LL(expected, actual, msg, true)
+#define ASSERT_NULL(actual, msg)                       UTCHECK_NULL(actual, msg, true)
+#define ASSERT_NONNULL(actual, msg)                    UTCHECK_NONNULL(actual, msg, true)
 
 /*
  * The list of test cases is made up of these elements.
@@ -315,9 +290,7 @@ bool unittest_expect_bytes(const uint8_t* expected,
                            int line,
                            bool expect_eq);
 
-typedef bool        (*unitest_fn_t)(void* context);
-typedef zx_status_t (*unitest_testcase_init_fn_t)(void** context);
-typedef void        (*unitest_testcase_cleanup_fn_t)(void* context);
+typedef bool        (*unitest_fn_t)(void);
 
 typedef struct unitest_registration {
     const char*  name;
@@ -327,8 +300,6 @@ typedef struct unitest_registration {
 typedef struct unitest_testcase_registration {
     const char*                     name;
     const char*                     desc;
-    unitest_testcase_init_fn_t      init;
-    unitest_testcase_cleanup_fn_t   cleanup;
     const unittest_registration_t*  tests;
     size_t                          test_cnt;
 } unittest_testcase_registration_t;
@@ -340,22 +311,20 @@ typedef struct unitest_testcase_registration {
 #define UNITTEST(_name, _fn) \
     { .name = _name, .fn = _fn },
 
-#define UNITTEST_END_TESTCASE(_global_id, _name, _desc, _init, _cleanup) \
+#define UNITTEST_END_TESTCASE(_global_id, _name, _desc)                 \
     };  /* __unittest_table_##_global_id */                             \
     __ALIGNED(sizeof(void *)) __USED __SECTION(".data.rel.ro.unittest_testcases") \
     static const unittest_testcase_registration_t __unittest_case_##_global_id = \
     {                                                                   \
         .name = _name,                                                  \
         .desc = _desc,                                                  \
-        .init = _init,                                                  \
-        .cleanup = _cleanup,                                            \
         .tests = __unittest_table_##_global_id,                         \
         .test_cnt = countof(__unittest_table_##_global_id),             \
     }
 #else   // WITH_LIB_UNITTEST
 #define UNITTEST_START_TESTCASE(_global_id)
 #define UNITTEST(_name, _fn)
-#define UNITTEST_END_TESTCASE(_global_id, _name, _desc, _init, _cleanup)
+#define UNITTEST_END_TESTCASE(_global_id, _name, _desc)
 #endif  // WITH_LIB_UNITTEST
 
 __END_CDECLS

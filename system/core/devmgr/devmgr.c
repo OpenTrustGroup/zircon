@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #include <launchpad/launchpad.h>
-#include <launchpad/loader-service.h>
+#include <loader-service/loader-service.h>
 #include <zircon/boot/bootdata.h>
 #include <zircon/dlfcn.h>
 #include <zircon/process.h>
@@ -35,10 +35,6 @@ static zx_handle_t svc_root_handle;
 // The handle used by appmgr to serve incoming requests.
 // If appmgr cannot be launched within a timeout, this handle is closed.
 static zx_handle_t svc_request_handle;
-
-zx_handle_t svc_root_clone(void) {
-    return fdio_service_clone(svc_root_handle);
-}
 
 bool getenv_bool(const char* key, bool _default) {
     const char* value = getenv(key);
@@ -75,7 +71,6 @@ zx_handle_t get_sysinfo_job_root(void) {
 }
 
 static const char* argv_sh[] = { "/boot/bin/sh" };
-static const char* argv_autorun0[] = { "/boot/bin/sh", "/boot/autorun" };
 static const char* argv_appmgr[] = { "/system/bin/appmgr" };
 
 void do_autorun(const char* name, const char* env) {
@@ -105,11 +100,11 @@ void do_autorun(const char* name, const char* env) {
     printf("...\n");
     devmgr_launch(svcs_job_handle, name,
                   argc, (const char* const*)argv,
-                  NULL, -1, NULL, NULL, 0, NULL);
+                  NULL, -1, NULL, NULL, 0, NULL, FS_ALL);
     free(buf);
 }
 
-static zx_handle_t fuchsia_event;
+static zx_handle_t fshost_event;
 
 static int fuchsia_starter(void* arg) {
     bool appmgr_started = false;
@@ -119,10 +114,12 @@ static int fuchsia_starter(void* arg) {
     zx_time_t deadline = zx_deadline_after(ZX_SEC(10));
 
     do {
-        zx_status_t status = zx_object_wait_one(fuchsia_event, ZX_USER_SIGNAL_0, deadline, NULL);
+        zx_status_t status = zx_object_wait_one(fshost_event, FSHOST_SIGNAL_READY, deadline, NULL);
         if (status == ZX_ERR_TIMED_OUT) {
             if (svc_request_handle != ZX_HANDLE_INVALID) {
-                printf("devmgr: appmgr not launched in 10s, closing svc handle\n");
+                if (require_system) {
+                    printf("devmgr: appmgr not launched in 10s, closing svc handle\n");
+                }
                 zx_handle_close(svc_request_handle);
             }
             deadline = ZX_TIME_INFINITE;
@@ -132,7 +129,7 @@ static int fuchsia_starter(void* arg) {
             printf("devmgr: error waiting on fuchsia start event: %d\n", status);
             break;
         }
-        zx_object_signal(fuchsia_event, ZX_USER_SIGNAL_0, 0);
+        zx_object_signal(fshost_event, FSHOST_SIGNAL_READY, 0);
 
         if (!drivers_loaded) {
             // we're starting the appmgr because /system is present
@@ -150,13 +147,13 @@ static int fuchsia_starter(void* arg) {
             if (svc_request_handle) {
                 assert(appmgr_hnd_count < countof(appmgr_hnds));
                 appmgr_hnds[appmgr_hnd_count] = svc_request_handle;
-                appmgr_ids[appmgr_hnd_count] = PA_SERVICE_REQUEST;
+                appmgr_ids[appmgr_hnd_count] = PA_DIRECTORY_REQUEST;
                 appmgr_hnd_count++;
                 svc_request_handle = ZX_HANDLE_INVALID;
             }
             devmgr_launch(fuchsia_job_handle, "appmgr", countof(argv_appmgr),
                           argv_appmgr, NULL, -1, appmgr_hnds, appmgr_ids,
-                          appmgr_hnd_count, NULL);
+                          appmgr_hnd_count, NULL, FS_FOR_APPMGR);
             appmgr_started = true;
         }
         if (!autorun_started) {
@@ -211,7 +208,7 @@ int service_starter(void* arg) {
             devmgr_launch(svcs_job_handle, "crashlogger",
                           argc_crashlogger, argv_crashlogger,
                           NULL, -1, handles, handle_types,
-                          countof(handles), NULL);
+                          countof(handles), NULL, 0);
         }
     }
 
@@ -219,13 +216,19 @@ int service_starter(void* arg) {
     __UNUSED bool netboot = false;
     bool vruncmd = false;
     if (!getenv_bool("netsvc.disable", false)) {
-        const char* args[] = { "/boot/bin/netsvc", NULL, NULL };
+        const char* args[] = { "/boot/bin/netsvc", NULL, NULL, NULL, NULL };
         int argc = 1;
 
         if (getenv_bool("netsvc.netboot", false)) {
             args[argc++] = "--netboot";
             netboot = true;
             vruncmd = true;
+        }
+
+        const char* interface;
+        if ((interface = getenv("netsvc.interface")) != NULL) {
+            args[argc++] = "--interface";
+            args[argc++] = interface;
         }
 
         const char* nodename = getenv("zircon.nodename");
@@ -235,7 +238,7 @@ int service_starter(void* arg) {
 
         zx_handle_t proc;
         if (devmgr_launch(svcs_job_handle, "netsvc", argc, args,
-                          NULL, -1, NULL, NULL, 0, &proc) == ZX_OK) {
+                          NULL, -1, NULL, NULL, 0, &proc, FS_ALL) == ZX_OK) {
             if (vruncmd) {
                 zx_info_handle_basic_t info = {
                     .koid = 0,
@@ -269,7 +272,7 @@ int service_starter(void* arg) {
         const char* args[] = { "/boot/bin/virtual-console", "--run", vcmd };
         devmgr_launch(svcs_job_handle, "virtual-console",
                       vruncmd ? 3 : 1, args, envp, -1,
-                      &h, &type, (h == ZX_HANDLE_INVALID) ? 0 : 1, NULL);
+                      &h, &type, (h == ZX_HANDLE_INVALID) ? 0 : 1, NULL, FS_ALL);
     }
 
     const char* epoch = getenv("devmgr.epoch");
@@ -279,13 +282,6 @@ int service_starter(void* arg) {
     }
 
     do_autorun("autorun:boot", "zircon.autorun.boot");
-    struct stat s;
-    if (stat(argv_autorun0[1], &s) == 0) {
-        printf("devmgr: starting /boot/autorun ...\n");
-        devmgr_launch(svcs_job_handle, "sh:autorun0",
-                      countof(argv_autorun0), argv_autorun0,
-                      NULL, -1, NULL, NULL, 0, NULL);
-    }
 
     thrd_t t;
     if ((thrd_create_with_name(&t, fuchsia_starter, NULL, "fuchsia-starter")) == thrd_success) {
@@ -314,7 +310,7 @@ static int console_starter(void* arg) {
         int fd;
         if ((fd = open(device, O_RDWR)) >= 0) {
             devmgr_launch(svcs_job_handle, "sh:console",
-                          countof(argv_sh), argv_sh, envp, fd, NULL, NULL, 0, NULL);
+                          countof(argv_sh), argv_sh, envp, fd, NULL, NULL, 0, NULL, FS_ALL);
             break;
         }
         zx_nanosleep(zx_deadline_after(ZX_MSEC(100)));
@@ -426,7 +422,7 @@ int main(int argc, char** argv) {
     }
     zx_object_set_property(fuchsia_job_handle, ZX_PROP_NAME, "fuchsia", 7);
     zx_channel_create(0, &svc_root_handle, &svc_request_handle);
-    zx_event_create(0, &fuchsia_event);
+    zx_event_create(0, &fshost_event);
 
     devmgr_vfs_init();
 
@@ -438,6 +434,13 @@ int main(int argc, char** argv) {
     }
 
     require_system = getenv_bool("devmgr.require-system", false);
+
+    // if we're not a full fuchsia build, no point to set up /svc
+    // which will just cause things attempting to access it to block
+    // until we give up on the appmgr 10s later
+    if (!require_system) {
+        devmgr_disable_svc();
+    }
 
     start_console_shell();
 
@@ -454,7 +457,7 @@ int main(int argc, char** argv) {
 static void devmgr_import_bootdata(zx_handle_t vmo) {
     bootdata_t bootdata;
     size_t actual;
-    zx_status_t status = zx_vmo_read(vmo, &bootdata, 0, sizeof(bootdata), &actual);
+    zx_status_t status = zx_vmo_read_old(vmo, &bootdata, 0, sizeof(bootdata), &actual);
     if ((status < 0) || (actual != sizeof(bootdata))) {
         return;
     }
@@ -469,7 +472,7 @@ static void devmgr_import_bootdata(zx_handle_t vmo) {
     size_t off = sizeof(bootdata);
 
     while (len > sizeof(bootdata)) {
-        zx_status_t status = zx_vmo_read(vmo, &bootdata, off, sizeof(bootdata), &actual);
+        zx_status_t status = zx_vmo_read_old(vmo, &bootdata, off, sizeof(bootdata), &actual);
         if ((status < 0) || (actual != sizeof(bootdata))) {
             break;
         }
@@ -506,7 +509,7 @@ static zx_status_t load_object(void* ctx, const char* name, zx_handle_t* vmo) {
     return bootfs_open(bootfs, tmp, vmo);
 }
 
-static zx_status_t load_abspath(void *ctx, const char* name, zx_handle_t* vmo) {
+static zx_status_t load_abspath(void* ctx, const char* name, zx_handle_t* vmo) {
     return ZX_ERR_NOT_SUPPORTED;
 }
 
@@ -537,8 +540,7 @@ void fshost_start(void) {
     // to allow us to load the fshost (since we don't have filesystems before
     // the fshost starts up).
     zx_handle_t svc;
-    if ((loader_service_create("bootfs-loader", &loader_ops,
-                               &bootfs, &loader_service) != ZX_OK) ||
+    if ((loader_service_create(NULL, &loader_ops, &bootfs, &loader_service) != ZX_OK) ||
         (loader_service_connect(loader_service, &svc) != ZX_OK)) {
         printf("devmgr: cannot create loader service\n");
         exit(1);
@@ -559,7 +561,7 @@ void fshost_start(void) {
     if ((handles[n] = devfs_root_clone()) != ZX_HANDLE_INVALID) {
         types[n++] = PA_HND(PA_USER0, 1);
     }
-    if ((handles[n] = svc_root_clone()) != ZX_HANDLE_INVALID) {
+    if ((handles[n] = fs_clone("svc")) != ZX_HANDLE_INVALID) {
         types[n++] = PA_HND(PA_USER0, 2);
     }
     if (zx_channel_create(0, &svc, &handles[n]) == ZX_OK) {
@@ -573,7 +575,7 @@ void fshost_start(void) {
     types[n++] = PA_HND(PA_VMO_BOOTFS, 0);
 
     // pass fuchsia start event to fshost
-    if (zx_handle_duplicate(fuchsia_event, ZX_RIGHT_SAME_RIGHTS, &handles[n]) == ZX_OK) {
+    if (zx_handle_duplicate(fshost_event, ZX_RIGHT_SAME_RIGHTS, &handles[n]) == ZX_OK) {
         types[n++] = PA_HND(PA_USER1, 0);
     }
 
@@ -631,7 +633,7 @@ void fshost_start(void) {
     envp[envc] = NULL;
 
     devmgr_launch(svcs_job_handle, "fshost", argc, argv,
-                  envp, -1, handles, types, n, NULL);
+                  envp, -1, handles, types, n, NULL, 0);
 
     // switch to system loader service provided by fshost
     zx_handle_close(dl_set_loader_service(svc));
@@ -646,12 +648,34 @@ zx_handle_t devmgr_load_file(const char* path) {
     return vmo;
 }
 
-zx_handle_t fs_root_clone(void) {
-    return fdio_service_clone(fs_root);
+void devmgr_vfs_exit(void) {
+    zx_status_t status;
+    if ((status = zx_object_signal(fshost_event, 0, FSHOST_SIGNAL_EXIT)) != ZX_OK) {
+        printf("devmgr: Failed to signal VFS exit\n");
+        return;
+    } else if ((status = zx_object_wait_one(fshost_event,
+                                            FSHOST_SIGNAL_EXIT_DONE,
+                                            zx_deadline_after(ZX_SEC(5)), NULL)) != ZX_OK) {
+        printf("devmgr: Failed to wait for VFS exit completion\n");
+    }
 }
 
-void devmgr_vfs_exit(void) {
-    //TODO: wire up correctly
+zx_handle_t fs_clone(const char* path) {
+    if (!strcmp(path, "svc")) {
+        return fdio_service_clone(svc_root_handle);
+    }
+    if (!strcmp(path, "dev")) {
+        return devfs_root_clone();
+    }
+    zx_handle_t h0, h1;
+    if (zx_channel_create(0, &h0, &h1) != ZX_OK) {
+        return ZX_HANDLE_INVALID;
+    }
+    if (fdio_open_at(fs_root, path, FS_DIR_FLAGS, h1) != ZX_OK) {
+        zx_handle_close(h0);
+        return ZX_HANDLE_INVALID;
+    }
+    return h0;
 }
 
 void devmgr_vfs_init(void) {
@@ -665,11 +689,14 @@ void devmgr_vfs_init(void) {
         printf("devmgr: cannot create namespace: %d\n", r);
         return;
     }
-    if ((r = fdio_ns_bind(ns, "/", fs_root_clone())) != ZX_OK) {
-        printf("devmgr: cannot bind / to namespace: %d\n", r);
-    }
-    if ((r = fdio_ns_bind(ns, "/dev", devfs_root_clone())) != ZX_OK) {
+    if ((r = fdio_ns_bind(ns, "/dev", fs_clone("dev"))) != ZX_OK) {
         printf("devmgr: cannot bind /dev to namespace: %d\n", r);
+    }
+    if ((r = fdio_ns_bind(ns, "/boot", fs_clone("boot"))) != ZX_OK) {
+        printf("devmgr: cannot bind /boot to namespace: %d\n", r);
+    }
+    if ((r = fdio_ns_bind(ns, "/system", fs_clone("system"))) != ZX_OK) {
+        printf("devmgr: cannot bind /system to namespace: %d\n", r);
     }
     if ((r = fdio_ns_install(ns)) != ZX_OK) {
         printf("devmgr: cannot install namespace: %d\n", r);

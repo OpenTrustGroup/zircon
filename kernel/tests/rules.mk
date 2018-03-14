@@ -16,6 +16,7 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/clock_tests.cpp \
     $(LOCAL_DIR)/fibo.cpp \
     $(LOCAL_DIR)/mem_tests.cpp \
+    $(LOCAL_DIR)/preempt_disable_tests.cpp \
     $(LOCAL_DIR)/printf_tests.cpp \
     $(LOCAL_DIR)/sleep_tests.cpp \
     $(LOCAL_DIR)/string_tests.c \
@@ -23,15 +24,15 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/tests.cpp \
     $(LOCAL_DIR)/thread_tests.cpp \
     $(LOCAL_DIR)/timer_tests.cpp \
+    $(LOCAL_DIR)/uart_tests.cpp \
 
 
 MODULE_DEPS += \
     kernel/lib/crypto \
     kernel/lib/header_tests \
     kernel/lib/fbl \
-    third_party/lib/safeint \
     kernel/lib/unittest \
 
-MODULE_COMPILEFLAGS += -Wno-format -fno-builtin
+MODULE_COMPILEFLAGS += -fno-builtin
 
 include make/module.mk

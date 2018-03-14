@@ -32,6 +32,11 @@ Repetition (zero or more) is expressed with parentheses and a star.
 zero-or-more = ( list-part )* ;
 ```
 
+Repetition (one or more) is expressed with parentheses and a plus.
+```
+one-or-more = ( list-part )+ ;
+```
+
 ## The grammar
 
 `file` is the starting symbol.
@@ -52,17 +57,17 @@ using = "using" , compound-identifier , ( "as" , IDENTIFIER ) , ";" ;
 declaration = const-declaration | enum-declaration | interface-declaration |
               struct-declaration | union-declaration ;
 
-const-declaration = "const" , type , IDENTIFIER , "=" , constant ;
+const-declaration = ( attribute-list ) , "const" , type , IDENTIFIER , "=" , constant ;
 
-enum-declaration = "enum" , IDENTIFIER , ( ":" , integer-type ) ,
+enum-declaration = ( attribute-list ) , "enum" , IDENTIFIER , ( ":" , integer-type ) ,
                    "{" , ( enum-member , ";" )* , "}" ;
 
 enum-member = IDENTIFIER , ( "=" , enum-member-value ) ;
 
 enum-member-value = IDENTIFIER | NUMERIC-LITERAL ;
 
-interface-declaration = "interface" , IDENTIFIER , ( ":" , super-interface-list ) ,
-                        "{" , ( interface-member , ";" )*  , "}" ;
+interface-declaration = ( attribute-list ) , "interface" , IDENTIFIER ,
+                        ( ":" , super-interface-list ) , "{" , ( interface-member , ";" )*  , "}" ;
 
 super-interface-list = compound-identifier
                      | compound-identifier , "," , super-interface-list
@@ -72,7 +77,7 @@ interface-member = interface-method | const-declaration | enum-declaration ;
 interface-method = ordinal , ":" , interface-parameters
 
 interface-parameters = IDENTIFIER , parameter-list , ( "->" , parameter-list )
-                     | "event" , IDENTIFIER , parameter-list
+                     | "->" , IDENTIFIER , parameter-list
 
 parameter-list = "(" , parameters , ")" ;
 
@@ -80,18 +85,23 @@ parameters = parameter | parameter , "," , parameter-list ;
 
 parameter = type , IDENTIFIER ;
 
-struct-declaration = "struct" , IDENTIFIER ,
-                     "{" , ( struct-member , ";" )* , "}" ;
+struct-declaration = ( attribute-list ) , "struct" , IDENTIFIER , "{" , ( struct-member , ";" )* , "}" ;
 
 struct-member = struct-field | const-declaration | enum-declaration ;
 
 struct-field = type , IDENTIFIER , ( "=" , constant ) ;
 
-union-declaration = "union" , IDENTIFIER , "{" , ( union-member , ";" )* , "}" ;
+union-declaration = ( attribute-list ) , "union" , IDENTIFIER , "{" , ( union-member , ";" )+ , "}" ;
 
 union-member = union-field | const-declaration | enum-declaration ;
 
 union-field = type , IDENTIFIER ;
+
+attribute-list = "[" , attributes, "]" ;
+
+attributes = attribute | attribute , "," , attribute ;
+
+attribute = IDENTIFIER , ( "=", STRING-LITERAL ) ;
 
 type = identifier-type | array-type | vector-type | string-type | handle-type
                        | request-type | primitive-type ;
@@ -107,9 +117,8 @@ string-type = "string" , ( ":" , constant ) , ( "?" ) ;
 handle-type = "handle" , ( "<" , handle-subtype , ">" ) , ( "?" ) ;
 
 handle-subtype = "process" | "thread" | "vmo" | "channel" | "event" | "port" |
-                 "interrupt" | "iomap" | "pci" | "log" | "socket" |
-                 "resource" | "eventpair" | "job" | "vmar" | "fifo" |
-                 "hypervisor" | "guest" | "timer" ;
+                 "interrupt" | "log" | "socket" | "resource" | "eventpair" |
+                 "job" | "vmar" | "fifo" | "guest" | "timer" ;
 
 request-type = "request" , "<" , compound-identifier , ">" , ( "?" ) ;
 

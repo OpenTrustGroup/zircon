@@ -19,28 +19,64 @@
 #include <hw/reg.h>
 
 #include <soc/aml-s912/s912-hw.h>
+#include <soc/aml-s912/s912-gpio.h>
 
 #include <zircon/assert.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
+#include <zircon/threads.h>
 
 #include "vim.h"
 
 // DMC MMIO for display driver
 static pbus_mmio_t vim_display_mmios[] = {
     {
-        .base = DMC_REG_BASE,
-        .length = PAGE_SIZE,
+        .base =     S912_PRESET_BASE,
+        .length =   S912_PRESET_LENGTH,
+    },
+    {
+        .base =     S912_HDMITX_BASE,
+        .length =   S912_HDMITX_LENGTH,
+    },
+    {
+        .base =     S912_HIU_BASE,
+        .length =   S912_HIU_LENGTH,
+    },
+    {
+        .base =     S912_VPU_BASE,
+        .length =   S912_VPU_LENGTH,
+    },
+    {
+        .base =     S912_HDMITX_SEC_BASE,
+        .length =   S912_HDMITX_SEC_LENGTH,
+    },
+    {
+        .base =     S912_DMC_REG_BASE,
+        .length =   S912_DMC_REG_LENGTH,
+    },
+    {
+        .base =     S912_CBUS_REG_BASE,
+        .length =   S912_CBUS_REG_LENGTH,
+    },
+};
+
+
+const pbus_gpio_t vim_display_gpios[] = {
+    {
+        // HPD
+        .gpio = S912_GPIOH(20),
     },
 };
 
 static const pbus_dev_t display_dev = {
     .name = "display",
     .vid = PDEV_VID_KHADAS,
-    .pid = PDEV_PID_VIM,
+    .pid = PDEV_PID_VIM2,
     .did = PDEV_DID_VIM_DISPLAY,
     .mmios = vim_display_mmios,
     .mmio_count = countof(vim_display_mmios),
+    .gpios = vim_display_gpios,
+    .gpio_count = countof(vim_display_gpios),
 };
 
 static void vim_bus_release(void* ctx) {
@@ -65,14 +101,28 @@ static int vim_start_thread(void* arg) {
         zxlogf(ERROR, "vim_i2c_init failed: %d\n", status);
         goto fail;
     }
+    if ((status = vim_uart_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_uart_init failed: %d\n", status);
+        goto fail;
+    }
     if ((status = vim_usb_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_usb_init failed: %d\n", status);
         goto fail;
     }
 
-    if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "vim_start_thread could not add display_dev: %d\n", status);
-        goto fail;
+    if (bus->soc_pid == PDEV_PID_AMLOGIC_S912) {
+        if ((status = vim_mali_init(bus)) != ZX_OK) {
+            zxlogf(ERROR, "vim_mali_init failed: %d\n", status);
+            goto fail;
+        }
+    }
+
+    // Display driver currently supports only the S912
+    if (bus->soc_pid == PDEV_PID_AMLOGIC_S912) {
+        if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
+            zxlogf(ERROR, "vim_start_thread could not add display_dev: %d\n", status);
+            goto fail;
+        }
     }
 
     return ZX_OK;
@@ -82,15 +132,21 @@ fail:
 }
 
 static zx_status_t vim_bus_bind(void* ctx, zx_device_t* parent) {
-    zx_status_t status;
-
     vim_bus_t* bus = calloc(1, sizeof(vim_bus_t));
     if (!bus) {
         return ZX_ERR_NO_MEMORY;
     }
     bus->parent = parent;
 
-    if ((status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &bus->pbus)) != ZX_OK) {
+    zx_status_t status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &bus->pbus);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
+    // get default BTI from the dummy IOMMU implementation in the platform bus
+    status = device_get_protocol(parent, ZX_PROTOCOL_IOMMU, &bus->iommu);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "vim_bus_bind: could not get ZX_PROTOCOL_IOMMU\n");
         goto fail;
     }
 
@@ -121,6 +177,7 @@ static zx_status_t vim_bus_bind(void* ctx, zx_device_t* parent) {
     thrd_t t;
     int thrd_rc = thrd_create_with_name(&t, vim_start_thread, bus, "vim_start_thread");
     if (thrd_rc != thrd_success) {
+        status = thrd_status_to_zx_status(thrd_rc);
         goto fail;
     }
     return ZX_OK;

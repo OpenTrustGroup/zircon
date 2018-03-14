@@ -7,7 +7,7 @@ LOCAL_COMPILEFLAGS := \
 
 ifeq ($(ARCH),arm64)
 MUSL_ARCH := aarch64
-else ifeq ($(SUBARCH),x86-64)
+else ifeq ($(ARCH),x86)
 MUSL_ARCH := x86_64
 else
 $(error Unsupported architecture $(ARCH) for musl build!)
@@ -55,10 +55,7 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/pthread/pthread_attr_init.c \
     $(LOCAL_DIR)/pthread/pthread_attr_setdetachstate.c \
     $(LOCAL_DIR)/pthread/pthread_attr_setguardsize.c \
-    $(LOCAL_DIR)/pthread/pthread_attr_setinheritsched.c \
     $(LOCAL_DIR)/pthread/pthread_attr_setschedparam.c \
-    $(LOCAL_DIR)/pthread/pthread_attr_setschedpolicy.c \
-    $(LOCAL_DIR)/pthread/pthread_attr_setscope.c \
     $(LOCAL_DIR)/pthread/pthread_attr_setstacksize.c \
     $(LOCAL_DIR)/pthread/pthread_barrier_destroy.c \
     $(LOCAL_DIR)/pthread/pthread_barrier_init.c \
@@ -81,7 +78,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/pthread/pthread_getattr_np.c \
     $(LOCAL_DIR)/pthread/pthread_getconcurrency.c \
     $(LOCAL_DIR)/pthread/pthread_getcpuclockid.c \
-    $(LOCAL_DIR)/pthread/pthread_getschedparam.c \
     $(LOCAL_DIR)/pthread/pthread_getspecific.c \
     $(LOCAL_DIR)/pthread/pthread_join.c \
     $(LOCAL_DIR)/pthread/pthread_key_create.c \
@@ -116,8 +112,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/pthread/pthread_setcancelstate.c \
     $(LOCAL_DIR)/pthread/pthread_setcanceltype.c \
     $(LOCAL_DIR)/pthread/pthread_setconcurrency.c \
-    $(LOCAL_DIR)/pthread/pthread_setschedparam.c \
-    $(LOCAL_DIR)/pthread/pthread_setschedprio.c \
     $(LOCAL_DIR)/pthread/pthread_setspecific.c \
     $(LOCAL_DIR)/pthread/pthread_sigmask.c \
     $(LOCAL_DIR)/pthread/pthread_spin_destroy.c \
@@ -285,9 +279,7 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/legacy/getpass.c \
     $(LOCAL_DIR)/src/legacy/isastream.c \
     $(LOCAL_DIR)/src/legacy/lutimes.c \
-    $(LOCAL_DIR)/src/legacy/ulimit.c \
     $(LOCAL_DIR)/src/linux/adjtime.c \
-    $(LOCAL_DIR)/src/linux/cache.c \
     $(LOCAL_DIR)/src/linux/flock.c \
     $(LOCAL_DIR)/src/linux/sethostname.c \
     $(LOCAL_DIR)/src/linux/settimeofday.c \
@@ -295,12 +287,10 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/linux/utimes.c \
     $(LOCAL_DIR)/src/locale/__lctrans.c \
     $(LOCAL_DIR)/src/locale/__mo_lookup.c \
-    $(LOCAL_DIR)/src/locale/bind_textdomain_codeset.c \
     $(LOCAL_DIR)/src/locale/c_locale.c \
     $(LOCAL_DIR)/src/locale/catclose.c \
     $(LOCAL_DIR)/src/locale/catgets.c \
     $(LOCAL_DIR)/src/locale/catopen.c \
-    $(LOCAL_DIR)/src/locale/dcngettext.c \
     $(LOCAL_DIR)/src/locale/duplocale.c \
     $(LOCAL_DIR)/src/locale/freelocale.c \
     $(LOCAL_DIR)/src/locale/iconv.c \
@@ -313,7 +303,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/locale/strcoll.c \
     $(LOCAL_DIR)/src/locale/strfmon.c \
     $(LOCAL_DIR)/src/locale/strxfrm.c \
-    $(LOCAL_DIR)/src/locale/textdomain.c \
     $(LOCAL_DIR)/src/locale/uselocale.c \
     $(LOCAL_DIR)/src/locale/wcscoll.c \
     $(LOCAL_DIR)/src/locale/wcsxfrm.c \
@@ -444,9 +433,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/misc/gethostid.c \
     $(LOCAL_DIR)/src/misc/getopt.c \
     $(LOCAL_DIR)/src/misc/getopt_long.c \
-    $(LOCAL_DIR)/src/misc/getpriority.c \
-    $(LOCAL_DIR)/src/misc/getrlimit.c \
-    $(LOCAL_DIR)/src/misc/getrusage.c \
     $(LOCAL_DIR)/src/misc/getsubopt.c \
     $(LOCAL_DIR)/src/misc/initgroups.c \
     $(LOCAL_DIR)/src/misc/issetugid.c \
@@ -456,8 +442,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/misc/ptsname.c \
     $(LOCAL_DIR)/src/misc/pty.c \
     $(LOCAL_DIR)/src/misc/setdomainname.c \
-    $(LOCAL_DIR)/src/misc/setpriority.c \
-    $(LOCAL_DIR)/src/misc/setrlimit.c \
     $(LOCAL_DIR)/src/misc/syslog.c \
     $(LOCAL_DIR)/src/misc/wordexp.c \
     $(LOCAL_DIR)/src/mman/madvise.c \
@@ -879,11 +863,9 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/unistd/acct.c \
     $(LOCAL_DIR)/src/unistd/alarm.c \
     $(LOCAL_DIR)/src/unistd/ctermid.c \
-    $(LOCAL_DIR)/src/unistd/fchdir.c \
     $(LOCAL_DIR)/src/unistd/gethostname.c \
     $(LOCAL_DIR)/src/unistd/getlogin.c \
     $(LOCAL_DIR)/src/unistd/getlogin_r.c \
-    $(LOCAL_DIR)/src/unistd/nice.c \
     $(LOCAL_DIR)/src/unistd/pause.c \
     $(LOCAL_DIR)/src/unistd/posix_close.c \
     $(LOCAL_DIR)/src/unistd/setpgrp.c \
@@ -1025,7 +1007,7 @@ LOCAL_SRCS += \
     $(LOCAL_DIR)/third_party/math/log2l.c \
     $(LOCAL_DIR)/third_party/math/logl.c \
 
-else ifeq ($(SUBARCH),x86-64)
+else ifeq ($(ARCH),x86)
 LOCAL_SRCS += \
     $(LOCAL_DIR)/src/fenv/x86_64/fenv.c \
     $(LOCAL_DIR)/src/ldso/x86_64/tlsdesc.S \

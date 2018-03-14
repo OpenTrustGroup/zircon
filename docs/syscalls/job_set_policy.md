@@ -11,7 +11,7 @@ job_set_policy - Set job security and resource policies.
 #include <zircon/syscalls/policy.h>
 
 zx_status_t zx_job_set_policy(zx_handle_t job_handle, uint32_t options,
-                              uint32_t topic, void* policy, size_t count);
+                              uint32_t topic, const void* policy, uint32_t count);
 
 ```
 
@@ -71,7 +71,7 @@ Where *condition* is one of
   the above **ZX_NEW** condtions such as **ZX_POL_NEW_VMO**,
   **ZX_POL_NEW_CHANNEL**, **ZX_POL_NEW_EVENT**, **ZX_POL_NEW_EVPAIR**,
   **ZX_POL_NEW_PORT**, **ZX_POL_NEW_SOCKET**, **ZX_POL_NEW_FIFO**,
-  **ZX_POL_NEW_GUEST**, and any future ZX_NEW policy. This will include any new
+  and any future ZX_NEW policy. This will include any new
   kernel objects which do not require a parent object for creation.
 
 Where *policy* is either
@@ -105,7 +105,8 @@ or *policy* was not **ZX_JOB_POL_RELATIVE** or **ZX_JOB_POL_ABSOLUTE**, or
 
 **ZX_ERR_BAD_STATE**  the job has existing jobs or processes alive.
 
-**ZX_ERR_OUT_OF_RANGE** *count* is bigger than ZX_MAX_POLICY.
+**ZX_ERR_OUT_OF_RANGE** *count* is bigger than ZX_POL_MAX or *condition* is
+bigger than ZX_POL_MAX.
 
 **ZX_ERR_ALREADY_EXISTS** existing policy conflicts with the new policy.
 

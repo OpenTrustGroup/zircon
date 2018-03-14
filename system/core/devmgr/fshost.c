@@ -12,9 +12,10 @@
 #include <fdio/watcher.h>
 #include <fs-management/ramdisk.h>
 #include <launchpad/launchpad.h>
-#include <launchpad/loader-service.h>
+#include <loader-service/loader-service.h>
 
 #include <zircon/boot/bootdata.h>
+#include <zircon/device/vfs.h>
 #include <zircon/dlfcn.h>
 #include <zircon/process.h>
 #include <zircon/processargs.h>
@@ -163,7 +164,7 @@ static void setup_bootfs(void) {
     for (unsigned n = 0; (vmo = zx_get_startup_handle(HND_BOOTDATA(n))); n++) {
         bootdata_t bootdata;
         size_t actual;
-        zx_status_t status = zx_vmo_read(vmo, &bootdata, 0, sizeof(bootdata), &actual);
+        zx_status_t status = zx_vmo_read_old(vmo, &bootdata, 0, sizeof(bootdata), &actual);
         if ((status < 0) || (actual != sizeof(bootdata))) {
             goto done;
         }
@@ -180,7 +181,7 @@ static void setup_bootfs(void) {
         size_t off = sizeof(bootdata);
 
         while (len > sizeof(bootdata)) {
-            zx_status_t status = zx_vmo_read(vmo, &bootdata, off, sizeof(bootdata), &actual);
+            zx_status_t status = zx_vmo_read_old(vmo, &bootdata, off, sizeof(bootdata), &actual);
             if ((status < 0) || (actual != sizeof(bootdata))) {
                 break;
             }
@@ -299,10 +300,15 @@ static void fetch_vmos(uint_fast8_t type, const char* debug_type_name) {
     }
 }
 
+static zx_handle_t devfs_root;
+static zx_handle_t svc_root;
+static zx_handle_t fshost_event;
+
 void fshost_start(void) {
     setup_bootfs();
 
     vfs_global_init(vfs_create_global_root());
+    vfs_watch_exit(fshost_event);
 
     fetch_vmos(PA_VMO_VDSO, "PA_VMO_VDSO");
     fetch_vmos(PA_VMO_KERNEL_FILE, "PA_VMO_KERNEL_FILE");
@@ -325,20 +331,35 @@ zx_handle_t devmgr_load_file(const char* path) {
     return ZX_HANDLE_INVALID;
 }
 
+static zx_handle_t fs_root;
 static zx_handle_t devfs_root;
 static zx_handle_t svc_root;
-static zx_handle_t fuchsia_event;
+static zx_handle_t fshost_event;
 
-zx_handle_t devfs_root_clone(void) {
-    return fdio_service_clone(devfs_root);
-}
+#define FS_DIR_FLAGS \
+    (ZX_FS_RIGHT_READABLE | ZX_FS_RIGHT_ADMIN |\
+    ZX_FS_FLAG_DIRECTORY | ZX_FS_FLAG_NOREMOTE)
 
-zx_handle_t svc_root_clone(void) {
-    return fdio_service_clone(svc_root);
+zx_handle_t fs_clone(const char* path) {
+    if (!strcmp(path, "svc")) {
+        return fdio_service_clone(svc_root);
+    }
+    if (!strcmp(path, "dev")) {
+        return fdio_service_clone(devfs_root);
+    }
+    zx_handle_t h0, h1;
+    if (zx_channel_create(0, &h0, &h1) != ZX_OK) {
+        return ZX_HANDLE_INVALID;
+    }
+    if (fdio_open_at(fs_root, path, FS_DIR_FLAGS, h1) != ZX_OK) {
+        zx_handle_close(h0);
+        return ZX_HANDLE_INVALID;
+    }
+    return h0;
 }
 
 void fuchsia_start(void) {
-    zx_object_signal(fuchsia_event, 0, ZX_USER_SIGNAL_0);
+    zx_object_signal(fshost_event, 0, FSHOST_SIGNAL_READY);
 }
 
 static loader_service_t* loader_service;
@@ -357,15 +378,15 @@ int main(int argc, char** argv) {
         argv++;
     }
 
-    zx_handle_t fs_root = zx_get_startup_handle(PA_HND(PA_USER0, 0));
+    zx_handle_t _fs_root = zx_get_startup_handle(PA_HND(PA_USER0, 0));
     devfs_root = zx_get_startup_handle(PA_HND(PA_USER0, 1));
     svc_root = zx_get_startup_handle(PA_HND(PA_USER0, 2));
     zx_handle_t devmgr_loader = zx_get_startup_handle(PA_HND(PA_USER0, 3));
-    fuchsia_event = zx_get_startup_handle(PA_HND(PA_USER1, 0));
+    fshost_event = zx_get_startup_handle(PA_HND(PA_USER1, 0));
 
     fshost_start();
 
-    vfs_connect_global_root_handle(fs_root);
+    vfs_connect_global_root_handle(_fs_root);
 
     fdio_ns_t* ns;
     zx_status_t r;
@@ -373,17 +394,24 @@ int main(int argc, char** argv) {
         printf("fshost: cannot create namespace: %d\n", r);
         return -1;
     }
-    if ((r = fdio_ns_bind(ns, "/", fs_root_clone())) != ZX_OK) {
-        printf("fshost: cannot bind / to namespace: %d\n", r);
+
+    if ((r = fdio_ns_bind(ns, "/fs", (fs_root = fs_root_clone()))) != ZX_OK) {
+        printf("fshost: cannot bind /fs to namespace: %d\n", r);
     }
-    if ((r = fdio_ns_bind(ns, "/dev", devfs_root_clone())) != ZX_OK) {
+    if ((r = fdio_ns_bind(ns, "/dev", fs_clone("dev"))) != ZX_OK) {
         printf("fshost: cannot bind /dev to namespace: %d\n", r);
+    }
+    if ((r = fdio_ns_bind(ns, "/boot", fs_clone("boot"))) != ZX_OK) {
+        printf("devmgr: cannot bind /boot to namespace: %d\n", r);
+    }
+    if ((r = fdio_ns_bind(ns, "/system", fs_clone("system"))) != ZX_OK) {
+        printf("devmgr: cannot bind /system to namespace: %d\n", r);
     }
     if ((r = fdio_ns_install(ns)) != ZX_OK) {
         printf("fshost: cannot install namespace: %d\n", r);
     }
 
-    if ((r = loader_service_create_fs("system-loader", &loader_service)) != ZX_OK) {
+    if ((r = loader_service_create_fs(NULL, &loader_service)) != ZX_OK) {
         printf("fshost: failed to create loader service: %d\n", r);
     } else {
         loader_service_attach(loader_service, devmgr_loader);

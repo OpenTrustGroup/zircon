@@ -26,7 +26,6 @@ public:
     ~FifoDispatcher() final;
 
     zx_obj_type_t get_type() const final { return ZX_OBJ_TYPE_FIFO; }
-    zx_koid_t get_related_koid() const final { return peer_koid_; }
     bool has_state_tracker() const final { return true; }
     void on_zero_handles() final;
     zx_status_t user_signal(uint32_t clear_mask, uint32_t set_mask, bool peer) final;
@@ -39,22 +38,19 @@ private:
                    uint32_t options, uint32_t elem_count, uint32_t elem_size,
                    fbl::unique_ptr<uint8_t[]> data);
     void Init(fbl::RefPtr<FifoDispatcher> other);
-    zx_status_t WriteSelf(user_in_ptr<const uint8_t> ptr, size_t len, uint32_t* actual);
-    zx_status_t UserSignalSelf(uint32_t clear_mask, uint32_t set_mask);
+    zx_status_t WriteSelfLocked(user_in_ptr<const uint8_t> ptr, size_t len, uint32_t* actual);
+    zx_status_t UserSignalSelfLocked(uint32_t clear_mask, uint32_t set_mask);
 
-    void OnPeerZeroHandles();
+    void OnPeerZeroHandlesLocked();
 
     fbl::Canary<fbl::magic("FIFO")> canary_;
     const uint32_t elem_count_;
     const uint32_t elem_size_;
     const uint32_t mask_;
-    zx_koid_t peer_koid_;
 
-    fbl::Mutex lock_;
-    fbl::RefPtr<FifoDispatcher> other_ TA_GUARDED(lock_);
-    uint32_t head_ TA_GUARDED(lock_);
-    uint32_t tail_ TA_GUARDED(lock_);
-    fbl::unique_ptr<uint8_t[]> data_ TA_GUARDED(lock_);
+    uint32_t head_ TA_GUARDED(get_lock());
+    uint32_t tail_ TA_GUARDED(get_lock());
+    fbl::unique_ptr<uint8_t[]> data_ TA_GUARDED(get_lock());
 
     static constexpr uint32_t kMaxSizeBytes = PAGE_SIZE;
 };

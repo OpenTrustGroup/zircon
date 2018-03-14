@@ -12,8 +12,10 @@
 
 #include "edid.h"
 #include "gtt.h"
+#include "power.h"
 #include "registers-ddi.h"
 #include "registers-pipe.h"
+#include "registers-transcoder.h"
 
 namespace i915 {
 
@@ -24,7 +26,8 @@ using DisplayDeviceType = ddk::Device<DisplayDevice>;
 
 class DisplayDevice : public DisplayDeviceType, public ddk::DisplayProtocol<DisplayDevice> {
 public:
-    DisplayDevice(Controller* device, registers::Ddi ddi, registers::Pipe pipe);
+    DisplayDevice(Controller* device, registers::Ddi ddi,
+                  registers::Trans trans, registers::Pipe pipe);
     virtual ~DisplayDevice();
 
     void DdkRelease();
@@ -35,25 +38,26 @@ public:
     void Flush();
 
     bool Init();
+    bool Resume();
 
     const zx::vmo& framebuffer_vmo() const { return framebuffer_vmo_; }
     uint32_t framebuffer_size() const { return framebuffer_size_; }
     const zx_display_info_t& info() const { return info_; }
     registers::Ddi ddi() const { return ddi_; }
     registers::Pipe pipe() const { return pipe_; }
-    int dpll() const {
-        // Skip over dpll0 because changing it requires messing around with CDCLK
-        // TODO(ZX-1413): Do a smarter mapping to handle stuff like HDPORT claims or sharing clocks
-        return pipe_ + 1;
-    }
-    const Controller* controller() { return controller_; }
+    registers::Trans trans() const { return trans_; }
+    Controller* controller() { return controller_; }
 
 protected:
-    virtual bool Init(zx_display_info_t* info) = 0;
+    // Queries the DisplayDevice to see if there is a supported display attached. If
+    // there is, then returns true and populates |info|.
+    virtual bool QueryDevice(zx_display_info_t* info) = 0;
+    // Configures the hardware to display a framebuffer at the preferred resolution.
+    virtual bool DefaultModeset() = 0;
 
     hwreg::RegisterIo* mmio_space() const;
-    bool EnablePowerWell2();
-    bool ResetPipe();
+    void ResetPipe();
+    bool ResetTrans();
     bool ResetDdi();
 
 private:
@@ -61,7 +65,11 @@ private:
     Controller* controller_;
 
     registers::Ddi ddi_;
+    registers::Trans trans_;
     registers::Pipe pipe_;
+
+    PowerWellRef ddi_power_;
+    PowerWellRef pipe_power_;
 
     uintptr_t framebuffer_;
     uint32_t framebuffer_size_;

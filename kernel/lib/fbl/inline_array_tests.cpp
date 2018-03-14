@@ -32,7 +32,7 @@ struct TestType {
 size_t TestType::ctor_run_count = 0u;
 size_t TestType::dtor_run_count = 0u;
 
-bool inline_test(void* unused) {
+bool inline_test() {
     BEGIN_TEST;
 
     for (size_t sz = 0u; sz <= 3u; sz++) {
@@ -49,7 +49,7 @@ bool inline_test(void* unused) {
     END_TEST;
 }
 
-bool non_inline_test(void* unused) {
+bool non_inline_test() {
     static const size_t test_sizes[] = { 4u, 5u, 6u, 10u, 100u, 1000u };
 
     BEGIN_TEST;
@@ -75,4 +75,4 @@ bool non_inline_test(void* unused) {
 UNITTEST_START_TESTCASE(inline_array_tests)
 UNITTEST("inline test", inline_test)
 UNITTEST("non-inline test", non_inline_test)
-UNITTEST_END_TESTCASE(inline_array_tests, "inlinearraytests", "Inline array test", nullptr, nullptr);
+UNITTEST_END_TESTCASE(inline_array_tests, "inlinearraytests", "Inline array test");

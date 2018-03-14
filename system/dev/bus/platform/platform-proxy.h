@@ -18,6 +18,7 @@ enum {
     // ZX_PROTOCOL_PLATFORM_DEV
     PDEV_GET_MMIO = 1,
     PDEV_GET_INTERRUPT,
+    PDEV_GET_BTI,
     PDEV_ALLOC_CONTIG_VMO,
     PDEV_GET_DEVICE_INFO,
 
@@ -36,6 +37,14 @@ enum {
     PDEV_I2C_TRANSACT,
     PDEV_I2C_SET_BITRATE,
     PDEV_I2C_CHANNEL_RELEASE,
+
+    // ZX_PROTOCOL_SERIAL
+    PDEV_SERIAL_CONFIG,
+    PDEV_SERIAL_OPEN_SOCKET,
+
+    // ZX_PROTOCOL_CLK
+    PDEV_CLK_ENABLE,
+    PDEV_CLK_DISABLE,
 };
 
 // context for i2c_transact
@@ -49,6 +58,7 @@ typedef struct {
 typedef struct {
     size_t size;
     uint32_t align_log2;
+    uint32_t cache_policy;
 } pdev_config_vmo_t;
 
 typedef struct {
@@ -78,6 +88,10 @@ typedef struct {
         uint32_t gpio_alt_function;
         uint8_t gpio_value;
         pdev_i2c_req_t i2c;
+        struct {
+            uint32_t baud_rate;
+            uint32_t flags;
+        } serial_config;
     };
 } pdev_req_t;
 

@@ -19,6 +19,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/zx_channel_call.cpp \
     $(LOCAL_DIR)/zx_deadline_after.cpp \
     $(LOCAL_DIR)/zx_status_get_string.cpp \
+    $(LOCAL_DIR)/zx_system_get_dcache_line_size.cpp \
     $(LOCAL_DIR)/zx_system_get_features.cpp \
     $(LOCAL_DIR)/zx_system_get_num_cpus.cpp \
     $(LOCAL_DIR)/zx_system_get_physmem.cpp \
@@ -49,11 +50,5 @@ MODULE_SO_INSTALL_NAME := -
 # does not need any writable data (except its caller's stack).
 # Make it use a simplified, hardened memory layout.
 MODULE_LDFLAGS := $(RODSO_LDFLAGS)
-
-# Explicit dependency to make sure the file gets generated first.
-# MODULE_SRCDEPS is overkill for this since only one file uses it.
-$(BUILDDIR)/$(LOCAL_DIR)/$(LOCAL_DIR)/zx_system_get_version.cpp.o: \
-    $(BUILDDIR)/config-buildid.h
-MODULE_COMPILEFLAGS += -I$(BUILDDIR)
 
 include make/module.mk

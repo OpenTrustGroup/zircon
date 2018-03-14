@@ -51,10 +51,6 @@
 #define ENABLE_MODESETTING 1
 
 namespace {
-static int irq_handler(void* arg) {
-    return static_cast<i915::Controller*>(arg)->IrqLoop();
-}
-
 bool pipe_in_use(const fbl::Vector<i915::DisplayDevice*>& displays, registers::Pipe pipe) {
     for (size_t i = 0; i < displays.size(); i++) {
         if (displays[i]->pipe() == pipe) {
@@ -66,44 +62,6 @@ bool pipe_in_use(const fbl::Vector<i915::DisplayDevice*>& displays, registers::P
 } // namespace
 
 namespace i915 {
-
-int Controller::IrqLoop() {
-    for (;;) {
-        uint64_t slots;
-        if (zx_interrupt_wait(irq_, &slots) != ZX_OK) {
-            zxlogf(TRACE, "i915: interrupt wait failed\n");
-            break;
-        }
-
-        auto interrupt_ctrl = registers::MasterInterruptControl::Get().ReadFrom(mmio_space_.get());
-        interrupt_ctrl.set_enable_mask(0);
-        interrupt_ctrl.WriteTo(mmio_space_.get());
-
-        if (interrupt_ctrl.sde_int_pending()) {
-            auto sde_int_identity = registers::SdeInterruptBase::Get(registers::SdeInterruptBase::kSdeIntIdentity).ReadFrom(mmio_space_.get());
-            auto hp_ctrl1 = registers::HotplugCtrl
-                    ::Get(registers::DDI_A).ReadFrom(mmio_space_.get());
-            auto hp_ctrl2 = registers::HotplugCtrl
-                    ::Get(registers::DDI_E).ReadFrom(mmio_space_.get());
-            for (uint32_t i = 0; i < registers::kDdiCount; i++) {
-                registers::Ddi ddi = registers::kDdis[i];
-                bool hp_detected = sde_int_identity.ddi_bit(ddi).get();
-                auto hp_ctrl = ddi < registers::DDI_E ? hp_ctrl1 : hp_ctrl2;
-                if (hp_detected && hp_ctrl.hpd_long_pulse(ddi).get()) {
-                    HandleHotplug(ddi);
-                }
-            }
-            // Write back the register to clear the bits
-            hp_ctrl1.WriteTo(mmio_space_.get());
-            hp_ctrl2.WriteTo(mmio_space_.get());
-            sde_int_identity.WriteTo(mmio_space_.get());
-        }
-
-        interrupt_ctrl.set_enable_mask(1);
-        interrupt_ctrl.WriteTo(mmio_space_.get());
-    }
-    return 0;
-}
 
 void Controller::EnableBacklight(bool enable) {
     if (flags_ & FLAGS_BACKLIGHT) {
@@ -117,60 +75,6 @@ void Controller::EnableBacklight(bool enable) {
 
         mmio_space_->Write<uint32_t>(BACKLIGHT_CTRL_OFFSET, tmp);
     }
-}
-
-zx_status_t Controller::InitHotplug() {
-    // Disable interrupts here, we'll re-enable them at the very end of ::Bind
-    auto interrupt_ctrl = registers::MasterInterruptControl::Get().ReadFrom(mmio_space_.get());
-    interrupt_ctrl.set_enable_mask(0);
-    interrupt_ctrl.WriteTo(mmio_space_.get());
-
-    uint32_t irq_cnt = 0;
-    zx_status_t status = pci_query_irq_mode(&pci_, ZX_PCIE_IRQ_MODE_LEGACY, &irq_cnt);
-    if (status != ZX_OK || !irq_cnt) {
-        zxlogf(ERROR, "i915: Failed to find interrupts %d %d\n", status, irq_cnt);
-        return ZX_ERR_INTERNAL;
-    }
-
-    if ((status = pci_set_irq_mode(&pci_, ZX_PCIE_IRQ_MODE_LEGACY, 1)) != ZX_OK) {
-        zxlogf(ERROR, "i915: Failed to set irq mode %d\n", status);
-        return status;
-    }
-
-    if ((status = pci_map_interrupt(&pci_, 0, &irq_) != ZX_OK)) {
-        zxlogf(ERROR, "i915: Failed to map interrupt %d\n", status);
-        return status;
-    }
-
-    status = thrd_create_with_name(&irq_thread_, irq_handler, this, "i915-irq-thread");
-    if (status != ZX_OK) {
-        zxlogf(ERROR, "i915: Failed to create irq thread\n");
-        return status;
-    }
-
-    auto sfuse_strap = registers::SouthFuseStrap::Get().ReadFrom(mmio_space_.get());
-    for (uint32_t i = 0; i < registers::kDdiCount; i++) {
-        registers::Ddi ddi = registers::kDdis[i];
-        bool enabled = (ddi == registers::DDI_A) || (ddi == registers::DDI_E) || (ddi == registers::DDI_B && sfuse_strap.port_b_present()) || (ddi == registers::DDI_C && sfuse_strap.port_c_present()) || (ddi == registers::DDI_D && sfuse_strap.port_d_present());
-
-        auto hp_ctrl = registers::HotplugCtrl::Get(ddi).ReadFrom(mmio_space_.get());
-        hp_ctrl.hpd_enable(ddi).set(enabled);
-        hp_ctrl.WriteTo(mmio_space_.get());
-
-        auto mask = registers::SdeInterruptBase::Get(
-                        registers::SdeInterruptBase::kSdeIntMask)
-                        .ReadFrom(mmio_space_.get());
-        mask.ddi_bit(ddi).set(!enabled);
-        mask.WriteTo(mmio_space_.get());
-
-        auto enable = registers::SdeInterruptBase::Get(
-                          registers::SdeInterruptBase::kSdeIntEnable)
-                          .ReadFrom(mmio_space_.get());
-        enable.ddi_bit(ddi).set(enabled);
-        enable.WriteTo(mmio_space_.get());
-    }
-
-    return ZX_OK;
 }
 
 void Controller::HandleHotplug(registers::Ddi ddi) {
@@ -211,7 +115,11 @@ void Controller::HandleHotplug(registers::Ddi ddi) {
     }
 }
 
-bool Controller::BringUpDisplayEngine() {
+void Controller::HandlePipeVsync(registers::Pipe pipe) {
+    // TODO(ZX-1413): Do something with these when we actually have something to do
+}
+
+bool Controller::BringUpDisplayEngine(bool resume) {
     // Enable PCH Reset Handshake
     auto nde_rstwrn_opt = registers::NorthDERestetWarning::Get().ReadFrom(mmio_space_.get());
     nde_rstwrn_opt.set_rst_pch_handshake_enable(1);
@@ -223,27 +131,15 @@ bool Controller::BringUpDisplayEngine() {
         return false;
     }
 
-    // Enable and wait for Power Well 1 and Misc IO power
-    auto power_well = registers::PowerWellControl2::Get().ReadFrom(mmio_space_.get());
-    power_well.set_power_well_1_request(1);
-    power_well.set_misc_io_power_state(1);
-    power_well.WriteTo(mmio_space_.get());
-    if (!WAIT_ON_US(registers::PowerWellControl2::Get().ReadFrom(mmio_space_.get()).power_well_1_state(), 10)) {
-        zxlogf(ERROR, "Power Well 1 failed to enable\n");
-        return false;
-    }
-    if (!WAIT_ON_US(registers::PowerWellControl2::Get().ReadFrom(mmio_space_.get()).misc_io_power_state(), 10)) {
-        zxlogf(ERROR, "Misc IO power failed to enable\n");
-        return false;
-    }
-    if (!WAIT_ON_US(registers::FuseStatus::Get().ReadFrom(mmio_space_.get()).pg1_dist_status(), 5)) {
-        zxlogf(ERROR, "Power Well 1 distribution failed\n");
-        return false;
+    if (resume) {
+        power_.Resume();
+    } else {
+        cd_clk_power_well_ = power_.GetCdClockPowerWellRef();
     }
 
     // Enable CDCLK PLL to 337.5mhz if the BIOS didn't already enable it. If it needs to be
     // something special (i.e. for eDP), assume that the BIOS already enabled it.
-    auto dpll_enable = registers::DpllEnable::Get(0).ReadFrom(mmio_space_.get());
+    auto dpll_enable = registers::DpllEnable::Get(registers::DPLL_0).ReadFrom(mmio_space_.get());
     if (!dpll_enable.enable_dpll()) {
         // Set the cd_clk frequency to the minimum
         auto cd_clk = registers::CdClockCtl::Get().ReadFrom(mmio_space_.get());
@@ -253,10 +149,10 @@ bool Controller::BringUpDisplayEngine() {
 
         // Configure DPLL0
         auto dpll_ctl1 = registers::DpllControl1::Get().ReadFrom(mmio_space_.get());
-        dpll_ctl1.dpll_link_rate(0).set(dpll_ctl1.kLinkRate810Mhz);
-        dpll_ctl1.dpll_override(0).set(1);
-        dpll_ctl1.dpll_hdmi_mode(0).set(0);
-        dpll_ctl1.dpll_ssc_enable(0).set(0);
+        dpll_ctl1.dpll_link_rate(registers::DPLL_0).set(dpll_ctl1.kLinkRate810Mhz);
+        dpll_ctl1.dpll_override(registers::DPLL_0).set(1);
+        dpll_ctl1.dpll_hdmi_mode(registers::DPLL_0).set(0);
+        dpll_ctl1.dpll_ssc_enable(registers::DPLL_0).set(0);
         dpll_ctl1.WriteTo(mmio_space_.get());
 
         // Enable DPLL0 and wait for it
@@ -333,12 +229,29 @@ bool Controller::BringUpDisplayEngine() {
         vga_ctl.WriteTo(mmio_space());
     }
 
+    for (unsigned i = 0; i < registers::kPipeCount; i++) {
+        ResetPipe(registers::kPipes[i]);
+    }
+
+    for (unsigned i = 0; i < registers::kTransCount; i++) {
+        ResetTrans(registers::kTrans[i]);
+    }
+
+    for (unsigned i = 0; i < registers::kDdiCount; i++) {
+        ResetDdi(registers::kDdis[i]);
+    }
+
+    for (unsigned i = 0; i < registers::kDpllCount; i++) {
+        dplls_[i].use_count = 0;
+    }
+
+    AllocDisplayBuffers();
+
     return true;
 }
 
-bool Controller::ResetPipe(registers::Pipe pipe) {
+void Controller::ResetPipe(registers::Pipe pipe) {
     registers::PipeRegs pipe_regs(pipe);
-    registers::TranscoderRegs trans_regs(pipe);
 
     // Disable planes
     pipe_regs.PlaneControl().FromValue(0).WriteTo(mmio_space());
@@ -351,6 +264,10 @@ bool Controller::ResetPipe(registers::Pipe pipe) {
         pipe_regs.PipeScalerCtrl(1).ReadFrom(mmio_space()).set_enable(0).WriteTo(mmio_space());
         pipe_regs.PipeScalerWinSize(1).ReadFrom(mmio_space()).WriteTo(mmio_space());
     }
+}
+
+bool Controller::ResetTrans(registers::Trans trans) {
+    registers::TranscoderRegs trans_regs(trans);
 
     // Disable transcoder and wait it to stop
     auto trans_conf = trans_regs.Conf().ReadFrom(mmio_space());
@@ -367,9 +284,11 @@ bool Controller::ResetPipe(registers::Pipe pipe) {
     trans_ddi_ctl.set_ddi_select(0);
     trans_ddi_ctl.WriteTo(mmio_space());
 
-    auto trans_clk_sel = trans_regs.ClockSelect().ReadFrom(mmio_space());
-    trans_clk_sel.set_trans_clock_select(0);
-    trans_clk_sel.WriteTo(mmio_space());
+    if (trans != registers::TRANS_EDP) {
+        auto trans_clk_sel = trans_regs.ClockSelect().ReadFrom(mmio_space());
+        trans_clk_sel.set_trans_clock_select(0);
+        trans_clk_sel.WriteTo(mmio_space());
+    }
 
     return true;
 }
@@ -400,15 +319,52 @@ bool Controller::ResetDdi(registers::Ddi ddi) {
 
     // Remove the PLL mapping and disable the PLL (we don't share PLLs)
     auto dpll_ctrl2 = registers::DpllControl2::Get().ReadFrom(mmio_space());
-    dpll_ctrl2.ddi_clock_off(ddi).set(1);
-    dpll_ctrl2.WriteTo(mmio_space());
+    if (!dpll_ctrl2.ddi_clock_off(ddi).get()) {
+        dpll_ctrl2.ddi_clock_off(ddi).set(1);
+        dpll_ctrl2.WriteTo(mmio_space());
 
-    uint8_t dpll_number = static_cast<uint8_t>(dpll_ctrl2.ddi_clock_select(ddi).get());
-    auto dpll_enable = registers::DpllEnable::Get(dpll_number).ReadFrom(mmio_space());
-    dpll_enable.set_enable_dpll(1);
-    dpll_enable.WriteTo(mmio_space());
+        registers::Dpll dpll = static_cast<registers::Dpll>(dpll_ctrl2.ddi_clock_select(ddi).get());
+        // Don't underflow if we're resetting at initialization
+        dplls_[dpll].use_count =
+                static_cast<uint8_t>(dplls_[dpll].use_count > 0 ? dplls_[dpll].use_count - 1 : 0);
+        // We don't want to disable DPLL0, since that drives cdclk.
+        if (dplls_[dpll].use_count == 0 && dpll != registers::DPLL_0) {
+            auto dpll_enable = registers::DpllEnable::Get(dpll).ReadFrom(mmio_space());
+            dpll_enable.set_enable_dpll(0);
+            dpll_enable.WriteTo(mmio_space());
+        }
+    }
 
     return true;
+}
+
+registers::Dpll Controller::SelectDpll(bool is_edp, bool is_hdmi, uint32_t rate) {
+    registers::Dpll res = registers::DPLL_INVALID;
+    if (is_edp) {
+        if (dplls_[0].use_count == 0 || dplls_[0].rate == rate) {
+            res = registers::DPLL_0;
+        }
+    } else {
+        for (unsigned i = registers::kDpllCount - 1; i > 0; i--) {
+            if (dplls_[i].use_count == 0) {
+                res = static_cast<registers::Dpll>(i);
+            } else if (dplls_[i].is_hdmi == is_hdmi && dplls_[i].rate == rate) {
+                res = static_cast<registers::Dpll>(i);
+                break;
+            }
+        }
+    }
+
+    if (res != registers::DPLL_INVALID) {
+        dplls_[res].is_hdmi = is_hdmi;
+        dplls_[res].rate = rate;
+        dplls_[res].use_count++;
+        zxlogf(SPEW, "Selected DPLL %d\n", res);
+    } else {
+        zxlogf(INFO, "Failed to allocate DPLL\n");
+    }
+
+    return res;
 }
 
 void Controller::AllocDisplayBuffers() {
@@ -454,8 +410,7 @@ fbl::unique_ptr<DisplayDevice> Controller::InitDisplay(registers::Ddi ddi) {
     registers::Pipe pipe;
     if (!pipe_in_use(display_devices_, registers::PIPE_A)) {
         pipe = registers::PIPE_A;
-    } else if (!pipe_in_use(display_devices_, registers::PIPE_B)
-            && !registers::HdportState::Get().ReadFrom(mmio_space_.get()).dpll2_used()) {
+    } else if (!pipe_in_use(display_devices_, registers::PIPE_B)) {
         pipe = registers::PIPE_B;
     } else if (!pipe_in_use(display_devices_, registers::PIPE_C)) {
         pipe = registers::PIPE_C;
@@ -465,20 +420,19 @@ fbl::unique_ptr<DisplayDevice> Controller::InitDisplay(registers::Ddi ddi) {
     }
 
     fbl::AllocChecker ac;
-    if (igd_opregion_.IsHdmi(ddi) || igd_opregion_.IsDvi(ddi)) {
-        zxlogf(SPEW, "Checking for hdmi monitor\n");
-        auto hdmi_disp = fbl::make_unique_checked<HdmiDisplay>(&ac, this, ddi, pipe);
-        if (ac.check() && reinterpret_cast<DisplayDevice*>(hdmi_disp.get())->Init()) {
-            return hdmi_disp;
-        }
-    } else if (igd_opregion_.IsDp(ddi)) {
+    if (igd_opregion_.SupportsDp(ddi)) {
         zxlogf(SPEW, "Checking for displayport monitor\n");
         auto dp_disp = fbl::make_unique_checked<DpDisplay>(&ac, this, ddi, pipe);
         if (ac.check() && reinterpret_cast<DisplayDevice*>(dp_disp.get())->Init()) {
             return dp_disp;
         }
-    } else {
-        zxlogf(SPEW, "Skipping ddi\n");
+    }
+    if (igd_opregion_.SupportsHdmi(ddi) || igd_opregion_.SupportsDvi(ddi)) {
+        zxlogf(SPEW, "Checking for hdmi monitor\n");
+        auto hdmi_disp = fbl::make_unique_checked<HdmiDisplay>(&ac, this, ddi, pipe);
+        if (ac.check() && reinterpret_cast<DisplayDevice*>(hdmi_disp.get())->Init()) {
+            return hdmi_disp;
+        }
     }
 
     return nullptr;
@@ -486,17 +440,7 @@ fbl::unique_ptr<DisplayDevice> Controller::InitDisplay(registers::Ddi ddi) {
 
 zx_status_t Controller::InitDisplays() {
     if (ENABLE_MODESETTING && is_gen9(device_id_)) {
-        BringUpDisplayEngine();
-
-        for (unsigned i = 0; i < registers::kPipeCount; i++) {
-            ResetPipe(registers::kPipes[i]);
-        }
-
-        for (unsigned i = 0; i < registers::kDdiCount; i++) {
-            ResetDdi(registers::kDdis[i]);
-        }
-
-        AllocDisplayBuffers();
+        BringUpDisplayEngine(false);
 
         for (uint32_t i = 0; i < registers::kDdiCount; i++) {
             auto disp_device = InitDisplay(registers::kDdis[i]);
@@ -600,7 +544,7 @@ zx_status_t Controller::DdkSuspend(uint32_t hint) {
             registers::PipeRegs pipe_regs(display->pipe());
 
             auto plane_stride = pipe_regs.PlaneSurfaceStride().ReadFrom(mmio_space_.get());
-            plane_stride.set_stride(stride / registers::PlaneSurfaceStride::kLinearStrideChunkSize);
+            plane_stride.set_linear_stride(stride, format);
             plane_stride.WriteTo(mmio_space_.get());
 
             auto plane_surface = pipe_regs.PlaneSurface().ReadFrom(mmio_space_.get());
@@ -608,6 +552,32 @@ zx_status_t Controller::DdkSuspend(uint32_t hint) {
             plane_surface.WriteTo(mmio_space_.get());
         }
     }
+    return ZX_OK;
+}
+
+zx_status_t Controller::DdkResume(uint32_t hint) {
+    BringUpDisplayEngine(true);
+
+    registers::PanelPowerDivisor::Get().FromValue(pp_divisor_val_).WriteTo(mmio_space_.get());
+    registers::PanelPowerOffDelay::Get().FromValue(pp_off_delay_val_).WriteTo(mmio_space_.get());
+    registers::PanelPowerOnDelay::Get().FromValue(pp_on_delay_val_).WriteTo(mmio_space_.get());
+    registers::SouthBacklightCtl1::Get().FromValue(0)
+            .set_polarity(sblc_polarity_).WriteTo(mmio_space_.get());
+    registers::SouthBacklightCtl2::Get().FromValue(sblc_ctrl2_val_).WriteTo(mmio_space_.get());
+    registers::SChicken1::Get().FromValue(schicken1_val_).WriteTo(mmio_space_.get());
+
+    registers::DdiRegs(registers::DDI_A).DdiBufControl().ReadFrom(mmio_space_.get())
+            .set_ddi_a_lane_capability_control(ddi_a_lane_capability_control_)
+            .WriteTo(mmio_space_.get());
+
+    for (auto& disp : display_devices_) {
+        if (!disp->Resume()) {
+            zxlogf(ERROR, "Failed to resume display\n");
+        }
+    }
+
+    interrupts_.Resume();
+
     return ZX_OK;
 }
 
@@ -654,9 +624,20 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
     }
     mmio_space_ = fbl::move(mmio_space);
 
+    pp_divisor_val_ = registers::PanelPowerDivisor::Get().ReadFrom(mmio_space_.get()).reg_value();
+    pp_off_delay_val_ =
+            registers::PanelPowerOffDelay::Get().ReadFrom(mmio_space_.get()).reg_value();
+    pp_on_delay_val_  = registers::PanelPowerOnDelay::Get().ReadFrom(mmio_space_.get()).reg_value();
+    sblc_ctrl2_val_ = registers::SouthBacklightCtl2::Get().ReadFrom(mmio_space_.get()).reg_value();
+    schicken1_val_ = registers::SChicken1::Get().ReadFrom(mmio_space_.get()).reg_value();
+
+    sblc_polarity_ = registers::SouthBacklightCtl1::Get().ReadFrom(mmio_space_.get()).polarity();
+    ddi_a_lane_capability_control_ = registers::DdiRegs(registers::DDI_A).DdiBufControl()
+            .ReadFrom(mmio_space_.get()).ddi_a_lane_capability_control();
+
     if (ENABLE_MODESETTING && is_gen9(device_id_)) {
         zxlogf(TRACE, "i915: initialzing hotplug\n");
-        status = InitHotplug();
+        status = interrupts_.Init(this);
         if (status != ZX_OK) {
             zxlogf(ERROR, "i915: failed to init hotplugging\n");
             return status;
@@ -686,9 +667,7 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
     }
 
     if (is_gen9(device_id_)) {
-        auto interrupt_ctrl = registers::MasterInterruptControl::Get().ReadFrom(mmio_space_.get());
-        interrupt_ctrl.set_enable_mask(1);
-        interrupt_ctrl.WriteTo(mmio_space_.get());
+        interrupts_.FinishInit();
     }
 
     // TODO remove when the gfxconsole moves to user space
@@ -700,17 +679,10 @@ zx_status_t Controller::Bind(fbl::unique_ptr<i915::Controller>* controller_ptr) 
 }
 
 Controller::Controller(zx_device_t* parent)
-    : DeviceType(parent), irq_(ZX_HANDLE_INVALID) {}
+    : DeviceType(parent), power_(this) {}
 
 Controller::~Controller() {
-    if (irq_ != ZX_HANDLE_INVALID) {
-        zx_interrupt_signal(irq_, ZX_INTERRUPT_SLOT_USER, 0);
-
-        thrd_join(irq_thread_, nullptr);
-
-        zx_handle_close(irq_);
-    }
-
+    interrupts_.Destroy();
     if (mmio_space_) {
         EnableBacklight(false);
 

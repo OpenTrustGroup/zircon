@@ -5,14 +5,12 @@
 #ifndef ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_JSON_GENERATOR_H_
 #define ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_JSON_GENERATOR_H_
 
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <memory>
 
-#include "coded_ast.h"
 #include "flat_ast.h"
-#include "library.h"
 #include "string_view.h"
 
 namespace fidl {
@@ -29,49 +27,59 @@ namespace fidl {
 
 class JSONGenerator {
 public:
-    explicit JSONGenerator(Library* library) : library_(library) {}
+    explicit JSONGenerator(flat::Library* library)
+        : library_(library) {}
 
     ~JSONGenerator() = default;
 
-    void ProduceJSON(std::ostringstream* json_file_out);
+    std::ostringstream Produce();
 
- private:
+private:
     enum class Position {
         First,
         Subsequent,
     };
 
-    template<typename Collection>
+    void GenerateEOF();
+
+    template <typename Collection>
     void GenerateArray(const Collection& collection);
 
-    template<typename Callback>
+    template <typename Callback>
     void GenerateObject(Callback callback);
 
-    template<typename Type>
+    template <typename Type>
     void GenerateObjectMember(StringView key, const Type& value,
                               Position position = Position::Subsequent);
 
-    template<typename T>
+    template <typename T>
     void Generate(const std::unique_ptr<T>& value);
 
-    template<typename T>
+    void Generate(const flat::Decl* decl);
+
+    template <typename T>
     void Generate(const std::vector<T>& value);
 
     void Generate(bool value);
     void Generate(StringView value);
+    void Generate(SourceLocation value);
+    void Generate(uint64_t value);
 
     void Generate(types::HandleSubtype value);
+    void Generate(types::Nullability value);
+    void Generate(types::PrimitiveSubtype value);
 
-    void Generate(ast::Nullability value);
-    void Generate(ast::PrimitiveType::Subtype value);
-    void Generate(const ast::Identifier& value);
-    void Generate(const ast::CompoundIdentifier& value);
-    void Generate(const ast::Literal& value);
-    void Generate(const ast::Type& value);
-    void Generate(const ast::Constant& value);
+    void Generate(const raw::Identifier& value);
+    void Generate(const raw::CompoundIdentifier& value);
+    void Generate(const raw::Literal& value);
+    void Generate(const raw::Type& value);
+    void Generate(const raw::Constant& value);
+    void Generate(const raw::Attribute& value);
+    void Generate(const raw::AttributeList& value);
 
     void Generate(const flat::Ordinal& value);
     void Generate(const flat::Name& value);
+    void Generate(const flat::Type& value);
     void Generate(const flat::Const& value);
     void Generate(const flat::Enum& value);
     void Generate(const flat::Enum::Member& value);
@@ -83,11 +91,13 @@ public:
     void Generate(const flat::Union& value);
     void Generate(const flat::Union::Member& value);
 
-    Library* library_;
+    void GenerateDeclarationMapEntry(int count, const flat::Name& name, StringView decl);
+
+    flat::Library* library_;
     int indent_level_;
     std::ostringstream json_file_;
 };
 
 } // namespace fidl
 
-#endif // ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_C_GENERATOR_H_
+#endif // ZIRCON_SYSTEM_HOST_FIDL_INCLUDE_FIDL_JSON_GENERATOR_H_

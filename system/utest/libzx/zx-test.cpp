@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include <zx/bti.h>
 #include <zx/channel.h>
 #include <zx/event.h>
 #include <zx/eventpair.h>
@@ -113,6 +114,13 @@ static bool event_duplicate_test() {
     END_TEST;
 }
 
+static bool bti_compilation_test() {
+    BEGIN_TEST;
+    zx::bti bti;
+    // TODO(teisenbe): test more.
+    END_TEST;
+}
+
 static bool channel_test() {
     BEGIN_TEST;
     zx::channel channel[2];
@@ -120,6 +128,57 @@ static bool channel_test() {
     ASSERT_EQ(validate_handle(channel[0].get()), ZX_OK);
     ASSERT_EQ(validate_handle(channel[1].get()), ZX_OK);
     // TODO(cpu): test more.
+    END_TEST;
+}
+
+static bool channel_rw_test() {
+    BEGIN_TEST;
+    zx::eventpair evpair[2];
+    ASSERT_EQ(zx::eventpair::create(0u, &evpair[0], &evpair[1]), ZX_OK);
+
+    zx::channel channel[2];
+    ASSERT_EQ(zx::channel::create(0u, &channel[0], &channel[1]), ZX_OK);
+
+    zx_handle_t handles[2] = {
+        evpair[0].release(),
+        evpair[1].release()
+    };
+
+    zx_handle_t recv[2] = {0};
+
+    ASSERT_EQ(channel[0].write(0u, nullptr, 0u, handles, 2), ZX_OK);
+    ASSERT_EQ(channel[1].read(0u, nullptr, 0u, nullptr, recv, 2, nullptr), ZX_OK);
+
+    ASSERT_EQ(zx_handle_close(recv[0]), ZX_OK);
+    ASSERT_EQ(zx_handle_close(recv[1]), ZX_OK);
+    END_TEST;
+}
+
+static bool channel_rw_etc_test() {
+    BEGIN_TEST;
+    zx::eventpair evpair[2];
+    ASSERT_EQ(zx::eventpair::create(0u, &evpair[0], &evpair[1]), ZX_OK);
+
+    zx::channel channel[2];
+    ASSERT_EQ(zx::channel::create(0u, &channel[0], &channel[1]), ZX_OK);
+
+    zx_handle_t handles[2] = {
+        evpair[0].release(),
+        evpair[1].release()
+    };
+
+    zx_handle_info_t recv[2] = {{}};
+    uint32_t h_count = 0;
+
+    ASSERT_EQ(channel[0].write(0u, nullptr, 0u, handles, 2), ZX_OK);
+    ASSERT_EQ(channel[1].read_etc(0u, nullptr, 0u, nullptr, recv, 2, &h_count), ZX_OK);
+
+    ASSERT_EQ(h_count, 2u);
+    ASSERT_EQ(recv[0].type, ZX_OBJ_TYPE_EVENT_PAIR, ZX_OK);
+    ASSERT_EQ(recv[1].type, ZX_OBJ_TYPE_EVENT_PAIR, ZX_OK);
+
+    ASSERT_EQ(zx_handle_close(recv[0].handle), ZX_OK);
+    ASSERT_EQ(zx_handle_close(recv[1].handle), ZX_OK);
     END_TEST;
 }
 
@@ -270,7 +329,7 @@ static bool job_default_test() {
     END_TEST;
 }
 
-BEGIN_TEST_CASE(libmx_tests)
+BEGIN_TEST_CASE(libzx_tests)
 RUN_TEST(handle_invalid_test)
 RUN_TEST(handle_close_test)
 RUN_TEST(handle_move_test)
@@ -278,7 +337,10 @@ RUN_TEST(handle_duplicate_test)
 RUN_TEST(handle_replace_test)
 RUN_TEST(event_test)
 RUN_TEST(event_duplicate_test)
+RUN_TEST(bti_compilation_test)
 RUN_TEST(channel_test)
+RUN_TEST(channel_rw_test)
+RUN_TEST(channel_rw_etc_test)
 RUN_TEST(socket_test)
 RUN_TEST(eventpair_test)
 RUN_TEST(vmar_test)
@@ -288,7 +350,7 @@ RUN_TEST(thread_self_test)
 RUN_TEST(process_self_test)
 RUN_TEST(vmar_root_self_test)
 RUN_TEST(job_default_test)
-END_TEST_CASE(libmx_tests)
+END_TEST_CASE(libzx_tests)
 
 int main(int argc, char** argv) {
     bool success = unittest_run_all_tests(argc, argv);

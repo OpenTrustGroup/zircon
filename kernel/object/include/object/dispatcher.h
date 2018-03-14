@@ -59,12 +59,31 @@ DECLARE_DISPTAG(GuestDispatcher, ZX_OBJ_TYPE_GUEST)
 DECLARE_DISPTAG(VcpuDispatcher, ZX_OBJ_TYPE_VCPU)
 DECLARE_DISPTAG(TimerDispatcher, ZX_OBJ_TYPE_TIMER)
 DECLARE_DISPTAG(IommuDispatcher, ZX_OBJ_TYPE_IOMMU)
+DECLARE_DISPTAG(BusTransactionInitiatorDispatcher, ZX_OBJ_TYPE_BTI)
 
 #undef DECLARE_DISPTAG
 
-class Dispatcher : public fbl::RefCounted<Dispatcher>,
-                   public fbl::Recyclable<Dispatcher> {
+// Base class for all kernel objects that can be exposed to user-mode via
+// the syscall API and referenced by handles.
+//
+// It implements RefCounted because handles are abstractions to a multiple
+// references from user mode or kernel mode that control the lifetime o
+// the object.
+//
+// It implements Recyclable because upon final Release() on the RefPtr
+// it might be necessary to implement a destruction pattern that avoids
+// deep recursion since the kernel stack is very limited.
+//
+// You rarely derive directly from this class; instead consider deriving
+// from SoloDispatcher or PeeredDispatcher.
+class Dispatcher : private fbl::RefCounted<Dispatcher>,
+                   private fbl::Recyclable<Dispatcher> {
 public:
+    using fbl::RefCounted<Dispatcher>::AddRef;
+    using fbl::RefCounted<Dispatcher>::Release;
+    using fbl::RefCounted<Dispatcher>::Adopt;
+    using fbl::RefCounted<Dispatcher>::AddRefMaybeInDestructor;
+
     // At construction, the object's state tracker is asserting
     // |signals|.
     explicit Dispatcher(zx_signals_t signals = 0u);
@@ -119,6 +138,7 @@ public:
     zx_status_t SetCookie(CookieJar* cookiejar, zx_koid_t scope, uint64_t cookie);
     zx_status_t GetCookie(CookieJar* cookiejar, zx_koid_t scope, uint64_t* cookie);
     zx_status_t InvalidateCookie(CookieJar *cookiejar);
+    zx_status_t InvalidateCookieLocked(CookieJar *cookiejar) TA_REQ(get_lock());
 
     // Interface for derived classes.
 
@@ -159,7 +179,7 @@ protected:
     void UpdateState(zx_signals_t clear_mask, zx_signals_t set_mask);
     void UpdateStateLocked(zx_signals_t clear_mask, zx_signals_t set_mask) TA_REQ(get_lock());
 
-    zx_signals_t GetSignalsState() const {
+    zx_signals_t GetSignalsStateLocked() const TA_REQ(get_lock()) {
         ZX_DEBUG_ASSERT(has_state_tracker());
         return signals_;
     }
@@ -189,14 +209,7 @@ private:
     const zx_koid_t koid_;
     uint32_t handle_count_;
 
-    // TODO(kulakowski) Make signals_ TA_GUARDED(get_lock()).
-    // Right now, signals_ is almost entirely accessed under the
-    // common dispatcher lock_. Once we migrate the per-object locks
-    // to instead use the common dispatcher lock_, all of the unlocked
-    // accesses (all of which go via GetSignalsState) will be
-    // statically under this lock_, rather than maybe under this lock
-    // or the more specific object lock.
-    zx_signals_t signals_;
+    zx_signals_t signals_ TA_GUARDED(get_lock());
 
     // Active observers are elements in |observers_|.
     ObserverList observers_ TA_GUARDED(get_lock());
@@ -249,9 +262,16 @@ public:
           holder_(fbl::move(holder)) {}
     virtual ~PeeredDispatcher() = default;
 
+    zx_koid_t get_related_koid() const final TA_REQ(get_lock()) { return peer_koid_; }
+
     fbl::Mutex* get_lock() const override { return holder_->get_lock(); }
 
-    fbl::RefPtr<PeerHolder<Self>> holder_;
+protected:
+    zx_koid_t peer_koid_ = 0u;
+    fbl::RefPtr<Self> peer_ TA_GUARDED(get_lock());
+
+private:
+    const fbl::RefPtr<PeerHolder<Self>> holder_;
 };
 
 // SoloDispatchers stand alone. Since they have no peer to coordinate

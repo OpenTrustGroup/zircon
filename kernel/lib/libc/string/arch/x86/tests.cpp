@@ -35,7 +35,7 @@ static void initialize_buffer(char* buf, size_t len, char fill, size_t fill_len)
     }
 }
 
-static bool memcpy_func_test(memcpy_func_t cpy, void* context) {
+static bool memcpy_func_test(memcpy_func_t cpy) {
     BEGIN_TEST;
 
     // Test buffers for sizes from 0 to 64
@@ -48,9 +48,9 @@ static bool memcpy_func_test(memcpy_func_t cpy, void* context) {
 
         initialize_buffer(src, sizeof(src), static_cast<char>(len + 1), len);
         cpy(dst, src, len);
-        REQUIRE_TRUE(!memcmp(src, dst, len), "buffer mismatch");
+        ASSERT_TRUE(!memcmp(src, dst, len), "buffer mismatch");
         for (size_t i = len; i < sizeof(dst); ++i) {
-            REQUIRE_EQ(0, dst[i], "coppied padding");
+            ASSERT_EQ(0, dst[i], "coppied padding");
         }
     }
 
@@ -75,13 +75,13 @@ static bool memcpy_func_test(memcpy_func_t cpy, void* context) {
             const size_t cpy_len = kBufLen - src_offset;
             cpy(dst + dst_offset, src + src_offset, cpy_len);
             for (size_t i = 0; i < dst_offset; ++i) {
-                REQUIRE_EQ(0, dst[i], "overwrote before buffer");
+                ASSERT_EQ(0, dst[i], "overwrote before buffer");
             }
             for (size_t i = dst_offset; i < dst_offset + cpy_len; ++i) {
-                REQUIRE_EQ(static_cast<char>(i - dst_offset + 1), dst[i], "buffer mismatch");
+                ASSERT_EQ(static_cast<char>(i - dst_offset + 1), dst[i], "buffer mismatch");
             }
             for (size_t i = dst_offset + cpy_len; i < sizeof(dst); ++i) {
-                REQUIRE_EQ(0, dst[i], "overwrote after buffer");
+                ASSERT_EQ(0, dst[i], "overwrote after buffer");
             }
         }
     }
@@ -89,7 +89,7 @@ static bool memcpy_func_test(memcpy_func_t cpy, void* context) {
     END_TEST;
 }
 
-static bool memset_func_test(memset_func_t set, void* context) {
+static bool memset_func_test(memset_func_t set) {
     BEGIN_TEST;
 
     // Test buffers for sizes from 0 to 64
@@ -101,10 +101,10 @@ static bool memset_func_test(memset_func_t set, void* context) {
 
         set(dst, static_cast<int>(len + 1), len);
         for (size_t i = 0; i < len; ++i) {
-            REQUIRE_EQ(static_cast<char>(len + 1), dst[i], "buffer mismatch");
+            ASSERT_EQ(static_cast<char>(len + 1), dst[i], "buffer mismatch");
         }
         for (size_t i = len; i < sizeof(dst); ++i) {
-            REQUIRE_EQ(0, dst[i], "overwrote padding");
+            ASSERT_EQ(0, dst[i], "overwrote padding");
         }
     }
 
@@ -113,7 +113,7 @@ static bool memset_func_test(memset_func_t set, void* context) {
         char dst[kBufLen] = { static_cast<char>(fill + 1) };
         set(dst, fill, sizeof(dst));
         for (size_t i = 0; i < kBufLen; ++i) {
-            REQUIRE_EQ(static_cast<char>(fill), dst[i], "buffer mismatch");
+            ASSERT_EQ(static_cast<char>(fill), dst[i], "buffer mismatch");
         }
     }
 
@@ -125,49 +125,49 @@ static bool memset_func_test(memset_func_t set, void* context) {
 
         set(dst + offset, static_cast<int>(kBufLen - offset), kBufLen - offset);
         for (size_t i = 0; i < offset; ++i) {
-            REQUIRE_EQ(0, dst[i], "overwrote before buffer");
+            ASSERT_EQ(0, dst[i], "overwrote before buffer");
         }
         for (size_t i = offset; i < kBufLen; ++i) {
-            REQUIRE_EQ(static_cast<char>(kBufLen - offset), dst[i], "buffer mismatch");
+            ASSERT_EQ(static_cast<char>(kBufLen - offset), dst[i], "buffer mismatch");
         }
         for (size_t i = kBufLen; i < sizeof(dst); ++i) {
-            REQUIRE_EQ(0, dst[i], "overwrote after buffer");
+            ASSERT_EQ(0, dst[i], "overwrote after buffer");
         }
     }
 
     END_TEST;
 }
 
-static bool memcpy_test(void* context) {
-    return memcpy_func_test(memcpy, context);
+static bool memcpy_test() {
+    return memcpy_func_test(memcpy);
 }
 
-static bool memcpy_quad_test(void* context) {
-    return memcpy_func_test(memcpy_quad, context);
+static bool memcpy_quad_test() {
+    return memcpy_func_test(memcpy_quad);
 }
 
-static bool memcpy_erms_test(void* context) {
+static bool memcpy_erms_test() {
     if (!x86_feature_test(X86_FEATURE_ERMS)) {
         return true;
     }
 
-    return memcpy_func_test(memcpy_erms, context);
+    return memcpy_func_test(memcpy_erms);
 }
 
-static bool memset_test(void* context) {
-    return memset_func_test(memset, context);
+static bool memset_test() {
+    return memset_func_test(memset);
 }
 
-static bool memset_quad_test(void* context) {
-    return memset_func_test(memset_quad, context);
+static bool memset_quad_test() {
+    return memset_func_test(memset_quad);
 }
 
-static bool memset_erms_test(void* context) {
+static bool memset_erms_test() {
     if (!x86_feature_test(X86_FEATURE_ERMS)) {
         return true;
     }
 
-    return memset_func_test(memset_erms, context);
+    return memset_func_test(memset_erms);
 }
 
 UNITTEST_START_TESTCASE(memops_tests)
@@ -177,4 +177,4 @@ UNITTEST("memcpy_erms tests", memcpy_erms_test)
 UNITTEST("memset tests", memset_test)
 UNITTEST("memset_quad tests", memset_quad_test)
 UNITTEST("memset_erms tests", memset_erms_test)
-UNITTEST_END_TESTCASE(memops_tests, "memops_tests", "memcpy/memset tests", nullptr, nullptr);
+UNITTEST_END_TESTCASE(memops_tests, "memops_tests", "memcpy/memset tests");

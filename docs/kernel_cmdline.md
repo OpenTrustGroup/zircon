@@ -32,12 +32,12 @@ option off unless you suspect the crashlogger is causing problems.
 
 If this option is set, the crashlogger will attempt to generate a
 "processor trace" dump along with the crash report. The dump files
-are written as /tmp/crash-pt.*. This option requires processor tracing
+are written as /tmp/crash-pt.\*. This option requires processor tracing
 to be enabled in the kernel. This can be done by running "ipt" program after
-the system has booted. E.g., add this to /system/autorun
+the system has booted. E.g., set zircon.autorun.system like this
 
 ```
-ipt --circular --control init start
+zircon.autorun.system=ipt+--circular+--control+init+start
 ```
 
 After the files are written, copy them to the host and print them
@@ -51,27 +51,38 @@ Sets the initial offset (from the Unix epoch, in seconds) for the UTC clock.
 This is useful for platforms lacking an RTC, where the UTC offset would
 otherwise remain at 0.
 
+## devmgr\.require-system=\<bool\>
+
+Instructs the devmgr that a /system volume is required.  Without this,
+devmgr assumes this is a standalone Zircon build and not a full Fuchsia
+system.
+
 ## driver.\<name>.disable
 
 Disables the driver with the given name. The driver name comes from the
-zircon\_driver\_info, and can be found as the second argument to the
+zircon\_driver\_info, and can be found as the first argument to the
 ZIRCON\_DRIVER\_BEGIN macro.
 
-Example: `driver.usb-audio.disable`
+Example: `driver.usb_audio.disable`
 
 ## driver.\<name>.log=\<flags>
 
 Set the log flags for a driver.  Flags are one or more comma-separated
-values which must be preceeded by a "+" (in which case that flag is enabled)
+values which must be preceded by a "+" (in which case that flag is enabled)
 or a "-" (in which case that flag is disabled).  The textual constants
-"error", "info", "trace", "spew", "debug1", "debug2", "debug3", and "debug4"
+"error", "warn", "info", "trace", "spew", "debug1", "debug2", "debug3", and "debug4"
 may be used, and they map to the corresponding bits in DDK_LOG_... in `ddk/debug.h`
-The default log flags for a driver is "error" and "info".
+The default log flags for a driver is "error", "warn", and "info".
 
 Individual drivers may define their own log flags beyond the eight mentioned
 above.
 
-Example: `driver.usb-audio.log=-error,+info,+0x1000`
+Example: `driver.usb_audio.log=-error,+info,+0x1000`
+
+Note again that the name of the driver is the "Driver" argument to the
+ZIRCON\_DRIVER\_BEGIN macro. It is not, for example, the name of the device,
+which for some drivers is almost identical, except that the device may be
+named "foo-bar" whereas the driver name must use underscores, e.g., "foo_bar".
 
 ## gfxconsole.early=\<bool>
 
@@ -225,6 +236,11 @@ This option (disabled by default) turns on dynamic linker trace output.
 The output is in a form that is consumable by clients like Intel
 Processor Trace support.
 
+## thread.set.priority.disable=\<bool>
+
+This option (false by default) prevents the syscall that increases
+a thread priority (`zx_thread_set_priority`) from taking effect.
+
 ## zircon.autorun.boot=\<command>
 
 This option requests that *command* be run at boot, after devmgr starts up.
@@ -241,21 +257,21 @@ will never be launched.
 Any `+` characters in *command* are treated as argument separators, allowing
 you to pass arguments to an executable.
 
-## zircon.system.blobstore-init=\<command>
+## zircon.system.blob-init=\<command>
 
-This option requests that *command* be run once the blobstore partition is
+This option requests that *command* be run once the blob partition is
 mounted. The given command is expected to mount /system, and then signal its
 process handle with `ZX_SIGNAL_USER0`.
 
 *command* may not assume that any other filesystem has been mounted. If
-`zircon.system.blobstore-init-arg` is set, it will be provided as the first
+`zircon.system.blob-init-arg` is set, it will be provided as the first
 argument.
 
 A ramdisk containing `/system` takes precedence over
-`zircon.system.blobstore-init` and *command* will not be run if a system
-ramdisk is present. blobstore init will take precendence over a minfs
+`zircon.system.blob-init` and *command* will not be run if a system
+ramdisk is present. blob init will take precedence over a minfs
 partition with the system GUID, and the minfs partition will not be mounted
-if `zircon.system.blobstore-init` is set.
+if `zircon.system.blob-init` is set.
 
 ## zircon.system.disable-automount=<\bool>
 
@@ -278,7 +294,7 @@ It may be set to:
   will be used.
 "none" (default) which avoids mounting anything.
 
-A "/system" ramdisk provided by bootdata always supercedes this option.
+A "/system" ramdisk provided by bootdata always supersedes this option.
 
 ## netsvc.netboot=\<bool>
 
@@ -290,6 +306,16 @@ the local link and attempt to kexec into the new image, thereby replacing the
 currently running instance of zircon.
 
 This setting implies **zircon.system.disable-automount=true**
+
+## netsvc.interface=\<path>
+
+This option instructs netsvc to use only the ethernet device at the given
+topological path. All other ethernet devices are ignored by netsvc. The
+topological path for a device can be determined from the shell by running the
+`lsdev` command on the ethernet class device (e.g., `/dev/class/ethernet/000`).
+
+This is useful for configuring network booting for a device with multiple
+ethernet ports which may be enumerated in a non-deterministic order.
 
 ## userboot=\<path>
 

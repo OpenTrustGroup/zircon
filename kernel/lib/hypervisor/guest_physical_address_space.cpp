@@ -12,18 +12,24 @@
 #include <vm/vm_object_physical.h>
 #include <fbl/alloc_checker.h>
 
-static const uint kPfFlags = VMM_PF_FLAG_WRITE | VMM_PF_FLAG_SW_FAULT;
-static const uint kMmuFlags =
+static constexpr uint kPfFlags = VMM_PF_FLAG_WRITE | VMM_PF_FLAG_SW_FAULT;
+static constexpr uint kMmuFlags =
     ARCH_MMU_FLAG_CACHED |
     ARCH_MMU_FLAG_PERM_READ |
     ARCH_MMU_FLAG_PERM_WRITE |
     ARCH_MMU_FLAG_PERM_EXECUTE;
 
-static const uint kInterruptMmuFlags =
+static constexpr uint kInterruptMmuFlags =
+    ARCH_MMU_FLAG_PERM_READ |
+    ARCH_MMU_FLAG_PERM_WRITE;
+
+static constexpr uint kGuestMmuFlags =
+    ARCH_MMU_FLAG_CACHED |
     ARCH_MMU_FLAG_PERM_READ |
     ARCH_MMU_FLAG_PERM_WRITE;
 
 namespace {
+
 // Locate a VMO for a given vaddr.
 struct AspaceVmoLocator final : public VmEnumerator {
     AspaceVmoLocator(vaddr_t vaddr_) : vaddr(vaddr_) {}
@@ -42,7 +48,10 @@ struct AspaceVmoLocator final : public VmEnumerator {
     vaddr_t base = 0;
     const vaddr_t vaddr;
 };
+
 } // namespace
+
+namespace hypervisor {
 
 zx_status_t GuestPhysicalAddressSpace::Create(fbl::RefPtr<VmObject> guest_phys_mem,
 #ifdef ARCH_ARM64
@@ -65,7 +74,7 @@ zx_status_t GuestPhysicalAddressSpace::Create(fbl::RefPtr<VmObject> guest_phys_m
     // Initialize our VMAR with the provided VMO, mapped at address 0.
     fbl::RefPtr<VmMapping> mapping;
     zx_status_t status = gpas->paspace_->RootVmar()->CreateVmMapping(
-        0 /* mapping_offset */, guest_phys_mem->size(), /* align_pow2*/ 0, VMAR_FLAG_SPECIFIC,
+        0 /* mapping_offset */, guest_phys_mem->size(), /* align_pow2*/ false, VMAR_FLAG_SPECIFIC,
         guest_phys_mem, /* vmo_offset */ 0, kMmuFlags, "guest_phys_mem_vmo", &mapping);
     if (status != ZX_OK)
         return status;
@@ -131,3 +140,39 @@ zx_status_t GuestPhysicalAddressSpace::GetPage(vaddr_t guest_paddr, paddr_t* hos
     vaddr_t offset = guest_paddr - vmo_locator.base;
     return vmo->Lookup(offset, PAGE_SIZE, kPfFlags, guest_lookup_page, host_paddr);
 }
+
+
+zx_status_t GuestPhysicalAddressSpace::CreateGuestPtr(zx_vaddr_t guest_paddr, size_t size,
+                                                      const char* name, GuestPtr* guest_ptr) {
+    zx_vaddr_t begin = ROUNDDOWN(guest_paddr, PAGE_SIZE);
+    zx_vaddr_t end = ROUNDUP(guest_paddr + size, PAGE_SIZE);
+    // Overflow check.
+    if (begin > end) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    // Boundaries check.
+    if (end > guest_phys_mem_->size()) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    fbl::RefPtr<VmMapping> mapping;
+    zx_status_t status = VmAspace::kernel_aspace()->RootVmar()->CreateVmMapping(
+        /* mapping_offset */ 0,
+        end - begin,
+        /* align_pow2 */ false,
+        /* vmar_flags */ 0,
+        guest_phys_mem_,
+        begin,
+        kGuestMmuFlags,
+        name,
+        &mapping);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    GuestPtr ptr(fbl::move(mapping), guest_paddr - begin);
+    *guest_ptr = fbl::move(ptr);
+    return ZX_OK;
+}
+
+} // namespace hypervisor

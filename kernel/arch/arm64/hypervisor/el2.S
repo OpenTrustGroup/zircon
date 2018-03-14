@@ -27,8 +27,6 @@
 // NOTE(abdulla): This excludes the top bit, as it is too large for VTCR_EL2.PS.
 #define ID_AA64MMFR0_EL1_PARANGE_MASK   0x07
 
-#define VECTOR_TABLE_SIZE               0x0800
-
 .section .text.el2,"ax",@progbits
 .align 12
 
@@ -215,41 +213,45 @@
     str x9, [sp, -16]!
     mov x9, \return_code
     str x9, [sp, 8]
-
-    // Check VTTBR_EL2 to determine whether the exception came from the guest or
-    // from the host.
-    mrs x9, vttbr_el2
-    cbnz x9, el2_guest_exit
-
-    // The exception came from the host, so there is no guest state to preserve.
-    pop_stack
 .endm
 
 .macro entry_init
 .align 7
-    hvc_jump .Linit_table 5
+    hvc_jump .Linit_table 4
 .Linit_table:
     b el2_hvc_psci
     b el2_hvc_mexec
     b el2_hvc_on
-    b el2_hvc_tlbi_ipa
-    b el2_hvc_tlbi_vmid
+    b el2_hvc_tlbi
 .endm
 
-.macro entry_exec name return_code
+.macro entry_sync return_code
 .align 7
     guest_exit \return_code
 
+    // Check VTTBR_EL2 to determine whether the exception came from the guest or
+    // from the host.
+    mrs x9, vttbr_el2
+    cbnz x9, el2_guest_exit_or_fp_resume
+
+    // The exception came from the host, so there is no guest state to preserve.
+    pop_stack
+
     // If we got to here, the exception came from the host or EL2.
     // Continue execution through a jump table based on the HVC index.
-    hvc_jump .L\name\()_exec_table 6
-.L\name\()_exec_table:
+    hvc_jump .Lsync_table 5
+.Lsync_table:
     b el2_hvc_psci
     b el2_hvc_mexec
     b el2_hvc_off
-    b el2_hvc_tlbi_ipa
-    b el2_hvc_tlbi_vmid
+    b el2_hvc_tlbi
     b el2_hvc_resume
+.endm
+
+.macro entry_irq return_code
+.align 7
+    guest_exit \return_code
+    b el2_guest_exit
 .endm
 
 .macro entry_invalid_exception
@@ -267,6 +269,7 @@
 // stack and hypervisor state, and we use the exec vector table to maintain
 // execution of the hypervisor.
 
+.align 10
 FUNCTION_LABEL(arm64_el2_init_table)
     /* exceptions from current EL, using SP0 */
     entry_invalid_exception
@@ -292,6 +295,7 @@ FUNCTION_LABEL(arm64_el2_init_table)
     entry_invalid_exception
     entry_invalid_exception
 
+.align 10
 FUNCTION_LABEL(arm64_el2_exec_table)
     /* exceptions from current EL, using SP0 */
     entry_invalid_exception
@@ -306,8 +310,8 @@ FUNCTION_LABEL(arm64_el2_exec_table)
     entry_invalid_exception
 
     /* exceptions from lower EL, running arm64 */
-    entry_exec sync, ZX_OK
-    entry_exec irq, ZX_ERR_NEXT
+    entry_sync ZX_OK
+    entry_irq ZX_ERR_NEXT
     entry_invalid_exception
     entry_invalid_exception
 
@@ -325,6 +329,12 @@ FUNCTION(arm64_el2_on)
     ret
 END_FUNCTION(arm64_el2_on)
 FUNCTION_LABEL(el2_hvc_on)
+    // Setup the EL2 translation table.
+    msr ttbr0_el2, x0
+
+    // Setup the EL2 stack pointer.
+    mov sp, x1
+
     // Load PARange from ID_AA64MMFR0_EL1.
     mrs x10, id_aa64mmfr0_el1
     and x10, x10, ID_AA64MMFR0_EL1_PARANGE_MASK
@@ -345,29 +355,20 @@ FUNCTION_LABEL(el2_hvc_on)
     // Setup the EL2 memory attributes.
     movlit x9, MMU_MAIR_VAL
     msr mair_el2, x9
-
-    // Setup the EL2 translation table.
-    msr ttbr0_el2, x0
-    isb
-
-    // Enable the MMU, I-cache, D-cache, and all alignment checking.
-    movlit x9, SCTLR_ELX_M | SCTLR_ELX_A | SCTLR_ELX_C | SCTLR_ELX_SA | SCTLR_ELX_I | \
-               SCTLR_EL2_RES1
-    msr sctlr_el2, x9
     isb
 
     // Invalidate all EL2 TLB entries.
     tlbi alle2
-    isb
+    dsb sy
 
-    // Setup the EL2 stack pointer.
-    mov sp, x1
+    // Enable the MMU, I-cache, D-cache, and stack alignment checking.
+    movlit x9, SCTLR_ELX_M | SCTLR_ELX_C | SCTLR_ELX_SA | SCTLR_ELX_I | SCTLR_EL2_RES1
+    msr sctlr_el2, x9
+    isb
 
     // Setup the exec vector table for EL2.
-    mrs x9, vbar_el2
-    add x9, x9, VECTOR_TABLE_SIZE
+    adr_global x9, arm64_el2_exec_table
     msr vbar_el2, x9
-    isb
 
     exception_return ZX_OK
 
@@ -384,8 +385,8 @@ FUNCTION(arm64_el2_off)
     ret
 END_FUNCTION(arm64_el2_off)
 FUNCTION_LABEL(el2_hvc_off)
-    // Disable the MMU, but enable I-cache, D-cache, and all alignment checking.
-    movlit x9, SCTLR_ELX_A | SCTLR_ELX_C | SCTLR_ELX_SA | SCTLR_ELX_I | SCTLR_EL2_RES1
+    // Disable the MMU, but enable I-cache, D-cache, and stack alignment checking.
+    movlit x9, SCTLR_ELX_C | SCTLR_ELX_SA | SCTLR_ELX_I | SCTLR_EL2_RES1
     msr sctlr_el2, x9
     isb
 
@@ -394,8 +395,7 @@ FUNCTION_LABEL(el2_hvc_off)
     isb
 
     // Setup the init vector table for EL2.
-    mrs x9, vbar_el2
-    sub x9, x9, VECTOR_TABLE_SIZE
+    adr_global x9, arm64_el2_init_table
     msr vbar_el2, x9
     isb
 
@@ -403,12 +403,29 @@ FUNCTION_LABEL(el2_hvc_off)
 
 // zx_status_t arm64_el2_tlbi_ipa(zx_paddr_t vttbr, zx_vaddr_t addr, bool terminal);
 FUNCTION(arm64_el2_tlbi_ipa)
+    mov x7, 0
     hvc 3
     ret
 END_FUNCTION(arm64_el2_tlbi_ipa)
-FUNCTION_LABEL(el2_hvc_tlbi_ipa)
+
+// zx_status_t arm64_el2_tlbi_vmid(zx_paddr_t vttbr);
+FUNCTION(arm64_el2_tlbi_vmid)
+    mov x7, 1
+    hvc 3
+    ret
+END_FUNCTION(arm64_el2_tlbi_vmid)
+
+FUNCTION_LABEL(el2_hvc_tlbi)
     switch_to_guest
 
+    cbz x7, el2_hvc_tlbi_ipa
+    b el2_hvc_tlbi_vmid
+
+.Ltlbi_exit:
+    switch_to_host
+    exception_return ZX_OK
+
+FUNCTION_LABEL(el2_hvc_tlbi_ipa)
     // TLBI IPAS2* instructions take bits [51:12] of the IPA.
     lsr x1, x1, 12
 
@@ -424,30 +441,19 @@ FUNCTION_LABEL(el2_hvc_tlbi_ipa)
     tlbi vmalle1is
     dsb ish
     isb
+    b .Ltlbi_exit
 
-    switch_to_host
-    exception_return ZX_OK
-
-// zx_status_t arm64_el2_tlbi_vmid(zx_paddr_t vttbr);
-FUNCTION(arm64_el2_tlbi_vmid)
-    hvc 4
-    ret
-END_FUNCTION(arm64_el2_tlbi_vmid)
 FUNCTION_LABEL(el2_hvc_tlbi_vmid)
-    switch_to_guest
-
     // Invalidate VMID. Based on ARM DEN 0024A, page 12-5.
     dsb ishst
     tlbi vmalls12e1is
     dsb ish
     isb
-
-    switch_to_host
-    exception_return ZX_OK
+    b .Ltlbi_exit
 
 // zx_status_t arm64_el2_resume(zx_paddr_t vttbr, zx_paddr_t state, uint64_t hcr);
 FUNCTION(arm64_el2_resume)
-    hvc 5
+    hvc 4
     ret
 END_FUNCTION(arm64_el2_resume)
 FUNCTION_LABEL(el2_hvc_resume)
@@ -462,10 +468,9 @@ FUNCTION_LABEL(el2_hvc_resume)
     ldr x10, [x9, ES_RESUME]
     cbnz x10, .Lresume
     tlbi vmalle1
-    isb
     mov x10, 1
     str x10, [x9, ES_RESUME]
-    dsb ishst
+    dsb nshst
 
 .Lresume:
     // Set the hypervisor control register.
@@ -476,9 +481,8 @@ FUNCTION_LABEL(el2_hvc_resume)
     msr cnthctl_el2, x10
 
     // Enable floating-point traps.
-    // TODO(ZX-1685): Re-enable floating-point traps once bug is fixed.
-    // movlit x10, CPTR_EL2_RES1 | CPTR_EL2_TFP
-    // msr cptr_el2, x10
+    movlit x10, CPTR_EL2_RES1 | CPTR_EL2_TFP
+    msr cptr_el2, x10
     isb
 
     host_state stp, HS_X18
@@ -491,7 +495,7 @@ FUNCTION_LABEL(el2_hvc_resume)
     // Return to guest.
     eret
 
-FUNCTION_LABEL(el2_guest_exit)
+FUNCTION_LABEL(el2_guest_exit_or_fp_resume)
     // Check ESR_EL2.EC to determine whether the exception was due to a
     // floating-point trap.
     mrs x9, esr_el2
@@ -499,6 +503,7 @@ FUNCTION_LABEL(el2_guest_exit)
     cmp x9, ESR_EL2_EC_FP
     b.eq el2_fp_resume
 
+FUNCTION_LABEL(el2_guest_exit)
     // Load El2State from tpidr_el2.
     mrs x9, tpidr_el2
 
@@ -512,19 +517,19 @@ FUNCTION_LABEL(el2_guest_exit)
     host_state ldp, HS_X18
 
     mrs x10, cptr_el2
-    tbz x10, CPTR_EL2_TFP_SHIFT, .Lfp_restore
+    tbnz x10, CPTR_EL2_TFP_SHIFT, .Lfp_untrap
 
-    // Disable floating-point traps.
-    mov x10, CPTR_EL2_RES1
-    msr cptr_el2, x10
-    b .Lfp_skip
-
-.Lfp_restore:
     // Restore floating-point state if it was modified.
     fp_state stp, GS_FP_STATE
     fp_state ldp, HS_FP_STATE
+    b .Lfp_done
 
-.Lfp_skip:
+.Lfp_untrap:
+    // Disable floating-point traps.
+    mov x10, CPTR_EL2_RES1
+    msr cptr_el2, x10
+
+.Lfp_done:
     // Disable virtual timer set by guest, and enable access to physical timer.
     msr cntv_ctl_el0, xzr
     mov x10, CNTHCTL_EL2_EL1PCTEN | CNTHCTL_EL2_EL1PCEN
@@ -543,21 +548,22 @@ FUNCTION_LABEL(el2_guest_exit)
     eret
 
 FUNCTION_LABEL(el2_fp_resume)
-    // Load El2State from tpidr_el2.
-    mrs x9, tpidr_el2
-
     // Save x10 so we have an extra register for floating-point state swapping.
     // We're returning to the guest so we don't need the return code in [sp, 8].
     str x10, [sp, 8]
 
-    // Disable floating-point traps.
-    mov x10, CPTR_EL2_RES1
-    msr cptr_el2, x10
+    // Disable floating-point traps and reset exception syndrome.
+    mov x9, CPTR_EL2_RES1
+    msr cptr_el2, x9
+    msr esr_el2, xzr
+    isb
+
+    // Load El2State from tpidr_el2.
+    mrs x9, tpidr_el2
 
     fp_state stp, HS_FP_STATE
     fp_state ldp, GS_FP_STATE
 
     // Return to guest.
-    ldp x9, x10, [sp]
-    pop_stack
+    ldp x9, x10, [sp], 16
     eret

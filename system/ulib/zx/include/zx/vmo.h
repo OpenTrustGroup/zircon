@@ -30,12 +30,12 @@ public:
 
     zx_status_t read(void* data, uint64_t offset, size_t len,
                      size_t* actual) const {
-        return zx_vmo_read(get(), data, offset, len, actual);
+        return zx_vmo_read_old(get(), data, offset, len, actual);
     }
 
     zx_status_t write(const void* data, uint64_t offset, size_t len,
                       size_t* actual) const {
-        return zx_vmo_write(get(), data, offset, len, actual);
+        return zx_vmo_write_old(get(), data, offset, len, actual);
     }
 
     zx_status_t get_size(uint64_t* size) const {
@@ -56,6 +56,10 @@ public:
     zx_status_t op_range(uint32_t op, uint64_t offset, uint64_t size,
                          void* buffer, size_t buffer_size) const {
         return zx_vmo_op_range(get(), op, offset, size, buffer, buffer_size);
+    }
+
+    zx_status_t set_cache_policy(uint32_t cache_policy) {
+        return zx_vmo_set_cache_policy(get(), cache_policy);
     }
 };
 

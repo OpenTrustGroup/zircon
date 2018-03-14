@@ -165,7 +165,7 @@ MODULE_PKG_FILES := $(shell find $(MODULE_SRCDIR) -type f)
 ifneq ($(MODULE_PACKAGE_INCS),)
 MODULE_PKG_INCS := $(MODULE_PACKAGE_INCS)
 else
-MODULE_PKG_INCS := $(filter %.h,$(filter $(MODULE_SRCDIR)/include/%,$(MODULE_PKG_FILES)))
+MODULE_PKG_INCS := $(filter %.h %.modulemap,$(filter $(MODULE_SRCDIR)/include/%,$(MODULE_PKG_FILES)))
 endif
 MODULE_PKG_INCS := $(foreach inc,$(MODULE_PKG_INCS),$(patsubst $(MODULE_SRCDIR)/include/%,%,$(inc))=SOURCE/$(inc))
 
@@ -179,20 +179,15 @@ ifeq ($(filter src,$(MODULE_PACKAGE)),src)
 ifneq ($(MODULE_PACKAGE_SRCS),)
 MODULE_PKG_SRCS := $(filter-out none,$(MODULE_PACKAGE_SRCS))
 else
-MODULE_PKG_SRCS := $(filter %.c %.h %.cpp %.S,$(filter-out $(MODULE_SRCDIR)/include/%,$(MODULE_PKG_FILES)))
+MODULE_PKG_SRCS := $(filter %.c %.h %.cpp %.S %.modulemap,$(filter-out $(MODULE_SRCDIR)/include/%,$(MODULE_PKG_FILES)))
 endif
 MODULE_PKG_SRCS := $(foreach src,$(MODULE_PKG_SRCS),$(patsubst $(MODULE_SRCDIR)/%,%,$(src))=SOURCE/$(src))
 MODULE_PKG_ARCH := src
 MODULE_PKG_TAG := "[src]"
-# source modules need to include their static deps to be buildable
-# we apply the same . to - transform as in PKG_DEPS
-MODULE_PKG_SDEPS := $(subst .,-,$(foreach dep,$(MODULE_STATIC_LIBS),$(lastword $(subst /,$(SPACE),$(dep)))))
 else
 MODULE_PKG_SRCS :=
 MODULE_PKG_ARCH := $(ARCH)
 MODULE_PKG_TAG := "[lib]"
-# binary modules do not include static deps (they've already been linked in)
-MODULE_PKG_SDEPS :=
 
 ifneq ($(filter shared,$(MODULE_PACKAGE)),)
 ifneq ($(MODULE_SO_NAME),)
@@ -206,6 +201,13 @@ MODULE_PKG_SRCS += lib/lib$(MODULE_NAME).a=BUILD/$(patsubst $(BUILDDIR)/%,%,$(MO
 endif
 endif
 
+ifeq ($(filter shared,$(MODULE_PACKAGE)),)
+# source modules and static libraries need to include their static deps to be buildable
+# we apply the same . to - transform as in PKG_DEPS
+MODULE_PKG_SDEPS := $(subst .,-,$(foreach dep,$(MODULE_STATIC_LIBS),$(lastword $(subst /,$(SPACE),$(dep)))))
+else
+MODULE_PKG_SDEPS :=
+endif
 
 # libc is the "sysroot" package
 # We bundle crt1, aux libs (libdl, etc), libzircon, as well
@@ -225,11 +227,11 @@ MODULE_PKG_SRCS += lib/libzircon.so=BUILD/system/ulib/zircon/libzircon.so.abi
 MODULE_PKG_SRCS += lib/debug/libzircon.so=BUILD/system/ulib/zircon/libzircon.so
 
 # global headers
-GLOBAL_HEADERS := $(shell find system/public -name \*\.h -o -name \*\.inc)
+GLOBAL_HEADERS := $(shell find system/public -name \*\.h -o -name \*\.inc -o -name \*\.modulemap)
 MODULE_PKG_INCS += $(foreach inc,$(GLOBAL_HEADERS),$(patsubst system/public/%,%,$(inc))=SOURCE/$(inc))
 
 # generated headers
-MODULE_PKG_INCS += $(foreach inc,$(sort $(SYSGEN_PUBLIC_HEADERS)),$(patsubst $(SYSGEN_BUILDDIR)/%,%,$(inc))=$(patsubst $(BUILDDIR)/%,BUILD/%,$(inc)))
+MODULE_PKG_INCS += $(foreach inc,$(sort $(ABIGEN_PUBLIC_HEADERS)),$(patsubst $(ABIGEN_BUILDDIR)/%,%,$(inc))=$(patsubst $(BUILDDIR)/%,BUILD/%,$(inc)))
 
 # libzircon headers
 ZIRCON_HEADERS := $(shell find system/ulib/zircon/include -name \*\.h)

@@ -38,14 +38,16 @@
 + [job_set_relative_importance](syscalls/job_set_relative_importance.md) - update a global ordering of jobs
 
 ## Tasks (Thread, Process, or Job)
-+ [task_resume](syscalls/task_resume.md) - cause a suspended task to continue running
 + [task_bind_exception_port](syscalls/task_bind_exception_port.md) - attach an exception port to a task
 + [task_kill](syscalls/task_kill.md) - cause a task to stop running
++ [task_resume](syscalls/task_resume.md) - cause a suspended task to continue running
++ [task_suspend](syscalls/task_suspend.md) - cause a task to be suspended
 
 ## Channels
 + [channel_call](syscalls/channel_call.md) - synchronously send a message and receive a reply
 + [channel_create](syscalls/channel_create.md) - create a new channel
 + [channel_read](syscalls/channel_read.md) - receive a message from a channel
++ [channel_read_etc](syscalls/channel_read.md) - receive a message from a channel with handle information
 + [channel_write](syscalls/channel_write.md) - write a message to a channel
 
 ## Sockets
@@ -66,7 +68,7 @@
 + [port_create](syscalls/port_create.md) - create a port
 + [port_queue](syscalls/port_queue.md) - send a packet to a port
 + [port_wait](syscalls/port_wait.md) - wait for packets to arrive on a port
-+ [port_cancel](syscalls/port_cancel.md) - cancel notificaitons from async_wait
++ [port_cancel](syscalls/port_cancel.md) - cancel notifications from async_wait
 
 ## Futexes
 + [futex_wait](syscalls/futex_wait.md) - wait on a futex

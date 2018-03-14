@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <imports>
+    <localimport file="minimal"/>
+    <import remote="ssh://review.gerrithub.io:29418/OpenTrustGroup/manifest"
+            remotebranch="gzos"
+            manifest="build"
+            name="manifest"/>
+  </imports>
+</manifest>

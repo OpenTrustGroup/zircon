@@ -18,6 +18,28 @@
 
 namespace {
 
+// 8 bits for each RGB.
+static constexpr uint32_t MJPEG_BITS_PER_PIXEL = 24;
+
+camera::camera_proto::PixelFormat guid_to_pixel_format(uint8_t guid[GUID_LENGTH]) {
+    struct {
+        uint8_t guid[GUID_LENGTH];
+        camera::camera_proto::PixelFormat pixel_format;
+    } GUID_LUT[] = {
+        { USB_VIDEO_GUID_YUY2_VALUE, YUY2 },
+        { USB_VIDEO_GUID_NV12_VALUE, NV12 },
+        { USB_VIDEO_GUID_M420_VALUE, M420 },
+        { USB_VIDEO_GUID_I420_VALUE, I420 },
+    };
+
+    for (const auto& g : GUID_LUT) {
+        if (memcmp(g.guid, guid, GUID_LENGTH) == 0) {
+            return g.pixel_format;
+        }
+    }
+    return INVALID;
+}
+
 // Parses the payload format descriptor and any corresponding frame descriptors.
 // The result is stored in out_format.
 zx_status_t parse_format(usb_video_vc_desc_header* format_desc,
@@ -36,9 +58,26 @@ zx_status_t parse_format(usb_video_vc_desc_header* format_desc,
 
         want_frame_type = USB_VIDEO_VS_FRAME_UNCOMPRESSED;
         out_format->index = uncompressed_desc->bFormatIndex;
+        out_format->pixel_format =
+            guid_to_pixel_format(uncompressed_desc->guidFormat);
         out_format->bits_per_pixel = uncompressed_desc->bBitsPerPixel;
         want_num_frame_descs = uncompressed_desc->bNumFrameDescriptors;
         out_format->default_frame_index = uncompressed_desc->bDefaultFrameIndex;
+        break;
+    }
+    case USB_VIDEO_VS_FORMAT_MJPEG: {
+        usb_video_vs_mjpeg_format_desc* mjpeg_desc =
+            (usb_video_vs_mjpeg_format_desc *)format_desc;
+        zxlogf(TRACE,
+               "USB_VIDEO_VS_FORMAT_MJPEG bNumFrameDescriptors %u bmFlags %d\n",
+               mjpeg_desc->bNumFrameDescriptors, mjpeg_desc->bmFlags);
+
+        want_frame_type = USB_VIDEO_VS_FRAME_MJPEG;
+        out_format->index = mjpeg_desc->bFormatIndex;
+        out_format->pixel_format = MJPEG;
+        out_format->bits_per_pixel = MJPEG_BITS_PER_PIXEL;
+        want_num_frame_descs = mjpeg_desc->bNumFrameDescriptors;
+        out_format->default_frame_index = mjpeg_desc->bDefaultFrameIndex;
         break;
     }
     // TODO(jocelyndang): handle other formats.
@@ -66,20 +105,24 @@ zx_status_t parse_format(usb_video_vc_desc_header* format_desc,
         }
 
         switch (format_desc->bDescriptorSubtype) {
-        case USB_VIDEO_VS_FRAME_UNCOMPRESSED: {
-            usb_video_vs_uncompressed_video_frame_desc* desc =
-                (usb_video_vs_uncompressed_video_frame_desc *)header;
+        case USB_VIDEO_VS_FRAME_UNCOMPRESSED:
+        case USB_VIDEO_VS_FRAME_MJPEG: {
+            usb_video_vs_frame_desc* desc = (usb_video_vs_frame_desc *)header;
 
             // Intervals are specified in 100 ns units.
             double framesPerSec = 1 / (desc->dwDefaultFrameInterval * 100 / 1e9);
-            zxlogf(TRACE, "USB_VIDEO_VS_FRAME_UNCOMPRESSED (%u x %u) %.2f frames / sec\n",
+            zxlogf(TRACE, "%s (%u x %u) %.2f frames / sec\n",
+                   format_desc->bDescriptorSubtype == USB_VIDEO_VS_FRAME_UNCOMPRESSED ?
+                   "USB_VIDEO_VS_FRAME_UNCOMPRESSED" : "USB_VIDEO_VS_FRAME_MJPEG",
                    desc->wWidth, desc->wHeight, framesPerSec);
 
             video::usb::UsbVideoFrameDesc frame_desc = {
                 .index = desc->bFrameIndex,
+                .capture_type = STREAM,
                 .default_frame_interval = desc->dwDefaultFrameInterval,
                 .width = desc->wWidth,
-                .height = desc->wHeight
+                .height = desc->wHeight,
+                .stride = desc->dwMaxVideoFrameBufferSize / desc->wHeight
             };
             out_format->frame_descs.push_back(frame_desc);
             break;
@@ -273,7 +316,8 @@ zx_status_t usb_video_parse_descriptors(void* ctx, zx_device_t* device, void** c
                 video::usb::UsbVideoStreamingSetting setting = {
                     .alt_setting = intf->bAlternateSetting,
                     .transactions_per_microframe = per_mf,
-                    .max_packet_size = max_packet_size
+                    .max_packet_size = max_packet_size,
+                    .ep_type = usb_ep_type(endp)
                 };
                 streaming_settings.push_back(setting, &ac);
                 if (!ac.check()) {

@@ -19,12 +19,22 @@ __BEGIN_CDECLS
 // type.
 typedef struct fidl_type fidl_type_t;
 
+// See
+// https://fuchsia.googlesource.com/zircon/+/HEAD/docs/fidl/c-language-bindings.md#fidl_encode
 zx_status_t fidl_encode(const fidl_type_t* type, void* bytes, uint32_t num_bytes,
                         zx_handle_t* handles, uint32_t max_handles, uint32_t* actual_handles_out,
                         const char** error_msg_out);
 
+// See
+// https://fuchsia.googlesource.com/zircon/+/HEAD/docs/fidl/c-language-bindings.md#fidl_decode
 zx_status_t fidl_decode(const fidl_type_t* type, void* bytes, uint32_t num_bytes,
                         const zx_handle_t* handles, uint32_t num_handles,
                         const char** error_msg_out);
+
+// Validates an encoded message against the given |type|.
+//
+// The |bytes| are not modified.
+zx_status_t fidl_validate(const fidl_type_t* type, const void* bytes, uint32_t num_bytes,
+                          uint32_t num_handles, const char** error_msg_out);
 
 __END_CDECLS
