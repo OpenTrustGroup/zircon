@@ -33,6 +33,7 @@ MODULES += \
     system/uapp/psutils \
     system/uapp/dlog \
     system/ulib/syslog \
+    system/ulib/virtio \
     third_party/uapp/dash \
 
 MODULES += \
