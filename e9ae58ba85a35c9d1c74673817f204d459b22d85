@@ -49,6 +49,30 @@
     },
     {
       "key": {
+        "uuid": "5b3e7d95_92c8857a",
+        "filename": "kernel/dev/interrupt/arm_gic/v2/arm_gicv2.c",
+        "patchSetId": 4
+      },
+      "lineNbr": 573,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-03-19T22:57:24Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "84e0f546_21f39d83",
+      "range": {
+        "startLine": 573,
+        "startChar": 4,
+        "endLine": 573,
+        "endChar": 84
+      },
+      "revId": "e9ae58ba85a35c9d1c74673817f204d459b22d85",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "fe84d512_51278fd8",
         "filename": "third_party/lib/sm/sm.c",
         "patchSetId": 4
@@ -83,6 +107,30 @@
       "writtenOn": "2018-03-19T21:11:53Z",
       "side": 1,
       "message": "Trusty sm.c use the init hook to handling bootargs and resume all nsthreads. Due to bootargs are unused in Zircon, I ignore the handling bootargs part and directly call the resume_nsthreads() instead.\n\nThe init hook\u0027s name should be changed for readability.",
+      "parentUuid": "fe84d512_51278fd8",
+      "range": {
+        "startLine": 409,
+        "startChar": 13,
+        "endLine": 409,
+        "endChar": 27
+      },
+      "revId": "e9ae58ba85a35c9d1c74673817f204d459b22d85",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "3dc2f4ed_0a5592df",
+        "filename": "third_party/lib/sm/sm.c",
+        "patchSetId": 4
+      },
+      "lineNbr": 409,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-03-19T22:57:24Z",
+      "side": 1,
+      "message": "Done",
       "parentUuid": "fe84d512_51278fd8",
       "range": {
         "startLine": 409,
