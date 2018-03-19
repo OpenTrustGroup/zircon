@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "84e0f546_21f39d83",
+        "filename": "kernel/dev/interrupt/arm_gic/v2/arm_gicv2.c",
+        "patchSetId": 4
+      },
+      "lineNbr": 573,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-03-19T07:07:12Z",
+      "side": 1,
+      "message": "add a comment here to describe why disable HALT IPI",
+      "range": {
+        "startLine": 573,
+        "startChar": 4,
+        "endLine": 573,
+        "endChar": 84
+      },
+      "revId": "e9ae58ba85a35c9d1c74673817f204d459b22d85",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "fe84d512_51278fd8",
+        "filename": "third_party/lib/sm/sm.c",
+        "patchSetId": 4
+      },
+      "lineNbr": 409,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-03-19T07:07:12Z",
+      "side": 1,
+      "message": "libsm_bootargs?",
+      "range": {
+        "startLine": 409,
+        "startChar": 13,
+        "endLine": 409,
+        "endChar": 27
+      },
+      "revId": "e9ae58ba85a35c9d1c74673817f204d459b22d85",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    }
+  ]
+}
