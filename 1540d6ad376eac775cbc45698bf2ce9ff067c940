@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "3b5336ac_092792ab",
+        "filename": "kernel/dev/interrupt/arm_gic/v2/arm_gicv2.c",
+        "patchSetId": 5
+      },
+      "lineNbr": 573,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-03-20T04:39:15Z",
+      "side": 1,
+      "message": "Linux\u0027s",
+      "range": {
+        "startLine": 573,
+        "startChar": 14,
+        "endLine": 573,
+        "endChar": 19
+      },
+      "revId": "1540d6ad376eac775cbc45698bf2ce9ff067c940",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "8dbeced6_e3be6c40",
+        "filename": "kernel/dev/interrupt/arm_gic/v2/arm_gicv2.c",
+        "patchSetId": 5
+      },
+      "lineNbr": 574,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-03-20T04:39:15Z",
+      "side": 1,
+      "message": "Is it possible to disable Android custom IPI driver for now?",
+      "range": {
+        "startLine": 573,
+        "startChar": 46,
+        "endLine": 574,
+        "endChar": 24
+      },
+      "revId": "1540d6ad376eac775cbc45698bf2ce9ff067c940",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    }
+  ]
+}
