@@ -45,6 +45,30 @@
       "revId": "1540d6ad376eac775cbc45698bf2ce9ff067c940",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "d9812a21_5f907d0e",
+        "filename": "kernel/dev/interrupt/arm_gic/v2/arm_gicv2.c",
+        "patchSetId": 5
+      },
+      "lineNbr": 574,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-03-21T00:55:25Z",
+      "side": 1,
+      "message": "Yes. Linux patch (https://review.gerrithub.io/#/c/403642/) was updated and we no longer to do this workaround for libsm.",
+      "parentUuid": "8dbeced6_e3be6c40",
+      "range": {
+        "startLine": 573,
+        "startChar": 46,
+        "endLine": 574,
+        "endChar": 24
+      },
+      "revId": "1540d6ad376eac775cbc45698bf2ce9ff067c940",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     }
   ]
 }
