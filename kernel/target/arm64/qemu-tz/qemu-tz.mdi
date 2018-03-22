@@ -13,7 +13,7 @@ const MEMBASE = 0x0e100000
 mem-map = {
     bank = {
         base-phys = MEMBASE
-        length = 0x00f00000
+        length = 0x01f00000
     }
 }
 
