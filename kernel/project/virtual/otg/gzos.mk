@@ -34,6 +34,7 @@ MODULES += \
     system/uapp/dlog \
     system/ulib/syslog \
     system/ulib/virtio \
+    system/ulib/hid \
     third_party/uapp/dash \
 
 MODULES += \
