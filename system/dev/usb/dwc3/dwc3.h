@@ -81,12 +81,13 @@ typedef struct {
     platform_device_protocol_t pdev;
     usb_mode_switch_protocol_t ums;
     usb_dci_interface_t dci_intf;
-    pdev_vmo_buffer_t mmio;
+    io_buffer_t mmio;
+    zx_handle_t bti_handle;
 
     usb_mode_t usb_mode;
 
     // event stuff
-    pdev_vmo_buffer_t event_buffer;
+    io_buffer_t event_buffer;
     zx_handle_t irq_handle;
     thrd_t irq_thread;
 
@@ -97,7 +98,7 @@ typedef struct {
 
     // ep0 stuff
     usb_setup_t cur_setup;      // current setup request
-    pdev_vmo_buffer_t ep0_buffer;
+    io_buffer_t ep0_buffer;
     dwc3_ep0_state ep0_state;
 
     // Used for synchronizing global state
@@ -109,7 +110,7 @@ typedef struct {
 } dwc3_t;
 
 static inline volatile void* dwc3_mmio(dwc3_t* dwc) {
-    return dwc->mmio.vaddr;
+    return io_buffer_virt(&dwc->mmio);
 }
 
 void dwc3_usb_reset(dwc3_t* dwc);

@@ -166,7 +166,7 @@ static zx_protocol_device_t sdmmc_device_proto = {
 static void sdmmc_query(void* ctx, block_info_t* info_out, size_t* block_op_size_out) {
     sdmmc_device_t* dev = ctx;
     memcpy(info_out, &dev->block_info, sizeof(*info_out));
-    *block_op_size_out = sizeof(sdmmc_req_t);
+    *block_op_size_out = sizeof(sdmmc_txn_t);
 }
 
 static void sdmmc_queue(void* ctx, block_op_t* btxn) {
@@ -179,9 +179,11 @@ static void sdmmc_queue(void* ctx, block_op_t* btxn) {
         uint64_t max = dev->block_info.block_count;
         if ((btxn->rw.offset_dev >= max) || ((max - btxn->rw.offset_dev) < btxn->rw.length)) {
             block_complete(btxn, ZX_ERR_OUT_OF_RANGE);
+            return;
         }
         if (btxn->rw.length == 0) {
             block_complete(btxn, ZX_OK);
+            return;
         }
         break;
     }
@@ -309,29 +311,13 @@ static void sdmmc_do_txn(sdmmc_device_t* dev, sdmmc_txn_t* txn) {
         if (st != ZX_OK) {
             zxlogf(TRACE, "sdmmc: do_txn cacheop error %d\n", st);
             block_complete(&txn->bop, st);
+            return;
         }
 
         req->use_dma = true;
         req->virt = NULL;
+        req->phys = 0;
 
-        // TODO: use pages in txn->bop.rw.pages
-        st = zx_vmo_op_range(txn->bop.rw.vmo, ZX_VMO_OP_COMMIT,
-                             txn->bop.rw.offset_vmo, txn->bop.rw.length, NULL, 0);
-        if (st != ZX_OK) {
-            zxlogf(TRACE, "sdmmc: do_txn vmo commit error %d\n", st);
-            block_complete(&txn->bop, st);
-            return;
-        }
-        st = zx_vmo_op_range(txn->bop.rw.vmo, ZX_VMO_OP_LOOKUP,
-                             txn->bop.rw.offset_vmo, txn->bop.rw.length,
-                             req->phys, sizeof(req->phys));
-        if (st != ZX_OK) {
-            zxlogf(TRACE, "sdmmc: do_txn vmo lookup error %d\n", st);
-            zxlogf(TRACE, "sdmmc: offset_vmo 0x%" PRIx64 " length 0x%x buflen 0x%zx\n",
-                   txn->bop.rw.offset_vmo, txn->bop.rw.length, sizeof(req->phys));
-            block_complete(&txn->bop, st);
-            return;
-        }
     } else {
         req->use_dma = false;
         st = zx_vmar_map(zx_vmar_root_self(), 0, txn->bop.rw.vmo,

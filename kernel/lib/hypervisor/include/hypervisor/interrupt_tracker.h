@@ -8,9 +8,11 @@
 
 #include <bitmap/raw-bitmap.h>
 #include <bitmap/storage.h>
+#include <hypervisor/ktrace.h>
 #include <hypervisor/state_invalidator.h>
 #include <kernel/auto_lock.h>
 #include <kernel/event.h>
+#include <lib/ktrace.h>
 
 namespace hypervisor {
 
@@ -26,7 +28,7 @@ public:
     // Returns whether there are pending interrupts.
     bool Pending() {
         AutoSpinLock lock(&lock_);
-        return bitmap_.Scan(0, N, false) != N;
+        return !bitmap_.Scan(0, N, false);
     }
 
     bool TryPop(uint32_t vector) {
@@ -40,16 +42,15 @@ public:
 
     // Pops the highest priority interrupt.
     zx_status_t Pop(uint32_t* vector) {
-        uint32_t value;
+        size_t value;
         {
             AutoSpinLock lock(&lock_);
-            value = static_cast<uint32_t>(bitmap_.Scan(0, N, false));
-            if (value == N) {
+            if (bitmap_.Scan(0, N, false, &value)) {
                 return ZX_ERR_NOT_FOUND;
             }
             bitmap_.ClearOne(value);
         }
-        *vector = reverse(value);
+        *vector = reverse(static_cast<uint32_t>(value));
         return ZX_OK;
     }
 
@@ -59,7 +60,8 @@ public:
             return ZX_ERR_OUT_OF_RANGE;
         }
         AutoSpinLock lock(&lock_);
-        return bitmap_.SetOne(reverse(vector));
+        bitmap_.SetOne(reverse(vector));
+        return ZX_OK;
     }
 
     // Tracks the given interrupt, and signals any waiters.
@@ -80,12 +82,15 @@ public:
         if (invalidator != nullptr) {
             invalidator->Invalidate();
         }
+        ktrace_vcpu(TAG_VCPU_BLOCK, VCPU_INTERRUPT);
         do {
             zx_status_t status = event_wait_deadline(&event_, ZX_TIME_INFINITE, true);
             if (status != ZX_OK) {
+                ktrace_vcpu(TAG_VCPU_UNBLOCK, VCPU_INTERRUPT);
                 return ZX_ERR_CANCELED;
             }
         } while (!Pending());
+        ktrace_vcpu(TAG_VCPU_UNBLOCK, VCPU_INTERRUPT);
         return ZX_OK;
     }
 

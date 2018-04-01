@@ -46,7 +46,7 @@ constexpr TypeShape kFloat32TypeShape = TypeShape(4u, 4u);
 constexpr TypeShape kFloat64TypeShape = TypeShape(8u, 8u);
 constexpr TypeShape kPointerTypeShape = TypeShape(8u, 8u);
 
-uint64_t AlignTo(uint64_t size, uint64_t alignment) {
+uint32_t AlignTo(uint32_t size, uint32_t alignment) {
     auto mask = alignment - 1;
     size += mask;
     size &= ~mask;
@@ -54,23 +54,24 @@ uint64_t AlignTo(uint64_t size, uint64_t alignment) {
 }
 
 TypeShape CStructTypeShape(std::vector<FieldShape*>* fields) {
-    uint64_t size = 0u;
-    uint64_t alignment = 1u;
+    uint32_t size = 0u;
+    uint32_t alignment = 1u;
 
     for (FieldShape* field : *fields) {
-        field->SetOffset(size);
         TypeShape typeshape = field->Typeshape();
         alignment = std::max(alignment, typeshape.Alignment());
         size = AlignTo(size, typeshape.Alignment());
+        field->SetOffset(size);
         size += typeshape.Size();
     }
+    size = AlignTo(size, alignment);
 
     return TypeShape(size, alignment);
 }
 
 TypeShape CUnionTypeShape(const std::vector<flat::Union::Member>& members) {
-    uint64_t size = 0u;
-    uint64_t alignment = 1u;
+    uint32_t size = 0u;
+    uint32_t alignment = 1u;
     for (const auto& member : members) {
         const auto& fieldshape = member.fieldshape;
         size = std::max(size, fieldshape.Size());
@@ -85,7 +86,7 @@ TypeShape FidlStructTypeShape(std::vector<FieldShape*>* fields) {
     return CStructTypeShape(fields);
 }
 
-TypeShape ArrayTypeShape(TypeShape element, uint64_t count) {
+TypeShape ArrayTypeShape(TypeShape element, uint32_t count) {
     return TypeShape(element.Size() * count, element.Alignment());
 }
 
@@ -140,46 +141,148 @@ TypeShape PrimitiveTypeShape(types::PrimitiveSubtype type) {
 // a struct declaration inside an interface out to the top level and
 // so on.
 
-bool Library::ParseSize(std::unique_ptr<raw::Constant> raw_constant, Size* out_size) {
-    uint64_t value;
-    if (!ParseIntegerConstant(raw_constant.get(), &value)) {
+StringView LibraryName(const Library* library) {
+    if (library == nullptr) {
+        return "";
+    }
+    return library->name();
+}
+
+bool Library::Fail(StringView message) {
+    auto formatted_message = std::string(message) + "\n";
+    error_reporter_->ReportError(std::move(formatted_message));
+    return false;
+}
+
+bool Library::Fail(const SourceLocation& location, StringView message) {
+    auto formatted_message = location.position() + ": " +
+        std::string(message) + "\n";
+    error_reporter_->ReportError(std::move(formatted_message));
+    return false;
+}
+
+Library::Library(const std::map<StringView, std::unique_ptr<Library>>* dependencies,
+                 ErrorReporter* error_reporter)
+    : dependencies_(dependencies), error_reporter_(error_reporter) {
+    for (const auto& dep : *dependencies_) {
+        const std::unique_ptr<Library>& library = dep.second;
+        const auto& declarations = library->declarations_;
+        declarations_.insert(declarations.begin(), declarations.end());
+    }
+}
+
+bool Library::CompileCompoundIdentifier(const raw::CompoundIdentifier* compound_identifier,
+                                        SourceLocation location,
+                                        Name* name_out) {
+    if (compound_identifier->components.size() == 1) {
+        *name_out = Name(this, compound_identifier->components[0]->location);
+        return true;
+    }
+    if (compound_identifier->components.size() == 2) {
+        const auto& components = compound_identifier->components;
+        auto library_location = components[0]->location;
+        auto library_name = library_location.data();
+        auto iter = dependencies_->find(library_name);
+        if (iter == dependencies_->end()) {
+            std::string message("Could not find library named ");
+            message += library_name;
+            return Fail(location, message);
+        }
+        const std::unique_ptr<Library>& library = iter->second;
+        auto decl_name = components[1]->location;
+        *name_out = Name(library.get(), {}, decl_name);
+        return true;
+    }
+
+    return Fail(location, "TODO(TO-701) Handle nested declarations.");
+}
+
+bool Library::ParseSize(std::unique_ptr<Constant> constant, Size* out_size) {
+    uint32_t value;
+    if (!ParseIntegerConstant(constant.get(), &value)) {
         *out_size = Size();
         return false;
     }
-    *out_size = Size(std::move(raw_constant), value);
+    *out_size = Size(std::move(constant), value);
     return true;
+}
+
+void Library::RegisterConst(Const* decl) {
+    const Name* name = &decl->name;
+    constants_.emplace(name, decl);
+    switch (decl->type->kind) {
+    case Type::Kind::String:
+        string_constants_.emplace(name, decl);
+        break;
+    case Type::Kind::Primitive:
+        primitive_constants_.emplace(name, decl);
+        break;
+    default:
+        break;
+    }
 }
 
 bool Library::RegisterDecl(Decl* decl) {
     const Name* name = &decl->name;
     auto iter = declarations_.emplace(name, decl);
-    return iter.second;
+    if (!iter.second) {
+        std::string message = "Name collision: ";
+        message.append(name->name().data());
+        return Fail(*name, message);
+    }
+    return true;
 }
 
-bool Library::ConsumeType(std::unique_ptr<raw::Type> raw_type, std::unique_ptr<Type>* out_type) {
+bool Library::ConsumeConstant(std::unique_ptr<raw::Constant> raw_constant, SourceLocation location, std::unique_ptr<Constant>* out_constant) {
+    switch (raw_constant->kind) {
+    case raw::Constant::Kind::Identifier: {
+        auto identifier = static_cast<raw::IdentifierConstant*>(raw_constant.get());
+        Name name;
+        if (!CompileCompoundIdentifier(identifier->identifier.get(), location, &name)) {
+            return false;
+        }
+        *out_constant = std::make_unique<IdentifierConstant>(std::move(name));
+        break;
+    }
+    case raw::Constant::Kind::Literal: {
+        auto literal = static_cast<raw::LiteralConstant*>(raw_constant.get());
+        *out_constant = std::make_unique<LiteralConstant>(std::move(literal->literal));
+        break;
+    }
+    }
+    return true;
+}
+
+bool Library::ConsumeType(std::unique_ptr<raw::Type> raw_type, SourceLocation location, std::unique_ptr<Type>* out_type) {
     switch (raw_type->kind) {
     case raw::Type::Kind::Array: {
         auto array_type = static_cast<raw::ArrayType*>(raw_type.get());
         std::unique_ptr<Type> element_type;
-        if (!ConsumeType(std::move(array_type->element_type), &element_type))
+        if (!ConsumeType(std::move(array_type->element_type), location, &element_type))
+            return false;
+        std::unique_ptr<Constant> constant;
+        if (!ConsumeConstant(std::move(array_type->element_count), location, &constant))
             return false;
         Size element_count;
-        if (!ParseSize(std::move(array_type->element_count), &element_count))
-            return false;
+        if (!ParseSize(std::move(constant), &element_count))
+            return Fail(location, "Unable to parse array element count");
         // TODO(kulakowski) Overflow checking.
-        uint64_t size = element_count.Value() * element_type->size;
+        uint32_t size = element_count.Value() * element_type->size;
         *out_type = std::make_unique<ArrayType>(size, std::move(element_type), std::move(element_count));
         break;
     }
     case raw::Type::Kind::Vector: {
         auto vector_type = static_cast<raw::VectorType*>(raw_type.get());
         std::unique_ptr<Type> element_type;
-        if (!ConsumeType(std::move(vector_type->element_type), &element_type))
+        if (!ConsumeType(std::move(vector_type->element_type), location, &element_type))
             return false;
         Size element_count = Size::Max();
         if (vector_type->maybe_element_count) {
-            if (!ParseSize(std::move(vector_type->maybe_element_count), &element_count))
+            std::unique_ptr<Constant> constant;
+            if (!ConsumeConstant(std::move(vector_type->maybe_element_count), location, &constant))
                 return false;
+            if (!ParseSize(std::move(constant), &element_count))
+                return Fail(location, "Unable to parse vector size bound");
         }
         *out_type = std::make_unique<VectorType>(std::move(element_type), std::move(element_count), vector_type->nullability);
         break;
@@ -188,8 +291,11 @@ bool Library::ConsumeType(std::unique_ptr<raw::Type> raw_type, std::unique_ptr<T
         auto string_type = static_cast<raw::StringType*>(raw_type.get());
         Size element_count = Size::Max();
         if (string_type->maybe_element_count) {
-            if (!ParseSize(std::move(string_type->maybe_element_count), &element_count))
+            std::unique_ptr<Constant> constant;
+            if (!ConsumeConstant(std::move(string_type->maybe_element_count), location, &constant))
                 return false;
+            if (!ParseSize(std::move(constant), &element_count))
+                return Fail(location, "Unable to parse string size bound");
         }
         *out_type = std::make_unique<StringType>(std::move(element_count), string_type->nullability);
         break;
@@ -201,9 +307,11 @@ bool Library::ConsumeType(std::unique_ptr<raw::Type> raw_type, std::unique_ptr<T
     }
     case raw::Type::Kind::RequestHandle: {
         auto request_type = static_cast<raw::RequestHandleType*>(raw_type.get());
-        // TODO(TO-701) Handle longer names.
-        Name name(request_type->identifier->components[0]->location);
-        *out_type = std::make_unique<RequestHandleType>(std::move(name), std::move(request_type->nullability));
+        Name name;
+        if (!CompileCompoundIdentifier(request_type->identifier.get(), location, &name)) {
+            return false;
+        }
+        *out_type = std::make_unique<RequestHandleType>(std::move(name), request_type->nullability);
         break;
     }
     case raw::Type::Kind::Primitive: {
@@ -213,8 +321,10 @@ bool Library::ConsumeType(std::unique_ptr<raw::Type> raw_type, std::unique_ptr<T
     }
     case raw::Type::Kind::Identifier: {
         auto identifier_type = static_cast<raw::IdentifierType*>(raw_type.get());
-        // TODO(TO-701) Handle longer names.
-        Name name(identifier_type->identifier->components[0]->location);
+        Name name;
+        if (!CompileCompoundIdentifier(identifier_type->identifier.get(), location, &name)) {
+            return false;
+        }
         *out_type = std::make_unique<IdentifierType>(std::move(name), identifier_type->nullability);
         break;
     }
@@ -224,29 +334,38 @@ bool Library::ConsumeType(std::unique_ptr<raw::Type> raw_type, std::unique_ptr<T
 
 bool Library::ConsumeConstDeclaration(std::unique_ptr<raw::ConstDeclaration> const_declaration) {
     auto attributes = std::move(const_declaration->attributes);
-    auto name = Name(const_declaration->identifier->location);
+    auto location = const_declaration->identifier->location;
+    auto name = Name(this, location);
     std::unique_ptr<Type> type;
-    if (!ConsumeType(std::move(const_declaration->type), &type))
+    if (!ConsumeType(std::move(const_declaration->type), location, &type))
+        return false;
+
+    std::unique_ptr<Constant> constant;
+    if (!ConsumeConstant(std::move(const_declaration->constant), location, &constant))
         return false;
 
     const_declarations_.push_back(std::make_unique<Const>(std::move(attributes), std::move(name), std::move(type),
-                                                          std::move(const_declaration->constant)));
-    return RegisterDecl(const_declarations_.back().get());
+                                                          std::move(constant)));
+    auto decl = const_declarations_.back().get();
+    RegisterConst(decl);
+    return RegisterDecl(decl);
 }
 
 bool Library::ConsumeEnumDeclaration(std::unique_ptr<raw::EnumDeclaration> enum_declaration) {
     std::vector<Enum::Member> members;
     for (auto& member : enum_declaration->members) {
-        auto name = member->identifier->location;
-        auto value = std::move(member->value);
-        members.emplace_back(name, std::move(value));
+        auto location = member->identifier->location;
+        std::unique_ptr<Constant> value;
+        if (!ConsumeConstant(std::move(member->value), location, &value))
+            return false;
+        members.emplace_back(location, std::move(value));
     }
     auto type = types::PrimitiveSubtype::Uint32;
     if (enum_declaration->maybe_subtype)
         type = enum_declaration->maybe_subtype->subtype;
 
     auto attributes = std::move(enum_declaration->attributes);
-    auto name = Name(enum_declaration->identifier->location);
+    auto name = Name(this, enum_declaration->identifier->location);
 
     enum_declarations_.push_back(std::make_unique<Enum>(std::move(attributes), std::move(name), type, std::move(members)));
     return RegisterDecl(enum_declarations_.back().get());
@@ -255,7 +374,7 @@ bool Library::ConsumeEnumDeclaration(std::unique_ptr<raw::EnumDeclaration> enum_
 bool Library::ConsumeInterfaceDeclaration(
     std::unique_ptr<raw::InterfaceDeclaration> interface_declaration) {
     auto attributes = std::move(interface_declaration->attributes);
-    auto name = Name(interface_declaration->identifier->location);
+    auto name = Name(this, interface_declaration->identifier->location);
 
     for (auto& const_member : interface_declaration->const_members)
         if (!ConsumeConstDeclaration(std::move(const_member)))
@@ -269,9 +388,9 @@ bool Library::ConsumeInterfaceDeclaration(
         auto ordinal_literal = std::move(method->ordinal);
         uint32_t value;
         if (!ParseIntegerLiteral<decltype(value)>(ordinal_literal.get(), &value))
-            return false;
+            return Fail(ordinal_literal->location, "Unable to parse ordinal");
         if (value == 0u)
-            return false;
+            return Fail(ordinal_literal->location, "Fidl ordinals cannot be 0");
         Ordinal ordinal(std::move(ordinal_literal), value);
 
         SourceLocation method_name = method->identifier->location;
@@ -282,7 +401,7 @@ bool Library::ConsumeInterfaceDeclaration(
             for (auto& parameter : method->maybe_request->parameter_list) {
                 SourceLocation parameter_name = parameter->identifier->location;
                 std::unique_ptr<Type> type;
-                if (!ConsumeType(std::move(parameter->type), &type))
+                if (!ConsumeType(std::move(parameter->type), parameter_name, &type))
                     return false;
                 maybe_request->parameters.emplace_back(std::move(type), std::move(parameter_name));
             }
@@ -294,7 +413,7 @@ bool Library::ConsumeInterfaceDeclaration(
             for (auto& parameter : method->maybe_response->parameter_list) {
                 SourceLocation parameter_name = parameter->identifier->location;
                 std::unique_ptr<Type> type;
-                if (!ConsumeType(std::move(parameter->type), &type))
+                if (!ConsumeType(std::move(parameter->type), parameter_name, &type))
                     return false;
                 maybe_response->parameters.emplace_back(std::move(type), parameter_name);
             }
@@ -312,7 +431,7 @@ bool Library::ConsumeInterfaceDeclaration(
 
 bool Library::ConsumeStructDeclaration(std::unique_ptr<raw::StructDeclaration> struct_declaration) {
     auto attributes = std::move(struct_declaration->attributes);
-    auto name = Name(struct_declaration->identifier->location);
+    auto name = Name(this, struct_declaration->identifier->location);
 
     for (auto& const_member : struct_declaration->const_members)
         if (!ConsumeConstDeclaration(std::move(const_member)))
@@ -324,11 +443,17 @@ bool Library::ConsumeStructDeclaration(std::unique_ptr<raw::StructDeclaration> s
     std::vector<Struct::Member> members;
     for (auto& member : struct_declaration->members) {
         std::unique_ptr<Type> type;
-        if (!ConsumeType(std::move(member->type), &type))
+        auto location = member->identifier->location;
+        if (!ConsumeType(std::move(member->type), location, &type))
             return false;
+        std::unique_ptr<Constant> maybe_default_value;
+        if (member->maybe_default_value != nullptr) {
+            if (!ConsumeConstant(std::move(member->maybe_default_value), location, &maybe_default_value))
+                return false;
+        }
         members.emplace_back(std::move(type),
                              member->identifier->location,
-                             std::move(member->maybe_default_value));
+                             std::move(maybe_default_value));
     }
 
     struct_declarations_.push_back(std::make_unique<Struct>(std::move(attributes), std::move(name), std::move(members)));
@@ -338,14 +463,15 @@ bool Library::ConsumeStructDeclaration(std::unique_ptr<raw::StructDeclaration> s
 bool Library::ConsumeUnionDeclaration(std::unique_ptr<raw::UnionDeclaration> union_declaration) {
     std::vector<Union::Member> members;
     for (auto& member : union_declaration->members) {
+        auto location = member->identifier->location;
         std::unique_ptr<Type> type;
-        if (!ConsumeType(std::move(member->type), &type))
+        if (!ConsumeType(std::move(member->type), location, &type))
             return false;
-        members.emplace_back(std::move(type), member->identifier->location);
+        members.emplace_back(std::move(type), location);
     }
 
     auto attributes = std::move(union_declaration->attributes);
-    auto name = Name(union_declaration->identifier->location);
+    auto name = Name(this, union_declaration->identifier->location);
 
     union_declarations_.push_back(std::make_unique<Union>(std::move(attributes), std::move(name), std::move(members)));
     return RegisterDecl(union_declarations_.back().get());
@@ -353,16 +479,13 @@ bool Library::ConsumeUnionDeclaration(std::unique_ptr<raw::UnionDeclaration> uni
 
 bool Library::ConsumeFile(std::unique_ptr<raw::File> file) {
     // All fidl files in a library should agree on the library name.
-    if (file->identifier->components.size() != 1) {
-        return false;
-    }
-    auto library_name = file->identifier->components[0]->location;
+    auto library_name = file->identifier->location;
 
     if (library_name_.valid()) {
         StringView current_name = library_name_.data();
         StringView new_name = library_name.data();
         if (current_name != new_name) {
-            return false;
+            return Fail(library_name, "Two files in the library disagree about the name of the library");
         }
     } else {
         library_name_ = library_name;
@@ -411,15 +534,167 @@ bool Library::ConsumeFile(std::unique_ptr<raw::File> file) {
 // Library resolution is concerned with resolving identifiers to their
 // declarations, and with computing type sizes and alignments.
 
-Decl* Library::LookupType(const flat::Type* type) {
+bool Library::TypecheckString(const IdentifierConstant* identifier) {
+    auto iter = string_constants_.find(&identifier->name);
+    if (iter == string_constants_.end())
+        return Fail(identifier->name.name(), "Unable to find string constant");
+    // TODO(kulakowski) Check string bounds.
+    return true;
+}
+
+bool Library::TypecheckPrimitive(const IdentifierConstant* identifier) {
+    auto iter = primitive_constants_.find(&identifier->name);
+    if (iter == primitive_constants_.end())
+        return Fail(identifier->name.name(), "Unable to find primitive constant");
+    // TODO(kulakowski) Check numeric values.
+    return true;
+}
+
+bool Library::TypecheckConst(const Const* const_declaration) {
+    auto type = const_declaration->type.get();
+    auto constant = const_declaration->value.get();
+    switch (type->kind) {
+    case Type::Kind::Array:
+        return Fail("Tried to generate an array constant");
+    case Type::Kind::Vector:
+        return Fail("Tried to generate an vector constant");
+    case Type::Kind::Handle:
+        return Fail("Tried to generate a handle constant");
+    case Type::Kind::RequestHandle:
+        return Fail("Tried to generate a request handle constant");
+    case Type::Kind::String: {
+        switch (constant->kind) {
+        case Constant::Kind::Identifier: {
+            auto identifier_constant = static_cast<const IdentifierConstant*>(constant);
+            return TypecheckString(identifier_constant);
+        }
+        case Constant::Kind::Literal: {
+            auto literal_constant = static_cast<const LiteralConstant*>(constant);
+            switch (literal_constant->literal->kind) {
+            case raw::Literal::Kind::String:
+                return true;
+            case raw::Literal::Kind::Numeric:
+                return Fail("Tried to assign a numeric literal into a string");
+            case raw::Literal::Kind::True:
+            case raw::Literal::Kind::False:
+                return Fail("Tried to assign a bool literal into a string");
+            }
+        }
+        }
+    }
+    case Type::Kind::Primitive: {
+        auto primitive_type = static_cast<const PrimitiveType*>(type);
+        switch (constant->kind) {
+        case Constant::Kind::Identifier: {
+            auto identifier_constant = static_cast<const IdentifierConstant*>(constant);
+            return TypecheckPrimitive(identifier_constant);
+        }
+        case Constant::Kind::Literal: {
+            auto literal_constant = static_cast<const LiteralConstant*>(constant);
+            switch (literal_constant->literal->kind) {
+            case raw::Literal::Kind::String:
+                return Fail("Tried to assign a string literal to a numeric constant");
+            case raw::Literal::Kind::Numeric:
+                // TODO(kulakowski) Check the constants of numbers.
+                switch (primitive_type->subtype) {
+                case types::PrimitiveSubtype::Uint8:
+                case types::PrimitiveSubtype::Uint16:
+                case types::PrimitiveSubtype::Uint32:
+                case types::PrimitiveSubtype::Uint64:
+                case types::PrimitiveSubtype::Int8:
+                case types::PrimitiveSubtype::Int16:
+                case types::PrimitiveSubtype::Int32:
+                case types::PrimitiveSubtype::Int64:
+                case types::PrimitiveSubtype::Float32:
+                case types::PrimitiveSubtype::Float64:
+                    return true;
+                case types::PrimitiveSubtype::Bool:
+                    return Fail("Tried to assign a numeric literal into a bool");
+                case types::PrimitiveSubtype::Status:
+                    return Fail("Tried to assign a numeric literal into a status");
+                }
+            case raw::Literal::Kind::True:
+            case raw::Literal::Kind::False:
+                switch (primitive_type->subtype) {
+                case types::PrimitiveSubtype::Bool:
+                    return true;
+                case types::PrimitiveSubtype::Uint8:
+                case types::PrimitiveSubtype::Uint16:
+                case types::PrimitiveSubtype::Uint32:
+                case types::PrimitiveSubtype::Uint64:
+                case types::PrimitiveSubtype::Int8:
+                case types::PrimitiveSubtype::Int16:
+                case types::PrimitiveSubtype::Int32:
+                case types::PrimitiveSubtype::Int64:
+                case types::PrimitiveSubtype::Float32:
+                case types::PrimitiveSubtype::Float64:
+                    return Fail("Tried to assign a bool into a numeric type");
+                case types::PrimitiveSubtype::Status:
+                    return Fail("Tried to assign a bool into a status");
+                }
+            }
+        }
+        }
+    }
+    case Type::Kind::Identifier: {
+        auto identifier_type = static_cast<const IdentifierType*>(type);
+        auto decl = LookupType(identifier_type);
+        switch (decl->kind) {
+        case Decl::Kind::kConst:
+            assert(false && "const declarations don't make types!");
+            return false;
+        case Decl::Kind::kEnum:
+            return true;
+        case Decl::Kind::kInterface:
+            return Fail("Tried to create a const declaration of interface type");
+        case Decl::Kind::kStruct:
+            return Fail("Tried to create a const declaration of struct type");
+        case Decl::Kind::kUnion:
+            return Fail("Tried to create a const declaration of union type");
+        }
+    }
+    }
+}
+
+Decl* Library::LookupConstant(const Type* type, const Name& name) {
+    auto decl = LookupType(type);
+    if (decl == nullptr) {
+        // This wasn't a named type. Thus we are looking up a
+        // top-level constant, of string or primitive type.
+        assert(type->kind == Type::Kind::String ||
+               type->kind == Type::Kind::Primitive);
+        auto iter = constants_.find(&name);
+        if (iter == constants_.end()) {
+            return nullptr;
+        }
+        return iter->second;
+    }
+    // We must otherwise be looking for an enum member.
+    if (decl->kind != Decl::Kind::kEnum) {
+        return nullptr;
+    }
+    auto enum_decl = static_cast<Enum*>(decl);
+    for (auto& member : enum_decl->members) {
+        if (member.name.data() == name.name().data()) {
+            return enum_decl;
+        }
+    }
+    // The enum didn't have a member of that name!
+    return nullptr;
+}
+
+Decl* Library::LookupType(const Type* type) const {
     for (;;) {
         switch (type->kind) {
         case flat::Type::Kind::String:
         case flat::Type::Kind::Handle:
         case flat::Type::Kind::RequestHandle:
         case flat::Type::Kind::Primitive:
-        case flat::Type::Kind::Vector:
             return nullptr;
+        case flat::Type::Kind::Vector: {
+            type = static_cast<const flat::VectorType*>(type)->element_type.get();
+            continue;
+        }
         case flat::Type::Kind::Array: {
             type = static_cast<const flat::ArrayType*>(type)->element_type.get();
             continue;
@@ -435,7 +710,7 @@ Decl* Library::LookupType(const flat::Type* type) {
     }
 }
 
-Decl* Library::LookupType(const Name& name) {
+Decl* Library::LookupType(const Name& name) const {
     auto iter = declarations_.find(&name);
     if (iter == declarations_.end()) {
         return nullptr;
@@ -449,29 +724,55 @@ Decl* Library::LookupType(const Name& name) {
 //     struct D1 { int32 x; };
 // D1 has an edge pointing to D2. Note that struct and union pointers,
 // unlike inline structs or unions, do not have dependency edges.
-std::set<Decl*> Library::DeclDependencies(Decl* decl) {
+bool Library::DeclDependencies(Decl* decl, std::set<Decl*>* out_edges) {
     std::set<Decl*> edges;
-    auto maybe_add_decl = [this, &edges](const std::unique_ptr<flat::Type>& type) {
-        auto type_decl = LookupType(type.get());
+    auto maybe_add_decl = [this, &edges](const Type* type) {
+        auto type_decl = LookupType(type);
         if (type_decl != nullptr) {
             edges.insert(type_decl);
         }
     };
+    auto maybe_add_constant = [this, &edges](const Type* type, const Constant* constant) -> bool {
+        switch (constant->kind) {
+        case Constant::Kind::Identifier: {
+            auto identifier = static_cast<const flat::IdentifierConstant*>(constant);
+            auto decl = LookupConstant(type, identifier->name);
+            if (decl == nullptr) {
+                std::string message("Unable to find the constant named: ");
+                message += identifier->name.name().data();
+                return Fail(identifier->name, message.data());
+            }
+            edges.insert(decl);
+            break;
+        }
+        case Constant::Kind::Literal: {
+            // Literals have no dependencies on other declarations.
+            break;
+        }
+        }
+        return true;
+    };
     switch (decl->kind) {
-    case Decl::Kind::kConst:
-    case Decl::Kind::kEnum:
+    case Decl::Kind::kConst:{
+        auto const_decl = static_cast<const Const*>(decl);
+        if (!maybe_add_constant(const_decl->type.get(), const_decl->value.get()))
+            return false;
         break;
+    }
+    case Decl::Kind::kEnum: {
+        break;
+    }
     case Decl::Kind::kInterface: {
         auto interface_decl = static_cast<const Interface*>(decl);
         for (const auto& method : interface_decl->methods) {
             if (method.maybe_request != nullptr) {
                 for (const auto& parameter : method.maybe_request->parameters) {
-                    maybe_add_decl(parameter.type);
+                    maybe_add_decl(parameter.type.get());
                 }
             }
             if (method.maybe_response != nullptr) {
                 for (const auto& parameter : method.maybe_response->parameters) {
-                    maybe_add_decl(parameter.type);
+                    maybe_add_decl(parameter.type.get());
                 }
             }
         }
@@ -480,19 +781,24 @@ std::set<Decl*> Library::DeclDependencies(Decl* decl) {
     case Decl::Kind::kStruct: {
         auto struct_decl = static_cast<const Struct*>(decl);
         for (const auto& member : struct_decl->members) {
-            maybe_add_decl(member.type);
+            maybe_add_decl(member.type.get());
+            if (member.maybe_default_value) {
+                if (!maybe_add_constant(member.type.get(), member.maybe_default_value.get()))
+                    return false;
+            }
         }
         break;
     }
     case Decl::Kind::kUnion: {
         auto union_decl = static_cast<const Union*>(decl);
         for (const auto& member : union_decl->members) {
-            maybe_add_decl(member.type);
+            maybe_add_decl(member.type.get());
         }
         break;
     }
     }
-    return edges;
+    *out_edges = std::move(edges);
+    return true;
 }
 
 bool Library::SortDeclarations() {
@@ -506,12 +812,14 @@ bool Library::SortDeclarations() {
     }
     for (auto& name_and_decl : declarations_) {
         Decl* decl = name_and_decl.second;
-        auto deps = DeclDependencies(decl);
+        std::set<Decl*> deps;
+        if (!DeclDependencies(decl, &deps))
+            return false;
         degrees[decl] += deps.size();
         for (Decl* dep : deps) {
             inverse_dependencies[dep].push_back(decl);
         }
-    }
+   }
 
     // Start with all decls that have no incoming edges.
     std::vector<Decl*> decls_without_deps;
@@ -542,23 +850,25 @@ bool Library::SortDeclarations() {
 
     if (declaration_order_.size() != degrees.size()) {
         // We didn't visit all the edges! There was a cycle.
-        return false;
+        return Fail("There is an includes-cycle in declarations");
     }
 
     assert(declaration_order_.size() != 0u);
     return true;
 }
 
-bool Library::ResolveConst(Const* const_declaration) {
+bool Library::CompileConst(Const* const_declaration) {
     TypeShape typeshape;
-    if (!ResolveType(const_declaration->type.get(), &typeshape)) {
+    if (!CompileType(const_declaration->type.get(), &typeshape)) {
         return false;
     }
-    // TODO(TO-702) Resolve const declarations.
+    if (!TypecheckConst(const_declaration)) {
+        return false;
+    }
     return true;
 }
 
-bool Library::ResolveEnum(Enum* enum_declaration) {
+bool Library::CompileEnum(Enum* enum_declaration) {
     switch (enum_declaration->type) {
     case types::PrimitiveSubtype::Int8:
     case types::PrimitiveSubtype::Int16:
@@ -568,7 +878,7 @@ bool Library::ResolveEnum(Enum* enum_declaration) {
     case types::PrimitiveSubtype::Uint16:
     case types::PrimitiveSubtype::Uint32:
     case types::PrimitiveSubtype::Uint64:
-        // These are allowed as enum subtypes. Resolve the size and alignment.
+        // These are allowed as enum subtypes. Compile the size and alignment.
         enum_declaration->typeshape = PrimitiveTypeShape(enum_declaration->type);
         break;
 
@@ -577,22 +887,22 @@ bool Library::ResolveEnum(Enum* enum_declaration) {
     case types::PrimitiveSubtype::Float32:
     case types::PrimitiveSubtype::Float64:
         // These are not allowed as enum subtypes.
-        return false;
+        return Fail(*enum_declaration, "Enums cannot be bools, statuses, or floats");
     }
 
     // TODO(TO-702) Validate values.
     return true;
 }
 
-bool Library::ResolveInterface(Interface* interface_declaration) {
+bool Library::CompileInterface(Interface* interface_declaration) {
     // TODO(TO-703) Add subinterfaces here.
     Scope<StringView> name_scope;
     Scope<uint32_t> ordinal_scope;
     for (auto& method : interface_declaration->methods) {
         if (!name_scope.Insert(method.name.data()))
-            return false;
+            return Fail(method.name, "Multiple methods with the same name in an interface");
         if (!ordinal_scope.Insert(method.ordinal.Value()))
-            return false;
+            return Fail(method.name, "Mulitple methods with the same ordinal in an interface");
         auto CreateMessage = [&](Interface::Method::Message* message) -> bool{
             Scope<StringView> scope;
             auto header_field_shape = FieldShape(TypeShape(16u, 4u));
@@ -600,8 +910,8 @@ bool Library::ResolveInterface(Interface* interface_declaration) {
             message_struct.push_back(&header_field_shape);
             for (auto& param : message->parameters) {
                 if (!scope.Insert(param.name.data()))
-                    return false;
-                if (!ResolveType(param.type.get(), &param.fieldshape.Typeshape()))
+                    return Fail(param.name, "Multiple parameters with the same name in a method");
+                if (!CompileType(param.type.get(), &param.fieldshape.Typeshape()))
                     return false;
                 message_struct.push_back(&param.fieldshape);
             }
@@ -620,13 +930,13 @@ bool Library::ResolveInterface(Interface* interface_declaration) {
     return true;
 }
 
-bool Library::ResolveStruct(Struct* struct_declaration) {
+bool Library::CompileStruct(Struct* struct_declaration) {
     Scope<StringView> scope;
     std::vector<FieldShape*> fidl_struct;
     for (auto& member : struct_declaration->members) {
         if (!scope.Insert(member.name.data()))
-            return false;
-        if (!ResolveType(member.type.get(), &member.fieldshape.Typeshape()))
+            return Fail(member.name, "Multiple struct fields with the same name");
+        if (!CompileType(member.type.get(), &member.fieldshape.Typeshape()))
             return false;
         fidl_struct.push_back(&member.fieldshape);
     }
@@ -636,31 +946,37 @@ bool Library::ResolveStruct(Struct* struct_declaration) {
     return true;
 }
 
-bool Library::ResolveUnion(Union* union_declaration) {
+bool Library::CompileUnion(Union* union_declaration) {
     Scope<StringView> scope;
     for (auto& member : union_declaration->members) {
         if (!scope.Insert(member.name.data()))
-            return false;
-        if (!ResolveType(member.type.get(), &member.fieldshape.Typeshape()))
+            return Fail(member.name, "Multiple union members with the same name");
+        if (!CompileType(member.type.get(), &member.fieldshape.Typeshape()))
             return false;
     }
 
     auto tag = FieldShape(kUint32TypeShape);
-    auto members = FieldShape(CUnionTypeShape(union_declaration->members));
-    std::vector<FieldShape*> fidl_union = {&tag, &members};
+    union_declaration->membershape = FieldShape(CUnionTypeShape(union_declaration->members));
+    std::vector<FieldShape*> fidl_union = {&tag, &union_declaration->membershape};
+    union_declaration->typeshape = CStructTypeShape(&fidl_union);
 
     // This is either 4 or 8, depending on whether any union members
     // have alignment 8.
-    auto offset = members.Offset();
+    auto offset = union_declaration->membershape.Offset();
     for (auto& member : union_declaration->members) {
         member.fieldshape.SetOffset(offset);
     }
-    union_declaration->fieldshape = FieldShape(CStructTypeShape(&fidl_union), offset);
 
     return true;
 }
 
-bool Library::Resolve() {
+bool Library::Compile() {
+    for (const auto& name_and_library : *dependencies_) {
+        const Library* library = name_and_library.second.get();
+        constants_.insert(library->constants_.begin(),
+                          library->constants_.end());
+    }
+
     if (!SortDeclarations()) {
         return false;
     }
@@ -672,35 +988,35 @@ bool Library::Resolve() {
         switch (decl->kind) {
         case Decl::Kind::kConst: {
             auto const_decl = static_cast<Const*>(decl);
-            if (!ResolveConst(const_decl)) {
+            if (!CompileConst(const_decl)) {
                 return false;
             }
             break;
         }
         case Decl::Kind::kEnum: {
             auto enum_decl = static_cast<Enum*>(decl);
-            if (!ResolveEnum(enum_decl)) {
+            if (!CompileEnum(enum_decl)) {
                 return false;
             }
             break;
         }
         case Decl::Kind::kInterface: {
             auto interface_decl = static_cast<Interface*>(decl);
-            if (!ResolveInterface(interface_decl)) {
+            if (!CompileInterface(interface_decl)) {
                 return false;
             }
             break;
         }
         case Decl::Kind::kStruct: {
             auto struct_decl = static_cast<Struct*>(decl);
-            if (!ResolveStruct(struct_decl)) {
+            if (!CompileStruct(struct_decl)) {
                 return false;
             }
             break;
         }
         case Decl::Kind::kUnion: {
             auto union_decl = static_cast<Union*>(decl);
-            if (!ResolveUnion(union_decl)) {
+            if (!CompileUnion(union_decl)) {
                 return false;
             }
             break;
@@ -713,62 +1029,62 @@ bool Library::Resolve() {
     return true;
 }
 
-bool Library::ResolveArrayType(flat::ArrayType* array_type, TypeShape* out_typeshape) {
+bool Library::CompileArrayType(flat::ArrayType* array_type, TypeShape* out_typeshape) {
     TypeShape element_typeshape;
-    if (!ResolveType(array_type->element_type.get(), &element_typeshape))
+    if (!CompileType(array_type->element_type.get(), &element_typeshape))
         return false;
     *out_typeshape = ArrayTypeShape(element_typeshape, array_type->element_count.Value());
     return true;
 }
 
-bool Library::ResolveVectorType(flat::VectorType* vector_type, TypeShape* out_typeshape) {
+bool Library::CompileVectorType(flat::VectorType* vector_type, TypeShape* out_typeshape) {
     *out_typeshape = VectorTypeShape();
     return true;
 }
 
-bool Library::ResolveStringType(flat::StringType* string_type, TypeShape* out_typeshape) {
+bool Library::CompileStringType(flat::StringType* string_type, TypeShape* out_typeshape) {
     *out_typeshape = StringTypeShape();
     return true;
 }
 
-bool Library::ResolveHandleType(flat::HandleType* handle_type, TypeShape* out_typeshape) {
+bool Library::CompileHandleType(flat::HandleType* handle_type, TypeShape* out_typeshape) {
     // Nothing to check.
     *out_typeshape = kHandleTypeShape;
     return true;
 }
 
-bool Library::ResolveRequestHandleType(flat::RequestHandleType* request_type, TypeShape* out_typeshape) {
+bool Library::CompileRequestHandleType(flat::RequestHandleType* request_type, TypeShape* out_typeshape) {
     auto named_decl = LookupType(request_type->name);
     if (!named_decl || named_decl->kind != Decl::Kind::kInterface)
-        return false;
+        return Fail(request_type->name, "Undefined reference in request handle name");
 
     *out_typeshape = kHandleTypeShape;
     return true;
 }
 
-bool Library::ResolvePrimitiveType(flat::PrimitiveType* primitive_type,
+bool Library::CompilePrimitiveType(flat::PrimitiveType* primitive_type,
                                    TypeShape* out_typeshape) {
     *out_typeshape = PrimitiveTypeShape(primitive_type->subtype);
     return true;
 }
 
-bool Library::ResolveIdentifierType(flat::IdentifierType* identifier_type,
+bool Library::CompileIdentifierType(flat::IdentifierType* identifier_type,
                                     TypeShape* out_typeshape) {
     TypeShape typeshape;
 
     auto named_decl = LookupType(identifier_type->name);
     if (!named_decl)
-        return false;
+        return Fail(identifier_type->name, "Undefined reference in identifier type name");
 
     switch (named_decl->kind) {
     case Decl::Kind::kConst: {
         // A constant isn't a type!
-        return false;
+        return Fail(identifier_type->name, "The name of a constant was used where a type was expected");
     }
     case Decl::Kind::kEnum: {
         if (identifier_type->nullability == types::Nullability::Nullable) {
             // Enums aren't nullable!
-            return false;
+            return Fail(identifier_type->name, "An enum was referred to as 'nullable'");
         } else {
             typeshape = static_cast<const Enum*>(named_decl)->typeshape;
         }
@@ -790,7 +1106,7 @@ bool Library::ResolveIdentifierType(flat::IdentifierType* identifier_type,
         if (identifier_type->nullability == types::Nullability::Nullable) {
             typeshape = kPointerTypeShape;
         } else {
-            typeshape = static_cast<const Union*>(named_decl)->fieldshape.Typeshape();
+            typeshape = static_cast<const Union*>(named_decl)->typeshape;
         }
         break;
     }
@@ -804,41 +1120,41 @@ bool Library::ResolveIdentifierType(flat::IdentifierType* identifier_type,
     return true;
 }
 
-bool Library::ResolveType(Type* type, TypeShape* out_typeshape) {
+bool Library::CompileType(Type* type, TypeShape* out_typeshape) {
     switch (type->kind) {
     case Type::Kind::Array: {
         auto array_type = static_cast<ArrayType*>(type);
-        return ResolveArrayType(array_type, out_typeshape);
+        return CompileArrayType(array_type, out_typeshape);
     }
 
     case Type::Kind::Vector: {
         auto vector_type = static_cast<VectorType*>(type);
-        return ResolveVectorType(vector_type, out_typeshape);
+        return CompileVectorType(vector_type, out_typeshape);
     }
 
     case Type::Kind::String: {
         auto string_type = static_cast<StringType*>(type);
-        return ResolveStringType(string_type, out_typeshape);
+        return CompileStringType(string_type, out_typeshape);
     }
 
     case Type::Kind::Handle: {
         auto handle_type = static_cast<HandleType*>(type);
-        return ResolveHandleType(handle_type, out_typeshape);
+        return CompileHandleType(handle_type, out_typeshape);
     }
 
     case Type::Kind::RequestHandle: {
         auto request_type = static_cast<RequestHandleType*>(type);
-        return ResolveRequestHandleType(request_type, out_typeshape);
+        return CompileRequestHandleType(request_type, out_typeshape);
     }
 
     case Type::Kind::Primitive: {
         auto primitive_type = static_cast<PrimitiveType*>(type);
-        return ResolvePrimitiveType(primitive_type, out_typeshape);
+        return CompilePrimitiveType(primitive_type, out_typeshape);
     }
 
     case Type::Kind::Identifier: {
         auto identifier_type = static_cast<IdentifierType*>(type);
-        return ResolveIdentifierType(identifier_type, out_typeshape);
+        return CompileIdentifierType(identifier_type, out_typeshape);
     }
     }
 }

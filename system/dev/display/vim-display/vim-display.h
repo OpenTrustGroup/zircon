@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include "edid.h"
 #include <assert.h>
+#include <ddk/io-buffer.h>
+#include <ddk/protocol/display.h>
+#include <ddk/protocol/gpio.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "edid.h"
-#include <ddk/protocol/gpio.h>
+#include <zircon/device/display.h>
 
 #define DISP_ERROR(fmt, ...) zxlogf(ERROR, "[%s %d]" fmt, __func__, __LINE__, ##__VA_ARGS__)
 #define DISP_INFO(fmt, ...) zxlogf(INFO, "[%s %d]" fmt, __func__, __LINE__, ##__VA_ARGS__)
@@ -27,19 +30,20 @@ typedef struct {
     zx_device_t*                        parent;
     zx_device_t*                        mydevice;
     zx_device_t*                        fbdevice;
+    zx_handle_t                         bti;
 
     gpio_protocol_t                     gpio;
 
     thrd_t                              main_thread;
 
-    pdev_vmo_buffer_t                   mmio_preset;
-    pdev_vmo_buffer_t                   mmio_hdmitx;
-    pdev_vmo_buffer_t                   mmio_hiu;
-    pdev_vmo_buffer_t                   mmio_vpu;
-    pdev_vmo_buffer_t                   mmio_hdmitx_sec;
-    pdev_vmo_buffer_t                   mmio_dmc;
-    pdev_vmo_buffer_t                   mmio_cbus;
-    pdev_vmo_buffer_t                   fbuffer;
+    io_buffer_t                         mmio_preset;
+    io_buffer_t                         mmio_hdmitx;
+    io_buffer_t                         mmio_hiu;
+    io_buffer_t                         mmio_vpu;
+    io_buffer_t                         mmio_hdmitx_sec;
+    io_buffer_t                         mmio_dmc;
+    io_buffer_t                         mmio_cbus;
+    io_buffer_t                         fbuffer;
     zx_display_info_t                   disp_info;
 
     uint8_t                             input_color_format;
@@ -52,7 +56,9 @@ typedef struct {
     disp_timing_t                       std_disp_timing;
     disp_timing_t                       pref_disp_timing;
 
-
+    bool console_visible;
+    zx_display_cb_t ownership_change_callback;
+    void* ownership_change_cookie;
 } vim2_display_t;
 
 zx_status_t configure_canvas(vim2_display_t* display);

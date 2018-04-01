@@ -7,6 +7,7 @@
 #include <ddk/binding.h>
 #include <ddk/protocol/pci.h>
 #include <zircon/assert.h>
+#include <fbl/auto_call.h>
 #include <fbl/auto_lock.h>
 #include <stdio.h>
 #include <string.h>
@@ -56,14 +57,10 @@ zx_protocol_device_t IntelHDAController::CONTROLLER_DEVICE_THUNKS = {
 };
 #undef DEV
 
-void IntelHDAController::PrintDebugPrefix() const {
-    printf("[%s] ", debug_tag_);
-}
-
 IntelHDAController::IntelHDAController()
     : state_(static_cast<StateStorage>(State::STARTING)),
       id_(device_id_gen_.fetch_add(1u)) {
-    snprintf(debug_tag_, sizeof(debug_tag_), "Unknown IHDA Controller");
+    snprintf(log_prefix_, sizeof(log_prefix_), "IHDA Controller (unknown BDF)");
 }
 
 IntelHDAController::~IntelHDAController() {
@@ -71,14 +68,10 @@ IntelHDAController::~IntelHDAController() {
     // TODO(johngro) : place the device into reset.
 
     // Release our register window.
-    if (regs_handle_ != ZX_HANDLE_INVALID) {
-        ZX_DEBUG_ASSERT(pci_.ops != nullptr);
-        zx_handle_close(regs_handle_);
-    }
+    mapped_regs_.Unmap();
 
-    // Release our IRQ event.
-    if (irq_handle_ != ZX_HANDLE_INVALID)
-        zx_handle_close(irq_handle_);
+    // Release our IRQ.
+    irq_.reset();
 
     // Disable IRQs at the PCI level.
     if (pci_.ops != nullptr) {
@@ -91,9 +84,9 @@ IntelHDAController::~IntelHDAController() {
     free_output_streams_.clear();
     free_bidir_streams_.clear();
 
-    // Release all of our physical memory used to talk directly to the hardware.
-    cmd_buf_mem_.Release();
-    bdl_mem_.Release();
+    // Unmap, unpin and release the memory we use for the command/response ring buffers.
+    cmd_buf_cpu_mem_.Unmap();
+    cmd_buf_hda_mem_.Unpin();
 
     if (pci_.ops != nullptr) {
         // TODO(johngro) : unclaim the PCI device.  Right now, there is no way
@@ -248,36 +241,36 @@ zx_status_t IntelHDAController::ProcessClientRequest(dispatcher::Channel* channe
     ZX_DEBUG_ASSERT(channel != nullptr);
     res = channel->Read(&req, sizeof(req), &req_size);
     if (res != ZX_OK) {
-        DEBUG_LOG("Failed to read client request (res %d)\n", res);
+        LOG(TRACE, "Failed to read client request (res %d)\n", res);
         return res;
     }
 
     // Sanity checks
     if (req_size < sizeof(req.hdr)) {
-        DEBUG_LOG("Client request too small to contain header (%u < %zu)\n",
+        LOG(TRACE, "Client request too small to contain header (%u < %zu)\n",
                 req_size, sizeof(req.hdr));
         return ZX_ERR_INVALID_ARGS;
     }
 
     // Dispatch
-    VERBOSE_LOG("Client Request 0x%04x len %u\n", req.hdr.cmd, req_size);
+    LOG(SPEW, "Client Request 0x%04x len %u\n", req.hdr.cmd, req_size);
     switch (req.hdr.cmd) {
     case IHDA_CMD_GET_IDS: {
         if (req_size != sizeof(req.get_ids)) {
-            DEBUG_LOG("Bad GET_IDS request length (%u != %zu)\n",
+            LOG(TRACE, "Bad GET_IDS request length (%u != %zu)\n",
                     req_size, sizeof(req.get_ids));
             return ZX_ERR_INVALID_ARGS;
         }
 
         ZX_DEBUG_ASSERT(pci_dev_ != nullptr);
-        ZX_DEBUG_ASSERT(regs_ != nullptr);
+        ZX_DEBUG_ASSERT(regs() != nullptr);
 
         ihda_get_ids_resp_t resp;
         resp.hdr       = req.hdr;
         resp.vid       = pci_dev_info_.vendor_id;
         resp.did       = pci_dev_info_.device_id;
-        resp.ihda_vmaj = REG_RD(&regs_->vmaj);
-        resp.ihda_vmin = REG_RD(&regs_->vmin);
+        resp.ihda_vmaj = REG_RD(&regs()->vmaj);
+        resp.ihda_vmin = REG_RD(&regs()->vmin);
         resp.rev_id    = 0;
         resp.step_id   = 0;
 
@@ -286,7 +279,7 @@ zx_status_t IntelHDAController::ProcessClientRequest(dispatcher::Channel* channe
 
     case IHDA_CONTROLLER_CMD_SNAPSHOT_REGS:
         if (req_size != sizeof(req.snapshot_regs)) {
-            DEBUG_LOG("Bad SNAPSHOT_REGS request length (%u != %zu)\n",
+            LOG(TRACE, "Bad SNAPSHOT_REGS request length (%u != %zu)\n",
                     req_size, sizeof(req.snapshot_regs));
             return ZX_ERR_INVALID_ARGS;
         }
@@ -327,7 +320,12 @@ zx_status_t IntelHDAController::DriverInit(void** out_ctx) {
 
 zx_status_t IntelHDAController::DriverBind(void* ctx,
                                            zx_device_t* device) {
-    fbl::RefPtr<IntelHDAController> controller(fbl::AdoptRef(new IntelHDAController()));
+    fbl::AllocChecker ac;
+    fbl::RefPtr<IntelHDAController> controller(fbl::AdoptRef(new (&ac) IntelHDAController()));
+
+    if (!ac.check()) {
+        return ZX_ERR_NO_MEMORY;
+    }
 
     zx_status_t ret = controller->Init(device);
     if (ret != ZX_OK) {
@@ -364,7 +362,17 @@ void IntelHDAController::DriverRelease(void* ctx) {
 
 extern "C" {
 zx_status_t ihda_init_hook(void** out_ctx) {
-    return ::audio::intel_hda::IntelHDAController::DriverInit(out_ctx);
+    zx_status_t res = ::audio::intel_hda::DriverVmars::Initialize();
+
+    if (res == ZX_OK) {
+        res = ::audio::intel_hda::IntelHDAController::DriverInit(out_ctx);
+    }
+
+    if (res != ZX_OK) {
+        ::audio::intel_hda::DriverVmars::Shutdown();
+    }
+
+    return res;
 }
 
 zx_status_t ihda_bind_hook(void* ctx, zx_device_t* pci_dev) {
@@ -373,6 +381,7 @@ zx_status_t ihda_bind_hook(void* ctx, zx_device_t* pci_dev) {
 
 void ihda_release_hook(void* ctx) {
     ::audio::intel_hda::IntelHDAController::DriverRelease(ctx);
+    ::audio::intel_hda::DriverVmars::Shutdown();
 }
 }  // extern "C"
 

@@ -215,13 +215,13 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
     }
 
     // Allocate DMA memory for various things
-    result = io_buffer_init(&xhci->dcbaa_erst_buffer, PAGE_SIZE,
+    result = io_buffer_init(&xhci->dcbaa_erst_buffer, xhci->bti_handle, PAGE_SIZE,
                             IO_BUFFER_RW | IO_BUFFER_CONTIG | XHCI_IO_BUFFER_UNCACHED);
     if (result != ZX_OK) {
         zxlogf(ERROR, "io_buffer_init failed for xhci->dcbaa_erst_buffer\n");
         goto fail;
     }
-    result = io_buffer_init(&xhci->input_context_buffer, PAGE_SIZE,
+    result = io_buffer_init(&xhci->input_context_buffer, xhci->bti_handle, PAGE_SIZE,
                             IO_BUFFER_RW | IO_BUFFER_CONTIG | XHCI_IO_BUFFER_UNCACHED);
     if (result != ZX_OK) {
         zxlogf(ERROR, "io_buffer_init failed for xhci->input_context_buffer\n");
@@ -233,13 +233,15 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         uint32_t flags = xhci->page_size > PAGE_SIZE ?
                             (IO_BUFFER_RO | IO_BUFFER_CONTIG) : IO_BUFFER_RO;
         size_t scratch_pad_pages_size = scratch_pad_bufs * xhci->page_size;
-        result = io_buffer_init(&xhci->scratch_pad_pages_buffer, scratch_pad_pages_size, flags);
+        result = io_buffer_init(&xhci->scratch_pad_pages_buffer, xhci->bti_handle,
+                                scratch_pad_pages_size, flags);
         if (result != ZX_OK) {
             zxlogf(ERROR, "xhci_vmo_init failed for xhci->scratch_pad_pages_buffer\n");
             goto fail;
         }
         size_t scratch_pad_index_size = PAGE_ROUNDUP(scratch_pad_bufs * sizeof(uint64_t));
-        result = io_buffer_init(&xhci->scratch_pad_index_buffer, scratch_pad_index_size,
+        result = io_buffer_init(&xhci->scratch_pad_index_buffer, xhci->bti_handle,
+                                scratch_pad_index_size,
                                 IO_BUFFER_RW | IO_BUFFER_CONTIG | XHCI_IO_BUFFER_UNCACHED);
         if (result != ZX_OK) {
             zxlogf(ERROR, "io_buffer_init failed for xhci->scratch_pad_index_buffer\n");
@@ -279,8 +281,8 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         off_t offset = 0;
         for (uint32_t i = 0; i < scratch_pad_bufs; i++) {
             zx_paddr_t scratch_pad_phys;
-            result = io_buffer_physmap_range(&xhci->scratch_pad_pages_buffer, offset, PAGE_SIZE,
-                                             sizeof(scratch_pad_phys), &scratch_pad_phys);
+            result = io_buffer_physmap_range(&xhci->scratch_pad_pages_buffer, offset, PAGE_SIZE, 1,
+                                             &scratch_pad_phys);
             if (result != ZX_OK) {
                 zxlogf(ERROR, "io_buffer_physmap failed for xhci->scratch_pad_pages_buffer\n");
                 goto fail;
@@ -295,14 +297,15 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         xhci->dcbaa[0] = 0;
     }
 
-    result = xhci_transfer_ring_init(&xhci->command_ring, COMMAND_RING_SIZE);
+    result = xhci_transfer_ring_init(&xhci->command_ring, xhci->bti_handle, COMMAND_RING_SIZE);
     if (result != ZX_OK) {
         zxlogf(ERROR, "xhci_command_ring_init failed\n");
         goto fail;
     }
 
     for (uint32_t i = 0; i < xhci->num_interrupts; i++) {
-        result = xhci_event_ring_init(xhci, i, EVENT_RING_SIZE);
+        result = xhci_event_ring_init(&xhci->event_rings[i], xhci->bti_handle,
+                                      xhci->erst_arrays[i], EVENT_RING_SIZE);
         if (result != ZX_OK) {
             zxlogf(ERROR, "xhci_event_ring_init failed\n");
             goto fail;
@@ -468,6 +471,8 @@ void xhci_stop(xhci_t* xhci) {
     volatile uint32_t* usbcmd = &xhci->op_regs->usbcmd;
     volatile uint32_t* usbsts = &xhci->op_regs->usbsts;
 
+    // stop device thread and root hubs before turning off controller
+    xhci_stop_device_thread(xhci);
     xhci_stop_root_hubs(xhci);
 
     // stop controller
@@ -478,8 +483,6 @@ void xhci_stop(xhci_t* xhci) {
     for (uint32_t i = 1; i <= xhci->max_slots; i++) {
         xhci_slot_stop(&xhci->slots[i]);
     }
-
-    xhci_stop_device_thread(xhci);
 }
 
 void xhci_free(xhci_t* xhci) {
@@ -501,7 +504,7 @@ void xhci_free(xhci_t* xhci) {
     free(xhci->rh_port_map);
 
     for (uint32_t i = 0; i < xhci->num_interrupts; i++) {
-        xhci_event_ring_free(xhci, i);
+        xhci_event_ring_free(&xhci->event_rings[i]);
     }
 
     xhci_transfer_ring_free(&xhci->command_ring);
@@ -509,6 +512,10 @@ void xhci_free(xhci_t* xhci) {
     io_buffer_release(&xhci->input_context_buffer);
     io_buffer_release(&xhci->scratch_pad_pages_buffer);
     io_buffer_release(&xhci->scratch_pad_index_buffer);
+
+    // this must done after releasing anything that relies
+    // on our bti, like our io_buffers
+    zx_handle_close(xhci->bti_handle);
 
     free(xhci);
 }

@@ -26,24 +26,17 @@ private:
 
     Token::Kind Peek() { return last_token_.kind(); }
 
-    Token Consume() {
+    Token ConsumeToken(Token::Kind kind) {
+        if (Peek() != kind)
+            Fail();
         auto token = last_token_;
         last_token_ = Lex();
         return token;
     }
 
-    Token ConsumeToken(Token::Kind kind) {
-        auto token = Consume();
-        if (token.kind() != kind)
-            Fail();
-        return token;
-    }
-
     bool MaybeConsumeToken(Token::Kind kind) {
         if (Peek() == kind) {
-            auto token = Consume();
-            static_cast<void>(token);
-            assert(token.kind() == kind);
+            last_token_ = Lex();
             return true;
         } else {
             return false;
@@ -62,7 +55,6 @@ private:
     std::unique_ptr<raw::NumericLiteral> ParseNumericLiteral();
     std::unique_ptr<raw::TrueLiteral> ParseTrueLiteral();
     std::unique_ptr<raw::FalseLiteral> ParseFalseLiteral();
-    std::unique_ptr<raw::DefaultLiteral> ParseDefaultLiteral();
     std::unique_ptr<raw::Literal> ParseLiteral();
 
     std::unique_ptr<raw::Constant> ParseConstant();

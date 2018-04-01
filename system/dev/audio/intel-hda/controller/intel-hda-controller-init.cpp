@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <hw/arch_ops.h>
+#include <limits.h>
 
 #include "debug-logging.h"
 #include "intel-hda-controller.h"
@@ -19,7 +20,6 @@ static constexpr zx_time_t INTEL_HDA_RESET_TIMEOUT_NSEC          = ZX_MSEC(1);  
 static constexpr zx_time_t INTEL_HDA_RING_BUF_RESET_TIMEOUT_NSEC = ZX_MSEC(1);   // 1mS Arbitrary
 static constexpr zx_time_t INTEL_HDA_RESET_POLL_TIMEOUT_NSEC     = ZX_USEC(10);  // 10uS Arbitrary
 static constexpr zx_time_t INTEL_HDA_CODEC_DISCOVERY_WAIT_NSEC   = ZX_USEC(521); // Section 4.3
-static constexpr size_t CMD_BUFFER_SIZE = 4096;
 }  // anon namespace
 
 zx_status_t IntelHDAController::ResetControllerHW() {
@@ -31,37 +31,38 @@ zx_status_t IntelHDAController::ResetControllerHW() {
     // stream in reset while attempting to reset the controller on some Skylake
     // hardware has caused some pretty profound hardware lockups which require
     // fully removing power (warm reboot == not good enough) to recover from.
-    if (REG_RD(&regs_->gctl) & HDA_REG_GCTL_HWINIT) {
+    if (REG_RD(&regs()->gctl) & HDA_REG_GCTL_HWINIT) {
         // Explicitly disable all top level interrupt sources.
-        REG_WR(&regs_->intsts, 0u);
+        REG_WR(&regs()->intsts, 0u);
         hw_mb();
 
         // Count the number of streams present in the hardware and
         // unconditionally stop and reset all of them.
-        uint16_t gcap = REG_RD(&regs_->gcap);
+        uint16_t gcap = REG_RD(&regs()->gcap);
         unsigned int total_stream_cnt = HDA_REG_GCAP_ISS(gcap)
                                       + HDA_REG_GCAP_OSS(gcap)
                                       + HDA_REG_GCAP_BSS(gcap);
 
-        if (total_stream_cnt > countof(regs_->stream_desc)) {
-            LOG("Fatal error during reset!  Controller reports more streams (%u) "
+        if (total_stream_cnt > countof(regs()->stream_desc)) {
+            LOG(ERROR,
+                "Fatal error during reset!  Controller reports more streams (%u) "
                 "than should be possible for IHDA hardware.  (GCAP = 0x%04hx)\n",
                 total_stream_cnt, gcap);
             return ZX_ERR_INTERNAL;
         }
 
-        hda_stream_desc_regs_t* sregs = regs_->stream_desc;
+        hda_stream_desc_regs_t* sregs = regs()->stream_desc;
         for (uint32_t i = 0; i < total_stream_cnt; ++i) {
             IntelHDAStream::Reset(sregs + i);
         }
 
         // Explicitly shut down any CORB/RIRB DMA
-        REG_WR(&regs_->corbctl, 0u);
-        REG_WR(&regs_->rirbctl, 0u);
+        REG_WR(&regs()->corbctl, 0u);
+        REG_WR(&regs()->rirbctl, 0u);
     }
 
     // Assert the reset signal and wait for the controller to ack.
-    REG_CLR_BITS(&regs_->gctl, HDA_REG_GCTL_HWINIT);
+    REG_CLR_BITS(&regs()->gctl, HDA_REG_GCTL_HWINIT);
     hw_mb();
 
     res = WaitCondition(INTEL_HDA_RESET_TIMEOUT_NSEC,
@@ -70,10 +71,10 @@ zx_status_t IntelHDAController::ResetControllerHW() {
                            auto regs = reinterpret_cast<hda_registers_t*>(r);
                            return (REG_RD(&regs->gctl) & HDA_REG_GCTL_HWINIT) == 0;
                         },
-                        regs_);
+                        regs());
 
     if (res != ZX_OK) {
-        LOG("Error attempting to enter reset! (res %d)\n", res);
+        LOG(ERROR, "Error attempting to enter reset! (res %d)\n", res);
         return res;
     }
 
@@ -81,7 +82,7 @@ zx_status_t IntelHDAController::ResetControllerHW() {
     zx_nanosleep(zx_deadline_after(INTEL_HDA_RESET_HOLD_TIME_NSEC));
 
     // Deassert the reset signal and wait for the controller to ack.
-    REG_SET_BITS<uint32_t>(&regs_->gctl, HDA_REG_GCTL_HWINIT);
+    REG_SET_BITS<uint32_t>(&regs()->gctl, HDA_REG_GCTL_HWINIT);
     hw_mb();
 
     res = WaitCondition(INTEL_HDA_RESET_TIMEOUT_NSEC,
@@ -90,10 +91,10 @@ zx_status_t IntelHDAController::ResetControllerHW() {
                            auto regs = reinterpret_cast<hda_registers_t*>(r);
                            return (REG_RD(&regs->gctl) & HDA_REG_GCTL_HWINIT) != 0;
                         },
-                        regs_);
+                        regs());
 
     if (res != ZX_OK) {
-        LOG("Error attempting to leave reset! (res %d)\n", res);
+        LOG(ERROR, "Error attempting to leave reset! (res %d)\n", res);
         return res;
     }
 
@@ -106,7 +107,7 @@ zx_status_t IntelHDAController::ResetCORBRdPtrLocked() {
     zx_status_t res;
 
     /* Set the reset bit, then wait for ack from the HW.  See Section 3.3.21 */
-    REG_WR(&regs_->corbrp, HDA_REG_CORBRP_RST);
+    REG_WR(&regs()->corbrp, HDA_REG_CORBRP_RST);
     hw_mb();
 
     if ((res = WaitCondition(INTEL_HDA_RING_BUF_RESET_TIMEOUT_NSEC,
@@ -115,12 +116,12 @@ zx_status_t IntelHDAController::ResetCORBRdPtrLocked() {
                                 auto regs = reinterpret_cast<hda_registers_t*>(r);
                                 return (REG_RD(&regs->corbrp) & HDA_REG_CORBRP_RST) != 0;
                              },
-                             regs_)) != ZX_OK) {
+                             regs())) != ZX_OK) {
         return res;
     }
 
     /* Clear the reset bit, then wait for ack */
-    REG_WR(&regs_->corbrp, 0u);
+    REG_WR(&regs()->corbrp, 0u);
     hw_mb();
 
     if ((res = WaitCondition(INTEL_HDA_RING_BUF_RESET_TIMEOUT_NSEC,
@@ -129,7 +130,7 @@ zx_status_t IntelHDAController::ResetCORBRdPtrLocked() {
                                 auto regs = reinterpret_cast<hda_registers_t*>(r);
                                 return (REG_RD(&regs->corbrp) & HDA_REG_CORBRP_RST) == 0;
                              },
-                             regs_)) != ZX_OK) {
+                             regs())) != ZX_OK) {
         return res;
     }
 
@@ -144,23 +145,20 @@ zx_status_t IntelHDAController::SetupPCIDevice(zx_device_t* pci_dev) {
 
     // Have we already been set up?
     if (pci_dev_ != nullptr) {
-        LOG("Device already initialized!\n");
+        LOG(ERROR, "Device already initialized!\n");
         return ZX_ERR_BAD_STATE;
     }
 
-    ZX_DEBUG_ASSERT(irq_handle_  == ZX_HANDLE_INVALID);
-    ZX_DEBUG_ASSERT(regs_handle_ == ZX_HANDLE_INVALID);
+    ZX_DEBUG_ASSERT(!irq_.is_valid());
+    ZX_DEBUG_ASSERT(mapped_regs_.start() == nullptr);
     ZX_DEBUG_ASSERT(pci_.ops == nullptr);
 
     pci_dev_ = pci_dev;
 
-    // Generate a default debug tag for now.
-    snprintf(debug_tag_, sizeof(debug_tag_), "IHDA Controller (unknown BDF)");
-
     // The device had better be a PCI device, or we are very confused.
     res = device_get_protocol(pci_dev_, ZX_PROTOCOL_PCI, reinterpret_cast<void*>(&pci_));
     if (res != ZX_OK) {
-        LOG("PCI device does not support PCI protocol! (res %d)\n", res);
+        LOG(ERROR, "PCI device does not support PCI protocol! (res %d)\n", res);
         return res;
     }
 
@@ -169,37 +167,70 @@ zx_status_t IntelHDAController::SetupPCIDevice(zx_device_t* pci_dev) {
     ZX_DEBUG_ASSERT(pci_.ops != nullptr);
     res = pci_get_device_info(&pci_, &pci_dev_info_);
     if (res != ZX_OK) {
-        LOG("Failed to fetch basic PCI device info! (res %d)\n", res);
+        LOG(ERROR, "Failed to fetch basic PCI device info! (res %d)\n", res);
         return res;
     }
 
-    snprintf(debug_tag_, sizeof(debug_tag_), "IHDA Controller %02x:%02x.%01x",
+    snprintf(log_prefix_, sizeof(log_prefix_), "IHDA Controller %02x:%02x.%01x",
              pci_dev_info_.bus_id,
              pci_dev_info_.dev_id,
              pci_dev_info_.func_id);
 
-
-    // Map in the registers located at BAR 0.  Make sure that they are the size
-    // we expect them to be.
-    ZX_DEBUG_ASSERT(regs_handle_ == ZX_HANDLE_INVALID);
-    uint64_t reg_window_size;
-    hda_all_registers_t* all_regs;
-    res = pci_map_bar(&pci_, 0u, ZX_CACHE_POLICY_UNCACHED_DEVICE,
-                      reinterpret_cast<void**>(&all_regs),
-                      &reg_window_size,
-                      &regs_handle_);
+    // Fetch a handle to our bus transaction initiator and stash it in a ref
+    // counted object (so we can manage the lifecycle as we share the handle
+    // with various pinned VMOs we need to grant the controller BTI access to).
+    zx::bti pci_bti;
+    res = pci_get_bti(&pci_, 0, pci_bti.reset_and_get_address());
     if (res != ZX_OK) {
-        LOG("Error attempting to map registers (res %d)\n", res);
+        LOG(ERROR, "Failed to get BTI handle for IHDA Controller (res %d)\n", res);
         return res;
     }
 
-    if (sizeof(*all_regs) != reg_window_size) {
-        LOG("Bad register window size (expected 0x%zx got 0x%" PRIx64 ")\n",
-            sizeof(*all_regs), reg_window_size);
-        return ZX_ERR_INVALID_ARGS;
+    pci_bti_ = RefCountedBti::Create(fbl::move(pci_bti));
+    if (pci_bti_ == nullptr) {
+        LOG(ERROR, "Out of memory while attempting to allocate BTI wrapper for IHDA Controller\n");
+        return ZX_ERR_NO_MEMORY;
     }
 
-    regs_ = &all_regs->regs;
+    // Fetch the BAR which holds our main registers, then sanity check the type
+    // and size.
+    zx_pci_bar_t bar_info;
+    res = pci_get_bar(&pci_, 0u, &bar_info);
+    if (res != ZX_OK) {
+        LOG(ERROR, "Error attempting to fetch registers from PCI (res %d)\n", res);
+        return res;
+    }
+
+    if (bar_info.type != PCI_BAR_TYPE_MMIO) {
+        LOG(ERROR, "Bad register window type (expected %u got %u)\n",
+                PCI_BAR_TYPE_MMIO, bar_info.type);
+        return ZX_ERR_INTERNAL;
+    }
+
+    // We should have a valid handle now, make sure we don't leak it.
+    zx::vmo bar_vmo(bar_info.handle);
+    if (bar_info.size != sizeof(hda_all_registers_t)) {
+        LOG(ERROR, "Bad register window size (expected 0x%zx got 0x%zx)\n",
+            sizeof(hda_all_registers_t), bar_info.size);
+        return ZX_ERR_INTERNAL;
+    }
+
+    // Since this VMO provides access to our registers, make sure to set the
+    // cache policy to UNCACHED_DEVICE
+    res = bar_vmo.set_cache_policy(ZX_CACHE_POLICY_UNCACHED_DEVICE);
+    if (res != ZX_OK) {
+        LOG(ERROR, "Error attempting to set cache policy for PCI registers (res %d)\n", res);
+        return res;
+    }
+
+    // Map the VMO in, make sure to put it in the same VMAR as the rest of our
+    // registers.
+    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    res = mapped_regs_.Map(bar_vmo, 0, bar_info.size, CPU_MAP_FLAGS, DriverVmars::registers());
+    if (res != ZX_OK) {
+        LOG(ERROR, "Error attempting to map registers (res %d)\n", res);
+        return res;
+    }
 
     return ZX_OK;
 }
@@ -213,24 +244,24 @@ zx_status_t IntelHDAController::SetupPCIInterrupts() {
     if (res != ZX_OK) {
         res = pci_set_irq_mode(&pci_, ZX_PCIE_IRQ_MODE_LEGACY, 1);
         if (res != ZX_OK) {
-            LOG("Failed to set IRQ mode (%d)!\n", res);
+            LOG(ERROR, "Failed to set IRQ mode (%d)!\n", res);
             return res;
         } else {
-            LOG("Falling back on legacy IRQ mode!\n");
+            LOG(ERROR, "Falling back on legacy IRQ mode!\n");
         }
     }
 
-    ZX_DEBUG_ASSERT(irq_handle_ == ZX_HANDLE_INVALID);
-    res = pci_map_interrupt(&pci_, 0, &irq_handle_);
+    ZX_DEBUG_ASSERT(!irq_.is_valid());
+    res = pci_map_interrupt(&pci_, 0, irq_.reset_and_get_address());
     if (res != ZX_OK) {
-        LOG("Failed to map IRQ! (res %d)\n", res);
+        LOG(ERROR, "Failed to map IRQ! (res %d)\n", res);
         return res;
     }
 
     // Enable Bus Mastering so we can DMA data and receive MSIs
     res = pci_enable_bus_master(&pci_, true);
     if (res != ZX_OK) {
-        LOG("Failed to enable PCI bus mastering!\n");
+        LOG(ERROR, "Failed to enable PCI bus mastering!\n");
         return res;
     }
 
@@ -243,47 +274,23 @@ zx_status_t IntelHDAController::SetupStreamDescriptors() {
     // Sanity check our stream counts.
     uint16_t gcap;
     unsigned int input_stream_cnt, output_stream_cnt, bidir_stream_cnt, total_stream_cnt;
-    gcap              = REG_RD(&regs_->gcap);
+    gcap              = REG_RD(&regs()->gcap);
     input_stream_cnt  = HDA_REG_GCAP_ISS(gcap);
     output_stream_cnt = HDA_REG_GCAP_OSS(gcap);
     bidir_stream_cnt  = HDA_REG_GCAP_BSS(gcap);
     total_stream_cnt  = input_stream_cnt + output_stream_cnt + bidir_stream_cnt;
 
-    static_assert(IntelHDAStream::MAX_STREAMS_PER_CONTROLLER == countof(regs_->stream_desc),
+    static_assert(MAX_STREAMS_PER_CONTROLLER == countof(regs()->stream_desc),
                   "Max stream count mismatch!");
 
-    if (!total_stream_cnt || (total_stream_cnt > countof(regs_->stream_desc))) {
-        LOG("Invalid stream counts in GCAP register (In %u Out %u Bidir %u; Max %zu)\n",
-            input_stream_cnt, output_stream_cnt, bidir_stream_cnt, countof(regs_->stream_desc));
+    if (!total_stream_cnt || (total_stream_cnt > countof(regs()->stream_desc))) {
+        LOG(ERROR, "Invalid stream counts in GCAP register (In %u Out %u Bidir %u; Max %zu)\n",
+            input_stream_cnt, output_stream_cnt, bidir_stream_cnt, countof(regs()->stream_desc));
         return ZX_ERR_INTERNAL;
     }
 
-    // Allocate and map storage for our buffer descriptor lists.
-    //
-    // TODO(johngro) : Relax this restriction.  Individual BDLs need to be
-    // contiguous in physical memory (and non-swap-able) but the overall
-    // allocation does not need to be.
-    uint32_t bdl_size, total_bdl_size;
-
-    bdl_size       = sizeof(IntelHDABDLEntry) * IntelHDAStream::MAX_BDL_LENGTH;
-    total_bdl_size = bdl_size * total_stream_cnt;
-
-    zx_status_t res = bdl_mem_.Allocate(total_bdl_size);
-    if (res != ZX_OK) {
-        LOG("Failed to allocate %u bytes of contiguous physical memory for "
-            "buffer descriptor lists!  (res %d)\n", total_bdl_size, res);
-        return res;
-    }
-
-    // Map the memory in so that we can access it.
-    res = bdl_mem_.Map();
-    if (res != ZX_OK) {
-        LOG("Failed to map BDL memory!  (res %d)\n", res);
-        return res;
-    }
-
     // Allocate our stream descriptors and populate our free lists.
-    for (uint32_t i = 0, bdl_off = 0; i < total_stream_cnt; ++i, bdl_off += bdl_size) {
+    for (uint32_t i = 0; i < total_stream_cnt; ++i) {
         uint16_t stream_id = static_cast<uint16_t>(i + 1);
         auto type = (i < input_stream_cnt)
                   ? IntelHDAStream::Type::INPUT
@@ -291,16 +298,15 @@ zx_status_t IntelHDAController::SetupStreamDescriptors() {
                   ? IntelHDAStream::Type::OUTPUT
                   : IntelHDAStream::Type::BIDIR);
 
-        auto stream = fbl::AdoptRef(new IntelHDAStream(type,
-                                                        stream_id,
-                                                        &regs_->stream_desc[i],
-                                                        bdl_mem_.phys() + bdl_off,
-                                                        bdl_mem_.virt() + bdl_off));
+        auto stream = IntelHDAStream::Create(type, stream_id, &regs()->stream_desc[i], pci_bti_);
+        if (stream == nullptr) {
+            LOG(ERROR, "Failed to create HDA stream context %u/%u\n", i, total_stream_cnt);
+            return ZX_ERR_NO_MEMORY;
+        }
 
         ZX_DEBUG_ASSERT(i < countof(all_streams_));
         ZX_DEBUG_ASSERT(all_streams_[i] == nullptr);
         all_streams_[i] = stream;
-
         ReturnStreamLocked(fbl::move(stream));
     }
 
@@ -324,7 +330,7 @@ zx_status_t IntelHDAController::SetupCommandBufferSize(uint8_t* size_reg,
         *entry_count = 2;
         cmd = HDA_REG_CORBSIZE_CFG_2ENT;
     } else {
-        LOG("Invalid ring buffer capabilities! (0x%02x)\n", tmp);
+        LOG(ERROR, "Invalid ring buffer capabilities! (0x%02x)\n", tmp);
         return ZX_ERR_BAD_STATE;
     }
 
@@ -339,29 +345,46 @@ zx_status_t IntelHDAController::SetupCommandBuffer() {
 
     // Allocate our command buffer memory and map it into our address space.
     // Even the largest buffers permissible should fit within a single 4k page.
-    static_assert(CMD_BUFFER_SIZE >= (HDA_CORB_MAX_BYTES + HDA_RIRB_MAX_BYTES),
-                  "CMD_BUFFER_SIZE to small to hold CORB and RIRB buffers!");
-    res = cmd_buf_mem_.Allocate(CMD_BUFFER_SIZE);
+    zx::vmo cmd_buf_vmo;
+    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    static_assert(PAGE_SIZE >= (HDA_CORB_MAX_BYTES + HDA_RIRB_MAX_BYTES),
+                  "PAGE_SIZE to small to hold CORB and RIRB buffers!");
+    res = cmd_buf_cpu_mem_.CreateAndMap(PAGE_SIZE,
+                                        CPU_MAP_FLAGS,
+                                        DriverVmars::registers(),
+                                        &cmd_buf_vmo,
+                                        ZX_RIGHT_SAME_RIGHTS,
+                                        ZX_CACHE_POLICY_UNCACHED_DEVICE);
+
     if (res != ZX_OK) {
-        LOG("Failed to allocate %zu bytes for CORB/RIRB command buffers! (res %d)\n",
-            CMD_BUFFER_SIZE, res);
+        LOG(ERROR, "Failed to create and map %u bytes for CORB/RIRB command buffers! (res %d)\n",
+            PAGE_SIZE, res);
         return res;
     }
 
-    // Now map it so we have access as well.
-    res = cmd_buf_mem_.Map();
+    // Pin this VMO and grant the controller access to it.  The controller will
+    // need read/write access as this page contains both the command and
+    // response buffers.
+    //
+    // TODO(johngro): If we (someday) decide that we need more isolation, we
+    // should split this allocation so that there is a dedicated page for the
+    // command buffer separate from the response buffer.  The controller should
+    // never have a reason it needs to write to the command buffer, but it would
+    // need its own page if we wanted to control the access at an IOMMU level.
+    constexpr uint32_t HDA_MAP_FLAGS = ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE;
+    res = cmd_buf_hda_mem_.Pin(cmd_buf_vmo, pci_bti_, HDA_MAP_FLAGS);
     if (res != ZX_OK) {
-        LOG("Failed to map CORB/RIRB command buffer (res %d)\n", res);
+        LOG(ERROR, "Failed to pin pages for CORB/RIRB command buffers! (res %d)\n", res);
         return res;
     }
 
     // Start by making sure that the output and response ring buffers are being
     // held in the stopped state
-    REG_WR(&regs_->corbctl, 0u);
-    REG_WR(&regs_->rirbctl, 0u);
+    REG_WR(&regs()->corbctl, 0u);
+    REG_WR(&regs()->rirbctl, 0u);
 
     // Reset the read and write pointers for both ring buffers
-    REG_WR(&regs_->corbwp, 0u);
+    REG_WR(&regs()->corbwp, 0u);
     res = ResetCORBRdPtrLocked();
     if (res != ZX_OK)
         return res;
@@ -369,19 +392,19 @@ zx_status_t IntelHDAController::SetupCommandBuffer() {
     // Note; the HW does not expose a Response Input Ring Buffer Read Pointer,
     // we have to maintain our own.
     rirb_rd_ptr_ = 0;
-    REG_WR(&regs_->rirbwp, HDA_REG_RIRBWP_RST);
+    REG_WR(&regs()->rirbwp, HDA_REG_RIRBWP_RST);
 
     // Physical memory for the CORB/RIRB should already have been allocated at
     // this point
-    ZX_DEBUG_ASSERT(cmd_buf_mem_.virt() != 0);
+    ZX_DEBUG_ASSERT(cmd_buf_cpu_mem_.start() != 0);
 
     // Determine the ring buffer sizes.  If there are options, make them as
     // large as possible.
-    res = SetupCommandBufferSize(&regs_->corbsize, &corb_entry_count_);
+    res = SetupCommandBufferSize(&regs()->corbsize, &corb_entry_count_);
     if (res != ZX_OK)
         return res;
 
-    res = SetupCommandBufferSize(&regs_->rirbsize, &rirb_entry_count_);
+    res = SetupCommandBufferSize(&regs()->rirbsize, &rirb_entry_count_);
     if (res != ZX_OK)
         return res;
 
@@ -395,30 +418,32 @@ zx_status_t IntelHDAController::SetupCommandBuffer() {
 
     // Program the base address registers for the TX/RX ring buffers, and set up
     // the virtual pointers to the ring buffer entries.
-    uint64_t cmd_buf_paddr64 = static_cast<uint64_t>(cmd_buf_mem_.phys());
+    const auto& region = cmd_buf_hda_mem_.region(0);
+    uint64_t cmd_buf_paddr64 = static_cast<uint64_t>(region.phys_addr);
 
     // TODO(johngro) : If the controller does not support 64 bit phys
     // addressing, we need to make sure to get a page from low memory to use for
     // our command buffers.
-    bool gcap_64bit_ok = HDA_REG_GCAP_64OK(REG_RD(&regs_->gcap));
+    bool gcap_64bit_ok = HDA_REG_GCAP_64OK(REG_RD(&regs()->gcap));
     if ((cmd_buf_paddr64 >> 32) && !gcap_64bit_ok) {
-        LOG("Intel HDA controller does not support 64-bit physical addressing!\n");
+        LOG(ERROR, "Intel HDA controller does not support 64-bit physical addressing!\n");
         return ZX_ERR_NOT_SUPPORTED;
     }
 
     // Section 4.4.1.1; corb ring buffer base address must be 128 byte aligned.
     ZX_DEBUG_ASSERT(!(cmd_buf_paddr64 & 0x7F));
-    REG_WR(&regs_->corblbase, ((uint32_t)(cmd_buf_paddr64 & 0xFFFFFFFF)));
-    REG_WR(&regs_->corbubase, ((uint32_t)(cmd_buf_paddr64 >> 32)));
-    corb_ = reinterpret_cast<CodecCommand*>(cmd_buf_mem_.virt());
+    auto cmd_buf_start = reinterpret_cast<uint8_t*>(cmd_buf_cpu_mem_.start());
+    REG_WR(&regs()->corblbase, ((uint32_t)(cmd_buf_paddr64 & 0xFFFFFFFF)));
+    REG_WR(&regs()->corbubase, ((uint32_t)(cmd_buf_paddr64 >> 32)));
+    corb_ = reinterpret_cast<CodecCommand*>(cmd_buf_start);
 
     cmd_buf_paddr64 += HDA_CORB_MAX_BYTES;
 
     // Section 4.4.2.2; rirb ring buffer base address must be 128 byte aligned.
     ZX_DEBUG_ASSERT(!(cmd_buf_paddr64 & 0x7F));
-    REG_WR(&regs_->rirblbase, ((uint32_t)(cmd_buf_paddr64 & 0xFFFFFFFF)));
-    REG_WR(&regs_->rirbubase, ((uint32_t)(cmd_buf_paddr64 >> 32)));
-    rirb_ = reinterpret_cast<CodecResponse*>(cmd_buf_mem_.virt() + HDA_CORB_MAX_BYTES);
+    REG_WR(&regs()->rirblbase, ((uint32_t)(cmd_buf_paddr64 & 0xFFFFFFFF)));
+    REG_WR(&regs()->rirbubase, ((uint32_t)(cmd_buf_paddr64 >> 32)));
+    rirb_ = reinterpret_cast<CodecResponse*>(cmd_buf_start + HDA_CORB_MAX_BYTES);
 
     // Make sure our current view of the space available in the CORB is up-to-date.
     ComputeCORBSpaceLocked();
@@ -438,15 +463,15 @@ zx_status_t IntelHDAController::SetupCommandBuffer() {
     if (thresh > RIRB_RESERVED_RESPONSE_SLOTS)
         thresh -= RIRB_RESERVED_RESPONSE_SLOTS;
     ZX_DEBUG_ASSERT(thresh);
-    REG_WR(&regs_->rintcnt, thresh);
+    REG_WR(&regs()->rintcnt, thresh);
 
     // Clear out any lingering interrupt status
-    REG_WR(&regs_->corbsts, HDA_REG_CORBSTS_MEI);
-    REG_WR(&regs_->rirbsts, OR(HDA_REG_RIRBSTS_INTFL, HDA_REG_RIRBSTS_OIS));
+    REG_WR(&regs()->corbsts, HDA_REG_CORBSTS_MEI);
+    REG_WR(&regs()->rirbsts, OR(HDA_REG_RIRBSTS_INTFL, HDA_REG_RIRBSTS_OIS));
 
     // Enable the TX/RX IRQs and DMA engines.
-    REG_WR(&regs_->corbctl, OR(HDA_REG_CORBCTL_MEIE, HDA_REG_CORBCTL_DMA_EN));
-    REG_WR(&regs_->rirbctl, OR(OR(HDA_REG_RIRBCTL_INTCTL, HDA_REG_RIRBCTL_DMA_EN),
+    REG_WR(&regs()->corbctl, OR(HDA_REG_CORBCTL_MEIE, HDA_REG_CORBCTL_DMA_EN));
+    REG_WR(&regs()->rirbctl, OR(OR(HDA_REG_RIRBCTL_INTCTL, HDA_REG_RIRBCTL_DMA_EN),
                                HDA_REG_RIRBCTL_OIC));
 
     return ZX_OK;
@@ -464,11 +489,11 @@ zx_status_t IntelHDAController::InitInternal(zx_device_t* pci_dev) {
 
     // Check our hardware version
     uint8_t major, minor;
-    major = REG_RD(&regs_->vmaj);
-    minor = REG_RD(&regs_->vmin);
+    major = REG_RD(&regs()->vmaj);
+    minor = REG_RD(&regs()->vmin);
 
     if ((1 != major) || (0 != minor)) {
-        LOG("Unexpected HW revision %d.%d!\n", major, minor);
+        LOG(ERROR, "Unexpected HW revision %d.%d!\n", major, minor);
         return ZX_ERR_NOT_SUPPORTED;
     }
 
@@ -509,7 +534,7 @@ zx_status_t IntelHDAController::InitInternal(zx_device_t* pci_dev) {
 #endif
 
     if (c11_res < 0) {
-        LOG("Failed create IRQ thread! (res = %d)\n", c11_res);
+        LOG(ERROR, "Failed create IRQ thread! (res = %d)\n", c11_res);
         SetState(State::SHUT_DOWN);
         return ZX_ERR_INTERNAL;
     }
@@ -541,11 +566,12 @@ zx_status_t IntelHDAController::InitInternal(zx_device_t* pci_dev) {
     // our device.
 
     // Generate a device name and initialize our device structure
-    snprintf(debug_tag_, sizeof(debug_tag_), "intel-hda-%03u", id());
+    char dev_name[ZX_DEVICE_NAME_MAX] = { 0 };
+    snprintf(dev_name, sizeof(dev_name), "intel-hda-%03u", id());
 
     device_add_args_t args = {};
     args.version = DEVICE_ADD_ARGS_VERSION;
-    args.name = debug_tag_;
+    args.name = dev_name;
     args.ctx = this;
     args.ops = &CONTROLLER_DEVICE_THUNKS;
     args.proto_id = ZX_PROTOCOL_IHDA;

@@ -43,7 +43,7 @@ namespace zxcrypt {
 // derived from the caller-provided root key and specific slot.
 
 // Determines what algorithms are in use when creating new zxcrypt devices.
-const Volume::Version Volume::kDefaultVersion = Volume::kAES256_XTS_SHA256;
+const Volume::Version Volume::kDefaultVersion = Volume::kAES128_CTR_SHA256;
 
 // Maximum number of key slots.  If a device's block size can not hold |kNumSlots| for a particular
 // version, then attempting to |Create| or |Open| a zxcrypt volume will fail with
@@ -119,8 +119,7 @@ zx_status_t SyncIO(zx_device_t* dev, uint32_t cmd, void* buf, size_t off, size_t
     block->completion_cb = SyncComplete;
     block->cookie = &completion;
 
-    size_t actual;
-    if (cmd == BLOCK_OP_WRITE && (rc = vmo.write(buf, 0, len, &actual)) != ZX_OK) {
+    if (cmd == BLOCK_OP_WRITE && (rc = vmo.write(buf, 0, len)) != ZX_OK) {
         xprintf("zx::vmo::write failed: %s\n", zx_status_get_string(rc));
         return rc;
     }
@@ -134,7 +133,7 @@ zx_status_t SyncIO(zx_device_t* dev, uint32_t cmd, void* buf, size_t off, size_t
         return rc;
     }
 
-    if (cmd == BLOCK_OP_READ && (rc = vmo.read(buf, 0, len, &actual)) != ZX_OK) {
+    if (cmd == BLOCK_OP_READ && (rc = vmo.read(buf, 0, len)) != ZX_OK) {
         xprintf("zx::vmo::read failed: %s\n", zx_status_get_string(rc));
         return rc;
     }
@@ -455,6 +454,11 @@ zx_status_t Volume::Configure(Volume::Version version) {
     case Volume::kAES256_XTS_SHA256:
         aead_ = crypto::AEAD::kAES128_GCM_SIV;
         cipher_ = crypto::Cipher::kAES256_XTS;
+        digest_ = crypto::digest::kSHA256;
+        break;
+    case Volume::kAES128_CTR_SHA256:
+        aead_ = crypto::AEAD::kAES128_GCM_SIV;
+        cipher_ = crypto::Cipher::kAES128_CTR;
         digest_ = crypto::digest::kSHA256;
         break;
 

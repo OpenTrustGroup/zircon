@@ -27,7 +27,7 @@ namespace fidl {
 
 class JSONGenerator {
 public:
-    explicit JSONGenerator(flat::Library* library)
+    explicit JSONGenerator(const flat::Library* library)
         : library_(library) {}
 
     ~JSONGenerator() = default;
@@ -42,8 +42,13 @@ private:
 
     void GenerateEOF();
 
+    template <typename Iterator>
+    void GenerateArray(Iterator begin, Iterator end);
+
     template <typename Collection>
     void GenerateArray(const Collection& collection);
+
+    void GenerateObjectPunctuation(Position position);
 
     template <typename Callback>
     void GenerateObject(Callback callback);
@@ -63,23 +68,22 @@ private:
     void Generate(bool value);
     void Generate(StringView value);
     void Generate(SourceLocation value);
-    void Generate(uint64_t value);
+    void Generate(uint32_t value);
 
     void Generate(types::HandleSubtype value);
     void Generate(types::Nullability value);
     void Generate(types::PrimitiveSubtype value);
 
     void Generate(const raw::Identifier& value);
-    void Generate(const raw::CompoundIdentifier& value);
     void Generate(const raw::Literal& value);
     void Generate(const raw::Type& value);
-    void Generate(const raw::Constant& value);
     void Generate(const raw::Attribute& value);
     void Generate(const raw::AttributeList& value);
 
     void Generate(const flat::Ordinal& value);
     void Generate(const flat::Name& value);
     void Generate(const flat::Type& value);
+    void Generate(const flat::Constant& value);
     void Generate(const flat::Const& value);
     void Generate(const flat::Enum& value);
     void Generate(const flat::Enum::Member& value);
@@ -90,10 +94,12 @@ private:
     void Generate(const flat::Struct::Member& value);
     void Generate(const flat::Union& value);
     void Generate(const flat::Union::Member& value);
+    void Generate(const std::pair<const StringView, std::unique_ptr<flat::Library>>& library_dependency);
 
-    void GenerateDeclarationMapEntry(int count, const flat::Name& name, StringView decl);
+    void GenerateDeclarationsEntry(int count, const flat::Name& name, StringView decl);
+    void GenerateDeclarationsMember(const flat::Library* library, Position position = Position::Subsequent);
 
-    flat::Library* library_;
+    const flat::Library* library_;
     int indent_level_;
     std::ostringstream json_file_;
 };

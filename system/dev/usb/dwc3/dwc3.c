@@ -273,6 +273,12 @@ static zx_status_t dwc3_clear_stall(void* ctx, uint8_t ep_address) {
     return dwc3_ep_set_stall(dwc, dwc3_ep_num(ep_address), false);
 }
 
+static zx_status_t dwc3_get_bti(void* ctx, zx_handle_t* out_handle) {
+    dwc3_t* dwc = ctx;
+    *out_handle = dwc->bti_handle;
+    return ZX_OK;
+}
+
 usb_dci_protocol_ops_t dwc_dci_protocol = {
     .request_queue = dwc3_request_queue,
     .set_interface = dwc3_set_interface,
@@ -280,6 +286,7 @@ usb_dci_protocol_ops_t dwc_dci_protocol = {
     .disable_ep = dwc3_disable_ep,
     .ep_set_stall = dwc3_set_stall,
     .ep_clear_stall = dwc3_clear_stall,
+    .get_bti = dwc3_get_bti,
 };
 
 static zx_status_t dwc3_get_initial_mode(void* ctx, usb_mode_t* out_mode) {
@@ -375,10 +382,11 @@ static void dwc3_release(void* ctx) {
     for (unsigned i = 0; i < countof(dwc->eps); i++) {
         dwc3_ep_fifo_release(dwc, i);
     }
-    pdev_vmo_buffer_release(&dwc->event_buffer);
-    pdev_vmo_buffer_release(&dwc->ep0_buffer);
-    pdev_vmo_buffer_release(&dwc->mmio);
+    io_buffer_release(&dwc->event_buffer);
+    io_buffer_release(&dwc->ep0_buffer);
+    io_buffer_release(&dwc->mmio);
     zx_handle_close(dwc->irq_handle);
+    zx_handle_close(dwc->bti_handle);
     free(dwc);
 }
 
@@ -408,6 +416,11 @@ static zx_status_t dwc3_bind(void* ctx, zx_device_t* parent) {
 
     mtx_init(&dwc->lock, mtx_plain);
 
+    status = pdev_get_bti(&dwc->pdev, 0, &dwc->bti_handle);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+
     for (unsigned i = 0; i < countof(dwc->eps); i++) {
         dwc3_endpoint_t* ep = &dwc->eps[i];
         ep->ep_num = i;
@@ -424,19 +437,18 @@ static zx_status_t dwc3_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    status = pdev_map_contig_buffer(&dwc->pdev, EVENT_BUFFER_SIZE, 0, ZX_VM_FLAG_PERM_READ,
-                                    ZX_CACHE_POLICY_CACHED, &dwc->event_buffer);
+    status = io_buffer_init(&dwc->event_buffer, dwc->bti_handle, EVENT_BUFFER_SIZE,
+                            IO_BUFFER_RO | IO_BUFFER_CONTIG);
     if (status != ZX_OK) {
-        zxlogf(ERROR, "dwc3_bind: pdev_map_contig_buffer failed\n");
+        zxlogf(ERROR, "dwc3_bind: io_buffer_init failed\n");
         goto fail;
     }
-    pdev_vmo_buffer_cache_flush(&dwc->event_buffer, 0, EVENT_BUFFER_SIZE);
+    io_buffer_cache_flush(&dwc->event_buffer, 0, EVENT_BUFFER_SIZE);
 
-    status = pdev_map_contig_buffer(&dwc->pdev, 65536, 0,
-                                    ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                                    ZX_CACHE_POLICY_CACHED, &dwc->ep0_buffer);
+    status = io_buffer_init(&dwc->ep0_buffer,  dwc->bti_handle, 65536,
+                            IO_BUFFER_RW | IO_BUFFER_CONTIG);
     if (status != ZX_OK) {
-        zxlogf(ERROR, "dwc3_bind: pdev_map_contig_buffer failed\n");
+        zxlogf(ERROR, "dwc3_bind: io_buffer_init failed\n");
         goto fail;
     }
 

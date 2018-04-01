@@ -99,8 +99,8 @@ zx_status_t zxrio_handle_close(zxrio_cb_t cb, void* cookie) {
 
     // remote side was closed;
 #ifdef ZXRIO_FIDL
-    ObjectCloseMsg* request = (ObjectCloseMsg*) &msg;
-    memset(request, 0, sizeof(ObjectCloseMsg));
+    ObjectCloseRequest* request = (ObjectCloseRequest*) &msg;
+    memset(request, 0, sizeof(ObjectCloseRequest));
     request->hdr.ordinal = ZXFIDL_CLOSE;
 #else
     msg.op = ZXRIO_CLOSE;
@@ -109,7 +109,7 @@ zx_status_t zxrio_handle_close(zxrio_cb_t cb, void* cookie) {
     msg.hcount = 0;
 #endif
     cb(&msg, cookie);
-    return ZX_OK;
+    return ERR_DISPATCHER_DONE;
 }
 
 zx_status_t zxrio_handler(zx_handle_t h, zxrio_cb_t cb, void* cookie) {
@@ -126,15 +126,15 @@ zx_status_t zxrio_txn_handoff(zx_handle_t srv, zx_handle_t reply, zxrio_msg_t* m
     uint32_t dsize;
     switch (msg->op) {
     case ZXFIDL_OPEN: {
-        DirectoryOpenMsg* request = (DirectoryOpenMsg*) msg;
+        DirectoryOpenRequest* request = (DirectoryOpenRequest*) msg;
         request->object = FIDL_HANDLE_PRESENT;
-        dsize = FIDL_ALIGN(sizeof(DirectoryOpenMsg)) + FIDL_ALIGN(request->path.size);
+        dsize = FIDL_ALIGN(sizeof(DirectoryOpenRequest)) + FIDL_ALIGN(request->path.size);
         break;
     }
     case ZXFIDL_CLONE: {
-        ObjectCloneMsg* request = (ObjectCloneMsg*) msg;
+        ObjectCloneRequest* request = (ObjectCloneRequest*) msg;
         request->object = FIDL_HANDLE_PRESENT;
-        dsize = sizeof(ObjectCloneMsg);
+        dsize = sizeof(ObjectCloneRequest);
         break;
     }
     default:
@@ -813,25 +813,25 @@ zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
         return r;
     }
 
-    // Confirm that the objects "zxrio_describe_t" and "ObjectOnOpenEvt"
+    // Confirm that the objects "zxrio_describe_t" and "ObjectOnOpenEvent"
     // are aligned enough to be compatible.
     //
-    // This is somewhat complicated by the fact that the "ObjectOnOpenEvt"
+    // This is somewhat complicated by the fact that the "ObjectOnOpenEvent"
     // object has an optional "ObjectInfo" secondary which exists immediately
     // following the struct.
     static_assert(__builtin_offsetof(zxrio_describe_t, extra) ==
-                  FIDL_ALIGN(sizeof(ObjectOnOpenEvt)),
+                  FIDL_ALIGN(sizeof(ObjectOnOpenEvent)),
                   "RIO Description message doesn't align with FIDL response secondary");
     static_assert(sizeof(zxrio_object_info_t) == sizeof(ObjectInfo),
                   "RIO Object Info doesn't align with FIDL object info");
     static_assert(__builtin_offsetof(zxrio_object_info_t, file.e) ==
-                  __builtin_offsetof(ObjectInfo, file.e), "Unaligned File");
+                  __builtin_offsetof(ObjectInfo, file.event), "Unaligned File");
     static_assert(__builtin_offsetof(zxrio_object_info_t, pipe.s) ==
-                  __builtin_offsetof(ObjectInfo, pipe.s), "Unaligned Pipe");
+                  __builtin_offsetof(ObjectInfo, pipe.socket), "Unaligned Pipe");
     static_assert(__builtin_offsetof(zxrio_object_info_t, vmofile.v) ==
-                  __builtin_offsetof(ObjectInfo, vmofile.v), "Unaligned Vmofile");
+                  __builtin_offsetof(ObjectInfo, vmofile.vmo), "Unaligned Vmofile");
     static_assert(__builtin_offsetof(zxrio_object_info_t, device.e) ==
-                  __builtin_offsetof(ObjectInfo, device.e), "Unaligned Device");
+                  __builtin_offsetof(ObjectInfo, device.event), "Unaligned Device");
 
     switch (info->extra.tag) {
     // Case: No extra handles expected
@@ -1237,7 +1237,6 @@ zx_status_t fdio_from_handles(zx_handle_t handle, zxrio_object_info_t* info,
     case FDIO_PROTOCOL_SOCKET_CONNECTED:
     case FDIO_PROTOCOL_SOCKET: {
         int flags = (info->tag == FDIO_PROTOCOL_SOCKET_CONNECTED) ? IOFLAG_SOCKET_CONNECTED : 0;
-#if WITH_NEW_SOCKET
         if (handle == ZX_HANDLE_INVALID || info->socket.s == ZX_HANDLE_INVALID) {
             r = ZX_ERR_INVALID_ARGS;
             break;
@@ -1247,18 +1246,6 @@ zx_status_t fdio_from_handles(zx_handle_t handle, zxrio_object_info_t* info,
             return ZX_ERR_NO_RESOURCES;
         }
         return ZX_OK;
-#else
-        if (handle == ZX_HANDLE_INVALID) {
-            r = ZX_ERR_INVALID_ARGS;
-            break;
-        }
-        io = fdio_socket_create(handle, info->socket.s, flags);
-        if (io == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        *out = io;
-        return ZX_OK;
-#endif
     }
     default:
         printf("fdio_from_handles: Not supported\n");
@@ -1396,6 +1383,17 @@ static void zxrio_wait_end(fdio_t* io, zx_signals_t signals, uint32_t* _events) 
     *_events = ((signals >> POLL_SHIFT) & POLL_MASK) | events;
 }
 
+static zx_status_t zxrio_get_vmo(fdio_t* io, int flags, zx_handle_t* out) {
+    zx_handle_t vmo;
+    zxrio_t* rio = (zxrio_t*)io;
+    zx_status_t r = fidl_getvmo(rio, flags, &vmo);
+    if (r != ZX_OK) {
+        return r;
+    }
+    *out = vmo;
+    return ZX_OK;
+}
+
 static fdio_ops_t zx_remote_ops = {
     .read = zxrio_read,
     .read_at = zxrio_read_at,
@@ -1416,7 +1414,7 @@ static fdio_ops_t zx_remote_ops = {
     .unwrap = zxrio_unwrap,
     .shutdown = fdio_default_shutdown,
     .posix_ioctl = fdio_default_posix_ioctl,
-    .get_vmo = fdio_default_get_vmo,
+    .get_vmo = zxrio_get_vmo,
 };
 
 fdio_t* fdio_remote_create(zx_handle_t h, zx_handle_t e) {

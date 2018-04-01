@@ -14,6 +14,7 @@
 #include <arch/hypervisor.h>
 #include <dev/psci.h>
 #include <dev/timer/arm_generic.h>
+#include <hypervisor/ktrace.h>
 #include <vm/fault.h>
 #include <vm/physmap.h>
 #include <zircon/syscalls/hypervisor.h>
@@ -102,7 +103,8 @@ static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_st
     return gich_state->interrupt_tracker.Wait(nullptr);
 }
 
-static zx_status_t handle_smc_instruction(uint32_t iss, GuestState* guest_state) {
+static zx_status_t handle_smc_instruction(uint32_t iss, GuestState* guest_state,
+                                          zx_port_packet_t* packet) {
     const SmcInstruction si(iss);
     if (si.imm != kSmcPsci)
         return ZX_ERR_NOT_SUPPORTED;
@@ -110,10 +112,15 @@ static zx_status_t handle_smc_instruction(uint32_t iss, GuestState* guest_state)
     next_pc(guest_state);
     switch (guest_state->x[0]) {
     case PSCI64_CPU_ON:
-        // Set return value of PSCI call.
-        guest_state->x[0] = ZX_ERR_NOT_SUPPORTED;
-        return ZX_OK;
+        memset(packet, 0, sizeof(*packet));
+        packet->type = ZX_PKT_TYPE_GUEST_VCPU;
+        packet->guest_vcpu.type = ZX_PKT_GUEST_VCPU_STARTUP;
+        packet->guest_vcpu.startup.id = guest_state->x[1];
+        packet->guest_vcpu.startup.entry = guest_state->x[2];
+        guest_state->x[0] = PSCI_SUCCESS;
+        return ZX_ERR_NEXT;
     default:
+        guest_state->x[0] = PSCI_NOT_SUPPORTED;
         return ZX_ERR_NOT_SUPPORTED;
     }
 }
@@ -271,22 +278,28 @@ zx_status_t vmexit_handler(uint64_t* hcr, GuestState* guest_state, GichState* gi
     switch (syndrome.ec) {
     case ExceptionClass::WFI_WFE_INSTRUCTION:
         LTRACEF("handling wfi/wfe instruction, iss %#x\n", syndrome.iss);
+        ktrace_vcpu(TAG_VCPU_EXIT, VCPU_WFI_WFE_INSTRUCTION);
         return handle_wfi_wfe_instruction(syndrome.iss, guest_state, gich_state);
     case ExceptionClass::SMC_INSTRUCTION:
         LTRACEF("handling smc instruction, iss %#x func %#lx\n", syndrome.iss, guest_state->x[0]);
-        return handle_smc_instruction(syndrome.iss, guest_state);
+        ktrace_vcpu(TAG_VCPU_EXIT, VCPU_SMC_INSTRUCTION);
+        return handle_smc_instruction(syndrome.iss, guest_state, packet);
     case ExceptionClass::SYSTEM_INSTRUCTION:
         LTRACEF("handling system instruction\n");
+        ktrace_vcpu(TAG_VCPU_EXIT, VCPU_SYSTEM_INSTRUCTION);
         return handle_system_instruction(syndrome.iss, hcr, guest_state, gpas);
     case ExceptionClass::INSTRUCTION_ABORT:
         LTRACEF("handling instruction abort at %#lx\n", guest_state->hpfar_el2);
+        ktrace_vcpu(TAG_VCPU_EXIT, VCPU_INSTRUCTION_ABORT);
         return handle_instruction_abort(guest_state, gpas);
     case ExceptionClass::DATA_ABORT:
         LTRACEF("handling data abort at %#lx\n", guest_state->hpfar_el2);
+        ktrace_vcpu(TAG_VCPU_EXIT, VCPU_DATA_ABORT);
         return handle_data_abort(syndrome.iss, guest_state, gpas, traps, packet);
     default:
         LTRACEF("unhandled exception syndrome, ec %#x iss %#x\n",
                 static_cast<uint32_t>(syndrome.ec), syndrome.iss);
+        ktrace_vcpu(TAG_VCPU_EXIT, VCPU_UNKNOWN);
         return ZX_ERR_NOT_SUPPORTED;
     }
 }

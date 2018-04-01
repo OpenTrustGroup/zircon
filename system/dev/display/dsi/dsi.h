@@ -12,8 +12,8 @@
 #include <threads.h>
 #include "edid.h"
 
-#define DW_DSI_READ32(a)        readl(dsi->mmio.vaddr + a)
-#define DW_DSI_WRITE32(a, v)    writel(v, dsi->mmio.vaddr + a)
+#define DW_DSI_READ32(a)        readl(io_buffer_virt(&dsi->mmio) + a)
+#define DW_DSI_WRITE32(a, v)    writel(v, io_buffer_virt(&dsi->mmio) + a)
 
 #define DW_DSI_MASK(start, count) (((1 << (count)) - 1) << (start))
 
@@ -185,14 +185,11 @@ typedef struct {
     zx_device_t*                        zxdev;
     platform_device_protocol_t          pdev;
     zx_device_t*                        parent;
-    pdev_vmo_buffer_t                   mmio;
+    io_buffer_t                         mmio;
 
     adv7533_i2c_t                       i2c_dev;        // ADV7533 I2C device
     hdmi_gpio_t                         hdmi_gpio;      // ADV7533-related GPIOs
 
-    i2c_channel_t                       channel_main;   // ADV7533 main i2c channel
-    i2c_channel_t                       channel_cec;    // ADV7533 CEC i2c channel
-    i2c_channel_t                       channel_edid;   // ADV7533 EDID i2c channel
     char                                write_buf[64];  // scratch buffer used for the i2c driver
 
     detailed_timing_t*                  std_raw_dtd;

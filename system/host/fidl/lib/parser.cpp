@@ -30,7 +30,6 @@ namespace fidl {
     case Token::Kind::Request
 
 #define TOKEN_LITERAL_CASES           \
-    case Token::Kind::Default:        \
     case Token::Kind::True:           \
     case Token::Kind::False:          \
     case Token::Kind::NumericLiteral: \
@@ -79,21 +78,35 @@ bool Parser::LookupHandleSubtype(const raw::Identifier* identifier,
 
 decltype(nullptr) Parser::Fail() {
     if (ok_) {
-        int line_number;
-        auto surrounding_line = last_token_.location().SourceLine(&line_number);
+        auto token_location = last_token_.location();
+        auto token_data = token_location.data();
 
-        std::string error = "found unexpected token: ";
-        error += last_token_.data();
-        error += "\n";
-        error += "on line #" + std::to_string(line_number) + ":\n\n";
+        SourceFile::Position position;
+        std::string surrounding_line = token_location.SourceLine(&position);
+        auto line_number = std::to_string(position.line);
+        auto column_number = std::to_string(position.column);
+
+        std::string squiggle(position.column, ' ');
+        squiggle +="^";
+        size_t squiggle_size = token_data.size();
+        if (squiggle_size != 0u) {
+            --squiggle_size;
+        }
+        squiggle += std::string(squiggle_size, '~');
+
+        std::string error = "found unexpected token in file ";
+        error += token_location.source_file().filename();
+        error += " on line " + line_number;
+        error += " column " + column_number + ":\n";
         error += surrounding_line;
-        error += "\n";
+        error += squiggle + "\n";
 
-        error_reporter_->ReportError(error);
+        error_reporter_->ReportError(std::move(error));
         ok_ = false;
     }
     return nullptr;
 }
+
 
 std::unique_ptr<raw::Identifier> Parser::ParseIdentifier() {
     auto identifier = ConsumeToken(Token::Kind::Identifier);
@@ -163,14 +176,6 @@ std::unique_ptr<raw::FalseLiteral> Parser::ParseFalseLiteral() {
     return std::make_unique<raw::FalseLiteral>();
 }
 
-std::unique_ptr<raw::DefaultLiteral> Parser::ParseDefaultLiteral() {
-    ConsumeToken(Token::Kind::Default);
-    if (!Ok())
-        return Fail();
-
-    return std::make_unique<raw::DefaultLiteral>();
-}
-
 std::unique_ptr<raw::Literal> Parser::ParseLiteral() {
     switch (Peek()) {
     case Token::Kind::StringLiteral:
@@ -184,9 +189,6 @@ std::unique_ptr<raw::Literal> Parser::ParseLiteral() {
 
     case Token::Kind::False:
         return ParseFalseLiteral();
-
-    case Token::Kind::Default:
-        return ParseDefaultLiteral();
 
     default:
         return Fail();
@@ -914,7 +916,7 @@ std::unique_ptr<raw::File> Parser::ParseFile() {
     ConsumeToken(Token::Kind::Library);
     if (!Ok())
         return Fail();
-    auto identifier = ParseCompoundIdentifier();
+    auto identifier = ParseIdentifier();
     if (!Ok())
         return Fail();
     ConsumeToken(Token::Kind::Semicolon);

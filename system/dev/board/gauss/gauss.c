@@ -91,6 +91,8 @@ usb_mode_switch_protocol_ops_t usb_mode_switch_ops = {
 
 static void gauss_bus_release(void* ctx) {
     gauss_bus_t* bus = ctx;
+    io_buffer_release(&bus->usb_phy);
+    zx_handle_close(bus->bti_handle);
     free(bus);
 }
 
@@ -152,7 +154,7 @@ static int gauss_start_thread(void* arg) {
         goto fail;
     }
 
-    status = a113_clk_init(&bus->clocks);
+    status = a113_clk_init(bus->bti_handle, &bus->clocks);
     if (status != ZX_OK) {
         zxlogf(ERROR, "a113_clk_init failed: %d\n",status);
         goto fail;
@@ -171,6 +173,10 @@ static int gauss_start_thread(void* arg) {
         goto fail;
     }
 
+    if ((status = gauss_pcie_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "gauss_pcie_init failed: %d\n", status);
+        goto fail;
+    }
     if ((status = gauss_usb_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "gauss_usb_init failed: %d\n", status);
         goto fail;
@@ -209,10 +215,15 @@ static zx_status_t gauss_bus_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    // get default BTI from the dummy IOMMU implementation in the platform bus
+    // get dummy IOMMU implementation in the platform bus
     status = device_get_protocol(parent, ZX_PROTOCOL_IOMMU, &bus->iommu);
     if (status != ZX_OK) {
         zxlogf(ERROR, "gauss_bus_bind: could not get ZX_PROTOCOL_IOMMU\n");
+        goto fail;
+    }
+    status = iommu_get_bti(&bus->iommu, 0, BTI_BOARD, &bus->bti_handle);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "gauss_bus_bind: iommu_get_bti failed: %d\n", status);
         goto fail;
     }
 

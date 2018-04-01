@@ -125,7 +125,7 @@ static zx_status_t usb_hid_control(usb_hid_device_t* hid, uint8_t req_type, uint
                                    size_t* out_length) {
     zx_status_t status = usb_control(&hid->usb, req_type, request, value, index, data, length,
                                      ZX_TIME_INFINITE, out_length);
-    if (status == ZX_ERR_IO_REFUSED) {
+    if (status == ZX_ERR_IO_REFUSED || status == ZX_ERR_IO_INVALID) {
         usb_reset_endpoint(&hid->usb, 0);
     }
     return status;
@@ -305,7 +305,7 @@ static zx_status_t usb_hid_bind(void* ctx, zx_device_t* dev) {
             usbhid->info.dev_class = HID_DEV_CLASS_POINTER;
         }
 
-        status = usb_request_alloc(&usbhid->req, usb_ep_max_packet(endpt),
+        status = usb_req_alloc(&usb, &usbhid->req, usb_ep_max_packet(endpt),
                                    endpt->bEndpointAddress);
         if (status != ZX_OK) {
             usb_desc_iter_release(&iter);

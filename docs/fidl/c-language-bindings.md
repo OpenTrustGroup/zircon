@@ -292,8 +292,8 @@ decoding.
 # fidl_encode()
 
 Declared in
-[system/ulib/fidl/include/fidl/coding.h](
-https://fuchsia.googlesource.com/zircon/+/HEAD/system/ulib/fidl/include/fidl/coding.h),
+[system/ulib/fidl/include/lib/fidl/coding.h](
+https://fuchsia.googlesource.com/zircon/+/HEAD/system/ulib/fidl/include/lib/fidl/coding.h),
 defined in
 [system/ulib/fidl/encoding.cpp](
 https://fuchsia.googlesource.com/zircon/+/HEAD/system/ulib/fidl/encoding.cpp).
@@ -370,8 +370,8 @@ ranges of data types such as enums and union tags.
 # fidl_decode()
 
 Declared in
-[system/ulib/fidl/include/fidl/coding.h](
-https://fuchsia.googlesource.com/zircon/+/HEAD/system/ulib/fidl/include/fidl/coding.h),
+[system/ulib/fidl/include/lib/fidl/coding.h](
+https://fuchsia.googlesource.com/zircon/+/HEAD/system/ulib/fidl/include/lib/fidl/coding.h),
 defined in
 [system/ulib/fidl/decoding.cpp](
 https://fuchsia.googlesource.com/zircon/+/HEAD/system/ulib/fidl/decoding.cpp).
@@ -625,9 +625,6 @@ Macros
 ```
 
 ## Examples
-
-See also [FIDL 2.0: I/O
-Sketch](http://drive.google.com/a/google.com/open?id=1_oBDWwtPiCd56tCpd4JEtexmkalczh7sNU7TB5K5wTU).
 
 Common Declarations used by Examples
 

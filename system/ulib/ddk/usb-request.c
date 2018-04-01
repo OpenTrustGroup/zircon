@@ -22,13 +22,14 @@ static void usb_request_release_free(usb_request_t* req) {
     free(req);
 }
 
-zx_status_t usb_request_alloc(usb_request_t** out, uint64_t data_size, uint8_t ep_address) {
+zx_status_t usb_request_alloc(usb_request_t** out, zx_handle_t bti_handle, uint64_t data_size,
+                              uint8_t ep_address) {
     usb_request_t* req = calloc(1, sizeof(usb_request_t));
     if (!req) {
         return ZX_ERR_NO_MEMORY;
     }
     if (data_size > 0) {
-        zx_status_t status = io_buffer_init(&req->buffer, data_size, IO_BUFFER_RW);
+        zx_status_t status = io_buffer_init(&req->buffer, bti_handle, data_size, IO_BUFFER_RW);
         if (status != ZX_OK) {
             free(req);
             return status;
@@ -41,13 +42,16 @@ zx_status_t usb_request_alloc(usb_request_t** out, uint64_t data_size, uint8_t e
     return ZX_OK;
 }
 
-zx_status_t usb_request_alloc_vmo(usb_request_t** out, zx_handle_t vmo_handle,
-                                  uint64_t vmo_offset, uint64_t length, uint8_t ep_address) {
+// usb_request_alloc_vmo() creates a new usb request with the given VMO.
+zx_status_t usb_request_alloc_vmo(usb_request_t** out, zx_handle_t bti_handle,
+                                  zx_handle_t vmo_handle, uint64_t vmo_offset, uint64_t length,
+                                  uint8_t ep_address) {
     usb_request_t* req = calloc(1, sizeof(usb_request_t));
     if (!req) {
         return ZX_ERR_NO_MEMORY;
     }
-    zx_status_t status = io_buffer_init_vmo(&req->buffer, vmo_handle, vmo_offset, IO_BUFFER_RW);
+    zx_status_t status = io_buffer_init_vmo(&req->buffer, bti_handle, vmo_handle, vmo_offset,
+                                            IO_BUFFER_RW);
     if (status != ZX_OK) {
         free(req);
         return status;
@@ -59,11 +63,14 @@ zx_status_t usb_request_alloc_vmo(usb_request_t** out, zx_handle_t vmo_handle,
     return ZX_OK;
 }
 
-zx_status_t usb_request_init(usb_request_t* req, zx_handle_t vmo_handle, uint64_t vmo_offset,
-                             uint64_t length, uint8_t ep_address) {
+// usb_request_init() initializes the statically allocated usb request with the given VMO.
+// This will free any resources allocated by the usb request but not the usb request itself.
+zx_status_t usb_request_init(usb_request_t* req, zx_handle_t bti_handle, zx_handle_t vmo_handle,
+                             uint64_t vmo_offset, uint64_t length, uint8_t ep_address) {
     memset(req, 0, sizeof(*req));
 
-    zx_status_t status = io_buffer_init_vmo(&req->buffer, vmo_handle, vmo_offset, IO_BUFFER_RW);
+    zx_status_t status = io_buffer_init_vmo(&req->buffer, bti_handle, vmo_handle, vmo_offset,
+                                            IO_BUFFER_RW);
     if (status != ZX_OK) {
         return status;
     }

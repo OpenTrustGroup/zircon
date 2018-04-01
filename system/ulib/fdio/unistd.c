@@ -569,24 +569,11 @@ void __libc_extensions_init(uint32_t handle_count,
             LOG(1, "fdio: inherit fd=%d (log)\n", arg_fd);
             break;
         case PA_FDIO_SOCKET:
-#if WITH_NEW_SOCKET
             fdio_fdtab[arg] = fdio_socket_create(h, IOFLAG_SOCKET_CONNECTED);
             fdio_fdtab[arg]->dupcount++;
             LOG(1, "fdio: inherit fd=%d (socket)\n", arg_fd);
             break;
-#else
-            // socket objects have a second handle
-            if (((n + 1) < handle_count) &&
-                (handle_info[n] == handle_info[n + 1])) {
-                fdio_fdtab[arg_fd] = fdio_socket_create(h, handle[n + 1], IOFLAG_SOCKET_CONNECTED);
-                handle_info[n + 1] = 0;
-                fdio_fdtab[arg_fd]->dupcount++;
                 LOG(1, "fdio: inherit fd=%d (socket)\n", arg_fd);
-            } else {
-                zx_handle_close(h);
-            }
-            break;
-#endif
         case PA_NS_DIR:
             // we always contine here to not steal the
             // handles from higher level code that may
@@ -858,6 +845,7 @@ int fdio_status_to_errno(zx_status_t status) {
     case ZX_ERR_NO_SPACE: return ENOSPC;
     case ZX_ERR_NOT_EMPTY: return ENOTEMPTY;
     case ZX_ERR_IO_REFUSED: return ECONNREFUSED;
+    case ZX_ERR_IO_INVALID: return EIO;
     case ZX_ERR_CANCELED: return ECANCELED;
     case ZX_ERR_PROTOCOL_NOT_SUPPORTED: return EPROTONOSUPPORT;
     case ZX_ERR_ADDRESS_UNREACHABLE: return ENETUNREACH;

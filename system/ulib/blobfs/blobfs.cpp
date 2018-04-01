@@ -31,28 +31,6 @@ using digest::MerkleTree;
 namespace blobfs {
 namespace {
 
-zx_status_t vmo_read_exact(zx_handle_t h, void* data, uint64_t offset, size_t len) {
-    size_t actual;
-    zx_status_t status = zx_vmo_read_old(h, data, offset, len, &actual);
-    if (status != ZX_OK) {
-        return status;
-    } else if (actual != len) {
-        return ZX_ERR_IO;
-    }
-    return ZX_OK;
-}
-
-zx_status_t vmo_write_exact(zx_handle_t h, const void* data, uint64_t offset, size_t len) {
-    size_t actual;
-    zx_status_t status = zx_vmo_write_old(h, data, offset, len, &actual);
-    if (status != ZX_OK) {
-        return status;
-    } else if (actual != len) {
-        return ZX_ERR_IO;
-    }
-    return ZX_OK;
-}
-
 zx_status_t CheckFvmConsistency(const blobfs_info_t* info, int block_fd) {
     if ((info->flags & kBlobFlagFVM) == 0) {
         return ZX_OK;
@@ -182,15 +160,14 @@ uint64_t VnodeBlob::SizeData() const {
 
 VnodeBlob::VnodeBlob(fbl::RefPtr<Blobfs> bs, const Digest& digest)
     : blobfs_(fbl::move(bs)),
-      flags_(kBlobStateEmpty),
-      syncing_(false) {
+      flags_(kBlobStateEmpty), syncing_(false), clone_watcher_(this) {
     digest.CopyTo(digest_, sizeof(digest_));
 }
 
 VnodeBlob::VnodeBlob(fbl::RefPtr<Blobfs> bs)
     : blobfs_(fbl::move(bs)),
       flags_(kBlobStateEmpty | kBlobFlagDirectory),
-      syncing_(false)  {}
+      syncing_(false), clone_watcher_(this) {}
 
 void VnodeBlob::BlobCloseHandles() {
     blob_ = nullptr;
@@ -331,7 +308,7 @@ zx_status_t VnodeBlob::WriteInternal(const void* data, size_t len, size_t* actua
     if (GetState() == kBlobStateDataWrite) {
         size_t to_write = fbl::min(len, inode->blob_size - bytes_written_);
         size_t offset = bytes_written_ + data_start;
-        zx_status_t status = vmo_write_exact(blob_->GetVmo(), data, offset, to_write);
+        zx_status_t status = zx_vmo_write(blob_->GetVmo(), data, offset, to_write);
         if (status != ZX_OK) {
             return status;
         }
@@ -414,8 +391,8 @@ zx_status_t VnodeBlob::GetReadableEvent(zx_handle_t* out) {
     return sizeof(zx_handle_t);
 }
 
-zx_status_t VnodeBlob::CopyVmo(zx_rights_t rights, zx_handle_t* out) {
-    TRACE_DURATION("blobfs", "Blobfs::CopyVmo", "rights", rights, "out", out);
+zx_status_t VnodeBlob::CloneVmo(zx_rights_t rights, zx_handle_t* out) {
+    TRACE_DURATION("blobfs", "Blobfs::CloneVmo", "rights", rights, "out", out);
     if (GetState() != kBlobStateReadable) {
         return ZX_ERR_BAD_STATE;
     }
@@ -441,7 +418,30 @@ zx_status_t VnodeBlob::CopyVmo(zx_rights_t rights, zx_handle_t* out) {
         zx_handle_close(clone);
         return status;
     }
+
+    if (clone_watcher_.object() == ZX_HANDLE_INVALID) {
+        clone_watcher_.set_object(blob_->GetVmo());
+        clone_watcher_.set_trigger(ZX_VMO_ZERO_CHILDREN);
+
+        // Keep a reference to "this" alive, preventing the blob
+        // from being closed while someone may still be using the
+        // underlying memory.
+        //
+        // We'll release it when no client-held VMOs are in use.
+        clone_ref_ = fbl::RefPtr<VnodeBlob>(this);
+        clone_watcher_.Begin(blobfs_->GetAsync());
+    }
+
     return ZX_OK;
+}
+
+async_wait_result_t VnodeBlob::HandleNoClones(async_t* async, zx_status_t status,
+                                              const zx_packet_signal_t* signal) {
+    ZX_DEBUG_ASSERT(status == ZX_OK);
+    ZX_DEBUG_ASSERT((signal->observed & ZX_VMO_ZERO_CHILDREN) != 0);
+    clone_watcher_.set_object(ZX_HANDLE_INVALID);
+    clone_ref_ = nullptr;
+    return ASYNC_WAIT_FINISHED;
 }
 
 zx_status_t VnodeBlob::ReadInternal(void* data, size_t len, size_t off, size_t* actual) {
@@ -473,7 +473,11 @@ zx_status_t VnodeBlob::ReadInternal(void* data, size_t len, size_t off, size_t* 
     }
 
     const size_t data_start = MerkleTreeBlocks(*inode) * kBlobfsBlockSize;
-    return zx_vmo_read_old(blob_->GetVmo(), data, data_start + off, len, actual);
+    status = zx_vmo_read(blob_->GetVmo(), data, data_start + off, len);
+    if (status == ZX_OK) {
+        *actual = len;
+    }
+    return status;
 }
 
 void VnodeBlob::QueueUnlink() {
@@ -708,26 +712,30 @@ zx_status_t Blobfs::Readdir(fs::vdircookie_t* cookie, void* dirents, size_t len,
 
 zx_status_t Blobfs::LookupBlob(const Digest& digest, fbl::RefPtr<VnodeBlob>* out) {
     TRACE_DURATION("blobfs", "Blobfs::LookupBlob");
+    fbl::RefPtr<VnodeBlob> vn;
     // Look up blob in the fast map (is the blob open elsewhere?)
     {
+        // Avoid releasing a reference to |vn| while holding |hash_lock_|.
         fbl::AutoLock lock(&hash_lock_);
         auto raw_vn = hash_.find(digest.AcquireBytes()).CopyPointer();
         digest.ReleaseBytes();
 
         if (raw_vn != nullptr) {
-            auto vn = fbl::internal::MakeRefPtrUpgradeFromRaw(raw_vn, hash_lock_);
+            vn = fbl::internal::MakeRefPtrUpgradeFromRaw(raw_vn, hash_lock_);
 
             if (vn == nullptr) {
                 // Blob was found but is being deleted - remove from hash so we don't collide
                 VnodeReleaseLocked(raw_vn);
-            } else {
-                if (out != nullptr) {
-                    UpdateLookupMetrics(vn->SizeData());
-                    *out = fbl::move(vn);
-                }
-                return ZX_OK;
             }
         }
+    }
+
+    if (vn != nullptr) {
+        if (out != nullptr) {
+            UpdateLookupMetrics(vn->SizeData());
+            *out = fbl::move(vn);
+        }
+        return ZX_OK;
     }
 
     // Look up blob in the slow map
@@ -737,8 +745,7 @@ zx_status_t Blobfs::LookupBlob(const Digest& digest, fbl::RefPtr<VnodeBlob>* out
                 if (out != nullptr) {
                     // Found it. Attempt to wrap the blob in a vnode.
                     fbl::AllocChecker ac;
-                    fbl::RefPtr<VnodeBlob> vn =
-                        fbl::AdoptRef(new (&ac) VnodeBlob(fbl::RefPtr<Blobfs>(this), digest));
+                    vn = fbl::AdoptRef(new (&ac) VnodeBlob(fbl::RefPtr<Blobfs>(this), digest));
                     if (!ac.check()) {
                         return ZX_ERR_NO_MEMORY;
                     }
@@ -1099,7 +1106,8 @@ zx_status_t blobfs_create(fbl::RefPtr<Blobfs>* out, fbl::unique_fd blockfd) {
     return ZX_OK;
 }
 
-zx_status_t blobfs_mount(fbl::RefPtr<VnodeBlob>* out, fbl::unique_fd blockfd, bool metrics) {
+zx_status_t blobfs_mount(async_t* async, fbl::unique_fd blockfd, bool metrics,
+                         fbl::RefPtr<VnodeBlob>* out) {
     zx_status_t status;
     fbl::RefPtr<Blobfs> fs;
 
@@ -1107,6 +1115,7 @@ zx_status_t blobfs_mount(fbl::RefPtr<VnodeBlob>* out, fbl::unique_fd blockfd, bo
         return status;
     }
 
+    fs->SetAsync(async);
     if (metrics) {
         fs->CollectMetrics();
     }

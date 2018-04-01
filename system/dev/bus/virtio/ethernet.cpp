@@ -119,7 +119,7 @@ ethmac_protocol_ops_t kProtoOps = {
 };
 
 // I/O buffer helpers
-zx_status_t InitBuffers(fbl::unique_ptr<io_buffer_t[]>* out) {
+zx_status_t InitBuffers(const zx::bti& bti, fbl::unique_ptr<io_buffer_t[]>* out) {
     zx_status_t rc;
     fbl::AllocChecker ac;
     fbl::unique_ptr<io_buffer_t[]> bufs(new (&ac) io_buffer_t[kNumIoBufs]);
@@ -130,7 +130,8 @@ zx_status_t InitBuffers(fbl::unique_ptr<io_buffer_t[]>* out) {
     memset(bufs.get(), 0, sizeof(io_buffer_t) * kNumIoBufs);
     size_t buf_size = kFrameSize * kFramesInBuf;
     for (uint16_t id = 0; id < kNumIoBufs; ++id) {
-        if ((rc = io_buffer_init(&bufs[id], buf_size, IO_BUFFER_RW | IO_BUFFER_CONTIG)) != ZX_OK) {
+        if ((rc = io_buffer_init(&bufs[id], bti.get(), buf_size,
+                                 IO_BUFFER_RW | IO_BUFFER_CONTIG)) != ZX_OK) {
             zxlogf(ERROR, "failed to allocate I/O buffers: %s\n", zx_status_get_string(rc));
             return rc;
         }
@@ -179,9 +180,9 @@ uint8_t* GetFrameData(io_buffer_t* bufs, uint16_t ring_id, uint16_t desc_id, siz
 
 } // namespace
 
-EthernetDevice::EthernetDevice(zx_device_t* bus_device, fbl::unique_ptr<Backend> backend)
-    : Device(bus_device, fbl::move(backend)), rx_(this), tx_(this), bufs_(nullptr), unkicked_(0),
-      ifc_(nullptr), cookie_(nullptr) {
+EthernetDevice::EthernetDevice(zx_device_t* bus_device, zx::bti bti, fbl::unique_ptr<Backend> backend)
+    : Device(bus_device, fbl::move(bti), fbl::move(backend)), rx_(this), tx_(this), bufs_(nullptr),
+      unkicked_(0), ifc_(nullptr), cookie_(nullptr) {
 }
 
 EthernetDevice::~EthernetDevice() {
@@ -232,7 +233,7 @@ zx_status_t EthernetDevice::Init() {
 
     // Allocate I/O buffers and virtqueues.
     uint16_t num_descs = static_cast<uint16_t>(kBacklog & 0xffff);
-    if ((rc = InitBuffers(&bufs_)) != ZX_OK || (rc = rx_.Init(kRxId, num_descs)) != ZX_OK ||
+    if ((rc = InitBuffers(bti_, &bufs_)) != ZX_OK || (rc = rx_.Init(kRxId, num_descs)) != ZX_OK ||
         (rc = tx_.Init(kTxId, num_descs)) != ZX_OK) {
         zxlogf(ERROR, "failed to allocate virtqueue: %s\n", zx_status_get_string(rc));
         return rc;

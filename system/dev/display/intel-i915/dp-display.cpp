@@ -4,13 +4,12 @@
 
 #include <ddk/debug.h>
 #include <ddk/driver.h>
-
 #include <endian.h>
+#include <lib/edid/edid.h>
 #include <string.h>
 #include <zircon/assert.h>
 
 #include "dp-display.h"
-#include "edid.h"
 #include "intel-i915.h"
 #include "macros.h"
 #include "pci-ids.h"
@@ -452,7 +451,7 @@ bool DpDisplay::DpAuxWrite(uint32_t dp_cmd, uint32_t addr, const uint8_t* buf, s
     return true;
 }
 
-bool DpDisplay::ReadEdid(uint8_t segment, uint8_t offset, uint8_t* buf, uint8_t len) {
+bool DpDisplay::DdcRead(uint8_t segment, uint8_t offset, uint8_t* buf, uint8_t len) {
     // Ignore failures setting the segment if segment == 0, since it could be the case
     // that the display doesn't support segments.
     return (DpAuxWrite(DP_REQUEST_I2C_WRITE, kDdcSegmentI2cAddress, &segment, 1) || segment == 0)
@@ -845,16 +844,17 @@ static registers::Trans select_trans(registers::Ddi ddi, registers::Pipe pipe) {
 namespace i915 {
 
 DpDisplay::DpDisplay(Controller* controller, registers::Ddi ddi, registers::Pipe pipe)
-        : DisplayDevice(controller, ddi, select_trans(ddi, pipe), pipe)
-        , edid_(this) { }
+        : DisplayDevice(controller, ddi, select_trans(ddi, pipe), pipe) { }
 
-bool DpDisplay::QueryDevice(zx_display_info* info) {
+bool DpDisplay::QueryDevice(edid::Edid* edid, zx_display_info* info) {
     // For eDP displays, assume that the BIOS has enabled panel power, given
     // that we need to rely on it properly configuring panel power anyway. For
     // general DP displays, the default power state is D0, so we don't have to
     // worry about AUX failures because of power saving mode.
     edid::timing_params_t timing;
-    if (!edid_.Init() || !edid_.GetPreferredTiming(&timing)) {
+    const char* edid_err = "Failed to find timing";
+    if (!edid->Init(this, &edid_err) || !edid->GetPreferredTiming(&timing)) {
+        zxlogf(TRACE, "i915: dp edid init failed \"%s\"\n", edid_err);
         return false;
     }
     zxlogf(TRACE, "Found %s monitor\n", controller()->igd_opregion().IsEdp(ddi()) ? "eDP" : "DP");
@@ -862,6 +862,26 @@ bool DpDisplay::QueryDevice(zx_display_info* info) {
     if (!DpcdRead(dpcd::DPCD_CAP_START, dpcd_capabilities_, fbl::count_of(dpcd_capabilities_))) {
         zxlogf(ERROR, "Failed to read dpcd capabilities\n");
         return false;
+    }
+
+    dpcd::DownStreamPortPresent dsp;
+    dsp.set_reg_value(dpcd_capabilities_[
+            dpcd::DPCD_DOWN_STREAM_PORT_PRESENT - dpcd::DPCD_CAP_START]);
+    if (dsp.is_branch()) {
+        dpcd::DownStreamPortCount count;
+        count.set_reg_value(dpcd_capabilities_[
+                dpcd::DPCD_DOWN_STREAM_PORT_COUNT - dpcd::DPCD_CAP_START]);
+        zxlogf(SPEW, "Found branch with %d ports\n", count.count());
+
+        dpcd::SinkCount sink_count;
+        if (!DpcdRead(dpcd::DPCD_SINK_COUNT, sink_count.reg_value_ptr(), 1)) {
+            return false;
+        }
+        // TODO(ZX-1416): Add support for MST
+        if (sink_count.count() != 1) {
+            zxlogf(ERROR, "MST not supported\n");
+            return false;
+        }
     }
 
     if (controller()->igd_opregion().IsEdp(ddi())) {
@@ -983,7 +1003,7 @@ bool DpDisplay::DefaultModeset() {
     }
 
     edid::timing_params_t timing;
-    edid_.GetPreferredTiming(&timing);
+    edid().GetPreferredTiming(&timing);
 
     registers::TranscoderRegs trans_regs(trans());
 
@@ -1259,5 +1279,38 @@ bool DpDisplay::SetBacklightBrightness(double val) {
     }
 
     return true;
+}
+
+bool DpDisplay::HandleHotplug(bool long_pulse) {
+    if (!long_pulse) {
+        dpcd::SinkCount sink_count;
+        if (!DpcdRead(dpcd::DPCD_SINK_COUNT, sink_count.reg_value_ptr(), 1)) {
+            return false;
+        }
+
+        // The pulse was from a downstream monitor being connected
+        // TODO(ZX-1416): Add support for MST
+        if (sink_count.count() > 1) {
+            return true;
+        }
+
+        // The pulse was from a downstream monitor disconnecting
+        if (sink_count.count() == 0) {
+            return false;
+        }
+
+        dpcd::LaneAlignStatusUpdate status;
+        if (!DpcdRead(dpcd::DPCD_LANE_ALIGN_STATUS_UPDATED, status.reg_value_ptr(), 1)) {
+            return false;
+        }
+
+        if (status.interlane_align_done()) {
+            zxlogf(SPEW, "HPD event for trained link\n");
+            return true;
+        }
+
+        return DoLinkTraining();
+    }
+    return false;
 }
 } // namespace i915

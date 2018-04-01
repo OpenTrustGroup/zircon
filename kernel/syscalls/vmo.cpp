@@ -64,12 +64,7 @@ zx_status_t sys_vmo_create(uint64_t size, uint32_t options,
 }
 
 zx_status_t sys_vmo_read(zx_handle_t handle, user_out_ptr<void> _data,
-                         uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
-    return sys_vmo_read_old(handle, _data, offset, len, _actual);
-}
-
-zx_status_t sys_vmo_read_old(zx_handle_t handle, user_out_ptr<void> _data,
-                             uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
+                         uint64_t offset, size_t len) {
     LTRACEF("handle %x, data %p, offset %#" PRIx64 ", len %#zx\n",
             handle, _data.get(), offset, len);
 
@@ -101,22 +96,11 @@ zx_status_t sys_vmo_read_old(zx_handle_t handle, user_out_ptr<void> _data,
         }
     }
 
-    // do the read operation
-    size_t nread;
-    status = vmo->Read(_data, len, offset, &nread);
-    if (status == ZX_OK)
-        status = _actual.copy_to_user(nread);
-
-    return status;
+    return vmo->Read(_data, len, offset);
 }
 
 zx_status_t sys_vmo_write(zx_handle_t handle, user_in_ptr<const void> _data,
-                          uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
-    return sys_vmo_write_old(handle, _data, offset, len, _actual);
-}
-
-zx_status_t sys_vmo_write_old(zx_handle_t handle, user_in_ptr<const void> _data,
-                              uint64_t offset, size_t len, user_out_ptr<size_t> _actual) {
+                          uint64_t offset, size_t len) {
     LTRACEF("handle %x, data %p, offset %#" PRIx64 ", len %#zx\n",
             handle, _data.get(), offset, len);
 
@@ -148,13 +132,7 @@ zx_status_t sys_vmo_write_old(zx_handle_t handle, user_in_ptr<const void> _data,
         }
     }
 
-    // do the write operation
-    size_t nwritten;
-    status = vmo->Write(_data, len, offset, &nwritten);
-    if (status == ZX_OK)
-        status = _actual.copy_to_user(nwritten);
-
-    return status;
+    return vmo->Write(_data, len, offset);
 }
 
 zx_status_t sys_vmo_get_size(zx_handle_t handle, user_out_ptr<uint64_t> _size) {

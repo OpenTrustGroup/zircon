@@ -10,7 +10,9 @@
 #include <arch/x86/feature.h>
 #include <fbl/auto_call.h>
 #include <hypervisor/cpu.h>
+#include <hypervisor/ktrace.h>
 #include <kernel/mp.h>
+#include <lib/ktrace.h>
 #include <vm/fault.h>
 #include <vm/pmm.h>
 #include <vm/vm_object.h>
@@ -28,6 +30,19 @@ static constexpr uint32_t kInterruptInfoDeliverErrorCode = 1u << 11;
 static constexpr uint32_t kInterruptTypeHardwareException = 3u << 8;
 static constexpr uint32_t kInterruptTypeSoftwareException = 6u << 8;
 static constexpr uint16_t kBaseProcessorVpid = 1;
+
+static zx_status_t invept(InvEpt invalidation, uint64_t eptp) {
+    uint8_t err;
+    uint64_t descriptor[] = { eptp, 0 };
+
+    __asm__ volatile(
+        "invept %[descriptor], %[invalidation];" VMX_ERR_CHECK(err)
+        : [err] "=r"(err)
+        : [descriptor] "m"(descriptor), [invalidation] "r"(invalidation)
+        : "cc");
+
+    return err ? ZX_ERR_INTERNAL : ZX_OK;
+}
 
 static zx_status_t vmptrld(paddr_t pa) {
     uint8_t err;
@@ -420,6 +435,11 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     const auto eptp = ept_pointer(pml4_address);
     vmcs.Write(VmcsField64::EPT_POINTER, eptp);
 
+    // From Volume 3, Section 28.3.3.4: Software can use an INVEPT with type all
+    // ALL_CONTEXT to prevent undesired retention of cached EPT information. Here,
+    // we only care about invalidating information associated with this EPTP.
+    invept(InvEpt::SINGLE_CONTEXT, eptp);
+
     // Setup MSR handling.
     vmcs.Write(VmcsField64::MSR_BITMAPS_ADDRESS, msr_bitmaps_address);
 
@@ -477,16 +497,18 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     uint64_t cr0 = X86_CR0_PE | // Enable protected mode
                    X86_CR0_PG | // Enable paging
                    X86_CR0_NE;  // Enable internal x87 exception handling
-    if (cr_is_invalid(cr0, X86_MSR_IA32_VMX_CR0_FIXED0, X86_MSR_IA32_VMX_CR0_FIXED1)) {
-        return ZX_ERR_BAD_STATE;
-    }
     if (vpid != kBaseProcessorVpid) {
         // Disable protected mode and paging on secondary VCPUs.
-        // From Volume 3, Section 26.3.1.1: CR0 is now invalid according to
-        // X86_MSR_IA32_VMX_CR0_FIXED1 but this does not apply to unrestricted guests.
         cr0 &= ~(X86_CR0_PE | X86_CR0_PG);
     }
+    if (cr0_is_invalid(&vmcs, cr0)) {
+        return ZX_ERR_BAD_STATE;
+    }
     vmcs.Write(VmcsFieldXX::GUEST_CR0, cr0);
+
+    // Ensure that CR0.NE remains set by masking and manually handling writes to CR0 that unset it.
+    vmcs.Write(VmcsFieldXX::CR0_GUEST_HOST_MASK, X86_CR0_NE);
+    vmcs.Write(VmcsFieldXX::CR0_READ_SHADOW, X86_CR0_NE);
 
     uint64_t cr4 = X86_CR4_VMXE; // Enable VMX
     if (vpid == kBaseProcessorVpid) {
@@ -712,6 +734,7 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
         // Updates guest system time if the guest subscribed to updates.
         pvclock_update_system_time(&pvclock_state_, guest_->AddressSpace());
 
+        ktrace(TAG_VCPU_ENTER, 0, 0, 0, 0);
         running_.store(true);
         status = vmx_enter(&vmx_state_);
         running_.store(false);
@@ -720,7 +743,9 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
             vmx_state_.guest_state.xcr0 = x86_xgetbv(0);
             x86_xsetbv(0, vmx_state_.host_state.xcr0);
         }
+
         if (status != ZX_OK) {
+            ktrace_vcpu(TAG_VCPU_EXIT, VCPU_FAILURE);
             uint64_t error = vmcs.Read(VmcsField32::INSTRUCTION_ERROR);
             dprintf(INFO, "VCPU resume failed: %#lx\n", error);
         } else {
@@ -823,4 +848,14 @@ zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
     }
     }
     return ZX_ERR_INVALID_ARGS;
+}
+
+bool cr0_is_invalid(AutoVmcs* vmcs, uint64_t cr0_value) {
+    uint64_t check_value = cr0_value;
+    // From Volume 3, Section 26.3.1.1: PE and PG bits of CR0 are not checked when unrestricted
+    // guest is enabled. Set both here to avoid clashing with X86_MSR_IA32_VMX_CR0_FIXED1.
+    if (vmcs->Read(VmcsField32::PROCBASED_CTLS2) & kProcbasedCtls2UnrestrictedGuest) {
+        check_value |= X86_CR0_PE | X86_CR0_PG;
+    }
+    return cr_is_invalid(check_value, X86_MSR_IA32_VMX_CR0_FIXED0, X86_MSR_IA32_VMX_CR0_FIXED1);
 }

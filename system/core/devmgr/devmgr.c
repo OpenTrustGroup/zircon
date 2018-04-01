@@ -200,10 +200,11 @@ int service_starter(void* arg) {
         // This should match the value used by crashlogger.
         const uint64_t kSysExceptionKey = 1166444u;
         if (zx_port_create(0, &exception_port) == ZX_OK &&
-            zx_task_bind_exception_port(ZX_HANDLE_INVALID, exception_port,
+            zx_task_bind_exception_port(root_job_handle, exception_port,
                                         kSysExceptionKey, 0) == ZX_OK) {
-            zx_handle_t handles[] = { exception_port };
-            uint32_t handle_types[] = { PA_HND(PA_USER0, 0) };
+            zx_handle_t handles[] = { ZX_HANDLE_INVALID, exception_port };
+            zx_handle_duplicate(root_job_handle, ZX_RIGHT_SAME_RIGHTS, &handles[0]);
+            uint32_t handle_types[] = { PA_HND(PA_USER0, 0), PA_HND(PA_USER0, 1) };
 
             devmgr_launch(svcs_job_handle, "crashlogger",
                           argc_crashlogger, argv_crashlogger,
@@ -216,13 +217,17 @@ int service_starter(void* arg) {
     __UNUSED bool netboot = false;
     bool vruncmd = false;
     if (!getenv_bool("netsvc.disable", false)) {
-        const char* args[] = { "/boot/bin/netsvc", NULL, NULL, NULL, NULL };
+        const char* args[] = { "/boot/bin/netsvc", NULL, NULL, NULL, NULL, NULL };
         int argc = 1;
 
         if (getenv_bool("netsvc.netboot", false)) {
             args[argc++] = "--netboot";
             netboot = true;
             vruncmd = true;
+        }
+
+        if (getenv_bool("netsvc.advertise", true)) {
+            args[argc++] = "--advertise";
         }
 
         const char* interface;
@@ -454,48 +459,6 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-static void devmgr_import_bootdata(zx_handle_t vmo) {
-    bootdata_t bootdata;
-    size_t actual;
-    zx_status_t status = zx_vmo_read_old(vmo, &bootdata, 0, sizeof(bootdata), &actual);
-    if ((status < 0) || (actual != sizeof(bootdata))) {
-        return;
-    }
-    if ((bootdata.type != BOOTDATA_CONTAINER) || (bootdata.extra != BOOTDATA_MAGIC)) {
-        printf("devmgr: bootdata item does not contain bootdata\n");
-        return;
-    }
-    if (!(bootdata.flags & BOOTDATA_FLAG_V2)) {
-        printf("devmgr: bootdata v1 not supported\n");
-    }
-    size_t len = bootdata.length;
-    size_t off = sizeof(bootdata);
-
-    while (len > sizeof(bootdata)) {
-        zx_status_t status = zx_vmo_read_old(vmo, &bootdata, off, sizeof(bootdata), &actual);
-        if ((status < 0) || (actual != sizeof(bootdata))) {
-            break;
-        }
-        size_t itemlen = BOOTDATA_ALIGN(sizeof(bootdata_t) + bootdata.length);
-        if (itemlen > len) {
-            printf("devmgr: bootdata item too large (%zd > %zd)\n", itemlen, len);
-            break;
-        }
-        switch (bootdata.type) {
-        case BOOTDATA_CONTAINER:
-            printf("devmgr: unexpected bootdata container header\n");
-            return;
-        case BOOTDATA_PLATFORM_ID:
-            devmgr_set_platform_id(vmo, off + sizeof(bootdata_t), itemlen);
-            break;
-        default:
-            break;
-        }
-        off += itemlen;
-        len -= itemlen;
-    }
-}
-
 static zx_handle_t fs_root;
 
 static bootfs_t bootfs;
@@ -583,7 +546,7 @@ void fshost_start(void) {
     for (size_t m = 0; n < MAXHND; m++) {
         uint32_t type = PA_HND(PA_VMO_BOOTDATA, m);
         if ((handles[n] = zx_get_startup_handle(type)) != ZX_HANDLE_INVALID) {
-            devmgr_import_bootdata(handles[n]);
+            devmgr_set_bootdata(handles[n]);
             types[n++] = type;
         } else {
             break;

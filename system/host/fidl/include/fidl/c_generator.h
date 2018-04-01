@@ -26,7 +26,7 @@ namespace fidl {
 
 class CGenerator {
 public:
-    explicit CGenerator(flat::Library* library)
+    explicit CGenerator(const flat::Library* library)
         : library_(library) {}
 
     ~CGenerator() = default;
@@ -57,6 +57,8 @@ private:
     };
 
     struct NamedMethod {
+        uint32_t ordinal;
+        std::string ordinal_name;
         std::unique_ptr<NamedMessage> request;
         std::unique_ptr<NamedMessage> response;
     };
@@ -106,7 +108,7 @@ private:
     void ProduceStructDeclaration(const NamedStruct& named_struct);
     void ProduceUnionDeclaration(const NamedUnion& named_union);
 
-    flat::Library* library_;
+    const flat::Library* library_;
     std::ostringstream header_file_;
 };
 

@@ -45,7 +45,7 @@ TransferBuffer::~TransferBuffer() {
     io_buffer_release(&buf_);
 }
 
-zx_status_t TransferBuffer::Init(size_t count, uint32_t chunk_size) {
+zx_status_t TransferBuffer::Init(const zx::bti& bti, size_t count, uint32_t chunk_size) {
     if (!count)
         return ZX_OK;
 
@@ -61,7 +61,7 @@ zx_status_t TransferBuffer::Init(size_t count, uint32_t chunk_size) {
 
     descriptor_.reset(descriptor, count_);
 
-    zx_status_t status = io_buffer_init(&buf_, size_, IO_BUFFER_RW | IO_BUFFER_CONTIG);
+    zx_status_t status = io_buffer_init(&buf_, bti.get(), size_, IO_BUFFER_RW | IO_BUFFER_CONTIG);
     if (status != ZX_OK) {
         zxlogf(ERROR, "Failed to allocate transfer buffers (%d)\n", status);
         return status;
@@ -115,8 +115,8 @@ bool TransferQueue::IsEmpty() const {
     return queue_.is_empty();
 }
 
-ConsoleDevice::ConsoleDevice(zx_device_t* bus_device, fbl::unique_ptr<Backend> backend)
-    : Device(bus_device, fbl::move(backend)) {}
+ConsoleDevice::ConsoleDevice(zx_device_t* bus_device, zx::bti bti, fbl::unique_ptr<Backend> backend)
+    : Device(bus_device, fbl::move(bti), fbl::move(backend)) {}
 
 ConsoleDevice::~ConsoleDevice() {}
 
@@ -145,7 +145,7 @@ zx_status_t ConsoleDevice::Init() TA_NO_THREAD_SAFETY_ANALYSIS {
         return status;
     }
 
-    status = port0_receive_buffer_.Init(kDescriptors, kChunkSize);
+    status = port0_receive_buffer_.Init(bti_, kDescriptors, kChunkSize);
     if (status) {
         zxlogf(ERROR, "%s: Failed to allocate buffers for receive queue (%d)\n", tag(), status);
         return status;
@@ -166,7 +166,7 @@ zx_status_t ConsoleDevice::Init() TA_NO_THREAD_SAFETY_ANALYSIS {
         return status;
     }
 
-    status = port0_transmit_buffer_.Init(kDescriptors, kChunkSize);
+    status = port0_transmit_buffer_.Init(bti_, kDescriptors, kChunkSize);
     if (status) {
         zxlogf(ERROR, "%s: Failed to allocate buffers for transmit queue (%d)\n", tag(), status);
         return status;

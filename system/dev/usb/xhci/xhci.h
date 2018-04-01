@@ -54,11 +54,12 @@ typedef struct {
 } xhci_transfer_state_t;
 
 typedef enum {
-    EP_STATE_DEAD = 0,      // device does not exist or has been removed
+    EP_STATE_DEAD = 0, // device does not exist or has been removed
     EP_STATE_RUNNING,
-    EP_STATE_HALTED,        // halted due to stall or error condition
-    EP_STATE_PAUSED,        // temporarily stopped for canceling a transfer
-    EP_STATE_DISABLED,      // endpoint is not enabled
+    EP_STATE_HALTED,   // halted due to stall
+    EP_STATE_PAUSED,   // temporarily stopped for canceling a transfer
+    EP_STATE_DISABLED, // endpoint is not enabled
+    EP_STATE_ERROR,    // endpoint has error condition
 } xhci_ep_state_t;
 
 typedef struct {
@@ -203,6 +204,8 @@ struct xhci {
     io_buffer_t scratch_pad_pages_buffer;
     // VMO buffer for scratch pad index
     io_buffer_t scratch_pad_index_buffer;
+
+    zx_handle_t bti_handle;
 
     // pool of control requests that can be reused
     usb_request_pool_t free_reqs;

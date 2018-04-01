@@ -53,7 +53,11 @@ zx_status_t VnodeFile::Read(void* data, size_t len, size_t off, size_t* out_actu
         len = length_ - off;
     }
 
-    return zx_vmo_read_old(vmo_, data, off, len, out_actual);
+    zx_status_t status = zx_vmo_read(vmo_, data, off, len);
+    if (status == ZX_OK) {
+        *out_actual = len;
+    }
+    return status;
 }
 
 zx_status_t VnodeFile::Write(const void* data, size_t len, size_t offset,
@@ -75,9 +79,10 @@ zx_status_t VnodeFile::Write(const void* data, size_t len, size_t offset,
         }
     }
 
-    if ((status = zx_vmo_write_old(vmo_, data, offset, len, out_actual)) != ZX_OK) {
+    if ((status = zx_vmo_write(vmo_, data, offset, len)) != ZX_OK) {
         return status;
     }
+    *out_actual = len;
 
     if (newlen > length_) {
         length_ = newlen;
@@ -106,7 +111,7 @@ zx_status_t VnodeFile::GetVmo(int flags, zx_handle_t* out) {
         }
     }
 
-    zx_rights_t rights = ZX_RIGHT_TRANSFER | ZX_RIGHT_MAP;
+    zx_rights_t rights = ZX_RIGHTS_BASIC | ZX_RIGHT_MAP;
     rights |= (flags & FDIO_MMAP_FLAG_READ) ? ZX_RIGHT_READ : 0;
     rights |= (flags & FDIO_MMAP_FLAG_WRITE) ? ZX_RIGHT_WRITE : 0;
     rights |= (flags & FDIO_MMAP_FLAG_EXEC) ? ZX_RIGHT_EXECUTE : 0;
@@ -152,11 +157,10 @@ zx_status_t VnodeFile::Truncate(size_t len) {
         size_t ppage_size = PAGE_SIZE - (len % PAGE_SIZE);
         ppage_size = len + ppage_size < length_ ? ppage_size : length_ - len;
         memset(buf, 0, ppage_size);
-        size_t actual;
-        status = zx_vmo_write_old(vmo_, buf, len, ppage_size, &actual);
-        if ((status != ZX_OK) || (actual != ppage_size)) {
-            return status != ZX_OK ? ZX_ERR_IO : status;
-        } else if ((status = zx_vmo_set_size(vmo_, alignedLen)) != ZX_OK) {
+        if (zx_vmo_write(vmo_, buf, len, ppage_size) != ZX_OK) {
+            return ZX_ERR_IO;
+        }
+        if ((status = zx_vmo_set_size(vmo_, alignedLen)) != ZX_OK) {
             return status;
         }
     } else if ((status = zx_vmo_set_size(vmo_, alignedLen)) != ZX_OK) {

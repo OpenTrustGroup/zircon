@@ -22,14 +22,14 @@
 #include <zircon/process.h>
 #include <zircon/syscalls/iommu.h>
 
-#include "errors.h"
-#include "init.h"
+#include "cpu-trace.h"
 #include "dev.h"
 #include "errors.h"
+#include "init.h"
 #include "pci.h"
 #include "powerbtn.h"
-#include "processor.h"
 #include "power.h"
+#include "processor.h"
 #include "resources.h"
 
 #define MAX_NAMESPACE_DEPTH 100
@@ -679,6 +679,15 @@ static ACPI_STATUS acpi_ns_walk_callback(ACPI_HANDLE object, uint32_t nesting_le
     if (hid == 0) {
         goto out;
     }
+    const char* cid = NULL;
+    if ((info->Valid & ACPI_VALID_CID) &&
+            (info->CompatibleIdList.Count > 0) &&
+            // IDs may be 7 or 8 bytes, and Length includes the null byte
+            (info->CompatibleIdList.Ids[0].Length == HID_LENGTH ||
+             info->CompatibleIdList.Ids[0].Length == HID_LENGTH + 1)) {
+        cid = (const char*)info->CompatibleIdList.Ids[0].String;
+    }
+
     if (!ctx->found_pci && (!memcmp(hid, PCI_EXPRESS_ROOT_HID_STRING, HID_LENGTH) ||
                             !memcmp(hid, PCI_ROOT_HID_STRING, HID_LENGTH))) {
         // Publish PCI root as top level
@@ -700,6 +709,12 @@ static ACPI_STATUS acpi_ns_walk_callback(ACPI_HANDLE object, uint32_t nesting_le
         cros_ec_lpc_init(parent, object);
     } else if (!memcmp(hid, DPTF_THERMAL_HID_STRING, HID_LENGTH)) {
         thermal_init(parent, info, object);
+    } else if (!memcmp(hid, I8042_HID_STRING, HID_LENGTH) ||
+               (cid && !memcmp(cid, I8042_HID_STRING, HID_LENGTH))) {
+        publish_device(parent, object, info, "i8042", ZX_PROTOCOL_ACPI, &acpi_proto);
+    } else if (!memcmp(hid, RTC_HID_STRING, HID_LENGTH) ||
+               (cid && !memcmp(cid, RTC_HID_STRING, HID_LENGTH))) {
+        publish_device(parent, object, info, "rtc", ZX_PROTOCOL_ACPI, &acpi_proto);
     }
 
 out:
@@ -728,10 +743,13 @@ static zx_status_t publish_acpi_devices(zx_device_t* parent) {
 }
 
 static zx_status_t acpi_drv_create(void* ctx, zx_device_t* parent, const char* name,
-                                   const char* _args, zx_handle_t rpc_channel) {
+                                   const char* _args, zx_handle_t bootdata_vmo) {
     // ACPI is the root driver for its devhost so run init in the bind thread.
     zxlogf(TRACE, "acpi-bus: bind to %s %p\n", device_get_name(parent), parent);
     root_resource_handle = get_root_resource();
+
+    // We don't need bootdata VMO handle.
+    zx_handle_close(bootdata_vmo);
 
     if (init() != ZX_OK) {
         zxlogf(ERROR, "acpi-bus: failed to initialize ACPI\n");
@@ -789,6 +807,18 @@ static zx_status_t acpi_drv_create(void* ctx, zx_device_t* parent, const char* n
     status = device_add(parent, &args, &sys_root);
     if (status != ZX_OK) {
         zxlogf(ERROR, "acpi-bus: error %d in device_add(sys)\n", status);
+        return status;
+    }
+
+    zx_handle_t cpu_trace_bti;
+    status = zx_bti_create(dummy_iommu_handle, 0, CPU_TRACE_BTI_ID, &cpu_trace_bti);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "acpi-bus: error %d in bti_create(cpu_trace_bti)\n", status);
+        return status;
+    }
+
+    status = publish_cpu_trace(cpu_trace_bti, sys_root);
+    if (status != ZX_OK) {
         return status;
     }
 

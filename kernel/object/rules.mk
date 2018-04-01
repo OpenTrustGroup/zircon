@@ -37,6 +37,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/policy_manager.cpp \
     $(LOCAL_DIR)/port_dispatcher.cpp \
     $(LOCAL_DIR)/process_dispatcher.cpp \
+    $(LOCAL_DIR)/profile_dispatcher.cpp \
     $(LOCAL_DIR)/resource_dispatcher.cpp \
     $(LOCAL_DIR)/resources.cpp \
     $(LOCAL_DIR)/semaphore.cpp \
@@ -50,6 +51,7 @@ MODULE_SRCS := \
 
 # Tests
 MODULE_SRCS += \
+    $(LOCAL_DIR)/mbuf_tests.cpp \
     $(LOCAL_DIR)/state_tracker_tests.cpp \
 
 MODULE_DEPS := \

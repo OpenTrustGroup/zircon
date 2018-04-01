@@ -25,14 +25,15 @@ std::string NameHandleSubtype(types::HandleSubtype subtype);
 std::string NameHandleZXObjType(types::HandleSubtype subtype);
 
 std::string NameRawLiteralKind(raw::Literal::Kind kind);
-std::string NameRawConstantKind(raw::Constant::Kind kind);
 
+std::string NameFlatConstantKind(flat::Constant::Kind kind);
 std::string NameFlatTypeKind(flat::Type::Kind kind);
 std::string NameUnionTag(StringView union_name, const flat::Union::Member& member);
 std::string NameFlatCType(const flat::Type* type);
 std::string NameInterface(const flat::Interface& interface);
 std::string NameMethod(StringView interface_name, const flat::Interface::Method& method);
-std::string NameMessage(StringView method_name, types::MessageKind kind);
+std::string NameOrdinal(StringView method_name);
+std::string NameMessage(StringView library_name, StringView method_name, types::MessageKind kind);
 std::string NameParameter(StringView message_name,
                           const flat::Interface::Method::Parameter& parameter);
 
@@ -41,9 +42,11 @@ std::string NamePointer(StringView name);
 std::string NameMembers(StringView name);
 std::string NameFields(StringView name);
 
+std::string NameCodedStruct(const flat::Struct* struct_decl);
+std::string NameCodedUnion(const flat::Union* union_decl);
 std::string NameCodedHandle(types::HandleSubtype subtype, types::Nullability nullability);
-std::string NameCodedInterfaceHandle(StringView interface_name, types::Nullability nullability);
-std::string NameCodedRequestHandle(StringView interface_name, types::Nullability nullability);
+std::string NameCodedInterfaceHandle(StringView library_name, StringView interface_name, types::Nullability nullability);
+std::string NameCodedRequestHandle(StringView library_name, StringView interface_name, types::Nullability nullability);
 std::string NameCodedArray(StringView element_name, uint64_t size);
 std::string NameCodedVector(StringView element_name, uint64_t max_size, types::Nullability nullability);
 std::string NameCodedString(uint64_t max_size, types::Nullability nullability);

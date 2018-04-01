@@ -22,12 +22,6 @@ static bool is_allocated_contiguous(size_t size, uint32_t flags) {
 
 static zx_status_t pin_contig_buffer(zx_handle_t bti, zx_handle_t vmo, size_t size,
                                      zx_paddr_t* phys) {
-    if (bti == ZX_HANDLE_INVALID) {
-        size_t lookup_size = size < PAGE_SIZE ? size : PAGE_SIZE;
-        return zx_vmo_op_range(vmo, ZX_VMO_OP_LOOKUP, 0, lookup_size, phys,
-                               sizeof(*phys));
-    }
-
     zx_info_bti_t info;
     zx_status_t status = zx_object_get_info(bti, ZX_INFO_BTI, &info, sizeof(info),
                                             NULL, NULL);
@@ -68,16 +62,6 @@ static zx_status_t io_buffer_init_common(io_buffer_t* buffer, zx_handle_t bti_ha
                                          zx_off_t offset, uint32_t flags) {
     zx_vaddr_t virt;
 
-    if (!is_allocated_contiguous(size, flags)) {
-        // needs to be done before ZX_VMO_OP_LOOKUP for non-contiguous VMOs
-        zx_status_t status = zx_vmo_op_range(vmo_handle, ZX_VMO_OP_COMMIT, 0, size, NULL, 0);
-        if (status != ZX_OK) {
-            zxlogf(ERROR, "io_buffer: zx_vmo_op_range(ZX_VMO_OP_COMMIT) failed %d\n", status);
-            zx_handle_close(vmo_handle);
-            return status;
-        }
-    }
-
     uint32_t map_flags = ZX_VM_FLAG_PERM_READ;
     if (flags & IO_BUFFER_RW) {
         map_flags = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
@@ -115,28 +99,8 @@ static zx_status_t io_buffer_init_common(io_buffer_t* buffer, zx_handle_t bti_ha
     return ZX_OK;
 }
 
-zx_status_t io_buffer_init_aligned(io_buffer_t* buffer, size_t size, uint32_t alignment_log2,
-                                   uint32_t flags) {
-    return io_buffer_init_aligned_with_bti(buffer, ZX_HANDLE_INVALID, size, alignment_log2, flags);
-}
-
-zx_status_t io_buffer_init(io_buffer_t* buffer, size_t size, uint32_t flags) {
-    return io_buffer_init_with_bti(buffer, ZX_HANDLE_INVALID, size, flags);
-}
-
-zx_status_t io_buffer_init_vmo(io_buffer_t* buffer,
-                               zx_handle_t vmo_handle, zx_off_t offset, uint32_t flags) {
-    return io_buffer_init_vmo_with_bti(buffer, ZX_HANDLE_INVALID, vmo_handle, offset, flags);
-}
-
-zx_status_t io_buffer_init_physical(io_buffer_t* buffer, zx_paddr_t addr, size_t size,
-                                    zx_handle_t resource, uint32_t cache_policy) {
-    return io_buffer_init_physical_with_bti(buffer, ZX_HANDLE_INVALID, addr, size, resource,
-                                            cache_policy);
-}
-
-zx_status_t io_buffer_init_aligned_with_bti(io_buffer_t* buffer, zx_handle_t bti,
-                                            size_t size, uint32_t alignment_log2, uint32_t flags) {
+zx_status_t io_buffer_init_aligned(io_buffer_t* buffer, zx_handle_t bti, size_t size,
+                                   uint32_t alignment_log2, uint32_t flags) {
     memset(buffer, 0, sizeof(*buffer));
 
     if (size == 0) {
@@ -174,14 +138,13 @@ zx_status_t io_buffer_init_aligned_with_bti(io_buffer_t* buffer, zx_handle_t bti
     return io_buffer_init_common(buffer, bti, vmo_handle, size, 0, flags);
 }
 
-zx_status_t io_buffer_init_with_bti(io_buffer_t* buffer, zx_handle_t bti,
-                                    size_t size, uint32_t flags) {
+zx_status_t io_buffer_init(io_buffer_t* buffer, zx_handle_t bti, size_t size, uint32_t flags) {
     // A zero alignment gets interpreted as PAGE_SIZE_SHIFT.
-    return io_buffer_init_aligned_with_bti(buffer, bti, size, 0, flags);
+    return io_buffer_init_aligned(buffer, bti, size, 0, flags);
 }
 
-zx_status_t io_buffer_init_vmo_with_bti(io_buffer_t* buffer, zx_handle_t bti,
-                                        zx_handle_t vmo_handle, zx_off_t offset, uint32_t flags) {
+zx_status_t io_buffer_init_vmo(io_buffer_t* buffer, zx_handle_t bti, zx_handle_t vmo_handle,
+                               zx_off_t offset, uint32_t flags) {
     memset(buffer, 0, sizeof(*buffer));
 
     if (flags != IO_BUFFER_RO && flags != IO_BUFFER_RW) {
@@ -201,9 +164,23 @@ zx_status_t io_buffer_init_vmo_with_bti(io_buffer_t* buffer, zx_handle_t bti,
     return io_buffer_init_common(buffer, bti, vmo_handle, size, offset, flags);
 }
 
-zx_status_t io_buffer_init_physical_with_bti(io_buffer_t* buffer, zx_handle_t bti,
-                                             zx_paddr_t addr, size_t size, zx_handle_t resource,
-                                             uint32_t cache_policy) {
+zx_status_t io_buffer_init_mmio(io_buffer_t* buffer, zx_handle_t vmo_handle, void* virt,
+                                zx_off_t offset, size_t size) {
+    memset(buffer, 0, sizeof(*buffer));
+
+    zx_status_t status = zx_handle_duplicate(vmo_handle, ZX_RIGHT_SAME_RIGHTS, &vmo_handle);
+    if (status != ZX_OK) return status;
+
+    buffer->vmo_handle = vmo_handle;
+    buffer->size = size;
+    buffer->offset = offset;
+    buffer->virt = (void *)virt;
+
+    return ZX_OK;
+}
+
+zx_status_t io_buffer_init_physical(io_buffer_t* buffer, zx_handle_t bti, zx_paddr_t addr,
+                                    size_t size, zx_handle_t resource, uint32_t cache_policy) {
     memset(buffer, 0, sizeof(*buffer));
 
     zx_handle_t vmo_handle;
@@ -302,7 +279,7 @@ zx_status_t io_buffer_physmap(io_buffer_t* buffer) {
         return ZX_ERR_INVALID_ARGS;
     }
 
-    // ZX_VMO_OP_LOOKUP returns whole pages, so take into account unaligned vmo
+    // zx_bti_pin returns whole pages, so take into account unaligned vmo
     // offset and length when calculating the amount of pages returned
     uint64_t page_offset = ROUNDDOWN(buffer->offset, PAGE_SIZE);
     // The buffer size is the vmo size from offset 0.
@@ -331,26 +308,21 @@ zx_status_t io_buffer_physmap_range(io_buffer_t* buffer, zx_off_t offset,
                                     zx_paddr_t* physmap) {
     // TODO(teisenbe): We need to figure out how to integrate lifetime
     // management of this pin into the io_buffer API...
-    if (buffer->bti_handle == ZX_HANDLE_INVALID) {
-        return zx_vmo_op_range(buffer->vmo_handle, ZX_VMO_OP_LOOKUP, offset, length,
-                               physmap, phys_count * sizeof(*physmap));
-    } else {
-        const size_t sub_offset = offset & (PAGE_SIZE - 1);
-        const size_t pin_offset = offset - sub_offset;
-        const size_t pin_length = ROUNDUP(length + sub_offset, PAGE_SIZE);
+    const size_t sub_offset = offset & (PAGE_SIZE - 1);
+    const size_t pin_offset = offset - sub_offset;
+    const size_t pin_length = ROUNDUP(length + sub_offset, PAGE_SIZE);
 
-        if (pin_length / PAGE_SIZE != phys_count) {
-            return ZX_ERR_INVALID_ARGS;
-        }
-
-        uint32_t options = ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE;
-        zx_status_t status = zx_bti_pin(buffer->bti_handle, options, buffer->vmo_handle,
-                                        pin_offset, pin_length, physmap, phys_count);
-        if (status != ZX_OK) {
-            return status;
-        }
-        // Account for the initial misalignment if any
-        physmap[0] += sub_offset;
-        return ZX_OK;
+    if (pin_length / PAGE_SIZE != phys_count) {
+        return ZX_ERR_INVALID_ARGS;
     }
+
+    uint32_t options = ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE;
+    zx_status_t status = zx_bti_pin(buffer->bti_handle, options, buffer->vmo_handle,
+                                    pin_offset, pin_length, physmap, phys_count);
+    if (status != ZX_OK) {
+        return status;
+    }
+    // Account for the initial misalignment if any
+    physmap[0] += sub_offset;
+    return ZX_OK;
 }

@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <zircon/compiler.h>
-#include <zircon/errors.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <zircon/compiler.h>
+#include <zircon/errors.h>
 #ifndef __cplusplus
 #ifndef _KERNEL
 // We don't want to include <stdatomic.h> from the kernel code because the
@@ -39,6 +39,7 @@ typedef uint64_t zx_time_t;
 // a duration in nanoseconds
 typedef uint64_t zx_duration_t;
 #define ZX_TIME_INFINITE UINT64_MAX
+#define ZX_NSEC(n) ((zx_duration_t)(1ULL * (n)))
 #define ZX_USEC(n) ((zx_duration_t)(1000ULL * (n)))
 #define ZX_MSEC(n) ((zx_duration_t)(1000000ULL * (n)))
 #define ZX_SEC(n)  ((zx_duration_t)(1000000000ULL * (n)))
@@ -121,9 +122,6 @@ typedef uint32_t zx_signals_t;
 #define ZX_SOCKET_ACCEPT            __ZX_OBJECT_SIGNAL_8
 #define ZX_SOCKET_SHARE             __ZX_OBJECT_SIGNAL_9
 
-// Port
-#define ZX_PORT_READABLE            __ZX_OBJECT_READABLE
-
 // Fifo
 #define ZX_FIFO_READABLE            __ZX_OBJECT_READABLE
 #define ZX_FIFO_WRITABLE            __ZX_OBJECT_WRITABLE
@@ -205,6 +203,7 @@ typedef uint32_t zx_rights_t;
 #define ZX_RIGHT_MANAGE_JOB       ((zx_rights_t)1u << 16)
 #define ZX_RIGHT_MANAGE_PROCESS   ((zx_rights_t)1u << 17)
 #define ZX_RIGHT_MANAGE_THREAD    ((zx_rights_t)1u << 18)
+#define ZX_RIGHT_APPLY_PROFILE    ((zx_rights_t)1u << 19)
 #define ZX_RIGHT_SAME_RIGHTS      ((zx_rights_t)1u << 31)
 
 // Convenient names for commonly grouped rights
@@ -358,7 +357,8 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_TIMER           ((zx_obj_type_t)22u)
 #define ZX_OBJ_TYPE_IOMMU           ((zx_obj_type_t)23u)
 #define ZX_OBJ_TYPE_BTI             ((zx_obj_type_t)24u)
-#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)25u)
+#define ZX_OBJ_TYPE_PROFILE         ((zx_obj_type_t)25u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)26u)
 
 typedef struct {
     zx_handle_t handle;

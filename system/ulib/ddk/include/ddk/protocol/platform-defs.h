@@ -18,10 +18,9 @@ __BEGIN_CDECLS;
 #define PDEV_DID_USB_DWC2           5   // DWC2 USB Controller
 #define PDEV_DID_RTC_PL031          6   // ARM Primecell PL031 RTC
 #define PDEV_DID_DSI                7   // DSI
-#define PDEV_DID_BT_UART            8   // Bluetooth HCI over UART
-#define PDEV_DID_UART_TEST          9   // Simple UART test driver
-#define PDEV_DID_GPIO_TEST          10  // Simple GPIO test driver
-#define PDEV_DID_DW_I2C             11  // Designware I2C
+#define PDEV_DID_GPIO_TEST          8   // Simple GPIO test driver
+#define PDEV_DID_DW_I2C             9   // Designware I2C
+#define PDEV_DID_DW_PCIE            10  // Designware PCIe
 
 // QEMU emulator
 #define PDEV_VID_QEMU               1
@@ -55,6 +54,7 @@ __BEGIN_CDECLS;
 #define PDEV_PID_AMLOGIC_S905X      2
 #define PDEV_PID_AMLOGIC_S912       3
 #define PDEV_PID_AMLOGIC_S905       4
+#define PDEV_PID_AMLOGIC_S905D2     5
 
 #define PDEV_DID_AMLOGIC_GPIO       1
 #define PDEV_DID_AMLOGIC_I2C        2
@@ -69,5 +69,9 @@ __BEGIN_CDECLS;
 //Hardkernel
 #define PDEV_VID_HARDKERNEL         7
 #define PDEV_PID_ODROID_C2          1
+
+// Intel
+#define PDEV_VID_INTEL              8
+#define PDEV_DID_INTEL_CPU_TRACE    1 // Intel CPU tracing driver
 
 __END_CDECLS;

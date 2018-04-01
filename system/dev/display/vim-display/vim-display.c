@@ -2,25 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "vim-display.h"
+#include "hdmitx.h"
 #include <assert.h>
+#include <ddk/binding.h>
+#include <ddk/debug.h>
+#include <ddk/device.h>
+#include <ddk/driver.h>
+#include <ddk/io-buffer.h>
+#include <ddk/protocol/display.h>
+#include <ddk/protocol/platform-defs.h>
+#include <ddk/protocol/platform-device.h>
+#include <hw/reg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <ddk/device.h>
-#include <ddk/driver.h>
-#include <ddk/debug.h>
-#include <ddk/binding.h>
-#include <ddk/io-buffer.h>
-#include <ddk/protocol/display.h>
-#include <ddk/protocol/platform-defs.h>
-#include <ddk/protocol/platform-device.h>
-#include <zircon/syscalls.h>
 #include <zircon/assert.h>
-#include <hw/reg.h>
-#include "vim-display.h"
-#include "hdmitx.h"
+#include <zircon/device/display.h>
+#include <zircon/syscalls.h>
 
 /* Default formats */
 static const uint8_t _ginput_color_format   = HDMI_COLOR_FORMAT_444;
@@ -51,36 +52,63 @@ static zx_status_t vc_get_mode(void* ctx, zx_display_info_t* info) {
 static zx_status_t vc_get_framebuffer(void* ctx, void** framebuffer) {
     if (!framebuffer) return ZX_ERR_INVALID_ARGS;
     vim2_display_t* display = ctx;
-    *framebuffer = display->fbuffer.vaddr;
+    *framebuffer = io_buffer_virt(&display->fbuffer);
     return ZX_OK;
 }
 
-static void vc_flush_framebuffer(void* ctx) {
-    vim2_display_t* display = ctx;
-    pdev_vmo_buffer_cache_flush(&display->fbuffer, 0,
+static void flush_framebuffer(vim2_display_t* display) {
+    io_buffer_cache_flush(&display->fbuffer, 0,
         (display->disp_info.stride * display->disp_info.height *
             ZX_PIXEL_FORMAT_BYTES(display->disp_info.format)));
+}
+
+static void vc_flush_framebuffer(void* ctx) {
+    flush_framebuffer(ctx);
+}
+
+static void vc_display_set_ownership_change_callback(void* ctx, zx_display_cb_t callback,
+                                                     void* cookie) {
+    vim2_display_t* display = ctx;
+    display->ownership_change_callback = callback;
+    display->ownership_change_cookie = cookie;
+}
+
+static void vc_display_acquire_or_release_display(void* ctx, bool acquire) {
+    vim2_display_t* display = ctx;
+
+    if (acquire) {
+        display->console_visible = true;
+        if (display->ownership_change_callback)
+            display->ownership_change_callback(true, display->ownership_change_cookie);
+    } else if (!acquire) {
+        display->console_visible = false;
+        if (display->ownership_change_callback)
+            display->ownership_change_callback(false, display->ownership_change_cookie);
+    }
 }
 
 static display_protocol_ops_t vc_display_proto = {
     .set_mode = vc_set_mode,
     .get_mode = vc_get_mode,
     .get_framebuffer = vc_get_framebuffer,
-    .flush = vc_flush_framebuffer
+    .flush = vc_flush_framebuffer,
+    .set_ownership_change_callback = vc_display_set_ownership_change_callback,
+    .acquire_or_release_display = vc_display_acquire_or_release_display,
 };
 
 static void display_release(void* ctx) {
     vim2_display_t* display = ctx;
 
     if (display) {
-        pdev_vmo_buffer_release(&display->mmio_preset);
-        pdev_vmo_buffer_release(&display->mmio_hdmitx);
-        pdev_vmo_buffer_release(&display->mmio_hiu);
-        pdev_vmo_buffer_release(&display->mmio_vpu);
-        pdev_vmo_buffer_release(&display->mmio_hdmitx_sec);
-        pdev_vmo_buffer_release(&display->mmio_dmc);
-        pdev_vmo_buffer_release(&display->mmio_cbus);
-        pdev_vmo_buffer_release(&display->fbuffer);
+        io_buffer_release(&display->mmio_preset);
+        io_buffer_release(&display->mmio_hdmitx);
+        io_buffer_release(&display->mmio_hiu);
+        io_buffer_release(&display->mmio_vpu);
+        io_buffer_release(&display->mmio_hdmitx_sec);
+        io_buffer_release(&display->mmio_dmc);
+        io_buffer_release(&display->mmio_cbus);
+        io_buffer_release(&display->fbuffer);
+        zx_handle_close(display->bti);
         free(display->edid_buf);
         free(display->p);
     }
@@ -92,8 +120,78 @@ static zx_protocol_device_t main_device_proto = {
     .release =  display_release,
 };
 
+struct display_client_device {
+    vim2_display_t* display;
+    zx_device_t* device;
+};
+
+static zx_status_t display_client_ioctl(void* ctx, uint32_t op, const void* in_buf, size_t in_len,
+                                        void* out_buf, size_t out_len, size_t* out_actual) {
+    struct display_client_device* client_struct = ctx;
+    vim2_display_t* display = client_struct->display;
+    switch (op) {
+    case IOCTL_DISPLAY_GET_FB: {
+        if (out_len < sizeof(ioctl_display_get_fb_t))
+            return ZX_ERR_INVALID_ARGS;
+        ioctl_display_get_fb_t* description = (ioctl_display_get_fb_t*)(out_buf);
+        zx_status_t status = zx_handle_duplicate(display->fbuffer.vmo_handle, ZX_RIGHT_SAME_RIGHTS, &description->vmo);
+        if (status != ZX_OK)
+            return ZX_ERR_NO_RESOURCES;
+        description->info = display->disp_info;
+        *out_actual = sizeof(ioctl_display_get_fb_t);
+        if (display->ownership_change_callback)
+            display->ownership_change_callback(false, display->ownership_change_cookie);
+        return ZX_OK;
+    }
+    case IOCTL_DISPLAY_FLUSH_FB:
+    case IOCTL_DISPLAY_FLUSH_FB_REGION:
+        flush_framebuffer(display);
+        return ZX_OK;
+    default:
+        DISP_ERROR("Invalid ioctl %d\n", op);
+        return ZX_ERR_INVALID_ARGS;
+    }
+}
+
+static zx_status_t display_client_close(void* ctx, uint32_t flags) {
+    struct display_client_device* client_struct = ctx;
+    vim2_display_t* display = client_struct->display;
+    if (display->ownership_change_callback)
+        display->ownership_change_callback(true, display->ownership_change_cookie);
+    free(ctx);
+    return ZX_OK;
+}
+
+static zx_protocol_device_t client_device_proto = {
+    .version = DEVICE_OPS_VERSION,
+    .ioctl = display_client_ioctl,
+    .close = display_client_close,
+};
+
+static zx_status_t vc_open(void* ctx, zx_device_t** dev_out, uint32_t flags) {
+    struct display_client_device* s = calloc(1, sizeof(struct display_client_device));
+
+    s->display = ctx;
+
+    device_add_args_t vc_fbuff_args = {
+        .version = DEVICE_ADD_ARGS_VERSION,
+        .name = "vim2-display",
+        .ctx = s,
+        .ops = &client_device_proto,
+        .flags = DEVICE_ADD_INSTANCE,
+    };
+    zx_status_t status = device_add(s->display->fbdevice, &vc_fbuff_args, &s->device);
+    if (status != ZX_OK) {
+        free(s);
+        return status;
+    }
+    *dev_out = s->device;
+    return ZX_OK;
+}
+
 static zx_protocol_device_t display_device_proto = {
     .version = DEVICE_OPS_VERSION,
+    .open = vc_open,
 };
 
 static zx_status_t setup_hdmi(vim2_display_t* display)
@@ -118,12 +216,12 @@ static zx_status_t setup_hdmi(vim2_display_t* display)
     display->disp_info.width  = display->p->timings.hactive;
     display->disp_info.height = display->p->timings.vactive;
     display->disp_info.stride = display->p->timings.hactive;
+    display->disp_info.pixelsize = ZX_PIXEL_FORMAT_BYTES(display->disp_info.format);
 
-   status = pdev_map_contig_buffer(&display->pdev,
-                        (display->disp_info.stride * display->disp_info.height *
-                            ZX_PIXEL_FORMAT_BYTES(display->disp_info.format)),
-                        0, ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, ZX_CACHE_POLICY_CACHED,
-                        &display->fbuffer);
+    status = io_buffer_init(&display->fbuffer, display->bti,
+                            (display->disp_info.stride * display->disp_info.height *
+                             ZX_PIXEL_FORMAT_BYTES(display->disp_info.format)),
+                            IO_BUFFER_RW | IO_BUFFER_CONTIG);
     if (status != ZX_OK) {
         return status;
     }
@@ -145,7 +243,7 @@ static zx_status_t setup_hdmi(vim2_display_t* display)
     /* OSD2 setup */
     configure_osd2(display);
 
-    zx_set_framebuffer(get_root_resource(), display->fbuffer.vaddr,
+    zx_set_framebuffer(get_root_resource(), io_buffer_virt(&display->fbuffer),
                        display->fbuffer.size, display->disp_info.format,
                        display->disp_info.width, display->disp_info.height,
                        display->disp_info.stride);
@@ -194,7 +292,7 @@ static int main_hdmi_thread(void *arg)
                 // let's shutdown hdmi
                 DISP_ERROR("Display Disconnected!\n");
                 hdmi_shutdown(display);
-                pdev_vmo_buffer_release(&display->fbuffer);
+                io_buffer_release(&display->fbuffer);
                 device_remove(display->fbdevice);
                 hdmi_inited = false;
             }
@@ -219,10 +317,17 @@ zx_status_t vim2_display_bind(void* ctx, zx_device_t* parent) {
     }
 
     display->parent = parent;
+    display->console_visible = true;
 
     zx_status_t status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_DEV, &display->pdev);
     if (status !=  ZX_OK) {
         DISP_ERROR("Could not get parent protocol\n");
+        goto fail;
+    }
+
+    status = pdev_get_bti(&display->pdev, 0, &display->bti);
+    if (status != ZX_OK) {
+        DISP_ERROR("Could not get BTI handle\n");
         goto fail;
     }
 

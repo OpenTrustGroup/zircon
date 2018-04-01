@@ -6,8 +6,8 @@
 #include <ddk/protocol/platform-defs.h>
 #include <hw/reg.h>
 
+#include <soc/aml-common/aml-usb-phy.h>
 #include <soc/aml-a113/a113-hw.h>
-#include <soc/aml-a113/a113-usb-phy.h>
 
 #include "gauss.h"
 #include "gauss-hw.h"
@@ -141,17 +141,11 @@ static int phy_irq_thread(void* arg) {
 }
 
 zx_status_t gauss_usb_init(gauss_bus_t* bus) {
-    zx_handle_t bti;
-    zx_status_t status = iommu_get_bti(&bus->iommu, 0, BTI_BOARD, &bti);
+    zx_status_t status = io_buffer_init_physical(&bus->usb_phy, bus->bti_handle, 0xffe09000, 4096,
+                                                 get_root_resource(),
+                                                 ZX_CACHE_POLICY_UNCACHED_DEVICE);
     if (status != ZX_OK) {
-        zxlogf(ERROR, "gauss_usb_init: iommu_get_bti failed: %d\n", status);
-        return status;
-    }
-    status = io_buffer_init_physical_with_bti(&bus->usb_phy, bti, 0xffe09000, 4096,
-                                              get_root_resource(), ZX_CACHE_POLICY_UNCACHED_DEVICE);
-    if (status != ZX_OK) {
-        zxlogf(ERROR, "gauss_usb_init io_buffer_init_physical_with_bti failed %d\n", status);
-        zx_handle_close(bti);
+        zxlogf(ERROR, "gauss_usb_init io_buffer_init_physical failed %d\n", status);
         return status;
     }
 

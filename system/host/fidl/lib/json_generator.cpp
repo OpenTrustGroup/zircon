@@ -50,10 +50,6 @@ void EmitUint32(std::ostream* file, uint32_t value) {
     *file << value;
 }
 
-void EmitUint64(std::ostream* file, uint64_t value) {
-    *file << value;
-}
-
 void EmitNewline(std::ostream* file) {
     *file << "\n";
 }
@@ -101,23 +97,28 @@ void JSONGenerator::GenerateEOF() {
     EmitNewline(&json_file_);
 }
 
-template <typename Collection>
-void JSONGenerator::GenerateArray(const Collection& collection) {
+template <typename Iterator>
+void JSONGenerator::GenerateArray(Iterator begin, Iterator end) {
     EmitArrayBegin(&json_file_);
 
-    if (!collection.empty())
+    if (begin != end)
         EmitNewlineAndIndent(&json_file_, ++indent_level_);
 
-    for (size_t i = 0; i < collection.size(); ++i) {
-        if (i)
+    for (Iterator it = begin; it != end; ++it) {
+        if (it != begin)
             EmitArraySeparator(&json_file_, indent_level_);
-        Generate(collection[i]);
+        Generate(*it);
     }
 
-    if (!collection.empty())
+    if (begin != end)
         EmitNewlineAndIndent(&json_file_, --indent_level_);
 
     EmitArrayEnd(&json_file_);
+}
+
+template <typename Collection>
+void JSONGenerator::GenerateArray(const Collection& collection) {
+    GenerateArray(collection.begin(), collection.end());
 }
 
 template <typename Callback>
@@ -134,8 +135,7 @@ void JSONGenerator::GenerateObject(Callback callback) {
     EmitObjectEnd(&json_file_);
 }
 
-template <typename Type>
-void JSONGenerator::GenerateObjectMember(StringView key, const Type& value, Position position) {
+void JSONGenerator::GenerateObjectPunctuation(Position position) {
     switch (position) {
     case Position::First:
         EmitNewlineAndIndent(&json_file_, ++indent_level_);
@@ -144,6 +144,11 @@ void JSONGenerator::GenerateObjectMember(StringView key, const Type& value, Posi
         EmitObjectSeparator(&json_file_, indent_level_);
         break;
     }
+}
+
+template <typename Type>
+void JSONGenerator::GenerateObjectMember(StringView key, const Type& value, Position position) {
+    GenerateObjectPunctuation(position);
     EmitObjectKey(&json_file_, indent_level_, key);
     Generate(value);
 }
@@ -174,8 +179,8 @@ void JSONGenerator::Generate(SourceLocation value) {
     EmitString(&json_file_, value.data());
 }
 
-void JSONGenerator::Generate(uint64_t value) {
-    EmitUint64(&json_file_, value);
+void JSONGenerator::Generate(uint32_t value) {
+    EmitUint32(&json_file_, value);
 }
 
 void JSONGenerator::Generate(types::HandleSubtype value) {
@@ -201,10 +206,6 @@ void JSONGenerator::Generate(const raw::Identifier& value) {
     EmitString(&json_file_, value.location.data());
 }
 
-void JSONGenerator::Generate(const raw::CompoundIdentifier& value) {
-    Generate(value.components);
-}
-
 void JSONGenerator::Generate(const raw::Literal& value) {
     GenerateObject([&]() {
         GenerateObjectMember("kind", NameRawLiteralKind(value.kind), Position::First);
@@ -228,7 +229,23 @@ void JSONGenerator::Generate(const raw::Literal& value) {
         case raw::Literal::Kind::False: {
             break;
         }
-        case raw::Literal::Kind::Default: {
+        }
+    });
+}
+
+void JSONGenerator::Generate(const flat::Constant& value) {
+    GenerateObject([&]() {
+        GenerateObjectMember("kind", NameFlatConstantKind(value.kind), Position::First);
+
+        switch (value.kind) {
+        case flat::Constant::Kind::Identifier: {
+            auto type = static_cast<const flat::IdentifierConstant*>(&value);
+            GenerateObjectMember("identifier", type->name);
+            break;
+        }
+        case flat::Constant::Kind::Literal: {
+            auto type = static_cast<const flat::LiteralConstant*>(&value);
+            GenerateObjectMember("literal", type->literal);
             break;
         }
         }
@@ -288,25 +305,6 @@ void JSONGenerator::Generate(const flat::Type& value) {
     });
 }
 
-void JSONGenerator::Generate(const raw::Constant& value) {
-    GenerateObject([&]() {
-        GenerateObjectMember("kind", NameRawConstantKind(value.kind), Position::First);
-
-        switch (value.kind) {
-        case raw::Constant::Kind::Identifier: {
-            auto type = static_cast<const raw::IdentifierConstant*>(&value);
-            GenerateObjectMember("identifier", type->identifier);
-            break;
-        }
-        case raw::Constant::Kind::Literal: {
-            auto type = static_cast<const raw::LiteralConstant*>(&value);
-            GenerateObjectMember("literal", type->literal);
-            break;
-        }
-        }
-    });
-}
-
 void JSONGenerator::Generate(const raw::Attribute& value) {
     GenerateObject([&]() {
         GenerateObjectMember("name", value.name, Position::First);
@@ -326,8 +324,23 @@ void JSONGenerator::Generate(const flat::Ordinal& value) {
 }
 
 void JSONGenerator::Generate(const flat::Name& value) {
-    std::vector<std::string> name_parts = {NameName(value)};
-    Generate(name_parts);
+    // These look like (when there is a library)
+    //     LIB/DECL-DECL-ID
+    //     LIB/ID
+    // or (when there is not)
+    //     DECL-DECL-ID
+    //     ID
+    std::string encoded_string;
+    if (LibraryName(value.library()) != LibraryName(library_)) {
+        encoded_string += LibraryName(value.library());
+        encoded_string += "/";
+    }
+    for (auto decl : value.nested_decls()) {
+        encoded_string += std::string(decl.data());
+        encoded_string += "-";
+    }
+    encoded_string += std::string(value.name().data());
+    Generate(encoded_string);
 }
 
 void JSONGenerator::Generate(const flat::Const& value) {
@@ -424,8 +437,8 @@ void JSONGenerator::Generate(const flat::Union& value) {
         if (value.attributes)
             GenerateObjectMember("maybe_attributes", value.attributes);
         GenerateObjectMember("members", value.members);
-        GenerateObjectMember("size", value.fieldshape.Size());
-        GenerateObjectMember("alignment", value.fieldshape.Alignment());
+        GenerateObjectMember("size", value.typeshape.Size());
+        GenerateObjectMember("alignment", value.typeshape.Alignment());
     });
 }
 
@@ -439,7 +452,15 @@ void JSONGenerator::Generate(const flat::Union::Member& value) {
     });
 }
 
-void JSONGenerator::GenerateDeclarationMapEntry(int count, const flat::Name& name, StringView decl) {
+void JSONGenerator::Generate(const std::pair<const StringView, std::unique_ptr<flat::Library>>& library_dependency) {
+    const flat::Library* library = library_dependency.second.get();
+    GenerateObject([&]() {
+        GenerateObjectMember("name", library->library_name_, Position::First);
+        GenerateDeclarationsMember(library);
+    });
+}
+
+void JSONGenerator::GenerateDeclarationsEntry(int count, const flat::Name& name, StringView decl) {
     if (count == 0)
         EmitNewlineAndIndent(&json_file_, ++indent_level_);
     else
@@ -448,38 +469,54 @@ void JSONGenerator::GenerateDeclarationMapEntry(int count, const flat::Name& nam
     EmitString(&json_file_, decl);
 }
 
+void JSONGenerator::GenerateDeclarationsMember(const flat::Library* library, Position position) {
+    GenerateObjectPunctuation(position);
+    EmitObjectKey(&json_file_, indent_level_, "declarations");
+    GenerateObject([&]() {
+        int count = 0;
+        for (const auto& decl : library->const_declarations_)
+            GenerateDeclarationsEntry(count++, decl->name, "const");
+
+        for (const auto& decl : library->enum_declarations_)
+            GenerateDeclarationsEntry(count++, decl->name, "enum");
+
+        for (const auto& decl : library->interface_declarations_)
+            GenerateDeclarationsEntry(count++, decl->name, "interface");
+
+        for (const auto& decl : library->struct_declarations_)
+            GenerateDeclarationsEntry(count++, decl->name, "struct");
+
+        for (const auto& decl : library->union_declarations_)
+            GenerateDeclarationsEntry(count++, decl->name, "union");
+    });
+}
+
 std::ostringstream JSONGenerator::Produce() {
     indent_level_ = 0;
     GenerateObject([&]() {
         GenerateObjectMember("name", library_->library_name_, Position::First);
-        // TODO(abarth): Produce library-dependencies data.
-        GenerateObjectMember("library_dependencies", std::vector<bool>());
+
+        GenerateObjectPunctuation(Position::Subsequent);
+        EmitObjectKey(&json_file_, indent_level_, "library_dependencies");
+        GenerateArray(library_->dependencies_->begin(), library_->dependencies_->end());
+
         GenerateObjectMember("const_declarations", library_->const_declarations_);
         GenerateObjectMember("enum_declarations", library_->enum_declarations_);
         GenerateObjectMember("interface_declarations", library_->interface_declarations_);
         GenerateObjectMember("struct_declarations", library_->struct_declarations_);
         GenerateObjectMember("union_declarations", library_->union_declarations_);
-        GenerateObjectMember("declaration_order", library_->declaration_order_);
 
-        EmitObjectSeparator(&json_file_, indent_level_);
-        EmitObjectKey(&json_file_, indent_level_, "declarations");
-        GenerateObject([&]() {
-            int count = 0;
-            for (const auto& decl : library_->const_declarations_)
-                GenerateDeclarationMapEntry(count++, decl->name, "const");
+        // The library's declaration_order_ contains all the declarations for all
+        // transitive dependencies. The backend only needs the declaration order
+        // for this specific library.
+        std::vector<flat::Decl*> declaration_order;
+        for (flat::Decl* decl : library_->declaration_order_) {
+            if (decl->name.library() == library_)
+                declaration_order.push_back(decl);
+        }
+        GenerateObjectMember("declaration_order", declaration_order);
 
-            for (const auto& decl : library_->enum_declarations_)
-                GenerateDeclarationMapEntry(count++, decl->name, "enum");
-
-            for (const auto& decl : library_->interface_declarations_)
-                GenerateDeclarationMapEntry(count++, decl->name, "interface");
-
-            for (const auto& decl : library_->struct_declarations_)
-                GenerateDeclarationMapEntry(count++, decl->name, "struct");
-
-            for (const auto& decl : library_->union_declarations_)
-                GenerateDeclarationMapEntry(count++, decl->name, "union");
-        });
+        GenerateDeclarationsMember(library_);
     });
     GenerateEOF();
 

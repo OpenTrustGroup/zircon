@@ -51,8 +51,8 @@ void EmitBlank(std::ostream* file) {
 
 // Various computational helper routines.
 
-void EnumValue(types::PrimitiveSubtype type, const raw::Constant* constant,
-               flat::Library* library, std::string* out_value) {
+void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
+               const flat::Library* library, std::string* out_value) {
     // TODO(kulakowski) Move this into library resolution.
 
     std::ostringstream member_value;
@@ -145,7 +145,7 @@ void EnumValue(types::PrimitiveSubtype type, const raw::Constant* constant,
     *out_value = member_value.str();
 }
 
-std::vector<uint32_t> ArrayCounts(flat::Library* library, const flat::Type* type) {
+std::vector<uint32_t> ArrayCounts(const flat::Library* library, const flat::Type* type) {
     std::vector<uint32_t> array_counts;
     for (;;) {
         switch (type->kind) {
@@ -161,14 +161,14 @@ std::vector<uint32_t> ArrayCounts(flat::Library* library, const flat::Type* type
     }
 }
 
-CGenerator::Member CreateMember(flat::Library* library, const flat::Type* type, StringView name) {
+CGenerator::Member CreateMember(const flat::Library* library, const flat::Type* type, StringView name) {
     auto type_name = NameFlatCType(type);
     std::vector<uint32_t> array_counts = ArrayCounts(library, type);
     return CGenerator::Member{type_name, name, std::move(array_counts)};
 }
 
 std::vector<CGenerator::Member>
-GenerateMembers(flat::Library* library, const std::vector<flat::Union::Member>& union_members) {
+GenerateMembers(const flat::Library* library, const std::vector<flat::Union::Member>& union_members) {
     std::vector<CGenerator::Member> members;
     members.reserve(union_members.size());
     for (const auto& union_member : union_members) {
@@ -184,9 +184,10 @@ GenerateMembers(flat::Library* library, const std::vector<flat::Union::Member>& 
 void CGenerator::GeneratePrologues() {
     EmitHeaderGuard(&header_file_);
     EmitBlank(&header_file_);
+    EmitIncludeHeader(&header_file_, "<stdalign.h>");
     EmitIncludeHeader(&header_file_, "<stdbool.h>");
     EmitIncludeHeader(&header_file_, "<stdint.h>");
-    EmitIncludeHeader(&header_file_, "<fidl/coding.h>");
+    EmitIncludeHeader(&header_file_, "<lib/fidl/coding.h>");
     EmitIncludeHeader(&header_file_, "<zircon/fidl.h>");
     EmitIncludeHeader(&header_file_, "<zircon/syscalls/object.h>");
     EmitIncludeHeader(&header_file_, "<zircon/types.h>");
@@ -216,6 +217,7 @@ void CGenerator::GenerateStructTypedef(StringView name) {
 
 void CGenerator::GenerateStructDeclaration(StringView name, const std::vector<Member>& members) {
     header_file_ << "struct " << name << " {\n";
+    header_file_ << kIndent << "FIDL_ALIGNDECL\n";
     for (const auto& member : members) {
         header_file_ << kIndent << member.type << " " << member.name;
         for (uint32_t array_count : member.array_counts) {
@@ -229,6 +231,7 @@ void CGenerator::GenerateStructDeclaration(StringView name, const std::vector<Me
 void CGenerator::GenerateTaggedUnionDeclaration(StringView name,
                                                 const std::vector<Member>& members) {
     header_file_ << "struct " << name << " {\n";
+    header_file_ << kIndent << "FIDL_ALIGNDECL\n";
     header_file_ << kIndent << "fidl_union_tag_t tag;\n";
     header_file_ << kIndent << "union {\n";
     for (const auto& member : members) {
@@ -269,18 +272,20 @@ std::map<const flat::Decl*, CGenerator::NamedInterface> CGenerator::NameInterfac
         for (const auto& method : interface_info->methods) {
             NamedMethod named_method;
             std::string method_name = NameMethod(interface_name, method);
+            named_method.ordinal = method.ordinal.Value();
+            named_method.ordinal_name = NameOrdinal(method_name);
             if (method.maybe_request != nullptr) {
-                std::string c_name = NameMessage(method_name, types::MessageKind::kRequest);
+                std::string c_name = NameMessage(LibraryName(library_), method_name, types::MessageKind::kRequest);
                 std::string coded_name = NameTable(c_name);
                 named_method.request = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_request->parameters});
             }
             if (method.maybe_response != nullptr) {
                 if (method.maybe_request == nullptr) {
-                    std::string c_name = NameMessage(method_name, types::MessageKind::kEvent);
+                    std::string c_name = NameMessage(LibraryName(library_), method_name, types::MessageKind::kEvent);
                     std::string coded_name = NameTable(c_name);
                     named_method.response = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_response->parameters});
                 } else {
-                    std::string c_name = NameMessage(method_name, types::MessageKind::kResponse);
+                    std::string c_name = NameMessage(LibraryName(library_), method_name, types::MessageKind::kResponse);
                     std::string coded_name = NameTable(c_name);
                     named_method.response = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_response->parameters});
                 }
@@ -331,6 +336,7 @@ void CGenerator::ProduceEnumForwardDeclaration(const NamedEnum& named_enum) {
 
 void CGenerator::ProduceInterfaceForwardDeclaration(const NamedInterface& named_interface) {
     for (const auto& method_info : named_interface.methods) {
+        header_file_ << "#define " << method_info.ordinal_name << " ((uint32_t)" << method_info.ordinal << ")\n";
         if (method_info.request)
             GenerateStructTypedef(method_info.request->c_name);
         if (method_info.response)

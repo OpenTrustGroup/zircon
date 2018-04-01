@@ -207,8 +207,8 @@ void InputDevice::virtio_input_stop(void* ctx) {
     inp->Stop();
 }
 
-InputDevice::InputDevice(zx_device_t* bus_device, fbl::unique_ptr<Backend> backend)
-    : Device(bus_device, fbl::move(backend)) {}
+InputDevice::InputDevice(zx_device_t* bus_device, zx::bti bti, fbl::unique_ptr<Backend> backend)
+    : Device(bus_device, fbl::move(bti), fbl::move(backend)) {}
 
 InputDevice::~InputDevice() {}
 
@@ -270,7 +270,7 @@ zx_status_t InputDevice::Init() {
     // TODO: Avoid multiple allocations, allocate enough for all buffers once.
     for (uint16_t id = 0; id < kEventCount; ++id) {
         static_assert(sizeof(virtio_input_event_t) <= PAGE_SIZE, "");
-        status = io_buffer_init(&buffers_[id], sizeof(virtio_input_event_t),
+        status = io_buffer_init(&buffers_[id], bti_.get(), sizeof(virtio_input_event_t),
                                 IO_BUFFER_RO | IO_BUFFER_CONTIG);
         if (status != ZX_OK) {
             zxlogf(ERROR, "Failed to allocate I/O buffers: %s\n", zx_status_get_string(status));

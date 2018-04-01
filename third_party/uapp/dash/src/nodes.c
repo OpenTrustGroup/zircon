@@ -601,6 +601,7 @@ freefunc(struct funcnode *f)
 // the environment) and a list of operations to be performed by the subshell.
 struct state_header
 {
+	size_t total_size;
 	size_t num_symbols;
 	size_t symtab_offset;
 	size_t cmd_offset;
@@ -711,13 +712,15 @@ codec_encode(struct nodelist *nlist, zx_handle_t *vmo)
 	header.string_offset = header.cmd_offset + funcblocksize;
 
 	const size_t total_size = header.string_offset + funcstringsize;
+	header.total_size = num_writable_vars + num_readonly_vars;
 	char buffer[total_size];
 
 	// Output the symbol tables
 	memcpy(buffer, &header, sizeof(header));
 	size_t symtab_offset = header.symtab_offset;
-	symtab_offset += output_symtab(&buffer[symtab_offset], writable_vars, 0);
-	output_symtab(&buffer[symtab_offset], readonly_vars, 1);
+	char* symtab = &buffer[symtab_offset];
+	symtab_offset += output_symtab(symtab, writable_vars, 0);
+	output_symtab(symtab, readonly_vars, 1);
 
 	// Output the command nodes
 	funcblock = buffer + header.cmd_offset;
@@ -728,15 +731,20 @@ codec_encode(struct nodelist *nlist, zx_handle_t *vmo)
 	zx_status_t status = zx_vmo_create(total_size, 0, vmo);
 	if (status != ZX_OK)
 		return status;
-	size_t actual;
-	return zx_vmo_write_old(*vmo, buffer, 0, total_size, &actual);
+	return zx_vmo_write(*vmo, buffer, 0, total_size);
 }
 
 struct nodelist *codec_decode(char *buffer, size_t length)
 {
-	// TODO(abarth): Validate the length.
+	if (length < sizeof(size_t)) {
+		return NULL;
+	}
+
 	struct state_header header;
 	memcpy(&header, buffer, sizeof(header));
+	if (length != header.total_size) {
+		return NULL;
+	}
 
 	restore_symtab(buffer + header.symtab_offset, header.num_symbols);
 	funcblock = buffer + header.cmd_offset;

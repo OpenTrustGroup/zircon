@@ -24,6 +24,13 @@
 #define MAX_TX_BUF_SZ 32768
 #define MAX_RX_BUF_SZ 32768
 
+#define ETHMAC_MAX_TRANSMIT_DELAY 100
+#define ETHMAC_MAX_RECV_DELAY 100
+#define ETHMAC_TRANSMIT_DELAY 10
+#define ETHMAC_RECV_DELAY 10
+#define ETHMAC_INITIAL_TRANSMIT_DELAY 0
+#define ETHMAC_INITIAL_RECV_DELAY 0
+
 const char* module_name = "usb-cdc-ecm";
 
 typedef struct {
@@ -39,8 +46,6 @@ typedef struct {
     mtx_t ethmac_mutex;
     ethmac_ifc_t* ethmac_ifc;
     void* ethmac_cookie;
-
-    uint64_t ticks_per_second;
 
     // Device attributes
     uint8_t mac_addr[ETH_MAC_SIZE];
@@ -62,12 +67,12 @@ typedef struct {
     ecm_endpoint_t tx_endpoint;
     list_node_t tx_txn_bufs;        // list of usb_request_t
     list_node_t tx_pending_infos;   // list of ethmac_netbuf_t
-    uint64_t tx_drop_notice_ticks;
     bool unbound;                   // set to true when device is going away. Guarded by tx_mutex
+    uint64_t tx_endpoint_delay;     // wait time between 2 transmit requests
 
     // Receive context
     ecm_endpoint_t rx_endpoint;
-
+    uint64_t rx_endpoint_delay;    // wait time between 2 recv requests
 } ecm_ctx_t;
 
 static void ecm_unbind(void* cookie) {
@@ -217,6 +222,7 @@ static zx_status_t send_locked(ecm_ctx_t* ctx, ethmac_netbuf_t* netbuf) {
         }
     }
 
+    zx_nanosleep(zx_deadline_after(ZX_USEC(ctx->tx_endpoint_delay)));
     zx_status_t status;
     if ((status = queue_request(ctx, byte_data, length, tx_req)) != ZX_OK) {
         list_add_tail(&ctx->tx_txn_bufs, &tx_req->node);
@@ -251,6 +257,16 @@ static void usb_write_complete(usb_request_t* request, void* cookie) {
 
     if (request->response.status == ZX_ERR_IO_REFUSED) {
         zxlogf(TRACE, "%s: resetting transmit endpoint\n", module_name);
+        usb_reset_endpoint(&ctx->usb, ctx->tx_endpoint.addr);
+    }
+
+    if (request->response.status == ZX_ERR_IO_INVALID) {
+        zxlogf(TRACE, "%s: slowing down the requests by %d usec."
+                     "Resetting the transmit endpoint\n",
+               module_name, ETHMAC_TRANSMIT_DELAY);
+        if (ctx->tx_endpoint_delay < ETHMAC_MAX_TRANSMIT_DELAY) {
+            ctx->tx_endpoint_delay += ETHMAC_TRANSMIT_DELAY;
+        }
         usb_reset_endpoint(&ctx->usb, ctx->tx_endpoint.addr);
     }
 
@@ -313,10 +329,19 @@ static void usb_read_complete(usb_request_t* request, void* cookie) {
     if (request->response.status == ZX_ERR_IO_REFUSED) {
         zxlogf(TRACE, "%s: resetting receive endpoint\n", module_name);
         usb_reset_endpoint(&ctx->usb, ctx->rx_endpoint.addr);
+    } else if (request->response.status == ZX_ERR_IO_INVALID) {
+        if (ctx->rx_endpoint_delay < ETHMAC_MAX_RECV_DELAY) {
+            ctx->rx_endpoint_delay += ETHMAC_RECV_DELAY;
+        }
+        zxlogf(TRACE, "%s: slowing down the requests by %d usec."
+                     "Resetting the recv endpoint\n",
+               module_name, ETHMAC_RECV_DELAY);
+        usb_reset_endpoint(&ctx->usb, ctx->rx_endpoint.addr);
     } else if (request->response.status == ZX_OK) {
         usb_recv(ctx, request);
     }
 
+    zx_nanosleep(zx_deadline_after(ZX_USEC(ctx->rx_endpoint_delay)));
     usb_request_queue(&ctx->usb, request);
 }
 
@@ -419,7 +444,8 @@ static int ecm_int_handler_thread(void* cookie) {
                    txn->response.status == ZX_ERR_IO_NOT_PRESENT) {
             zxlogf(TRACE, "%s: terminating interrupt handling thread\n", module_name);
             return txn->response.status;
-        } else if (txn->response.status == ZX_ERR_IO_REFUSED) {
+        } else if (txn->response.status == ZX_ERR_IO_REFUSED ||
+                   txn->response.status == ZX_ERR_IO_INVALID) {
             zxlogf(TRACE, "%s: resetting interrupt endpoint\n", module_name);
             usb_reset_endpoint(&ctx->usb, ctx->int_endpoint.addr);
         } else {
@@ -529,7 +555,6 @@ static zx_status_t ecm_bind(void* ctx, zx_device_t* device) {
     list_initialize(&ecm_ctx->tx_pending_infos);
     mtx_init(&ecm_ctx->ethmac_mutex, mtx_plain);
     mtx_init(&ecm_ctx->tx_mutex, mtx_plain);
-    ecm_ctx->ticks_per_second = zx_ticks_per_second();
 
     usb_desc_iter_t iter;
     result = usb_desc_iter_init(&usb, &iter);
@@ -641,6 +666,8 @@ static zx_status_t ecm_bind(void* ctx, zx_device_t* device) {
     copy_endpoint_info(&ecm_ctx->tx_endpoint, tx_ep);
     copy_endpoint_info(&ecm_ctx->rx_endpoint, rx_ep);
 
+    ecm_ctx->rx_endpoint_delay = ETHMAC_INITIAL_RECV_DELAY;
+    ecm_ctx->tx_endpoint_delay = ETHMAC_INITIAL_TRANSMIT_DELAY;
     // Reset by selecting default interface followed by data interface. We can't start
     // queueing transactions until this is complete.
     usb_set_interface(&usb, default_ifc->bInterfaceNumber, default_ifc->bAlternateSetting);
@@ -648,8 +675,9 @@ static zx_status_t ecm_bind(void* ctx, zx_device_t* device) {
 
     // Allocate interrupt transaction buffer
     usb_request_t* int_buf;
-    zx_status_t alloc_result = usb_request_alloc(&int_buf, ecm_ctx->int_endpoint.max_packet_size,
-                                                 ecm_ctx->int_endpoint.addr);
+    zx_status_t alloc_result = usb_req_alloc(&usb, &int_buf,
+                                             ecm_ctx->int_endpoint.max_packet_size,
+                                             ecm_ctx->int_endpoint.addr);
     if (alloc_result != ZX_OK) {
         result = alloc_result;
         goto fail;
@@ -670,8 +698,8 @@ static zx_status_t ecm_bind(void* ctx, zx_device_t* device) {
     size_t tx_buf_remain = MAX_TX_BUF_SZ;
     while (tx_buf_remain >= tx_buf_sz) {
         usb_request_t* tx_buf;
-        zx_status_t alloc_result = usb_request_alloc(&tx_buf, tx_buf_sz,
-                                                     ecm_ctx->tx_endpoint.addr);
+        zx_status_t alloc_result = usb_req_alloc(&usb, &tx_buf, tx_buf_sz,
+                                                 ecm_ctx->tx_endpoint.addr);
         if (alloc_result != ZX_OK) {
             result = alloc_result;
             goto fail;
@@ -694,8 +722,8 @@ static zx_status_t ecm_bind(void* ctx, zx_device_t* device) {
     size_t rx_buf_remain = MAX_RX_BUF_SZ;
     while (rx_buf_remain >= rx_buf_sz) {
         usb_request_t* rx_buf;
-        zx_status_t alloc_result = usb_request_alloc(&rx_buf, rx_buf_sz,
-                                                     ecm_ctx->rx_endpoint.addr);
+        zx_status_t alloc_result = usb_req_alloc(&usb, &rx_buf, rx_buf_sz,
+                                                 ecm_ctx->rx_endpoint.addr);
         if (alloc_result != ZX_OK) {
             result = alloc_result;
             goto fail;

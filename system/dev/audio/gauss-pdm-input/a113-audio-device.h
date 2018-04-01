@@ -17,10 +17,11 @@ __BEGIN_CDECLS;
 
 typedef struct a113_audio_device {
     platform_device_protocol_t pdev;
-    pdev_vmo_buffer_t ee_audio_mmio;
-    pdev_vmo_buffer_t pdm_mmio;
+    io_buffer_t ee_audio_mmio;
+    io_buffer_t pdm_mmio;
 
     zx_handle_t pdm_irq;
+    zx_handle_t bti;
 } a113_audio_device_t;
 
 zx_status_t a113_audio_device_init(a113_audio_device_t* audio_device,

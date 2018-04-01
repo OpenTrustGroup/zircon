@@ -132,6 +132,12 @@ static zx_status_t xhci_cancel_all(void* ctx, uint32_t device_id, uint8_t ep_add
     return xhci_cancel_transfers(xhci, device_id, ep_address);
 }
 
+static zx_status_t xhci_get_bti(void* ctx, zx_handle_t* out_handle) {
+    xhci_t* xhci = ctx;
+    *out_handle = xhci->bti_handle;
+    return ZX_OK;
+}
+
 usb_hci_protocol_ops_t xhci_hci_protocol = {
     .request_queue = xhci_hci_request_queue,
     .set_bus_interface = xhci_set_bus_interface,
@@ -144,6 +150,7 @@ usb_hci_protocol_ops_t xhci_hci_protocol = {
     .reset_endpoint = xhci_reset_ep,
     .get_max_transfer_size = xhci_get_max_transfer_size,
     .cancel_all = xhci_cancel_all,
+    .get_bti = xhci_get_bti,
 };
 
 void xhci_request_queue(xhci_t* xhci, usb_request_t* req) {
@@ -334,6 +341,11 @@ static zx_status_t usb_xhci_bind_pci(zx_device_t* parent, pci_protocol_t* pci) {
         goto error_return;
     }
 
+    status = pci_get_bti(pci, 0, &xhci->bti_handle);
+    if (status != ZX_OK) {
+        goto error_return;
+    }
+
     /*
      * eXtensible Host Controller Interface revision 1.1, section 5, xhci
      * should only use BARs 0 and 1. 0 for 32 bit addressing, and 0+1 for 64 bit addressing.
@@ -403,6 +415,7 @@ static zx_status_t usb_xhci_bind_pci(zx_device_t* parent, pci_protocol_t* pci) {
     return ZX_OK;
 
 error_return:
+    zx_handle_close(xhci->bti_handle);
     free(xhci);
     for (uint32_t i = 0; i < num_irq_handles_initialized; i++) {
         zx_handle_close(xhci->irq_handles[i]);
@@ -424,6 +437,11 @@ static zx_status_t usb_xhci_bind_pdev(zx_device_t* parent, platform_device_proto
     xhci = calloc(1, sizeof(xhci_t));
     if (!xhci) {
         status = ZX_ERR_NO_MEMORY;
+        goto error_return;
+    }
+
+    status = pdev_get_bti(pdev, 0, &xhci->bti_handle);
+    if (status != ZX_OK) {
         goto error_return;
     }
 
@@ -454,6 +472,7 @@ static zx_status_t usb_xhci_bind_pdev(zx_device_t* parent, platform_device_proto
     return ZX_OK;
 
 error_return:
+    zx_handle_close(xhci->bti_handle);
     free(xhci);
     if (xhci->mmio) {
         zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)xhci->mmio, xhci->mmio_size);

@@ -161,6 +161,10 @@ syscall object_get_child
     (handle: zx_handle_t, koid: uint64_t, rights: zx_rights_t)
     returns (zx_status_t, out: zx_handle_t);
 
+syscall object_set_profile
+    (handle: zx_handle_t, profile: zx_handle_t, options: uint32_t)
+    returns (zx_status_t);
+
 # IPC: Channels
 
 syscall channel_create
@@ -377,25 +381,13 @@ syscall vmo_create
     (size: uint64_t, options: uint32_t)
     returns (zx_status_t, out: zx_handle_t handle_acquire);
 
-# TODO(ZX-1802): remove actual argument, un-deprecate, delete _old
-syscall vmo_read deprecated
+syscall vmo_read
     (handle: zx_handle_t, data: any[len] OUT, offset: uint64_t, len: size_t)
-    returns (zx_status_t, actual: size_t);
+    returns (zx_status_t);
 
-# TODO(ZX-1802): delete
-syscall vmo_read_old
-    (handle: zx_handle_t, data: any[len] OUT, offset: uint64_t, len: size_t)
-    returns (zx_status_t, actual: size_t);
-
-# TODO(ZX-1802): remove actual argument, un-deprecate, delete _old
-syscall vmo_write deprecated
+syscall vmo_write
     (handle: zx_handle_t, data: any[len] IN, offset: uint64_t, len: size_t)
-    returns (zx_status_t, actual: size_t);
-
-# TODO(ZX-1802): delete
-syscall vmo_write_old
-    (handle: zx_handle_t, data: any[len] IN, offset: uint64_t, len: size_t)
-    returns (zx_status_t, actual: size_t);
+    returns (zx_status_t);
 
 syscall vmo_get_size
     (handle: zx_handle_t)
@@ -468,6 +460,12 @@ syscall fifo_read
 syscall fifo_write
     (handle: zx_handle_t, data: any[len] IN, len: size_t)
     returns (zx_status_t, num_written: uint32_t);
+
+# Profiles
+
+syscall profile_create
+    (resource: zx_handle_t, profile: zx_profile_info_t[1] IN)
+    returns (zx_status_t, out: zx_handle_t handle_acquire);
 
 # Multi-function
 
@@ -569,6 +567,30 @@ syscall interrupt_get_timestamp
 
 syscall interrupt_signal
     (handle: zx_handle_t, slot: uint32_t, timestamp: zx_time_t)
+    returns (zx_status_t);
+
+syscall irq_create
+    (src_obj: zx_handle_t, src_num: uint32_t, options: uint32_t)
+    returns (zx_status_t, out_handle: zx_handle_t);
+
+syscall irq_bind
+    (inth: zx_handle_t, porth: zx_handle_t, key: uint64_t, options: uint32_t)
+    returns (zx_status_t);
+
+syscall irq_wait blocking
+    (handle: zx_handle_t)
+    returns (zx_status_t, out_timestamp: zx_time_t);
+
+syscall irq_destroy
+    (handle: zx_handle_t)
+    returns (zx_status_t);
+
+syscall irq_ack
+    (handle: zx_handle_t)
+    returns (zx_status_t);
+
+syscall irq_trigger
+    (handle: zx_handle_t, options: uint32_t, timestamp: zx_time_t)
     returns (zx_status_t);
 
 # DDK Syscalls: MMIO and Ports

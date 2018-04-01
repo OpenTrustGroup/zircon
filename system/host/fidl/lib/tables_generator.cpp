@@ -68,7 +68,7 @@ void TablesGenerator::GenerateInclude(StringView filename) {
 }
 
 void TablesGenerator::GenerateFilePreamble() {
-    GenerateInclude("<fidl/internal.h>");
+    GenerateInclude("<lib/fidl/internal.h>");
     Emit(&tables_file_, "\nextern \"C\" {\n");
     Emit(&tables_file_, "\n");
 }
@@ -97,10 +97,6 @@ void TablesGenerator::GenerateArray(const Collection& collection) {
 }
 
 void TablesGenerator::Generate(const coded::StructType& struct_type) {
-    Emit(&tables_file_, "extern const fidl_type_t ");
-    Emit(&tables_file_, NameTable(struct_type.coded_name));
-    Emit(&tables_file_, ";\n");
-
     Emit(&tables_file_, "static const ::fidl::FidlField ");
     Emit(&tables_file_, NameFields(struct_type.coded_name));
     Emit(&tables_file_, "[] = ");
@@ -116,25 +112,9 @@ void TablesGenerator::Generate(const coded::StructType& struct_type) {
     Emit(&tables_file_, ", ");
     Emit(&tables_file_, struct_type.size);
     Emit(&tables_file_, "));\n\n");
-
-    if (struct_type.referenced_by_pointer) {
-        Emit(&tables_file_, "extern const fidl_type_t ");
-        Emit(&tables_file_, NamePointer(struct_type.coded_name));
-        Emit(&tables_file_, ";\n");
-
-        Emit(&tables_file_, "const fidl_type_t ");
-        Emit(&tables_file_, NamePointer(struct_type.coded_name));
-        Emit(&tables_file_, " = fidl_type_t(::fidl::FidlCodedStructPointer(&");
-        Emit(&tables_file_, NameTable(struct_type.coded_name));
-        Emit(&tables_file_, ".coded_struct));\n\n");
-    }
 }
 
 void TablesGenerator::Generate(const coded::UnionType& union_type) {
-    Emit(&tables_file_, "extern const fidl_type_t ");
-    Emit(&tables_file_, NameTable(union_type.coded_name));
-    Emit(&tables_file_, ";\n");
-
     Emit(&tables_file_, "static const fidl_type_t* ");
     Emit(&tables_file_, NameMembers(union_type.coded_name));
     Emit(&tables_file_, "[] = ");
@@ -152,18 +132,28 @@ void TablesGenerator::Generate(const coded::UnionType& union_type) {
     Emit(&tables_file_, ", ");
     Emit(&tables_file_, union_type.size);
     Emit(&tables_file_, "));\n\n");
+}
 
-    if (union_type.referenced_by_pointer) {
-        Emit(&tables_file_, "extern const fidl_type_t ");
-        Emit(&tables_file_, NamePointer(union_type.coded_name));
-        Emit(&tables_file_, ";\n");
+void TablesGenerator::Generate(const coded::MessageType& message_type) {
+    Emit(&tables_file_, "extern const fidl_type_t ");
+    Emit(&tables_file_, NameTable(message_type.coded_name));
+    Emit(&tables_file_, ";\n");
 
-        Emit(&tables_file_, "const fidl_type_t ");
-        Emit(&tables_file_, NamePointer(union_type.coded_name));
-        Emit(&tables_file_, " = fidl_type_t(::fidl::FidlCodedUnionPointer(&");
-        Emit(&tables_file_, NameTable(union_type.coded_name));
-        Emit(&tables_file_, ".coded_union));\n\n");
-    }
+    Emit(&tables_file_, "static const ::fidl::FidlField ");
+    Emit(&tables_file_, NameFields(message_type.coded_name));
+    Emit(&tables_file_, "[] = ");
+    GenerateArray(message_type.fields);
+    Emit(&tables_file_, ";\n");
+
+    Emit(&tables_file_, "const fidl_type_t ");
+    Emit(&tables_file_, NameTable(message_type.coded_name));
+    Emit(&tables_file_, " = fidl_type_t(::fidl::FidlCodedStruct(");
+    Emit(&tables_file_, NameFields(message_type.coded_name));
+    Emit(&tables_file_, ", ");
+    Emit(&tables_file_, message_type.fields.size());
+    Emit(&tables_file_, ", ");
+    Emit(&tables_file_, message_type.size);
+    Emit(&tables_file_, "));\n\n");
 }
 
 void TablesGenerator::Generate(const coded::HandleType& handle_type) {
@@ -202,7 +192,7 @@ void TablesGenerator::Generate(const coded::ArrayType& array_type) {
     Emit(&tables_file_, " = fidl_type_t(::fidl::FidlCodedArray(&");
     Emit(&tables_file_, NameTable(array_type.element_type->coded_name));
     Emit(&tables_file_, ", ");
-    Emit(&tables_file_, array_type.array_size);
+    Emit(&tables_file_, array_type.size);
     Emit(&tables_file_, ", ");
     Emit(&tables_file_, array_type.element_size);
     Emit(&tables_file_, "));\n\n");
@@ -238,8 +228,12 @@ void TablesGenerator::Generate(const coded::VectorType& vector_type) {
 }
 
 void TablesGenerator::Generate(const coded::Type* type) {
-    Emit(&tables_file_, "&");
-    Emit(&tables_file_, NameTable(type->coded_name));
+    if (type) {
+        Emit(&tables_file_, "&");
+        Emit(&tables_file_, NameTable(type->coded_name));
+    } else {
+        Emit(&tables_file_, "nullptr");
+    }
 }
 
 void TablesGenerator::Generate(const coded::Field& field) {
@@ -250,14 +244,46 @@ void TablesGenerator::Generate(const coded::Field& field) {
     Emit(&tables_file_, ")");
 }
 
-const coded::Type* TablesGenerator::Compile(const flat::Type* type) {
+void TablesGenerator::GeneratePointerIfNeeded(const coded::StructType& struct_type) {
+    if (struct_type.referenced_by_pointer) {
+        Emit(&tables_file_, "static const fidl_type_t ");
+        Emit(&tables_file_, NameTable(struct_type.pointer_name));
+        Emit(&tables_file_, " = fidl_type_t(::fidl::FidlCodedStructPointer(&");
+        Emit(&tables_file_, NameTable(struct_type.coded_name));
+        Emit(&tables_file_, ".coded_struct));\n");
+    }
+}
+
+void TablesGenerator::GeneratePointerIfNeeded(const coded::UnionType& union_type) {
+    if (union_type.referenced_by_pointer) {
+        Emit(&tables_file_, "static const fidl_type_t ");
+        Emit(&tables_file_, NameTable(union_type.pointer_name));
+        Emit(&tables_file_, " = fidl_type_t(::fidl::FidlCodedUnionPointer(&");
+        Emit(&tables_file_, NameTable(union_type.coded_name));
+        Emit(&tables_file_, ".coded_union));\n");
+    }
+}
+
+void TablesGenerator::GenerateForward(const coded::StructType& struct_type) {
+    Emit(&tables_file_, "extern const fidl_type_t ");
+    Emit(&tables_file_, NameTable(struct_type.coded_name));
+    Emit(&tables_file_, ";\n");
+}
+
+void TablesGenerator::GenerateForward(const coded::UnionType& union_type) {
+    Emit(&tables_file_, "extern const fidl_type_t ");
+    Emit(&tables_file_, NameTable(union_type.coded_name));
+    Emit(&tables_file_, ";\n");
+}
+
+const coded::Type* TablesGenerator::CompileType(const flat::Type* type) {
     switch (type->kind) {
     case flat::Type::Kind::Array: {
         auto array_type = static_cast<const flat::ArrayType*>(type);
         auto iter = array_type_map_.find(array_type);
         if (iter != array_type_map_.end())
             return iter->second;
-        auto coded_element_type = Compile(array_type->element_type.get());
+        auto coded_element_type = CompileType(array_type->element_type.get());
         uint32_t array_size = array_type->size;
         uint32_t element_size = array_type->element_type->size;
         auto name = NameCodedArray(coded_element_type->coded_name, array_size);
@@ -271,9 +297,9 @@ const coded::Type* TablesGenerator::Compile(const flat::Type* type) {
         auto iter = vector_type_map_.find(vector_type);
         if (iter != vector_type_map_.end())
             return iter->second;
-        auto coded_element_type = Compile(vector_type->element_type.get());
-        uint64_t max_count = vector_type->element_count.Value();
-        uint64_t element_size = vector_type->element_type->size;
+        auto coded_element_type = CompileType(vector_type->element_type.get());
+        uint32_t max_count = vector_type->element_count.Value();
+        uint32_t element_size = coded_element_type->size;
         StringView element_name = coded_element_type->coded_name;
         auto name = NameCodedVector(element_name, max_count, vector_type->nullability);
         auto coded_vector_type = std::make_unique<coded::VectorType>(std::move(name), coded_element_type, max_count, element_size, vector_type->nullability);
@@ -309,7 +335,7 @@ const coded::Type* TablesGenerator::Compile(const flat::Type* type) {
         auto iter = request_type_map_.find(request_type);
         if (iter != request_type_map_.end())
             return iter->second;
-        auto name = NameCodedRequestHandle(NameName(request_type->name), request_type->nullability);
+        auto name = NameCodedRequestHandle(LibraryName(request_type->name.library()), NameName(request_type->name), request_type->nullability);
         auto coded_request_type = std::make_unique<coded::RequestHandleType>(std::move(name), request_type->nullability);
         request_type_map_[request_type] = coded_request_type.get();
         coded_types_.push_back(std::move(coded_request_type));
@@ -321,50 +347,130 @@ const coded::Type* TablesGenerator::Compile(const flat::Type* type) {
         if (iter != primitive_type_map_.end())
             return iter->second;
         auto name = NamePrimitiveSubtype(primitive_type->subtype);
-        auto coded_primitive_type = std::make_unique<coded::PrimitiveType>(std::move(name), primitive_type->subtype);
+        auto coded_primitive_type = std::make_unique<coded::PrimitiveType>(std::move(name), primitive_type->subtype, flat::PrimitiveType::SubtypeSize(primitive_type->subtype));
         primitive_type_map_[primitive_type] = coded_primitive_type.get();
         coded_types_.push_back(std::move(coded_primitive_type));
         return coded_types_.back().get();
     }
     case flat::Type::Kind::Identifier: {
         auto identifier_type = static_cast<const flat::IdentifierType*>(type);
-        auto iter = named_type_map_.find(&identifier_type->name);
-        if (iter == named_type_map_.end()) {
-            // This must be an interface we haven't seen yet.
-            auto name = NameCodedInterfaceHandle(NameName(identifier_type->name), identifier_type->nullability);
-            coded_types_.push_back(std::make_unique<coded::InterfaceHandleType>(std::move(name), identifier_type->nullability));
-            auto coded_type = coded_types_.back().get();
-            named_type_map_[&identifier_type->name] = coded_type;
-            return coded_type;
+        auto iter = named_coded_types_.find(&identifier_type->name);
+        if (iter == named_coded_types_.end()) {
+            assert(false && "unknown type in named type map!");
         }
-        // Otherwise we have seen this type before. But we may need to
-        // set the emit-pointer bit on structs and unions, now.
-        auto coded_type = iter->second;
-        if (identifier_type->nullability == types::Nullability::Nullable) {
-            switch (coded_type->kind) {
-            case coded::Type::Kind::kStruct:
-                // Structs were compiled as part of decl compilation,
-                // but we may now need to generate the StructPointer.
-                static_cast<coded::StructType*>(coded_type)->referenced_by_pointer = true;
+        // We may need to set the emit-pointer bit on structs and unions now.
+        auto coded_type = iter->second.get();
+        switch (coded_type->kind) {
+        case coded::Type::Kind::kStruct: {
+            // Structs were compiled as part of decl compilation,
+            // but we may now need to generate the StructPointer.
+            if (identifier_type->nullability != types::Nullability::Nullable)
                 break;
-            case coded::Type::Kind::kUnion:
-                // Unions were compiled as part of decl compilation,
-                // but we may now need to generate the UnionPointer.
-                static_cast<coded::UnionType*>(coded_type)->referenced_by_pointer = true;
+            auto coded_struct_type = static_cast<coded::StructType*>(coded_type);
+            coded_struct_type->referenced_by_pointer = true;
+            coded_types_.push_back(std::make_unique<coded::StructPointerType>(coded_struct_type->pointer_name, coded_struct_type));
+            return coded_types_.back().get();
+        }
+        case coded::Type::Kind::kUnion: {
+            // Unions were compiled as part of decl compilation,
+            // but we may now need to generate the UnionPointer.
+            if (identifier_type->nullability != types::Nullability::Nullable)
                 break;
-            case coded::Type::Kind::kInterfaceHandle:
-                break;
-            case coded::Type::Kind::kPrimitive:
-            case coded::Type::Kind::kRequestHandle:
-            case coded::Type::Kind::kHandle:
-            case coded::Type::Kind::kArray:
-            case coded::Type::Kind::kVector:
-            case coded::Type::Kind::kString:
-                assert(false && "anonymous type in named type map!");
-                break;
-            }
+            auto coded_union_type = static_cast<coded::UnionType*>(coded_type);
+            coded_union_type->referenced_by_pointer = true;
+            coded_types_.push_back(std::make_unique<coded::UnionPointerType>(coded_union_type->pointer_name, coded_union_type));
+            return coded_types_.back().get();
+        }
+        case coded::Type::Kind::kInterface: {
+            auto iter = interface_type_map_.find(identifier_type);
+            if (iter != interface_type_map_.end())
+                return iter->second;
+            auto name = NameCodedInterfaceHandle(LibraryName(identifier_type->name.library()), NameName(identifier_type->name), identifier_type->nullability);
+            auto coded_interface_type = std::make_unique<coded::InterfaceHandleType>(std::move(name), identifier_type->nullability);
+            interface_type_map_[identifier_type] = coded_interface_type.get();
+            coded_types_.push_back(std::move(coded_interface_type));
+            return coded_types_.back().get();
+        }
+        case coded::Type::Kind::kPrimitive:
+            // These are from enums. We don't need to do anything with them.
+            break;
+        case coded::Type::Kind::kInterfaceHandle:
+        case coded::Type::Kind::kStructPointer:
+        case coded::Type::Kind::kUnionPointer:
+        case coded::Type::Kind::kMessage:
+        case coded::Type::Kind::kRequestHandle:
+        case coded::Type::Kind::kHandle:
+        case coded::Type::Kind::kArray:
+        case coded::Type::Kind::kVector:
+        case coded::Type::Kind::kString:
+            assert(false && "anonymous type in named type map!");
+            break;
         }
         return coded_type;
+    }
+    }
+}
+
+void TablesGenerator::CompileFields(const flat::Decl* decl) {
+    switch (decl->kind) {
+    case flat::Decl::Kind::kInterface: {
+        auto interface_decl = static_cast<const flat::Interface*>(decl);
+        coded::InterfaceType* coded_interface = static_cast<coded::InterfaceType*>(named_coded_types_[&decl->name].get());
+        size_t i = 0;
+        for (const auto& method : interface_decl->methods) {
+            auto CompileMessage = [&](const flat::Interface::Method::Message& message) -> void {
+                std::unique_ptr<coded::MessageType>& coded_message = coded_interface->messages[i++];
+                std::vector<coded::Field>& request_fields = coded_message->fields;
+                for (const auto& parameter : message.parameters) {
+                    std::string parameter_name = coded_message->coded_name + "_" + std::string(parameter.name.data());
+                    auto coded_parameter_type = CompileType(parameter.type.get());
+                    if (coded_parameter_type->coding_needed == coded::CodingNeeded::kNeeded)
+                        request_fields.emplace_back(coded_parameter_type, parameter.fieldshape.Offset());
+                }
+                // We move the coded_message to coded_types_ so that we'll generate tables for the message
+                // in the proper order.
+                coded_types_.push_back(std::move(coded_message));
+            };
+            if (method.maybe_request) {
+                CompileMessage(*method.maybe_request);
+            }
+            if (method.maybe_response) {
+                CompileMessage(*method.maybe_response);
+            }
+        }
+        break;
+    }
+    case flat::Decl::Kind::kStruct: {
+        auto struct_decl = static_cast<const flat::Struct*>(decl);
+        coded::StructType* coded_struct = static_cast<coded::StructType*>(named_coded_types_[&decl->name].get());
+        std::vector<coded::Field>& struct_fields = coded_struct->fields;
+        for (const auto& member : struct_decl->members) {
+            std::string member_name = coded_struct->coded_name + "_" + std::string(member.name.data());
+            auto coded_member_type = CompileType(member.type.get());
+            if (coded_member_type->coding_needed == coded::CodingNeeded::kNeeded)
+                struct_fields.emplace_back(coded_member_type, member.fieldshape.Offset());
+        }
+        break;
+    }
+    case flat::Decl::Kind::kUnion: {
+        auto union_decl = static_cast<const flat::Union*>(decl);
+        coded::UnionType* union_struct = static_cast<coded::UnionType*>(named_coded_types_[&decl->name].get());
+        std::vector<const coded::Type*>& union_members = union_struct->types;
+        for (const auto& member : union_decl->members) {
+            std::string member_name = union_struct->coded_name + "_" + std::string(member.name.data());
+            auto coded_member_type = CompileType(member.type.get());
+            if (coded_member_type->coding_needed == coded::CodingNeeded::kNeeded) {
+                union_members.push_back(coded_member_type);
+            } else {
+                // We need union_members.size() to match union_decl->members.size() because
+                // the coding tables will use the union |tag| to index into the member array.
+                union_members.push_back(nullptr);
+            }
+        }
+        break;
+    }
+    default: {
+        break;
     }
     }
 }
@@ -372,25 +478,24 @@ const coded::Type* TablesGenerator::Compile(const flat::Type* type) {
 void TablesGenerator::Compile(const flat::Decl* decl) {
     switch (decl->kind) {
     case flat::Decl::Kind::kConst:
-    case flat::Decl::Kind::kEnum:
-        // Nothing to do for const or enum declarations.
+        // Nothing to do for const declarations.
         break;
+    case flat::Decl::Kind::kEnum: {
+        auto enum_decl = static_cast<const flat::Enum*>(decl);
+        std::string enum_name = NameName(enum_decl->name);
+        named_coded_types_.emplace(&enum_decl->name, std::make_unique<coded::PrimitiveType>(std::move(enum_name), enum_decl->type, flat::PrimitiveType::SubtypeSize(enum_decl->type)));
+        break;
+    }
     case flat::Decl::Kind::kInterface: {
         auto interface_decl = static_cast<const flat::Interface*>(decl);
         std::string interface_name = NameInterface(*interface_decl);
+        std::vector<std::unique_ptr<coded::MessageType>> interface_messages;
         for (const auto& method : interface_decl->methods) {
             std::string method_name = NameMethod(interface_name, method);
             auto CreateMessage = [&](const flat::Interface::Method::Message& message,
-                                        types::MessageKind kind) -> void {
-                std::vector<coded::Field> request_fields;
-                std::string request_name = NameMessage(method_name, kind);
-                for (const auto& parameter : message.parameters) {
-                    std::string parameter_name = request_name + "_" + std::string(parameter.name.data());
-                    auto coded_parameter_type = Compile(parameter.type.get());
-                    if (coded_parameter_type->coding_needed == coded::CodingNeeded::kNeeded)
-                        request_fields.emplace_back(coded_parameter_type, parameter.fieldshape.Offset());
-                }
-                coded_types_.push_back(std::make_unique<coded::StructType>(std::move(request_name), std::move(request_fields), message.typeshape.Size()));
+                                     types::MessageKind kind) -> void {
+                std::string message_name = NameMessage(LibraryName(decl->name.library()), method_name, kind);
+                interface_messages.push_back(std::make_unique<coded::MessageType>(std::move(message_name), std::vector<coded::Field>(), message.typeshape.Size()));
             };
             if (method.maybe_request) {
                 CreateMessage(*method.maybe_request, types::MessageKind::kRequest);
@@ -400,35 +505,22 @@ void TablesGenerator::Compile(const flat::Decl* decl) {
                 CreateMessage(*method.maybe_response, kind);
             }
         }
+        named_coded_types_.emplace(&decl->name, std::make_unique<coded::InterfaceType>(std::move(interface_messages)));
         break;
     }
     case flat::Decl::Kind::kStruct: {
         auto struct_decl = static_cast<const flat::Struct*>(decl);
-        std::string struct_name = NameName(struct_decl->name);
-        std::vector<coded::Field> struct_fields;
-        for (const auto& member : struct_decl->members) {
-            std::string member_name = struct_name + "_" + std::string(member.name.data());
-            auto coded_member_type = Compile(member.type.get());
-            if (coded_member_type->coding_needed == coded::CodingNeeded::kNeeded)
-                struct_fields.emplace_back(coded_member_type, member.fieldshape.Offset());
-        }
-        coded_types_.push_back(std::make_unique<coded::StructType>(std::move(struct_name), std::move(struct_fields), struct_decl->typeshape.Size()));
-        named_type_map_[&decl->name] = coded_types_.back().get();
+        std::string struct_name = NameCodedStruct(struct_decl);
+        std::string pointer_name = NamePointer(struct_name);
+        named_coded_types_.emplace(&decl->name, std::make_unique<coded::StructType>(std::move(struct_name), std::vector<coded::Field>(), struct_decl->typeshape.Size(), std::move(pointer_name)));
         break;
     }
     case flat::Decl::Kind::kUnion: {
         auto union_decl = static_cast<const flat::Union*>(decl);
-        std::string union_name = NameName(union_decl->name);
-        std::vector<const coded::Type*> union_members;
-        for (const auto& member : union_decl->members) {
-            std::string member_name = union_name + "_" + std::string(member.name.data());
-            auto coded_member_type = Compile(member.type.get());
-            if (coded_member_type->coding_needed == coded::CodingNeeded::kNeeded)
-                union_members.push_back(coded_member_type);
-        }
-        coded_types_.push_back(std::make_unique<coded::UnionType>(std::move(union_name), std::move(union_members),
-                                                                  union_decl->fieldshape.Offset(), union_decl->fieldshape.Size()));
-        named_type_map_[&decl->name] = coded_types_.back().get();
+        std::string union_name = NameCodedUnion(union_decl);
+        std::string pointer_name = NamePointer(union_name);
+        named_coded_types_.emplace(&decl->name, std::make_unique<coded::UnionType>(std::move(union_name), std::vector<const coded::Type*>(),
+                                                                                   union_decl->membershape.Offset(), union_decl->typeshape.Size(), std::move(pointer_name)));
         break;
     }
     }
@@ -437,8 +529,51 @@ void TablesGenerator::Compile(const flat::Decl* decl) {
 std::ostringstream TablesGenerator::Produce() {
     GenerateFilePreamble();
 
-    for (const auto& decl : library_->declaration_order_)
+    for (const auto& decl : library_->declaration_order_) {
         Compile(decl);
+    }
+
+    for (const auto& decl : library_->declaration_order_) {
+        if (decl->name.library() != library_)
+            continue;
+        CompileFields(decl);
+    }
+
+    for (const auto& decl : library_->declaration_order_) {
+        coded::Type* coded_type = named_coded_types_[&decl->name].get();
+        if (!coded_type)
+            continue;
+        switch (coded_type->kind) {
+        case coded::Type::Kind::kStruct:
+            GenerateForward(*static_cast<const coded::StructType*>(coded_type));
+            break;
+        case coded::Type::Kind::kUnion:
+            GenerateForward(*static_cast<const coded::UnionType*>(coded_type));
+            break;
+        default:
+            break;
+        }
+    }
+
+    Emit(&tables_file_, "\n");
+
+    for (const auto& decl : library_->declaration_order_) {
+        coded::Type* coded_type = named_coded_types_[&decl->name].get();
+        if (!coded_type)
+            continue;
+        switch (coded_type->kind) {
+        case coded::Type::Kind::kStruct:
+            GeneratePointerIfNeeded(*static_cast<const coded::StructType*>(coded_type));
+            break;
+        case coded::Type::Kind::kUnion:
+            GeneratePointerIfNeeded(*static_cast<const coded::UnionType*>(coded_type));
+            break;
+        default:
+            break;
+        }
+    }
+
+    Emit(&tables_file_, "\n");
 
     for (const auto& coded_type : coded_types_) {
         if (coded_type->coding_needed == coded::CodingNeeded::kNotNeeded)
@@ -446,10 +581,17 @@ std::ostringstream TablesGenerator::Produce() {
 
         switch (coded_type->kind) {
         case coded::Type::Kind::kStruct:
-            Generate(*static_cast<const coded::StructType*>(coded_type.get()));
-            break;
+        case coded::Type::Kind::kStructPointer:
         case coded::Type::Kind::kUnion:
-            Generate(*static_cast<const coded::UnionType*>(coded_type.get()));
+        case coded::Type::Kind::kUnionPointer:
+            // These are generated in the next phase.
+            break;
+        case coded::Type::Kind::kInterface:
+            // Nothing to generate for interfaces. We've already moved the
+            // messages from the interface into coded_types_ directly.
+            break;
+        case coded::Type::Kind::kMessage:
+            Generate(*static_cast<const coded::MessageType*>(coded_type.get()));
             break;
         case coded::Type::Kind::kHandle:
             Generate(*static_cast<const coded::HandleType*>(coded_type.get()));
@@ -475,6 +617,25 @@ std::ostringstream TablesGenerator::Produce() {
             // should not be reached.
             assert(false && "Primitive types should never need coding tables");
             break;
+        }
+    }
+
+    for (const auto& decl : library_->declaration_order_) {
+        if (decl->name.library() != library_)
+            continue;
+
+        coded::Type* coded_type = named_coded_types_[&decl->name].get();
+        if (!coded_type)
+            continue;
+        switch (coded_type->kind) {
+        case coded::Type::Kind::kStruct:
+            Generate(*static_cast<const coded::StructType*>(coded_type));
+            break;
+        case coded::Type::Kind::kUnion:
+            Generate(*static_cast<const coded::UnionType*>(coded_type));
+            break;
+        default:
+            continue;
         }
     }
 

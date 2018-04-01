@@ -163,8 +163,6 @@ std::string NameRawLiteralKind(raw::Literal::Kind kind) {
         return "true";
     case raw::Literal::Kind::False:
         return "false";
-    case raw::Literal::Kind::Default:
-        return "default";
     }
 }
 
@@ -187,11 +185,11 @@ std::string NameFlatTypeKind(flat::Type::Kind kind) {
     }
 }
 
-std::string NameRawConstantKind(raw::Constant::Kind kind) {
+std::string NameFlatConstantKind(flat::Constant::Kind kind) {
     switch (kind) {
-    case raw::Constant::Kind::Identifier:
+    case flat::Constant::Kind::Identifier:
         return "identifier";
-    case raw::Constant::Kind::Literal:
+    case flat::Constant::Kind::Literal:
         return "literal";
     }
 }
@@ -264,7 +262,7 @@ std::string NameFlatCType(const flat::Type* type) {
 
         case flat::Type::Kind::Identifier: {
             auto identifier_type = static_cast<const flat::IdentifierType*>(type);
-            std::string name = identifier_type->name.data();
+            std::string name = identifier_type->name.name().data();
             if (identifier_type->nullability == types::Nullability::Nullable) {
                 name.push_back('*');
             }
@@ -280,8 +278,8 @@ std::string NameIdentifier(SourceLocation name) {
 }
 
 std::string NameName(const flat::Name& name) {
-    // TODO(TO-701) Handle complex names.
-    return name.data();
+    // TODO(TO-701) Handle nested declarations.
+    return name.name().data();
 }
 
 std::string NameInterface(const flat::Interface& interface) {
@@ -293,8 +291,15 @@ std::string NameMethod(StringView interface_name,
     return std::string(interface_name) + NameIdentifier(method.name);
 }
 
-std::string NameMessage(StringView method_name, types::MessageKind kind) {
-    std::string message_name(method_name);
+std::string NameOrdinal(StringView method_name) {
+    std::string ordinal_name(method_name);
+    ordinal_name += "Ordinal";
+    return ordinal_name;
+}
+
+std::string NameMessage(StringView library_name, StringView method_name, types::MessageKind kind) {
+    std::string message_name(library_name);
+    message_name += method_name;
     switch (kind) {
     case types::MessageKind::kRequest:
         message_name += "Request";
@@ -316,7 +321,7 @@ std::string NameTable(StringView type_name) {
 std::string NamePointer(StringView name) {
     std::string pointer_name(name);
     pointer_name += "Pointer";
-    return NameTable(pointer_name);
+    return pointer_name;
 }
 
 std::string NameMembers(StringView name) {
@@ -331,6 +336,18 @@ std::string NameFields(StringView name) {
     return fields_name;
 }
 
+std::string NameCodedStruct(const flat::Struct* struct_decl) {
+    std::string name(LibraryName(struct_decl->name.library()));
+    name += NameName(struct_decl->name);
+    return name;
+}
+
+std::string NameCodedUnion(const flat::Union* union_decl) {
+    std::string name(LibraryName(union_decl->name.library()));
+    name += NameName(union_decl->name);
+    return name;
+}
+
 std::string NameCodedHandle(types::HandleSubtype subtype, types::Nullability nullability) {
     std::string name("Handle");
     name += NameHandleSubtype(subtype);
@@ -338,15 +355,17 @@ std::string NameCodedHandle(types::HandleSubtype subtype, types::Nullability nul
     return name;
 }
 
-std::string NameCodedInterfaceHandle(StringView interface_name, types::Nullability nullability) {
-    std::string name("Interface");
+std::string NameCodedInterfaceHandle(StringView library_name, StringView interface_name, types::Nullability nullability) {
+    std::string name(library_name);
+    name += "Interface";
     name += interface_name;
     name += NameNullability(nullability);
     return name;
 }
 
-std::string NameCodedRequestHandle(StringView interface_name, types::Nullability nullability) {
-    std::string name("Request");
+std::string NameCodedRequestHandle(StringView library_name, StringView interface_name, types::Nullability nullability) {
+    std::string name(library_name);
+    name += "Request";
     name += interface_name;
     name += NameNullability(nullability);
     return name;

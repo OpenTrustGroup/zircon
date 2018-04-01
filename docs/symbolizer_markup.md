@@ -276,6 +276,14 @@ in human-readable symbolic form.
   }}}
   ```
 
+## Trigger elements ##
+
+These elements cause an external action and will be presented to the
+user in a human readable form. Generally they trigger an external
+action to occur that results in a linkable page. The link or some
+other informative information about the external action can then be
+presented to the user.
+
 * `{{{dumpfile:%s:%s}}}`
 
   Here the first `%s` is an identifier for a type of dump and the
@@ -285,17 +293,17 @@ in human-readable symbolic form.
   format per se.  In general it might correspond to writing a file by
   that name or something similar.
 
-  This is technically a presentation element, but it may also serve to
-  trigger additional post-processing work beyond symbolizing the markup.
-  It indicates that a dump file of some sort has been published.  Some
-  logic attached to the symbolizing filter may understand certain types
-  of dump file and trigger additional post-processing of the dump file
-  upon encountering this element (e.g. generating visualizations,
-  symbolization).  The expectation is that the information collected
-  from contextual elements (described below) in the logging stream may
-  be necessary to decode the content of the dump.  So if the symbolizing
-  filter triggers other processing, it may need to feed some distilled
-  form of the contextual information to those processes.
+  This element may trigger additional post-processing work beyond
+  symbolizing the markup. It indicates that a dump file of some sort
+  has been published.  Some logic attached to the symbolizing filter may
+  understand certain types of dump file and trigger additional
+  post-processing of the dump file upon encountering this element (e.g.
+  generating visualizations, symbolization).  The expectation is that the
+  information collected from contextual elements (described below) in the
+  logging stream may be necessary to decode the content of the dump.  So
+  if the symbolizing filter triggers other processing, it may need to
+  feed some distilled form of the contextual information to those
+  processes.
 
   On Zircon and Fuchsia in particular, "publish" means to call the
   `__sanitizer_publish_data` function from `<zircon/sanitizer.h>`
@@ -336,6 +344,19 @@ element, the necessary contextual elements should have appeared
 somewhere earlier in the logging stream.  It should always be possible
 for the symbolizing filter to be implemented as a single pass over the
 raw logging stream, accumulating context and massaging text as it goes.
+
+* `{{{reset}}}`
+
+  This should be output before any other contextual element. The need
+  for this contextual element is to support implementations that handle
+  logs coming from multiple processes. Such implementations might not
+  know when a new process starts or ends. Because some identifying
+  information (like process IDs) might be the same between old and new
+  processes, a way is needed to distinguish two processes with such
+  identical identifying information. This element informs such
+  implementations to reset the state of a filter so that information
+  from a previous process's contextual elements is not assumed for new
+  process that just happens have the same identifying information.
 
 * `{{{module:%x:%s:...}}}`
 

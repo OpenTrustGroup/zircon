@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -28,6 +29,7 @@ namespace {
                  "    fidl [--c-header HEADER_PATH]\n"
                  "         [--tables TABLES_PATH]\n"
                  "         [--json JSON_PATH]\n"
+                 "         [--name LIBRARY_NAME]\n"
                  "         [--files [FIDL_FILE...]...]\n"
                  "    * If no output types are provided, the FIDL_FILES are parsed and\n"
                  "      compiled, but no output is produced. Otherwise:\n"
@@ -37,6 +39,8 @@ namespace {
                  "        into TABLES_PATH.\n"
                  "    * If --json is provided, JSON intermediate data is generated\n"
                  "        into JSON_PATH.\n"
+                 "    * If --name is provided, the compiler will check that the generated\n"
+                 "        library has the given name.\n"
                  "    Each `--file [FIDL_FILE...]` chunk of arguments describes a library, all\n"
                  "    of which must share the same top-level library name declaration. Libraries\n"
                  "    must be presented in dependency order, with latter libraries able to use\n"
@@ -150,15 +154,11 @@ bool Parse(const fidl::SourceFile& source_file, fidl::IdentifierTable* identifie
     fidl::Parser parser(&lexer, error_reporter);
     auto ast = parser.Parse();
     if (!parser.Ok()) {
-        error_reporter->PrintReports();
         return false;
     }
-
     if (!library->ConsumeFile(std::move(ast))) {
-        fprintf(stderr, "Parse failed!\n");
         return false;
     }
-
     return true;
 }
 
@@ -193,6 +193,8 @@ int main(int argc, char* argv[]) {
         args = response_file_args.get();
     }
 
+    std::string library_name;
+
     std::map<Behavior, std::fstream> outputs;
     while (args->Remaining()) {
         // Try to parse an output type.
@@ -204,6 +206,8 @@ int main(int argc, char* argv[]) {
             outputs.emplace(Behavior::Tables, Open(args->Claim(), std::ios::out));
         } else if (behavior_argument == "--json") {
             outputs.emplace(Behavior::JSON, Open(args->Claim(), std::ios::out));
+        } else if (behavior_argument == "--name") {
+            library_name = args->Claim();
         } else if (behavior_argument == "--files") {
             // Start parsing filenames.
             break;
@@ -220,8 +224,7 @@ int main(int argc, char* argv[]) {
         if (arg == "--files") {
             source_managers.emplace_back();
         } else {
-            const fidl::SourceFile* source = source_managers.back().CreateSource(arg.data());
-            if (source == nullptr) {
+            if (!source_managers.back().CreateSource(arg.data())) {
                 fprintf(stderr, "Couldn't read in source data from %s\n", arg.data());
                 return 1;
             }
@@ -230,42 +233,64 @@ int main(int argc, char* argv[]) {
 
     fidl::IdentifierTable identifier_table;
     fidl::ErrorReporter error_reporter;
-    std::vector<fidl::flat::Library> libraries;
+    std::map<fidl::StringView, std::unique_ptr<fidl::flat::Library>> compiled_libraries;
+    const fidl::flat::Library* final_library = nullptr;
     for (const auto& source_manager : source_managers) {
-        libraries.emplace_back();
+        if (source_manager.sources().empty()) {
+            continue;
+        }
+        auto library = std::make_unique<fidl::flat::Library>(&compiled_libraries, &error_reporter);
         for (const auto& source_file : source_manager.sources()) {
-            if (!Parse(source_file, &identifier_table, &error_reporter, &libraries.back())) {
+            if (!Parse(*source_file, &identifier_table, &error_reporter, library.get())) {
+                error_reporter.PrintReports();
                 return 1;
             }
         }
-    }
-    for (auto& library : libraries) {
-        if (!library.Resolve()) {
-            fprintf(stderr, "flat::Library resolution failed!\n");
+        if (!library->Compile()) {
+            error_reporter.PrintReports();
             return 1;
         }
+        final_library = library.get();
+        auto name_and_library = std::make_pair(library->name(), std::move(library));
+        auto iter = compiled_libraries.insert(std::move(name_and_library));
+        if (!iter.second) {
+            auto name = iter.first->first;
+            fprintf(stderr, "Mulitple libraries with the same name: '%.*s'\n",
+                    static_cast<int>(name.size()), name.data());
+            return 1;
+        }
+    }
+    if (final_library == nullptr) {
+        fputs("No library was produced.\n", stderr);
+        return 1;
+    }
+
+    if (!library_name.empty() && final_library->name() != library_name) {
+        auto name = final_library->name();
+        fprintf(stderr, "Generated library '%.*s' did not match --name argument: %s\n",
+                static_cast<int>(name.size()), name.data(), library_name.c_str());
+        return 1;
     }
 
     // We recompile dependencies, and only emit output for the final
     // library.
-    fidl::flat::Library* library = &libraries.back();
     for (auto& output : outputs) {
         auto& behavior = output.first;
         auto& output_file = output.second;
 
         switch (behavior) {
         case Behavior::CHeader: {
-            fidl::CGenerator generator(library);
+            fidl::CGenerator generator(final_library);
             Generate(&generator, std::move(output_file));
             break;
         }
         case Behavior::Tables: {
-            fidl::TablesGenerator generator(library);
+            fidl::TablesGenerator generator(final_library);
             Generate(&generator, std::move(output_file));
             break;
         }
         case Behavior::JSON: {
-            fidl::JSONGenerator generator(library);
+            fidl::JSONGenerator generator(final_library);
             Generate(&generator, std::move(output_file));
             break;
         }

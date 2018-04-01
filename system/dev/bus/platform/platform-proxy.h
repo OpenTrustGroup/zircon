@@ -19,7 +19,6 @@ enum {
     PDEV_GET_MMIO = 1,
     PDEV_GET_INTERRUPT,
     PDEV_GET_BTI,
-    PDEV_ALLOC_CONTIG_VMO,
     PDEV_GET_DEVICE_INFO,
 
     // ZX_PROTOCOL_USB_MODE_SWITCH
@@ -33,14 +32,8 @@ enum {
     PDEV_GPIO_WRITE,
 
     // ZX_PROTOCOL_I2C
-    PDEV_I2C_GET_CHANNEL,
+    PDEV_I2C_GET_MAX_TRANSFER,
     PDEV_I2C_TRANSACT,
-    PDEV_I2C_SET_BITRATE,
-    PDEV_I2C_CHANNEL_RELEASE,
-
-    // ZX_PROTOCOL_SERIAL
-    PDEV_SERIAL_CONFIG,
-    PDEV_SERIAL_OPEN_SOCKET,
 
     // ZX_PROTOCOL_CLK
     PDEV_CLK_ENABLE,
@@ -61,37 +54,17 @@ typedef struct {
     uint32_t cache_policy;
 } pdev_config_vmo_t;
 
-typedef struct {
-    pdev_i2c_txn_ctx_t txn_ctx;
-    // private context for the server, returned from i2c_get_channel and passed by client
-    // for all channel operations
-    void* server_ctx;
-    uint32_t bitrate;
-} pdev_i2c_req_t;
-
-typedef struct {
-    pdev_i2c_txn_ctx_t txn_ctx;
-    // private context for the server, returned from i2c_get_channel and passed by client
-    // for all channel operations
-    void* server_ctx;
-    size_t max_transfer_size;
-} pdev_i2c_resp_t;
-
-typedef struct {
+typedef struct pdev_req {
     zx_txid_t txid;
     uint32_t op;
     uint32_t index;
     union {
-        pdev_config_vmo_t contig_vmo;
         usb_mode_t usb_mode;
         uint32_t gpio_flags;
         uint32_t gpio_alt_function;
         uint8_t gpio_value;
-        pdev_i2c_req_t i2c;
-        struct {
-            uint32_t baud_rate;
-            uint32_t flags;
-        } serial_config;
+        pdev_i2c_txn_ctx_t i2c_txn;
+        uint32_t i2c_bitrate;
     };
 } pdev_req_t;
 
@@ -101,7 +74,8 @@ typedef struct {
     union {
         usb_mode_t usb_mode;
         uint8_t gpio_value;
-        pdev_i2c_resp_t i2c;
+        pdev_i2c_txn_ctx_t i2c_txn;
+        size_t i2c_max_transfer;
         struct {
             zx_off_t offset;
             size_t length;

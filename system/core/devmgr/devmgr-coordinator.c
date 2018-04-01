@@ -36,6 +36,8 @@ uint32_t log_flags = LOG_ERROR | LOG_INFO;
 
 bool dc_asan_drivers = false;
 
+static zx_handle_t bootdata_vmo;
+
 static void dc_dump_state(void);
 static void dc_dump_devprops(void);
 static void dc_dump_drivers(void);
@@ -245,7 +247,7 @@ static zx_status_t libname_to_vmo(const char* libname, zx_handle_t* out) {
         log(ERROR, "devcoord: cannot open driver '%s'\n", libname);
         return ZX_ERR_IO;
     }
-    zx_status_t r = fdio_get_vmo(fd, out);
+    zx_status_t r = fdio_get_vmo_clone(fd, out);
     close(fd);
     if (r < 0) {
         log(ERROR, "devcoord: cannot get driver vmo '%s'\n", libname);
@@ -253,21 +255,10 @@ static zx_status_t libname_to_vmo(const char* libname, zx_handle_t* out) {
     return r;
 }
 
-zx_status_t devmgr_set_platform_id(zx_handle_t vmo, zx_off_t offset, size_t length) {
-    bootdata_platform_id_t platform_id;
-    size_t actual;
-
-    zx_status_t status = zx_vmo_read_old(vmo, &platform_id, offset, sizeof(platform_id), &actual);
-    if ((status < 0) || (actual != sizeof(platform_id))) {
-        return status;
+void devmgr_set_bootdata(zx_handle_t vmo) {
+    if (bootdata_vmo == ZX_HANDLE_INVALID) {
+        zx_handle_duplicate(vmo, ZX_RIGHT_SAME_RIGHTS, &bootdata_vmo);
     }
-
-    char buffer[100];
-    snprintf(buffer, sizeof(buffer), "sys,vid=%u,pid=%u,board=%s,", platform_id.vid, platform_id.pid,
-             platform_id.board_name);
-    buffer[countof(buffer) - 1] = 0;
-    sys_device.args = strdup(buffer);
-    return ZX_OK;
 }
 
 static void dc_dump_device(device_t* dev, size_t indent) {
@@ -985,7 +976,7 @@ static zx_status_t dc_load_firmware(device_t* dev, const char* path,
         close(fd);
         if (fwfd >= 0) {
             *size = lseek(fwfd, 0, SEEK_END);
-            zx_status_t r = fdio_get_vmo(fwfd, vmo);
+            zx_status_t r = fdio_get_vmo_clone(fwfd, vmo);
             close(fwfd);
             return r;
         }
@@ -1460,6 +1451,9 @@ static zx_status_t dc_prepare_proxy(device_t* dev) {
                 log(ERROR, "devcoord: cannot create proxy rpc channel: %d\n", r);
                 return r;
             }
+        } else if (dev == &sys_device) {
+            // pass bootdata VMO handle to sys device
+            h1 = bootdata_vmo;
         }
         if ((r = dc_new_devhost(devhostname, dev->host,
                                 &dev->proxy->host)) < 0) {

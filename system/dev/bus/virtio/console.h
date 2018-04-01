@@ -29,7 +29,7 @@ public:
     TransferBuffer();
     ~TransferBuffer();
 
-    zx_status_t Init(size_t count, uint32_t chunk_size);
+    zx_status_t Init(const zx::bti& bti, size_t count, uint32_t chunk_size);
 
     TransferDescriptor* GetDescriptor(size_t index);
     TransferDescriptor* PhysicalToDescriptor(uintptr_t phys);
@@ -58,7 +58,7 @@ private:
 // Actual virtio console implementation
 class ConsoleDevice : public Device {
 public:
-    explicit ConsoleDevice(zx_device_t* device, fbl::unique_ptr<Backend> backend);
+    explicit ConsoleDevice(zx_device_t* device, zx::bti bti, fbl::unique_ptr<Backend> backend);
     virtual ~ConsoleDevice();
 
     virtual zx_status_t Init() override;

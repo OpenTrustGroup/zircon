@@ -23,13 +23,14 @@ struct block_txn_t {
     struct vring_desc* desc;
     size_t index;
     list_node_t node;
+    zx_paddr_t pin_base;
 };
 
 class Ring;
 
 class BlockDevice : public Device {
 public:
-    BlockDevice(zx_device_t* device, fbl::unique_ptr<Backend> backend);
+    BlockDevice(zx_device_t* device, zx::bti bti, fbl::unique_ptr<Backend> backend);
     virtual ~BlockDevice();
 
     virtual zx_status_t Init() override;
@@ -56,6 +57,8 @@ private:
     zx_status_t QueueTxn(block_txn_t* txn, bool write, size_t bytes,
                          uint64_t* pages, size_t pagecount, uint16_t* idx);
     void QueueReadWriteTxn(block_txn_t* txn, bool write);
+
+    void txn_complete(block_txn_t* txn, zx_status_t status);
 
     // the main virtio ring
     Ring vring_ = {this};

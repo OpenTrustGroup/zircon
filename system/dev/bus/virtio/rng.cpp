@@ -11,8 +11,8 @@
 
 namespace virtio {
 
-RngDevice::RngDevice(zx_device_t* bus_device, fbl::unique_ptr<Backend> backend)
-    : Device(bus_device, fbl::move(backend)) {
+RngDevice::RngDevice(zx_device_t* bus_device, zx::bti bti, fbl::unique_ptr<Backend> backend)
+    : Device(bus_device, fbl::move(bti), fbl::move(backend)) {
 }
 
 RngDevice::~RngDevice() {
@@ -35,7 +35,7 @@ zx_status_t RngDevice::Init() {
 
     // allocate the entropy buffer
     static_assert(kBufferSize <= PAGE_SIZE, "");
-    zx_status_t rc = io_buffer_init(&buf_, kBufferSize,
+    zx_status_t rc = io_buffer_init(&buf_, bti_.get(), kBufferSize,
                                     IO_BUFFER_RO | IO_BUFFER_CONTIG);
     if (rc != ZX_OK) {
         zxlogf(ERROR, "%s: cannot allocate entropy buffer: %d\n", tag(), rc);

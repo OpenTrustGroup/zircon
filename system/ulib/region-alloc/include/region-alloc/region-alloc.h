@@ -218,6 +218,10 @@ static inline const ralloc_region_t* ralloc_get_specific_region(
 size_t ralloc_get_allocated_region_count(const ralloc_allocator_t* allocator);
 size_t ralloc_get_available_region_count(const ralloc_allocator_t* allocator);
 
+// Walk the allocated region list and call region_walk_cb for each region found
+typedef bool (*region_walk_cb)(const ralloc_region_t*, void*);
+zx_status_t ralloc_walk_allocated_regions(const ralloc_allocator_t*, region_walk_cb, void*);
+
 // RegionAllocator::Region interface.  In addition to the base/size members
 // which may be used to determine the location of the allocation,  valid
 // operations are...
@@ -357,15 +361,15 @@ public:
     // Possible return values
     // ++ ZX_ERR_BAD_STATE : The RegionAllocator currently has a RegionPool
     // assigned and currently has allocations from this pool.
-    zx_status_t SetRegionPool(const RegionPool::RefPtr& region_pool);
-    zx_status_t SetRegionPool(RegionPool::RefPtr&& region_pool) {
+    zx_status_t SetRegionPool(const RegionPool::RefPtr& region_pool) __TA_EXCLUDES(alloc_lock_);
+    zx_status_t SetRegionPool(RegionPool::RefPtr&& region_pool) __TA_EXCLUDES(alloc_lock_) {
         RegionPool::RefPtr ref(fbl::move(region_pool));
         return SetRegionPool(ref);
     }
 
     // Reset allocator.  Returns all available regions back to the RegionPool.
     // Has no effect on currently allocated regions.
-    void Reset();
+    void Reset() __TA_EXCLUDES(alloc_lock_);
 
     // Add a region to the set of allocatable regions.
     //
@@ -385,7 +389,8 @@ public:
     //      allocated regions.
     // ++++ The region being added intersects one ore more of the currently
     //      available regions, and allow_overlap is false.
-    zx_status_t AddRegion(const ralloc_region_t& region, bool allow_overlap = false);
+    zx_status_t AddRegion(const ralloc_region_t& region, bool allow_overlap = false)
+        __TA_EXCLUDES(alloc_lock_);
 
     // Subtract a region from the set of allocatable regions.
     //
@@ -409,7 +414,8 @@ public:
     // ++++ The region being subtracted intersects portions of the space which
     //      are absent from both the allocated and available sets, and
     //      allow_incomplete is false.
-    zx_status_t SubtractRegion(const ralloc_region_t& region, bool allow_incomplete = false);
+    zx_status_t SubtractRegion(const ralloc_region_t& region, bool allow_incomplete = false)
+        __TA_EXCLUDES(alloc_lock_);
 
     // Get a region out of the set of currently available regions which has a
     // specified size and alignment.  Note; the alignment must be a power of
@@ -422,7 +428,8 @@ public:
     // ++ ZX_ERR_INVALID_ARGS : size is zero, or alignment is not a power of two.
     // ++ ZX_ERR_NOT_FOUND : No suitable region could be found in the set of
     // currently available regions which can satisfy the request.
-    zx_status_t GetRegion(uint64_t size, uint64_t alignment, Region::UPtr& out_region);
+    zx_status_t GetRegion(uint64_t size, uint64_t alignment, Region::UPtr& out_region)
+        __TA_EXCLUDES(alloc_lock_);
 
     // Get a region with a specific location and size out of the set of
     // currently available regions.
@@ -434,57 +441,79 @@ public:
     // ++ ZX_ERR_INVALID_ARGS : The size of the requested region is zero.
     // ++ ZX_ERR_NOT_FOUND : No suitable region could be found in the set of
     // currently available regions which can satisfy the request.
-    zx_status_t GetRegion(const ralloc_region_t& requested_region, Region::UPtr& out_region);
+    zx_status_t GetRegion(const ralloc_region_t& requested_region, Region::UPtr& out_region)
+        __TA_EXCLUDES(alloc_lock_);;
 
     // Helper which defaults the alignment of a size/alignment based allocation
     // to pointer-aligned.
-    zx_status_t GetRegion(uint64_t size, Region::UPtr& out_region) {
+    zx_status_t GetRegion(uint64_t size, Region::UPtr& out_region) __TA_EXCLUDES(alloc_lock_) {
         return GetRegion(size, sizeof(void*), out_region);
     }
 
     // Helper versions of the GetRegion methods for those who don't care
     // about the specific reason for failure (nullptr will be returned on
     // failure).
-    Region::UPtr GetRegion(uint64_t size, uint64_t alignment) {
+    Region::UPtr GetRegion(uint64_t size, uint64_t alignment) __TA_EXCLUDES(alloc_lock_) {
         Region::UPtr ret;
         GetRegion(size, alignment, ret);
         return ret;
     }
 
-    Region::UPtr GetRegion(uint64_t size) {
+    Region::UPtr GetRegion(uint64_t size) __TA_EXCLUDES(alloc_lock_) {
         Region::UPtr ret;
         GetRegion(size, ret);
         return ret;
     }
 
-    Region::UPtr GetRegion(const ralloc_region_t& requested_region) {
+    Region::UPtr GetRegion(const ralloc_region_t& requested_region) __TA_EXCLUDES(alloc_lock_) {
         Region::UPtr ret;
         GetRegion(requested_region, ret);
         return ret;
     }
 
-    size_t AllocatedRegionCount() const {
+    size_t AllocatedRegionCount() const __TA_EXCLUDES(alloc_lock_) {
         fbl::AutoLock alloc_lock(&alloc_lock_);
         return allocated_regions_by_base_.size();
     }
 
-    size_t AvailableRegionCount() const {
+    size_t AvailableRegionCount() const __TA_EXCLUDES(alloc_lock_) {
         fbl::AutoLock alloc_lock(&alloc_lock_);
         return avail_regions_by_base_.size();
     }
 
+    // Walk the allocated regions and call the user provided callback for each
+    // entry. Stop when out of entries or the callback returns false.
+    //
+    // *** It is absolutely required that the user callback not call into any other
+    // RegionAllocator public APIs, and should likely not acquire any locks of any
+    // kind. This method cannot protect against deadlocks and lock inversions that
+    // are possible by acquriring the allocation lock before calling the user provided
+    // callback.
+    template<typename WalkCallback>
+    void WalkAllocatedRegions(WalkCallback&& cb) const
+        __TA_EXCLUDES(alloc_lock_) {
+        fbl::AutoLock alloc_lock(&alloc_lock_);
+        for (const auto& region : allocated_regions_by_base_) {
+            if (!fbl::forward<WalkCallback>(cb)(&region)) {
+                break;
+            }
+        }
+}
+
 private:
-    zx_status_t AddSubtractSanityCheckLocked(const ralloc_region_t& region);
-    void ReleaseRegion(Region* region);
-    void AddRegionToAvailLocked(Region* region, bool allow_overlap = false);
+    zx_status_t AddSubtractSanityCheckLocked(const ralloc_region_t& region)
+        __TA_REQUIRES(alloc_lock_);
+    void ReleaseRegion(Region* region) __TA_EXCLUDES(alloc_lock_);
+    void AddRegionToAvailLocked(Region* region, bool allow_overlap = false)
+        __TA_REQUIRES(alloc_lock_);
 
     zx_status_t AllocFromAvailLocked(Region::WAVLTreeSortBySize::iterator source,
                                      Region::UPtr& out_region,
                                      uint64_t base,
-                                     uint64_t size);
+                                     uint64_t size) __TA_REQUIRES(alloc_lock_);
 
-    static bool IntersectsLocked(const Region::WAVLTreeSortByBase& tree,
-                                 const ralloc_region_t& region);
+    bool IntersectsLocked(const Region::WAVLTreeSortByBase& tree,
+                                 const ralloc_region_t& region) __TA_REQUIRES(alloc_lock_);
 
     /* Locking notes:
      *
@@ -497,10 +526,10 @@ private:
      * the RegionAllocator.
      */
     mutable fbl::Mutex alloc_lock_;
-    Region::WAVLTreeSortByBase allocated_regions_by_base_;
-    Region::WAVLTreeSortByBase avail_regions_by_base_;
-    Region::WAVLTreeSortBySize avail_regions_by_size_;
-    RegionPool::RefPtr region_pool_;
+    Region::WAVLTreeSortByBase allocated_regions_by_base_   __TA_GUARDED(alloc_lock_);
+    Region::WAVLTreeSortByBase avail_regions_by_base_       __TA_GUARDED(alloc_lock_);
+    Region::WAVLTreeSortBySize avail_regions_by_size_       __TA_GUARDED(alloc_lock_);
+    RegionPool::RefPtr region_pool_                         __TA_GUARDED(alloc_lock_);
 };
 
 // If this is C++, clear out this pre-processor constant.  People can get to the

@@ -30,6 +30,7 @@
 #include <reg.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <trace.h>
 #include <vm/physmap.h>
 #include <zircon/types.h>
@@ -47,7 +48,8 @@ uint32_t uart_fifo_depth;
 
 // tx driven irq
 static bool uart_tx_irq_enabled = false;
-static event_t uart_dputc_event = EVENT_INITIAL_VALUE(uart_dputc_event, true, 0);
+static event_t uart_dputc_event = EVENT_INITIAL_VALUE(uart_dputc_event, true,
+                                                      EVENT_FLAG_AUTOUNSIGNAL);
 static spin_lock_t uart_spinlock = SPIN_LOCK_INITIAL_VALUE;
 
 static uint8_t uart_read(uint8_t reg) {
@@ -157,7 +159,32 @@ static void init_uart() {
     }
 }
 
+bool platform_serial_enabled() {
+    return bootloader.uart.type != BOOTDATA_UART_NONE;
+}
+
+// This just initializes the default serial console to the legacy COM1 port.
+// It's in a function rather than just a compile-time assignment to the
+// bootloader structure because our C++ compiler doesn't support non-trivial
+// designated initializers.
+void pc_init_debug_default_early() {
+    bootloader.uart.type = BOOTDATA_UART_PC_PORT;
+    bootloader.uart.base = 0x3f8;
+    bootloader.uart.irq = ISA_IRQ_SERIAL1;
+}
+
 void pc_init_debug_early() {
+    const char* serial_mode = cmdline_get("kernel.serial");
+    if (serial_mode != NULL) {
+        if (!strcmp(serial_mode, "none")) {
+            bootloader.uart.type = BOOTDATA_UART_NONE;
+        } else if (!strcmp(serial_mode, "legacy")) {
+            bootloader.uart.type = BOOTDATA_UART_PC_PORT;
+            bootloader.uart.base = 0x3f8;
+            bootloader.uart.irq = ISA_IRQ_SERIAL1;
+        }
+    }
+
     switch (bootloader.uart.type) {
     case BOOTDATA_UART_PC_PORT:
         uart_io_port = static_cast<uint32_t>(bootloader.uart.base);
@@ -167,6 +194,10 @@ void pc_init_debug_early() {
         uart_mem_addr = (uint64_t)paddr_to_physmap(bootloader.uart.base);
         uart_irq = bootloader.uart.irq;
         break;
+    case BOOTDATA_UART_NONE: // fallthrough
+    default:
+        bootloader.uart.type = BOOTDATA_UART_NONE;
+        return;
     }
 
     init_uart();
@@ -180,6 +211,12 @@ void pc_init_debug(void) {
     bool tx_irq_driven = false;
     /* finish uart init to get rx going */
     cbuf_initialize(&console_input_buf, 1024);
+
+    if (!platform_serial_enabled()) {
+        // Need to bail after initializing the input_buf to prevent unintialized
+        // access to it.
+        return;
+    }
 
     if ((uart_irq == 0) || cmdline_get_bool("kernel.debug_uart_poll", false)) {
         printf("debug-uart: polling enabled\n");
@@ -212,8 +249,10 @@ void pc_suspend_debug(void) {
 }
 
 void pc_resume_debug(void) {
-    init_uart();
-    output_enabled = true;
+    if (platform_serial_enabled()) {
+        init_uart();
+        output_enabled = true;
+    }
 }
 
 /*
@@ -272,19 +311,24 @@ static void platform_dputs(const char* str, size_t len,
     // drop strings if we haven't initialized the uart yet
     if (unlikely(!output_enabled))
         return;
-
     if (!uart_tx_irq_enabled)
         block = false;
-
     spin_lock_irqsave(&uart_spinlock, state);
     while (len > 0) {
         // Is FIFO empty ?
         while (!(uart_read(5) & (1<<5))) {
-            spin_unlock_irqrestore(&uart_spinlock, state);
-            if (block)
+            if (block) {
+                /*
+                 * We want to Tx more and FIFO is empty, re-enable
+                 * Tx interrupts before blocking.
+                 */
+                uart_write(1, (1<<0)|(1<<1)); // rx and tx interrupt enable
+                spin_unlock_irqrestore(&uart_spinlock, state);
                 event_wait(&uart_dputc_event);
-            else
+            } else {
+                spin_unlock_irqrestore(&uart_spinlock, state);
                 arch_spinloop_pause();
+            }
             spin_lock_irqsave(&uart_spinlock, state);
         }
         // Fifo is completely empty now, we can shove an entire
@@ -300,11 +344,15 @@ static void platform_dputs(const char* str, size_t len,
 }
 
 void platform_dputs_thread(const char* str, size_t len) {
-    platform_dputs(str, len, true, true);
+    if (platform_serial_enabled()) {
+        platform_dputs(str, len, true, true);
+    }
 }
 
 void platform_dputs_irq(const char* str, size_t len) {
-    platform_dputs(str, len, false, true);
+    if (platform_serial_enabled()) {
+        platform_dputs(str, len, false, true);
+    }
 }
 
 // polling versions of debug uart read/write
@@ -328,18 +376,26 @@ static void debug_uart_putc_poll(char c) {
 
 
 int platform_dgetc(char* c, bool wait) {
-    return static_cast<int>(cbuf_read_char(&console_input_buf, c, wait));
+    if (platform_serial_enabled()) {
+        return static_cast<int>(cbuf_read_char(&console_input_buf, c, wait));
+    }
+    return -1;
 }
 
 // panic time polling IO for the panic shell
 void platform_pputc(char c) {
-    if (c == '\n')
-        debug_uart_putc_poll('\r');
-    debug_uart_putc_poll(c);
+    if (platform_serial_enabled()) {
+        if (c == '\n')
+            debug_uart_putc_poll('\r');
+        debug_uart_putc_poll(c);
+    }
 }
 
 int platform_pgetc(char *c, bool wait) {
-    return debug_uart_getc_poll(c);
+    if (platform_serial_enabled()) {
+        return debug_uart_getc_poll(c);
+    }
+    return -1;
 }
 
 /*

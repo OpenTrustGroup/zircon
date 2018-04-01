@@ -35,7 +35,17 @@ zero-or-more = ( list-part )* ;
 Repetition (one or more) is expressed with parentheses and a plus.
 ```
 one-or-more = ( list-part )+ ;
+
 ```
+
+## Tokens
+
+Whitespace and comments are ignored during lexing, and thus not
+present in the following grammar. Comments are C++-style `//` until
+the end of the line.
+
+TODO(US-238): Eventually comments will be read as part of a
+documentation generation system.
 
 ## The grammar
 
@@ -44,7 +54,7 @@ one-or-more = ( list-part )+ ;
 ```
 file = library-header , using-list , declaration-list ;
 
-library-header = "library" , compound-identifier , ";" ;
+library-header = "library" , IDENTIFIER , ";" ;
 
 using-list = ( using )* ;
 
@@ -131,5 +141,5 @@ constant = compound-identifier | literal ;
 
 ordinal = NUMERIC-LITERAL ;
 
-literal = STRING-LITERAL | NUMERIC-LITERAL | TRUE | FALSE | DEFAULT ;
+literal = STRING-LITERAL | NUMERIC-LITERAL | TRUE | FALSE ;
 ```

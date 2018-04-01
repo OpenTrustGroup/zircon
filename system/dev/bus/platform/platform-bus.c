@@ -45,20 +45,17 @@ static zx_status_t platform_bus_set_protocol(void* ctx, uint32_t proto_id, void*
     case ZX_PROTOCOL_GPIO:
         memcpy(&bus->gpio, protocol, sizeof(bus->gpio));
         break;
-    case ZX_PROTOCOL_I2C:
-        memcpy(&bus->i2c, protocol, sizeof(bus->i2c));
-        break;
-    case ZX_PROTOCOL_CLK:
-        memcpy(&bus->clk, protocol, sizeof(bus->clk));
-        break;
-    case ZX_PROTOCOL_SERIAL_IMPL: {
-        zx_status_t status = platform_serial_init(bus, (serial_impl_protocol_t *)protocol);
+    case ZX_PROTOCOL_I2C_IMPL: {
+        zx_status_t status = platform_i2c_init(bus, (i2c_impl_protocol_t *)protocol);
         if (status != ZX_OK) {
             return status;
          }
-        memcpy(&bus->serial, protocol, sizeof(bus->serial));
+        memcpy(&bus->i2c, protocol, sizeof(bus->i2c));
         break;
     }
+    case ZX_PROTOCOL_CLK:
+        memcpy(&bus->clk, protocol, sizeof(bus->clk));
+        break;
     case ZX_PROTOCOL_IOMMU:
         memcpy(&bus->iommu, protocol, sizeof(bus->iommu));
         break;
@@ -105,7 +102,7 @@ static zx_status_t platform_bus_device_enable(void* ctx, uint32_t vid, uint32_t 
 
 static const char* platform_bus_get_board_name(void* ctx) {
     platform_bus_t* bus = ctx;
-    return bus->board_name;
+    return bus->platform_id.board_name;
 }
 
 static platform_bus_protocol_ops_t platform_bus_proto_ops = {
@@ -139,7 +136,7 @@ zx_status_t platform_bus_get_protocol(void* ctx, uint32_t proto_id, void* protoc
             return ZX_OK;
         }
         break;
-    case ZX_PROTOCOL_I2C:
+    case ZX_PROTOCOL_I2C_IMPL:
         if (bus->i2c.ops) {
             memcpy(protocol, &bus->i2c, sizeof(bus->i2c));
             return ZX_OK;
@@ -148,12 +145,6 @@ zx_status_t platform_bus_get_protocol(void* ctx, uint32_t proto_id, void* protoc
     case ZX_PROTOCOL_CLK:
         if (bus->clk.ops) {
             memcpy(protocol, &bus->clk, sizeof(bus->clk));
-            return ZX_OK;
-        }
-        break;
-    case ZX_PROTOCOL_SERIAL_IMPL:
-        if (bus->serial.ops) {
-            memcpy(protocol, &bus->serial, sizeof(bus->serial));
             return ZX_OK;
         }
         break;
@@ -179,13 +170,6 @@ static void platform_bus_release(void* ctx) {
         platform_dev_free(dev);
     }
 
-    i2c_txn_t* txn;
-    i2c_txn_t* temp;
-    list_for_every_entry_safe(&bus->i2c_txns, txn, temp, i2c_txn_t, node) {
-        free(txn);
-    }
-
-    platform_serial_release(bus);
     zx_handle_close(bus->dummy_iommu_handle);
 
     free(bus);
@@ -197,26 +181,64 @@ static zx_protocol_device_t platform_bus_proto = {
     .release = platform_bus_release,
 };
 
-static zx_status_t sys_device_suspend(void* ctx, uint32_t flags) {
+static zx_status_t platform_bus_suspend(void* ctx, uint32_t flags) {
     return ZX_ERR_NOT_SUPPORTED;
 }
 
 static zx_protocol_device_t sys_device_proto = {
     .version = DEVICE_OPS_VERSION,
-    .suspend = sys_device_suspend,
+    .suspend = platform_bus_suspend,
 };
 
-static zx_status_t platform_bus_create(void* ctx, zx_device_t* parent, const char* name,
-                                       const char* args, zx_handle_t rpc_channel) {
-    if (!args) {
-        zxlogf(ERROR, "platform_bus_create: args missing\n");
+static zx_status_t platform_bus_read_bootdata(platform_bus_t* bus, zx_handle_t vmo) {
+    bootdata_t bootdata;
+    zx_status_t status = zx_vmo_read(vmo, &bootdata, 0, sizeof(bootdata));
+    if (status != ZX_OK) {
+        return status;
+    }
+    if ((bootdata.type != BOOTDATA_CONTAINER) || (bootdata.extra != BOOTDATA_MAGIC)) {
+        zxlogf(ERROR, "platform_bus: bootdata item does not contain bootdata\n");
+        return ZX_ERR_INTERNAL;
+    }
+    if (!(bootdata.flags & BOOTDATA_FLAG_V2)) {
+        zxlogf(ERROR, "platform_bus: bootdata v1 not supported\n");
         return ZX_ERR_NOT_SUPPORTED;
     }
+    size_t len = bootdata.length;
+    size_t off = sizeof(bootdata);
 
-    uint32_t vid = 0;
-    uint32_t pid = 0;
-    if (sscanf(args, "vid=%u,pid=%u", &vid, &pid) != 2) {
-        zxlogf(ERROR, "platform_bus_create: could not find vid or pid in args\n");
+    while (len > sizeof(bootdata)) {
+        zx_status_t status = zx_vmo_read(vmo, &bootdata, off, sizeof(bootdata));
+        if (status < 0) {
+            break;
+        }
+        size_t itemlen = BOOTDATA_ALIGN(sizeof(bootdata_t) + bootdata.length);
+        if (itemlen > len) {
+            zxlogf(ERROR, "platform_bus: bootdata item too large (%zd > %zd)\n", itemlen, len);
+            break;
+        }
+        switch (bootdata.type) {
+        case BOOTDATA_CONTAINER:
+            zxlogf(ERROR, "platform_bus: unexpected bootdata container header\n");
+            return ZX_ERR_INTERNAL;
+        case BOOTDATA_PLATFORM_ID:
+            return zx_vmo_read(vmo, &bus->platform_id, off + sizeof(bootdata_t),
+                                 sizeof(bus->platform_id));
+        default:
+            break;
+        }
+        off += itemlen;
+        len -= itemlen;
+    }
+
+     zxlogf(ERROR, "platform_bus: BOOTDATA_PLATFORM_ID not found\n");
+     return ZX_ERR_INTERNAL;
+}
+
+static zx_status_t platform_bus_create(void* ctx, zx_device_t* parent, const char* name,
+                                       const char* args, zx_handle_t bootdata_vmo) {
+    if (!args) {
+        zxlogf(ERROR, "platform_bus_create: args missing\n");
         return ZX_ERR_NOT_SUPPORTED;
     }
 
@@ -227,28 +249,24 @@ static zx_status_t platform_bus_create(void* ctx, zx_device_t* parent, const cha
     completion_reset(&bus->proto_completion);
     bus->resource = get_root_resource();
 
+    zx_status_t status = platform_bus_read_bootdata(bus, bootdata_vmo);
+    zx_handle_close(bootdata_vmo);
+    if (status != ZX_OK) {
+        free(bus);
+        return status;
+    }
+
     // set up a dummy IOMMU protocol to use in the case where our board driver does not
     // set a real one.
     zx_iommu_desc_dummy_t desc;
-    zx_status_t status = zx_iommu_create(bus->resource, ZX_IOMMU_TYPE_DUMMY,
-                                         &desc, sizeof(desc), &bus->dummy_iommu_handle);
+    status = zx_iommu_create(bus->resource, ZX_IOMMU_TYPE_DUMMY,  &desc, sizeof(desc),
+                             &bus->dummy_iommu_handle);
     if (status != ZX_OK) {
         free(bus);
         return status;
     }
     bus->iommu.ops = &platform_bus_default_iommu_ops;
     bus->iommu.ctx = bus;
-
-    char* board_name = strstr(args, "board=");
-    if (board_name) {
-        board_name += strlen("board=");
-        strncpy(bus->board_name, board_name, sizeof(bus->board_name));
-        bus->board_name[sizeof(bus->board_name) - 1] = 0;
-        char* comma = strchr(bus->board_name, ',');
-        if (comma) {
-            *comma = 0;
-        }
-    }
 
     // This creates the "sys" device
     device_add_args_t self_args = {
@@ -266,15 +284,11 @@ static zx_status_t platform_bus_create(void* ctx, zx_device_t* parent, const cha
     }
 
     // Then we attach the platform-bus device below it
-    bus->vid = vid;
-    bus->pid = pid;
     list_initialize(&bus->devices);
-    list_initialize(&bus->i2c_txns);
-    mtx_init(&bus->i2c_txn_lock, mtx_plain);
 
     zx_device_prop_t props[] = {
-        {BIND_PLATFORM_DEV_VID, 0, bus->vid},
-        {BIND_PLATFORM_DEV_PID, 0, bus->pid},
+        {BIND_PLATFORM_DEV_VID, 0, bus->platform_id.vid},
+        {BIND_PLATFORM_DEV_PID, 0, bus->platform_id.pid},
     };
 
     device_add_args_t add_args = {
