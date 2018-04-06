@@ -72,6 +72,7 @@ static const char* ObjectTypeToString(zx_obj_type_t type) {
         case ZX_OBJ_TYPE_INTERRUPT: return "interrupt";
         case ZX_OBJ_TYPE_PCI_DEVICE: return "pci-device";
         case ZX_OBJ_TYPE_LOG: return "log";
+        case ZX_OBJ_TYPE_SMC: return "smc";
         case ZX_OBJ_TYPE_SOCKET: return "socket";
         case ZX_OBJ_TYPE_RESOURCE: return "resource";
         case ZX_OBJ_TYPE_EVENT_PAIR: return "event-pair";

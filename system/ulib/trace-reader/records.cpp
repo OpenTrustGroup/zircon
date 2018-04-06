@@ -64,6 +64,8 @@ const char* ObjectTypeToString(zx_obj_type_t type) {
         return "pci-device";
     case ZX_OBJ_TYPE_LOG:
         return "log";
+    case ZX_OBJ_TYPE_SMC:
+        return "smc";
     case ZX_OBJ_TYPE_SOCKET:
         return "socket";
     case ZX_OBJ_TYPE_RESOURCE:

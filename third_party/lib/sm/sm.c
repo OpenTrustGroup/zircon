@@ -26,8 +26,6 @@
 #include <kernel/event.h>
 #include <kernel/thread.h>
 #include <lib/sm.h>
-#include <lib/sm/smcall.h>
-#include <lib/sm/sm_err.h>
 #include <lk/init.h>
 #include <string.h>
 #include <sys/types.h>

@@ -23,8 +23,7 @@
 
 #include <asm.h>
 #include <arch/asm_macros.h>
-#include <lib/sm/smcall.h>
-#include <lib/sm/sm_err.h>
+#include <zircon/syscalls/smc_defs.h>
 
 FUNCTION(sm_sched_nonsecure)
 	push_regs	x1, x30

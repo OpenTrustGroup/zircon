@@ -31,8 +31,7 @@
 #include <trace.h>
 #include <kernel/mutex.h>
 #include <lib/sm.h>
-#include <lib/sm/smcall.h>
-#include <lib/sm/sm_err.h>
+#include <object/c_user_smc_service.h>
 #include <lk/init.h>
 #include <string.h>
 #include <arch/ops.h>
@@ -161,9 +160,11 @@ uint32_t sm_nr_fastcall_functions = countof(sm_fastcall_function_table);
 
 /* SMC dispatch tables */
 smc32_handler_t sm_fastcall_table[SMC_NUM_ENTITIES] = {
-    [0 ... SMC_ENTITY_SECURE_MONITOR - 1] = smc_undefined,
+    [0 ... SMC_ENTITY_RESERVED - 1] = notify_smc_service,
+    [SMC_ENTITY_RESERVED ... SMC_ENTITY_TRUSTED_APP - 1] = smc_undefined,
+    [SMC_ENTITY_TRUSTED_APP ... SMC_ENTITY_SECURE_MONITOR - 1] = notify_smc_service,
     [SMC_ENTITY_SECURE_MONITOR] = smc_fastcall_secure_monitor,
-    [SMC_ENTITY_SECURE_MONITOR + 1 ... SMC_NUM_ENTITIES - 1] = smc_undefined
+    [SMC_ENTITY_SECURE_MONITOR + 1 ... SMC_NUM_ENTITIES - 1] = notify_smc_service
 };
 
 smc32_handler_t sm_nopcall_table[SMC_NUM_ENTITIES] = {
@@ -172,46 +173,9 @@ smc32_handler_t sm_nopcall_table[SMC_NUM_ENTITIES] = {
 };
 
 smc32_handler_t sm_stdcall_table[SMC_NUM_ENTITIES] = {
-    [0 ... SMC_ENTITY_SECURE_MONITOR - 1] = smc_undefined,
+    [0 ... SMC_ENTITY_RESERVED - 1] = notify_smc_service,
+    [SMC_ENTITY_RESERVED ... SMC_ENTITY_TRUSTED_APP - 1] = smc_undefined,
+    [SMC_ENTITY_TRUSTED_APP ... SMC_ENTITY_SECURE_MONITOR - 1] = notify_smc_service,
     [SMC_ENTITY_SECURE_MONITOR] = smc_stdcall_secure_monitor,
-    [SMC_ENTITY_SECURE_MONITOR + 1 ... SMC_NUM_ENTITIES - 1] = smc_undefined
+    [SMC_ENTITY_SECURE_MONITOR + 1 ... SMC_NUM_ENTITIES - 1] = notify_smc_service
 };
-
-zx_status_t sm_register_entity(uint entity_nr, smc32_entity_t *entity)
-{
-    zx_status_t err = ZX_OK;
-
-    if (entity_nr >= SMC_NUM_ENTITIES)
-        return ZX_ERR_INVALID_ARGS;
-
-    if (entity_nr >= SMC_ENTITY_RESERVED && entity_nr < SMC_ENTITY_TRUSTED_APP)
-        return ZX_ERR_INVALID_ARGS;
-
-    if (!entity)
-        return ZX_ERR_INVALID_ARGS;
-
-    if (!entity->fastcall_handler && !entity->stdcall_handler)
-        return ZX_ERR_INVALID_ARGS;
-
-    mutex_acquire(&smc_table_lock);
-
-    /* Check if entity is already claimed */
-    if (sm_fastcall_table[entity_nr] != smc_undefined ||
-        sm_nopcall_table[entity_nr] != smc_undefined ||
-        sm_stdcall_table[entity_nr] != smc_undefined) {
-        err = ZX_ERR_ALREADY_EXISTS;
-        goto unlock;
-    }
-
-    if (entity->fastcall_handler)
-        sm_fastcall_table[entity_nr] = entity->fastcall_handler;
-
-    if (entity->nopcall_handler)
-        sm_nopcall_table[entity_nr] = entity->nopcall_handler;
-
-    if (entity->stdcall_handler)
-        sm_stdcall_table[entity_nr] = entity->stdcall_handler;
-unlock:
-    mutex_release(&smc_table_lock);
-    return err;
-}
