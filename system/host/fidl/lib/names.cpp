@@ -134,6 +134,8 @@ std::string NameHandleSubtype(types::HandleSubtype subtype) {
         return "interrupt";
     case types::HandleSubtype::Log:
         return "log";
+    case types::HandleSubtype::Smc:
+        return "smc";
     case types::HandleSubtype::Socket:
         return "socket";
     case types::HandleSubtype::Resource:
@@ -214,6 +216,8 @@ std::string NameHandleZXObjType(types::HandleSubtype subtype) {
         return "ZX_OBJ_TYPE_INTERRUPT";
     case types::HandleSubtype::Log:
         return "ZX_OBJ_TYPE_LOG";
+    case types::HandleSubtype::Smc:
+        return "ZX_OBJ_TYPE_SMC";
     case types::HandleSubtype::Socket:
         return "ZX_OBJ_TYPE_SOCKET";
     case types::HandleSubtype::Resource:

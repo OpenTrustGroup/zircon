@@ -23,6 +23,7 @@ enum struct HandleSubtype {
     Port,
     Interrupt,
     Log,
+    Smc,
     Socket,
     Resource,
     Eventpair,

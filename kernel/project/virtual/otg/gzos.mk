@@ -32,6 +32,7 @@ MODULES += \
     system/uapp/driverctl \
     system/uapp/psutils \
     system/uapp/dlog \
+    system/uapp/runtests \
     system/ulib/syslog \
     system/ulib/virtio \
     system/ulib/hid \
@@ -39,5 +40,10 @@ MODULES += \
 
 MODULES += \
     third_party/lib/sm \
+
+ifeq ($(call TOBOOL,$(DISABLE_UTEST)),false)
+MODULES += \
+    system/utest/core
+endif
 
 EXTRA_BUILDDEPS += $(USER_BOOTDATA)

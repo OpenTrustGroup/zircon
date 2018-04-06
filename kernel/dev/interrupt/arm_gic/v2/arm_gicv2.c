@@ -32,7 +32,6 @@
 
 #if WITH_LIB_SM
 #include <lib/sm.h>
-#include <lib/sm/sm_err.h>
 #endif
 
 #define LOCAL_TRACE 0

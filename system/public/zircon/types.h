@@ -146,6 +146,15 @@ typedef uint32_t zx_signals_t;
 #define ZX_LOG_READABLE             __ZX_OBJECT_READABLE
 #define ZX_LOG_WRITABLE             __ZX_OBJECT_WRITABLE
 
+// Smc
+#define ZX_SMC_REQUEST              __ZX_OBJECT_READABLE
+#define ZX_SMC_SIGNALED             __ZX_OBJECT_SIGNALED
+
+// Smc Test
+#define ZX_SMC_FAKE_REQUEST         ZX_USER_SIGNAL_0
+#define ZX_SMC_TEST_PASS            ZX_USER_SIGNAL_1
+#define ZX_SMC_TEST_FAIL            ZX_USER_SIGNAL_2
+
 // Timer
 #define ZX_TIMER_SIGNALED           __ZX_OBJECT_SIGNALED
 
@@ -346,6 +355,7 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_INTERRUPT       ((zx_obj_type_t)9u)
 #define ZX_OBJ_TYPE_PCI_DEVICE      ((zx_obj_type_t)11u)
 #define ZX_OBJ_TYPE_LOG             ((zx_obj_type_t)12u)
+#define ZX_OBJ_TYPE_SMC             ((zx_obj_type_t)13u)
 #define ZX_OBJ_TYPE_SOCKET          ((zx_obj_type_t)14u)
 #define ZX_OBJ_TYPE_RESOURCE        ((zx_obj_type_t)15u)
 #define ZX_OBJ_TYPE_EVENT_PAIR      ((zx_obj_type_t)16u)

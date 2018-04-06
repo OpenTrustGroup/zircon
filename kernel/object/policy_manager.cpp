@@ -43,7 +43,8 @@ union Encoding {
         uint64_t new_socket      :  4;
         uint64_t new_fifo        :  4;
         uint64_t new_timer       :  4;
-        uint64_t unused_bits     : 19;
+        uint64_t new_smc         :  4;
+        uint64_t unused_bits     : 15;
         uint64_t cookie_mode     :  1;  // see kPolicyInCookie.
     };
 
@@ -62,7 +63,7 @@ constexpr uint32_t kPolicyActionValidBits =
 static_assert(sizeof(Encoding) == sizeof(pol_cookie_t), "bitfield issue");
 
 // Make sure that adding new policies forces updating this file.
-static_assert(ZX_POL_MAX == 12u, "please update PolicyManager AddPolicy and QueryBasicPolicy");
+static_assert(ZX_POL_MAX == 13u, "please update PolicyManager AddPolicy and QueryBasicPolicy");
 
 PolicyManager* PolicyManager::Create(uint32_t default_action) {
     fbl::AllocChecker ac;
@@ -112,7 +113,7 @@ zx_status_t PolicyManager::AddPolicy(
 
         if (in.condition == ZX_POL_NEW_ANY) {
             // loop over all ZX_POL_NEW_xxxx conditions.
-            for (uint32_t it = ZX_POL_NEW_VMO; it <= ZX_POL_NEW_TIMER; ++it) {
+            for (uint32_t it = ZX_POL_NEW_VMO; it <= ZX_POL_NEW_SMC; ++it) {
                 if ((res = AddPartial(mode, existing_policy, it, in.policy, &partials[it])) < 0)
                     return res;
             }
@@ -151,6 +152,7 @@ uint32_t PolicyManager::QueryBasicPolicy(pol_cookie_t policy, uint32_t condition
     case ZX_POL_NEW_SOCKET: return GetEffectiveAction(existing.new_socket);
     case ZX_POL_NEW_FIFO: return GetEffectiveAction(existing.new_fifo);
     case ZX_POL_NEW_TIMER: return GetEffectiveAction(existing.new_fifo);
+    case ZX_POL_NEW_SMC: return GetEffectiveAction(existing.new_smc);
     case ZX_POL_VMAR_WX: return GetEffectiveAction(existing.vmar_wx);
     default: return ZX_POL_ACTION_DENY;
     }
@@ -218,6 +220,9 @@ zx_status_t PolicyManager::AddPartial(uint32_t mode, pol_cookie_t existing_polic
         break;
     case ZX_POL_NEW_TIMER:
         POLMAN_SET_ENTRY(mode, existing.new_timer, policy, result.new_timer);
+        break;
+    case ZX_POL_NEW_SMC:
+        POLMAN_SET_ENTRY(mode, existing.new_smc, policy, result.new_smc);
         break;
     default:
         return ZX_ERR_NOT_SUPPORTED;

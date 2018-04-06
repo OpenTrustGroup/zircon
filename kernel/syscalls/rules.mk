@@ -35,6 +35,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/port.cpp \
     $(LOCAL_DIR)/profile.cpp \
     $(LOCAL_DIR)/resource.cpp \
+    $(LOCAL_DIR)/smc.cpp \
     $(LOCAL_DIR)/socket.cpp \
     $(LOCAL_DIR)/system.cpp \
     $(LOCAL_DIR)/bootdata_unittest.cpp \
