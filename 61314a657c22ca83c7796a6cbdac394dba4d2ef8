@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "b204feb1_178433b5",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 87,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-04-09T13:23:28Z",
+      "side": 1,
+      "message": "if this failed, SmcDispatcher will not be freed. You should use fbl::unique_ptr",
+      "range": {
+        "startLine": 87,
+        "startChar": 8,
+        "endLine": 87,
+        "endChar": 46
+      },
+      "revId": "61314a657c22ca83c7796a6cbdac394dba4d2ef8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "f8c7091e_5c75cce7",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 94,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-04-09T13:23:28Z",
+      "side": 1,
+      "message": "If smc_disp is the only owner of this object, you should use fbl::unique_ptr instead",
+      "range": {
+        "startLine": 94,
+        "startChar": 8,
+        "endLine": 94,
+        "endChar": 16
+      },
+      "revId": "61314a657c22ca83c7796a6cbdac394dba4d2ef8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
