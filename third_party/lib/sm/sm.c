@@ -30,6 +30,10 @@
 #include <string.h>
 #include <sys/types.h>
 
+#include <mdi/mdi-defs.h>
+#include <mdi/mdi.h>
+#include <pdev/driver.h>
+
 #define LOCAL_TRACE 0
 
 
@@ -61,6 +65,7 @@ struct sm {
     thread_t* stdcallthread;
     bool ns_threads_started;
     struct sm_stdcall_state stdcall_state;
+    ns_shm_info_t ns_shm;
 };
 
 struct sm sm = {
@@ -112,6 +117,61 @@ static uint32_t sm_get_api_version(void)
     }
     return sm.api_version;
 }
+
+void sm_get_shm_config(ns_shm_info_t* shm)
+{
+    if (shm) {
+        memcpy(shm, &sm.ns_shm, sizeof(ns_shm_info_t));
+    }
+}
+
+static void sm_ns_shm_init(mdi_node_ref_t* node, uint level)
+{
+    if (level != LK_INIT_LEVEL_PLATFORM_EARLY)
+        return;
+
+    uint32_t shm_base_phys = 0;
+    uint32_t shm_length = 0;
+    bool shm_use_cache = 0;
+
+    bool got_shm_base_phys = false;
+    bool got_shm_length = false;
+    bool got_shm_use_cache = false;
+
+    mdi_node_ref_t child;
+    mdi_each_child(node, &child) {
+        switch (mdi_id(&child)) {
+        case MDI_SM_NS_SHM_BASE_PHYS:
+            got_shm_base_phys = mdi_node_uint32(&child, &shm_base_phys) == ZX_OK;
+            break;
+        case MDI_SM_NS_SHM_LENGTH:
+            got_shm_length = mdi_node_uint32(&child, &shm_length) == ZX_OK;
+            break;
+        case MDI_SM_NS_SHM_USE_CACHE:
+            got_shm_use_cache = mdi_node_boolean(&child, &shm_use_cache) == ZX_OK;
+            break;
+        }
+    }
+
+    if (!got_shm_base_phys) {
+        printf("libsm: shm_base_phys not defined\n");
+        return;
+    }
+    if (!got_shm_length) {
+        printf("libsm: shm_length not defined\n");
+        return;
+    }
+    if (!got_shm_use_cache) {
+        printf("libsm: shm_use_cache not defined\n");
+        return;
+    }
+
+    sm.ns_shm.pa = shm_base_phys;
+    sm.ns_shm.size = shm_length;
+    sm.ns_shm.use_cache = shm_use_cache;
+}
+
+LK_PDEV_INIT(libsm_ns_shm_init, MDI_SM_NS_SHM, sm_ns_shm_init, LK_INIT_LEVEL_PLATFORM_EARLY);
 
 /* must be called with irqs disabled */
 static long sm_queue_stdcall(smc32_args_t *args)

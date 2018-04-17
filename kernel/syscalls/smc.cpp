@@ -18,6 +18,7 @@
 #include <object/handle.h>
 #include <object/process_dispatcher.h>
 #include <object/smc_dispatcher.h>
+#include <object/vm_object_dispatcher.h>
 
 #include <fbl/auto_lock.h>
 #include <fbl/ref_ptr.h>
@@ -29,19 +30,29 @@ using fbl::AutoLock;
 
 #define LOCAL_TRACE 1
 
-zx_status_t sys_smc_create(uint32_t options, user_out_handle* out) {
+zx_status_t sys_smc_create(uint32_t options, user_out_handle* smc_out, user_out_handle* vmo_out) {
     auto up = ProcessDispatcher::GetCurrent();
     zx_status_t res = up->QueryPolicy(ZX_POL_NEW_SMC);
     if (res != ZX_OK) return res;
 
-    fbl::RefPtr<SmcDispatcher> smc;
-    zx_rights_t rights;
-    zx_status_t result = SmcDispatcher::Create(options, &smc, &rights);
+    fbl::RefPtr<SmcDispatcher> smc_disp;
+    fbl::RefPtr<VmObject> shm_vmo;
+    zx_rights_t smc_rights;
+    res = SmcDispatcher::Create(options, &smc_disp, &smc_rights, &shm_vmo);
+    if (res != ZX_OK) return res;
 
-    if (result == ZX_OK) {
-        result = out->make(fbl::move(smc), rights);
+    fbl::RefPtr<Dispatcher> vmo_disp;
+    zx_rights_t vmo_rights;
+    res = VmObjectDispatcher::Create(fbl::move(shm_vmo), &vmo_disp, &vmo_rights);
+    if (res != ZX_OK) return res;
+
+    res = smc_out->make(fbl::move(smc_disp), smc_rights);
+    if (res == ZX_OK) {
+        vmo_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP;
+        res = vmo_out->make(fbl::move(vmo_disp), vmo_rights);
     }
-    return result;
+
+    return res;
 }
 
 zx_status_t sys_smc_wait_for_request(zx_handle_t smc_handle,

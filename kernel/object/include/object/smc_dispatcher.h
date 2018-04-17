@@ -39,7 +39,7 @@ private:
 class SmcDispatcher final : public SoloDispatcher {
 public:
     static zx_status_t Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
-                              zx_rights_t* rights);
+                              zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo);
     static SmcDispatcher* GetDispatcherByEntity(uint32_t entity_nr);
 
     ~SmcDispatcher() final;

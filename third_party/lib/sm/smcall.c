@@ -146,6 +146,27 @@ static long smc_get_version_str(smc32_args_t *args)
 }
 #endif
 
+/* TODO(james): Trusty smc return behavior does not follow ARM
+ * SMC calling convention to return the smc params[0]~params[2].
+ * Due to smc parameters return issue, smc_get_shm_config()
+ * does not work for now.
+ */
+static long smc_get_shm_config(smc32_args_t *args)
+{
+    ns_shm_info_t info = {};
+
+    sm_get_shm_config(&info);
+
+    if (info.size > 0) {
+        args->params[0] = info.pa;
+        args->params[1] = info.size;
+        args->params[2] = info.use_cache;
+        return 0;
+    }
+
+    return SM_ERR_NOT_SUPPORTED;
+}
+
 smc32_handler_t sm_fastcall_function_table[] = {
     [SMC_FUNCTION(SMC_FC_GET_NEXT_IRQ)] = smc_intc_get_next_irq,
     [SMC_FUNCTION(SMC_FC_CPU_SUSPEND)] = smc_cpu_suspend,
@@ -154,6 +175,7 @@ smc32_handler_t sm_fastcall_function_table[] = {
     [SMC_FUNCTION(SMC_FC_GET_VERSION_STR)] = smc_get_version_str,
 #endif
     [SMC_FUNCTION(SMC_FC_API_VERSION)] = smc_sm_api_version,
+    [SMC_FUNCTION(SMC_FC_GET_SHM_CONFIG)] = smc_get_shm_config,
 };
 
 uint32_t sm_nr_fastcall_functions = countof(sm_fastcall_function_table);

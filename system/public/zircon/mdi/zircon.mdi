@@ -92,3 +92,9 @@ uint64  kernel.hdmi-hdcp.hdmitx-virt        MDI_HDMI_HDCP_HDMITX_BASE_VIRT      
 
 // NXP IMX UART
 list    kernel.arm-nxp-imx-uart             MDI_ARM_NXP_IMX_UART                1300
+
+// Secure Monitor non-secure share memory
+list kernel.sm-ns-shm                     MDI_SM_NS_SHM                         1400
+uint32  kernel.sm-ns-shm.base-phys        MDI_SM_NS_SHM_BASE_PHYS               1401
+uint32  kernel.sm-ns-shm.length           MDI_SM_NS_SHM_LENGTH                  1402
+boolean kernel.sm-ns-shm.use-cache        MDI_SM_NS_SHM_USE_CACHE               1403

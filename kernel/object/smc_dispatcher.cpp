@@ -7,6 +7,9 @@
 
 #include <inttypes.h>
 
+#include <vm/arch_vm_aspace.h>
+#include <vm/vm_aspace.h>
+#include <vm/vm_object_physical.h>
 #include <object/smc_dispatcher.h>
 #include <object/c_user_smc_service.h>
 
@@ -30,57 +33,164 @@ static fbl::Mutex alloc_lock;
 static SmcDispatcher* smc_disp TA_GUARDED(alloc_lock);
 
 #if ENABLE_SMC_TEST
-static int fake_smc(void* arg) {
-    /* clear fake smc signal to prevent from triggering fake smc again */
-    smc_disp->user_signal(ZX_SMC_FAKE_REQUEST, 0, 0);
-
-    /* clear test result signal */
-    smc_disp->user_signal(ZX_SMC_TEST_PASS | ZX_SMC_TEST_FAIL, 0, 0);
-
+static bool generate_fake_smc() {
     smc32_args_t smc_args = {
         .smc_nr = 0x534d43UL,
         .params = {0x70617230UL, 0x70617231UL, 0x70617232UL}
     };
 
     long result = notify_smc_service(&smc_args);
-    if (result == (long)smc_args.smc_nr) {
-        smc_disp->user_signal(0, ZX_SMC_TEST_PASS, 0);
-    } else {
-        smc_disp->user_signal(0, ZX_SMC_TEST_FAIL, 0);
+    return (result != (long)smc_args.smc_nr) ? true : false;
+}
+
+static void* map_shm(ns_shm_info_t* shm_info) {
+    void* shm_vaddr = nullptr;
+
+    /* TODO(james): share memory should be mapped as non-secure in page table */
+    zx_status_t status = VmAspace::kernel_aspace()->AllocPhysical(
+            "smc_ns_shm", shm_info->size, &shm_vaddr, PAGE_SIZE_SHIFT,
+            static_cast<paddr_t>(shm_info->pa), VmAspace::VMM_FLAG_COMMIT,
+            ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE /*| ARCH_MMU_FLAG_NS*/);
+    if (status != ZX_OK) {
+        TRACEF("failed to map shm into kernel address space, status %d\n", status);
+        return nullptr;
+    }
+    return shm_vaddr;
+}
+
+static void unmap_shm(void* va) {
+    if (va) {
+        VmAspace::kernel_aspace()->FreeRegion(reinterpret_cast<vaddr_t>(va));
+    }
+}
+
+static bool write_shm() {
+    bool is_fail = false;
+    ns_shm_info_t shm_info = {};
+    sm_get_shm_config(&shm_info);
+
+    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
+    if (shm_va == nullptr) {
+        is_fail = true;
+        goto exit;
     }
 
+    for (size_t i = 0; i < shm_info.size; i++) {
+        shm_va[i] = static_cast<uint8_t>((i & 0xff) ^ 0xaa);
+    }
+
+exit:
+    unmap_shm(shm_va);
+    return is_fail;
+}
+
+static bool verify_shm() {
+    bool is_fail = false;
+    ns_shm_info_t shm_info = {};
+    sm_get_shm_config(&shm_info);
+
+    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
+    if (shm_va == nullptr) {
+        is_fail = true;
+        goto exit;
+    }
+
+    for (uint32_t i = 0; i < shm_info.size; i++) {
+        if (shm_va[i] != (i & 0xff)) {
+            TRACEF("error: shm_va[%u] 0x%02x, expected 0x%02x\n",
+                        i, shm_va[i], (i & 0xff));
+            is_fail = true;
+            break;
+        }
+    }
+
+exit:
+    unmap_shm(shm_va);
+    return is_fail;
+}
+
+static int smc_test(void* arg) {
+    unsigned long s = reinterpret_cast<unsigned long>(arg);
+    bool is_fail = false;
+
+    /* clear all user signals including test request and old test result */
+    smc_disp->user_signal(ZX_USER_SIGNAL_ALL, 0, 0);
+
+    LTRACEF("signal (0x%08lx)\n", s);
+    switch (s) {
+    case ZX_SMC_FAKE_REQUEST:
+        is_fail = generate_fake_smc();
+        break;
+    case ZX_SMC_WRITE_SHM:
+        is_fail = write_shm();
+        break;
+    case ZX_SMC_VERIFY_SHM:
+        is_fail = verify_shm();
+        break;
+    default:
+        return 0;
+    }
+
+    if (is_fail) {
+        smc_disp->user_signal(0, ZX_SMC_TEST_FAIL, 0);
+    } else {
+        smc_disp->user_signal(0, ZX_SMC_TEST_PASS, 0);
+    }
     return 0;
 }
 
-static void generate_fake_smc_request() {
-    thread_t* fake_smc_thread = thread_create("fake_smc", fake_smc, NULL,
+static void run_smc_test(zx_signals_t s) {
+    unsigned long arg = s;
+    thread_t* smc_test_thread = thread_create("smc_test", smc_test,
+            reinterpret_cast<void*>(arg),
             DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
-    if (!fake_smc_thread) {
-        panic("failed to create fake smc thread\n");
+    if (!smc_test_thread) {
+        panic("failed to create smc test thread\n");
     }
 
-    thread_detach_and_resume(fake_smc_thread);
+    thread_detach_and_resume(smc_test_thread);
 }
 
-class FakeSmcRequest final : public SmcObserver {
+class SmcTestObserver final : public SmcObserver {
 public:
     Flags OnStateChange(zx_signals_t new_state) override {
         LTRACEF("new_state (0x%08x)\n", new_state);
-        if (new_state & ZX_SMC_FAKE_REQUEST) {
-            generate_fake_smc_request();
+
+        zx_signals_t expected_signals =
+                ZX_SMC_FAKE_REQUEST | ZX_SMC_WRITE_SHM | ZX_SMC_VERIFY_SHM;
+
+        if (new_state & expected_signals) {
+            run_smc_test(new_state);
         }
         return 0;
     }
 };
 
-static FakeSmcRequest fake_smc_obs;
+static SmcTestObserver smc_test_obs;
 #endif
 
 zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
-                                  zx_rights_t* rights) {
+                                  zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo) {
     AutoLock lock(&alloc_lock);
 
     if (smc_disp == nullptr) {
+        ns_shm_info_t info = {};
+
+        sm_get_shm_config(&info);
+        if (info.size == 0) return ZX_ERR_INTERNAL;
+
+        fbl::RefPtr<VmObject> vmo;
+        uintptr_t shm_pa = static_cast<uintptr_t>(info.pa);
+        size_t shm_size = ROUNDUP_PAGE_SIZE(static_cast<size_t>(info.size));
+
+        zx_status_t status = VmObjectPhysical::Create(shm_pa, shm_size, &vmo);
+        if (status != ZX_OK) return status;
+
+        if (info.use_cache) {
+            status = vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_CACHED);
+            if (status != ZX_OK) return status;
+        }
+
         fbl::AllocChecker ac;
         auto disp = new (&ac) SmcDispatcher(options);
         if (!ac.check()) {
@@ -88,11 +198,12 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
         }
 
 #if ENABLE_SMC_TEST
-        disp->add_observer(&fake_smc_obs);
+        disp->add_observer(&smc_test_obs);
 #endif
 
         *rights = ZX_DEFAULT_SMC_RIGHTS;
         *dispatcher = fbl::AdoptRef<SmcDispatcher>(disp);
+        *shm_vmo = fbl::move(vmo);
         smc_disp = dispatcher->get();
         LTRACEF("create smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
         return ZX_OK;
@@ -113,7 +224,7 @@ SmcDispatcher::~SmcDispatcher() {
     AutoLock lock(&alloc_lock);
 
 #if ENABLE_SMC_TEST
-    RemoveObserver(&fake_smc_obs);
+    RemoveObserver(&smc_test_obs);
 #endif
     LTRACEF("free smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
     smc_disp = nullptr;

@@ -61,4 +61,11 @@ kernel = {
     arm-timer = {
         irq-sphys = 29
     }
+    // non-secure share memory chosen arbitrary, in a way that it does not interfere
+    // with initial location of linux kernel, dtb and initrd
+    sm-ns-shm = {
+        base-phys = 0x40000000 + 0x2000000
+        length = 0x500000
+        use-cache = true
+    }
 }
