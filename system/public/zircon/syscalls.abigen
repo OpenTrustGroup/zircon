@@ -754,10 +754,10 @@ syscall job_set_relative_importance
     returns (zx_status_t);
 
 # SMC
-
 syscall smc_create
     (options: uint32_t)
-    returns (zx_status_t, out: zx_handle_t handle_acquire);
+    returns (zx_status_t, out0: zx_handle_t handle_acquire,
+        out1: zx_handle_t handle_acquire);
 
 syscall smc_wait_for_request
     (handle: zx_handle_t, buffer: any[len] OUT, len: uint32_t)
