@@ -1,0 +1,73 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "d5bcf0b5_144933d4",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 117,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-04-20T08:22:27Z",
+      "side": 1,
+      "message": "can be simplified to\nsmc_disp-\u003euser_signal(ZX_USER_SIGNAL_ALL, 0, 0);\nand we don\u0027t need to clear signal at each switch case",
+      "range": {
+        "startLine": 117,
+        "startChar": 4,
+        "endLine": 117,
+        "endChar": 69
+      },
+      "revId": "1182dc1c2729f7960752c202bc445b8207766dc4",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "1dd0c829_769e53bb",
+        "filename": "system/public/zircon/syscalls.abigen",
+        "patchSetId": 1
+      },
+      "lineNbr": 759,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-04-20T08:22:27Z",
+      "side": 1,
+      "message": "smc_handle?",
+      "range": {
+        "startLine": 759,
+        "startChar": 26,
+        "endLine": 759,
+        "endChar": 30
+      },
+      "revId": "1182dc1c2729f7960752c202bc445b8207766dc4",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "38a5edf6_771e77be",
+        "filename": "system/public/zircon/syscalls.abigen",
+        "patchSetId": 1
+      },
+      "lineNbr": 760,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-04-20T08:22:27Z",
+      "side": 1,
+      "message": "vmo_handle?",
+      "range": {
+        "startLine": 760,
+        "startChar": 8,
+        "endLine": 760,
+        "endChar": 12
+      },
+      "revId": "1182dc1c2729f7960752c202bc445b8207766dc4",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
