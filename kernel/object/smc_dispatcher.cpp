@@ -25,7 +25,9 @@
 #include <fbl/auto_lock.h>
 
 #define LOCAL_TRACE 0
+#if WITH_LIB_SM
 #define ENABLE_SMC_TEST 1
+#endif
 
 using fbl::AutoLock;
 
@@ -171,6 +173,7 @@ static SmcTestObserver smc_test_obs;
 
 zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
                                   zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo) {
+#if WITH_LIB_SM
     AutoLock lock(&alloc_lock);
 
     if (smc_disp == nullptr) {
@@ -211,6 +214,10 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
 
     TRACEF("error: smc kernel object already existed\n");
     return ZX_ERR_BAD_STATE;
+#else
+    TRACEF("error: libsm is not enabled\n");
+    return ZX_ERR_NOT_SUPPORTED;
+#endif
 
 }
 
@@ -302,6 +309,7 @@ zx_status_t SmcDispatcher::SetResult(long result) {
     return ZX_ERR_BAD_STATE;
 }
 
+#if WITH_LIB_SM
 long notify_smc_service(smc32_args_t* args) {
     if (args == nullptr) return SM_ERR_INVALID_PARAMETERS;
 
@@ -312,4 +320,4 @@ long notify_smc_service(smc32_args_t* args) {
 
     return smc_disp->WaitForResult();
 }
-
+#endif

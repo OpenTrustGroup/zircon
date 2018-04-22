@@ -13,9 +13,11 @@
 
 #include <fbl/canary.h>
 #include <fbl/mutex.h>
-#include <zircon/types.h>
+#include <zircon/syscalls/smc.h>
 
+#if WITH_LIB_SM
 #include <lib/sm.h>
+#endif
 
 class SmcObserver : public StateObserver {
 public:
