@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "84c4c0a7_fe239953",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 87,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-04-24T10:04:49Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "b204feb1_178433b5",
+      "range": {
+        "startLine": 87,
+        "startChar": 8,
+        "endLine": 87,
+        "endChar": 46
+      },
+      "revId": "61314a657c22ca83c7796a6cbdac394dba4d2ef8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "f8c7091e_5c75cce7",
         "filename": "kernel/object/smc_dispatcher.cpp",
         "patchSetId": 1
@@ -72,6 +96,30 @@
     },
     {
       "key": {
+        "uuid": "1406d478_694f41ba",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 94,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-04-24T10:04:49Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "1eee1c06_b656896a",
+      "range": {
+        "startLine": 94,
+        "startChar": 8,
+        "endLine": 94,
+        "endChar": 16
+      },
+      "revId": "61314a657c22ca83c7796a6cbdac394dba4d2ef8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "c2eac21c_14839a32",
         "filename": "system/public/zircon/types.h",
         "patchSetId": 1
@@ -83,6 +131,30 @@
       "writtenOn": "2018-04-09T15:47:58Z",
       "side": 1,
       "message": "Is it better to name it ZX_SMC_READABLE?",
+      "range": {
+        "startLine": 150,
+        "startChar": 8,
+        "endLine": 150,
+        "endChar": 22
+      },
+      "revId": "61314a657c22ca83c7796a6cbdac394dba4d2ef8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "eaddf4a1_33b35e91",
+        "filename": "system/public/zircon/types.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 150,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-04-24T10:04:49Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c2eac21c_14839a32",
       "range": {
         "startLine": 150,
         "startChar": 8,
