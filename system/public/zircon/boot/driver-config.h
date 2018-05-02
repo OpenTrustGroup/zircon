@@ -17,6 +17,7 @@
 #define KDRV_NXP_IMX_UART       0x55584D49  // 'IMXU'
 #define KDRV_HISILICON_POWER    0x4F505348  // 'HSPO'
 #define KDRV_AMLOGIC_HDCP       0x484C4D41  // 'AMLH'
+#define KDRV_SM_NS_SHM          0x4E53484D  // 'NSHM'
 
 // kernel driver struct that can be used for simple drivers
 // used by KDRV_PL011_UART, KDRV_AMLOGIC_UART and KDRV_NXP_IMX_UART
@@ -78,3 +79,10 @@ typedef struct {
     uint64_t hiu_phys;
     uint64_t hdmitx_phys;
 } dcfg_amlogic_hdcp_driver_t;
+
+// for KDRV_SM_NS_SHM
+typedef struct {
+    uint32_t base_phys;
+    uint32_t length;
+    bool     use_cache;
+} dcfg_sm_ns_shm_t;
