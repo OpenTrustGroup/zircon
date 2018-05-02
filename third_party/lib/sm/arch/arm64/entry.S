@@ -25,6 +25,8 @@
 #include <arch/asm_macros.h>
 #include <zircon/syscalls/smc_defs.h>
 
+.section .text
+
 FUNCTION(sm_sched_nonsecure)
 	push_regs	x1, x30
 .Lfastcall_complete:
@@ -44,7 +46,7 @@ FUNCTION(sm_sched_nonsecure)
 	stp	w2, w3, [sp, #4 * 2]
 
 	ubfx	x0, x0, #24, #6		/* x0 = entity */
-	ldr	x9, =sm_fastcall_table
+	adr_global	x9, sm_fastcall_table
 	ldr	x9, [x9, x0, lsl #3]
 
 	mov	x0, sp			/* x0 = smc_args_t* args */
@@ -69,15 +71,15 @@ END_FUNCTION(sm_sched_nonsecure)
 
 FUNCTION(smc_fastcall_secure_monitor)
 	ldrh	w1, [x0]	/* r1 = function# */
-	ldr	x2, =sm_nr_fastcall_functions
+	adr_global	x2, sm_nr_fastcall_functions
 	ldr	w2, [x2]
 	cmp	w1, w2
 	bhs	.Lfastcall_smc_undefined
-	ldr	x2, =sm_fastcall_function_table
+	adr_global	x2, sm_fastcall_function_table
 	ldr	x2, [x2, x1, lsl#3]
 	cbz	x2, .Lfastcall_smc_undefined
 	br	x2
 .Lfastcall_smc_undefined:
-	ldr	x2, =smc_undefined
+	adr_global	x2, smc_undefined
 	br	x2
 END_FUNCTION(smc_fastcall_secure_monitor)
