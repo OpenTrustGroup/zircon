@@ -14,17 +14,17 @@
 #include <fbl/unique_ptr.h>
 #include <fbl/vmo_mapper.h>
 #include <threads.h>
-#include <zx/interrupt.h>
+#include <lib/zx/interrupt.h>
 
 #include <dispatcher-pool/dispatcher-execution-domain.h>
 #include <intel-hda/utils/codec-commands.h>
 #include <intel-hda/utils/intel-hda-registers.h>
 #include <intel-hda/utils/intel-hda-proto.h>
+#include <intel-hda/utils/pinned-vmo.h>
 
 #include "codec-cmd-job.h"
 #include "debug-logging.h"
 #include "intel-hda-codec.h"
-#include "pinned-vmo.h"
 #include "thread-annotations.h"
 #include "utils.h"
 

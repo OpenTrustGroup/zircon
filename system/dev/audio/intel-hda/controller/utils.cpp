@@ -13,7 +13,7 @@
 #include <zircon/assert.h>
 #include <zircon/device/intel-hda.h>
 #include <zircon/process.h>
-#include <zx/channel.h>
+#include <lib/zx/channel.h>
 
 #include "debug-logging.h"
 #include "utils.h"
@@ -22,31 +22,6 @@ namespace audio {
 namespace intel_hda {
 
 fbl::RefPtr<fbl::VmarManager> DriverVmars::registers_;
-
-zx_status_t WaitCondition(zx_time_t timeout,
-                          zx_time_t poll_interval,
-                          WaitConditionFn cond,
-                          void* cond_ctx) {
-    ZX_DEBUG_ASSERT(poll_interval != ZX_TIME_INFINITE);
-    ZX_DEBUG_ASSERT(cond != nullptr);
-
-    zx_time_t now = zx_clock_get(ZX_CLOCK_MONOTONIC);
-    timeout += now;
-
-    while (!cond(cond_ctx)) {
-        now = zx_clock_get(ZX_CLOCK_MONOTONIC);
-        if (now >= timeout)
-            return ZX_ERR_TIMED_OUT;
-
-        zx_time_t sleep_time = timeout - now;
-        if (poll_interval < sleep_time)
-            sleep_time = poll_interval;
-
-        zx_nanosleep(zx_deadline_after(sleep_time));
-    }
-
-    return ZX_OK;
-}
 
 zx_status_t DriverVmars::Initialize() {
     if (registers_ != nullptr) {
@@ -90,17 +65,6 @@ zx_status_t DriverVmars::Initialize() {
 
 void DriverVmars::Shutdown() {
     registers_.reset();
-}
-
-fbl::RefPtr<RefCountedBti> RefCountedBti::Create(zx::bti initiator) {
-    fbl::AllocChecker ac;
-
-    auto ret = fbl::AdoptRef(new (&ac) RefCountedBti(fbl::move(initiator)));
-    if (!ac.check()) {
-        return nullptr;
-    }
-
-    return ret;
 }
 
 zx_status_t HandleDeviceIoctl(uint32_t op,

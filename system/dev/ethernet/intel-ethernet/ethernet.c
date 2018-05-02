@@ -50,12 +50,11 @@ static int irq_thread(void* arg) {
     ethernet_device_t* edev = arg;
     for (;;) {
         zx_status_t r;
-        uint64_t slots;
-        if ((r = zx_interrupt_wait(edev->irqh, &slots)) < 0) {
+        r = zx_interrupt_wait(edev->irqh, NULL);
+        if (r != ZX_OK) {
             printf("eth: irq wait failed? %d\n", r);
             break;
         }
-
         mtx_lock(&edev->lock);
         unsigned irq = eth_handle_irq(&edev->eth);
         if (irq & ETH_IRQ_RX) {

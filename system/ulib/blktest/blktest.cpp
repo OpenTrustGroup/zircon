@@ -581,98 +581,6 @@ bool blkdev_test_fifo_unclean_shutdown(void) {
     END_TEST;
 }
 
-bool blkdev_test_fifo_large_ops_count(void) {
-    BEGIN_TEST;
-    // Set up the blkdev
-    uint64_t kBlockSize, blk_count;
-    int fd = get_testdev(&kBlockSize, &blk_count);
-
-    // Create a connection to the blkdev
-    zx_handle_t fifo;
-    ssize_t expected = sizeof(fifo);
-    ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
-    fifo_client_t* client;
-    ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-
-    // Create a vmo
-    test_vmo_object_t obj;
-    ASSERT_TRUE(create_vmo_helper(fd, &obj, kBlockSize), "");
-
-    for (size_t num_ops = 1; num_ops <= MAX_TXN_MESSAGES; num_ops++) {
-        txnid_t txnid;
-        expected = sizeof(txnid_t);
-        ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
-
-        fbl::AllocChecker ac;
-        fbl::Array<block_fifo_request_t> requests(new (&ac) block_fifo_request_t[num_ops](),
-                                                   num_ops);
-        ASSERT_TRUE(ac.check(), "");
-
-        for (size_t b = 0; b < num_ops; b++) {
-            requests[b].txnid      = txnid;
-            requests[b].vmoid      = obj.vmoid;
-            requests[b].opcode     = BLOCKIO_WRITE;
-            requests[b].length     = 1;
-            requests[b].vmo_offset = 0;
-            requests[b].dev_offset = 0;
-        }
-
-        ASSERT_EQ(block_fifo_txn(client, &requests[0], requests.size()), ZX_OK, "");
-        ASSERT_EQ(ioctl_block_free_txn(fd, &txnid), ZX_OK, "Failed to free txn");
-    }
-
-    block_fifo_release_client(client);
-    ASSERT_EQ(ioctl_block_fifo_close(fd), ZX_OK, "Failed to close fifo");
-    close(fd);
-    END_TEST;
-}
-
-bool blkdev_test_fifo_too_many_ops(void) {
-    BEGIN_TEST;
-    // Set up the blkdev
-    uint64_t kBlockSize, blk_count;
-    int fd = get_testdev(&kBlockSize, &blk_count);
-
-    // Create a connection to the blkdev
-    zx_handle_t fifo;
-    ssize_t expected = sizeof(fifo);
-    ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
-    fifo_client_t* client;
-    ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    test_vmo_object_t obj;
-    ASSERT_TRUE(create_vmo_helper(fd, &obj, kBlockSize), "");
-
-    // This is one too many messages
-    size_t num_ops = MAX_TXN_MESSAGES + 1;
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
-
-    fbl::AllocChecker ac;
-    fbl::Array<block_fifo_request_t> requests(new (&ac) block_fifo_request_t[num_ops](),
-                                               num_ops);
-    ASSERT_TRUE(ac.check(), "");
-
-    for (size_t b = 0; b < num_ops; b++) {
-        requests[b].txnid      = txnid;
-        requests[b].vmoid      = obj.vmoid;
-        requests[b].opcode     = BLOCKIO_WRITE;
-        requests[b].length     = 1;
-        requests[b].vmo_offset = 0;
-        requests[b].dev_offset = 0;
-    }
-
-    // This should be caught locally by the client library
-    ASSERT_EQ(block_fifo_txn(client, &requests[0], requests.size()), ZX_ERR_INVALID_ARGS, "");
-
-    // The txn should still be usable! We should still be able to send a close request.
-    ASSERT_EQ(ioctl_block_free_txn(fd, &txnid), ZX_OK, "Failed to free txn");
-    block_fifo_release_client(client);
-    ASSERT_EQ(ioctl_block_fifo_close(fd), ZX_OK, "Failed to close fifo");
-    close(fd);
-    END_TEST;
-}
-
 bool blkdev_test_fifo_bad_client_vmoid(void) {
     // Try to flex the server's error handling by sending 'malicious' client requests.
     BEGIN_TEST;
@@ -866,9 +774,12 @@ bool blkdev_test_fifo_bad_client_bad_vmo(void) {
     expected = sizeof(txnid_t);
     ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
 
-    // Create a vmo which is not block aligned
+    ASSERT_TRUE(PAGE_SIZE % kBlockSize == 0);
+    ASSERT_TRUE(PAGE_SIZE >= kBlockSize);
+
+    // Create a vmo of one page.
     test_vmo_object_t obj;
-    obj.vmo_size = kBlockSize - 1;
+    obj.vmo_size = PAGE_SIZE;
     ASSERT_EQ(zx_vmo_create(obj.vmo_size, 0, &obj.vmo), ZX_OK,
               "Failed to create vmo");
     fbl::AllocChecker ac;
@@ -884,12 +795,12 @@ bool blkdev_test_fifo_bad_client_bad_vmo(void) {
     ASSERT_EQ(ioctl_block_attach_vmo(fd, &xfer_vmo, &obj.vmoid), expected,
               "Failed to attach vmo");
 
-    // Send a request to write to write a block -- even though that's larger than the VMO
+    // Send a request to write to write more than 1 page -- even though that's larger than the VMO
     block_fifo_request_t request;
     request.txnid      = txnid;
     request.vmoid      = static_cast<vmoid_t>(obj.vmoid);
     request.opcode     = BLOCKIO_WRITE;
-    request.length     = 1;
+    request.length     = PAGE_SIZE / kBlockSize + 1;
     request.vmo_offset = 0;
     request.dev_offset = 0;
     ASSERT_EQ(block_fifo_txn(client, &request, 1), ZX_ERR_OUT_OF_RANGE, "");
@@ -916,8 +827,6 @@ RUN_TEST(blkdev_test_fifo_multiple_vmo)
 RUN_TEST(blkdev_test_fifo_multiple_vmo_multithreaded)
 // TODO(smklein): Test ops across different vmos
 RUN_TEST(blkdev_test_fifo_unclean_shutdown)
-RUN_TEST(blkdev_test_fifo_large_ops_count)
-RUN_TEST(blkdev_test_fifo_too_many_ops)
 RUN_TEST(blkdev_test_fifo_bad_client_vmoid)
 RUN_TEST(blkdev_test_fifo_bad_client_txnid)
 RUN_TEST(blkdev_test_fifo_bad_client_unaligned_request)

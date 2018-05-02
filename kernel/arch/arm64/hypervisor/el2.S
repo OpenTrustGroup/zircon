@@ -24,6 +24,8 @@
 
 #define XTCR_EL2_PS_SHIFT               16
 
+#define MDCR_EL2_TDOSA                  BIT_32(10)
+
 // NOTE(abdulla): This excludes the top bit, as it is too large for VTCR_EL2.PS.
 #define ID_AA64MMFR0_EL1_PARANGE_MASK   0x07
 
@@ -239,13 +241,14 @@
 
     // If we got to here, the exception came from the host or EL2.
     // Continue execution through a jump table based on the HVC index.
-    hvc_jump .Lsync_table 5
+    hvc_jump .Lsync_table 6
 .Lsync_table:
     b el2_hvc_psci
     b el2_hvc_mexec
     b el2_hvc_off
     b el2_hvc_tlbi
     b el2_hvc_resume
+    b el2_hvc_sysreg
 .endm
 
 .macro entry_irq return_code
@@ -480,6 +483,10 @@ FUNCTION_LABEL(el2_hvc_resume)
     mov x10, CNTHCTL_EL2_EL1PCTEN
     msr cnthctl_el2, x10
 
+    // Trap any accesses to debug related registers in the guest
+    mov x10, MDCR_EL2_TDOSA
+    msr mdcr_el2, x10
+
     // Enable floating-point traps.
     movlit x10, CPTR_EL2_RES1 | CPTR_EL2_TFP
     msr cptr_el2, x10
@@ -534,6 +541,9 @@ FUNCTION_LABEL(el2_guest_exit)
     msr cntv_ctl_el0, xzr
     mov x10, CNTHCTL_EL2_EL1PCTEN | CNTHCTL_EL2_EL1PCEN
     msr cnthctl_el2, x10
+
+    // Don't trap debug register access to EL2.
+    msr mdcr_el2, xzr
 
     // Disable guest traps, and ensure EL1 is arm64.
     mov x10, HCR_EL2_RW

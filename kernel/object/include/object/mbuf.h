@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-#include <lib/user_copy/testable_user_ptr.h>
+#include <lib/user_copy/user_ptr.h>
 #include <zircon/types.h>
 #include <fbl/intrusive_single_list.h>
 
@@ -24,18 +24,17 @@ public:
     // Writes |len| bytes of stream data from |src| and sets |written| to number of bytes written.
     //
     // Returns an error on failure.
-    template <typename UCT>
-    zx_status_t WriteStream(testable_user_in_ptr<const void, UCT> src, size_t len, size_t* written);
+    zx_status_t WriteStream(user_in_ptr<const void> src, size_t len, size_t* written);
 
     // Writes a datagram of |len| bytes from |src| and sets |written| to number of bytes written.
     //
     // This operation is atomic in that either the entire datagram is written successfully or the
     // chain is unmodified.
     //
+    // Writing a zero-length datagram is an error.
+    //
     // Returns an error on failure.
-    template <typename UCT>
-    zx_status_t WriteDatagram(testable_user_in_ptr<const void, UCT> src, size_t len,
-                              size_t* written);
+    zx_status_t WriteDatagram(user_in_ptr<const void> src, size_t len, size_t* written);
 
     // Reads upto |len| bytes from chain into |dst|.
     //
@@ -46,14 +45,16 @@ public:
     // partial datagram is returned and its remaining bytes are discarded.
     //
     // Returns number of bytes read.
-    template <typename UCT>
-    size_t Read(testable_user_out_ptr<void, UCT> dst, size_t len, bool datagram);
+    size_t Read(user_out_ptr<void> dst, size_t len, bool datagram);
 
     bool is_full() const;
     bool is_empty() const;
 
     // Returns number of bytes stored in the chain.
     size_t size() const { return size_; }
+
+    // Returns the maximum number of bytes that can be stored in the chain.
+    size_t max_size() const { return kSizeMax; }
 
 private:
     // An MBuf is a small fixed-size chainable memory buffer.

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <zx/handle.h>
-#include <zx/vmo.h>
+#include <lib/zx/handle.h>
+#include <lib/zx/vmo.h>
 #include <fbl/intrusive_wavl_tree.h>
 #include <fbl/ref_counted.h>
 #include <fbl/ref_ptr.h>
@@ -15,8 +15,8 @@
 #include <audio-proto/audio-proto.h>
 #include <dispatcher-pool/dispatcher-channel.h>
 #include <intel-hda/utils/intel-hda-registers.h>
+#include <intel-hda/utils/pinned-vmo.h>
 
-#include "pinned-vmo.h"
 #include "debug-logging.h"
 #include "thread-annotations.h"
 #include "utils.h"

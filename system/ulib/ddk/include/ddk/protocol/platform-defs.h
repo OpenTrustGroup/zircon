@@ -21,6 +21,8 @@ __BEGIN_CDECLS;
 #define PDEV_DID_GPIO_TEST          8   // Simple GPIO test driver
 #define PDEV_DID_DW_I2C             9   // Designware I2C
 #define PDEV_DID_DW_PCIE            10  // Designware PCIe
+#define PDEV_DID_LED2472G           11  // RPi Sense Hat LED2472G
+#define PDEV_DID_GPU_VSL_GC         12  // Verisilicon GC series GPU
 
 // QEMU emulator
 #define PDEV_VID_QEMU               1
@@ -35,6 +37,7 @@ __BEGIN_CDECLS;
 // Google
 #define PDEV_VID_GOOGLE             3
 #define PDEV_PID_GAUSS              1
+#define PDEV_PID_MACHINA            2
 
 #define PDEV_DID_GAUSS_AUDIO_IN     1
 #define PDEV_DID_GAUSS_AUDIO_OUT    2
@@ -43,7 +46,6 @@ __BEGIN_CDECLS;
 
 // Khadas
 #define PDEV_VID_KHADAS             4
-#define PDEV_PID_VIM                1
 #define PDEV_PID_VIM2               2
 
 #define PDEV_DID_VIM_DISPLAY        1
@@ -61,6 +63,8 @@ __BEGIN_CDECLS;
 #define PDEV_DID_AMLOGIC_UART       3
 #define PDEV_DID_AMLOGIC_AXG_CLK    4
 #define PDEV_DID_AMLOGIC_GXL_CLK    5
+#define PDEV_DID_AMLOGIC_SD_EMMC    6
+#define PDEV_DID_AMLOGIC_ETH        7
 
 // Broadcom
 #define PDEV_VID_BROADCOM           6
@@ -73,5 +77,12 @@ __BEGIN_CDECLS;
 // Intel
 #define PDEV_VID_INTEL              8
 #define PDEV_DID_INTEL_CPU_TRACE    1 // Intel CPU tracing driver
+
+// NXP
+#define PDEV_VID_NXP                9
+#define PDEV_PID_IMX8MEVK           1
+
+#define PDEV_DID_IMX_GPIO           1
+#define PDEV_DID_IMX_DISPLAY        2
 
 __END_CDECLS;

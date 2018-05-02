@@ -6,6 +6,8 @@
 #include <inttypes.h>
 #include <sys/ioctl.h>
 
+#include <fvm/fvm.h>
+
 #include "fvm/container.h"
 
 #if defined(__APPLE__)
@@ -78,13 +80,7 @@ FvmContainer::FvmContainer(const char* path, size_t slice_size, off_t offset, of
 
     // Even if disk size is 0, this will default to at least FVM_BLOCK_SIZE
     metadata_size_ = fvm::MetadataSize(disk_size_, slice_size_);
-
-    fbl::AllocChecker ac;
-    metadata_.reset(new (&ac) uint8_t[metadata_size_ * 2]);
-    if (!ac.check()) {
-        fprintf(stderr, "Unable to acquire resources for metadata\n");
-        exit(-1);
-    }
+    metadata_.reset(new uint8_t[metadata_size_ * 2]);
 
     // Clear entire primary copy of metadata
     memset(metadata_.get(), 0, metadata_size_);
@@ -96,25 +92,52 @@ FvmContainer::FvmContainer(const char* path, size_t slice_size, off_t offset, of
             exit(-1);
         }
 
-        ssize_t rd = read(fd_.get(), metadata_.get(), metadata_size_ * 2);
-        if (rd != static_cast<ssize_t>(metadata_size_ * 2)) {
-            fprintf(stderr, "Metadata read failed: expected %ld, actual %ld\n", metadata_size_, rd);
+        // Read superblock first so we can determine if container has a different slice size.
+        ssize_t rd = read(fd_.get(), metadata_.get(), sizeof(fvm::fvm_t));
+        if (rd != static_cast<ssize_t>(sizeof(fvm::fvm_t))) {
+            fprintf(stderr, "Superblock read failed: expected %ld, actual %ld\n",
+                    sizeof(fvm::fvm_t), rd);
             exit(-1);
         }
 
-        const void* backup = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(metadata_.get()) +
-                                                     metadata_size_);
+        // If the image is obviously not an FVM header, bail out early.
+        // Otherwise, we go through the effort of ensuring the header is
+        // valid before using it.
+        if (SuperBlock()->magic != FVM_MAGIC) {
+            return;
+        }
 
-        // For now we always assume that primary metadata is primary
-        if (fvm_validate_header(metadata_.get(), backup, metadata_size_, nullptr) == ZX_OK) {
-            valid_ = true;
+        // Recalculate metadata size.
+        size_t old_slice_size = SuperBlock()->slice_size;
+        size_t old_metadata_size = fvm::MetadataSize(disk_size_, old_slice_size);
+        auto old_metadata = fbl::unique_ptr<uint8_t[]>(new uint8_t[old_metadata_size * 2]);
 
-            // Set the slice size to what is specified on disk.
-            slice_size_ = SuperBlock()->slice_size;
+        if (lseek(fd_.get(), disk_offset_, SEEK_SET) < 0) {
+            fprintf(stderr, "Seek reset failed\n");
+            exit(-1);
+        }
 
-            if (memcmp(metadata_.get(), backup, metadata_size_)) {
-                fprintf(stderr, "Warning: primary and backup metadata do not match\n");
+        // Read remainder of metadata.
+        rd = read(fd_.get(), old_metadata.get(), old_metadata_size * 2);
+        if (rd != static_cast<ssize_t>(old_metadata_size * 2)) {
+            fprintf(stderr, "Metadata read failed: expected %ld, actual %ld\n",
+                    old_metadata_size * 2, rd);
+            exit(-1);
+        }
+
+        const void* backup = reinterpret_cast<void*>(
+                reinterpret_cast<uintptr_t>(old_metadata.get()) + old_metadata_size);
+        const void* primary = nullptr;
+        if (fvm_validate_header(old_metadata.get(), backup, old_metadata_size, &primary) == ZX_OK) {
+            if (primary != old_metadata.get()) {
+                fprintf(stderr, "Can only update FVM with valid primary as first copy\n");
+                exit(-1);
             }
+
+            valid_ = true;
+            slice_size_ = old_slice_size;
+            metadata_size_ = old_metadata_size;
+            metadata_.reset(old_metadata.release());
         }
     }
 }
@@ -122,7 +145,7 @@ FvmContainer::FvmContainer(const char* path, size_t slice_size, off_t offset, of
 FvmContainer::~FvmContainer() = default;
 
 zx_status_t FvmContainer::Init() {
-    // Clear entire primary copy of metadata
+    // Clear entire primary copy of metadata.
     memset(metadata_.get(), 0, metadata_size_);
 
     // Superblock
@@ -555,9 +578,6 @@ void FvmContainer::CheckValid() const {
 zx_status_t FvmContainer::GrowMetadata(size_t new_size) {
     if (new_size <= metadata_size_) {
         return ZX_OK;
-    } else if (disk_size_ > 0) {
-        fprintf(stderr, "Cannot grow metadata for disk with established size\n");
-        return ZX_ERR_ACCESS_DENIED;
     }
 
     xprintf("Growing metadata from %zu to %zu\n", metadata_size_, new_size);
@@ -684,7 +704,7 @@ zx_status_t FvmContainer::WritePartition(unsigned part_index) {
 }
 
 zx_status_t FvmContainer::WriteExtent(unsigned extent_index, Format* format, uint32_t* pslice) {
-    vslice_info_t vslice_info;
+    vslice_info_t vslice_info{};
     zx_status_t status;
     if ((status = format->GetVsliceRange(extent_index, &vslice_info)) != ZX_OK) {
         return status;
@@ -700,7 +720,6 @@ zx_status_t FvmContainer::WriteExtent(unsigned extent_index, Format* format, uin
                 if (!vslice_info.zero_fill) {
                     break;
                 }
-
                 format->EmptyBlock();
             } else {
                 if ((status = format->FillBlock(vslice_info.block_offset + current_block)) != ZX_OK) {

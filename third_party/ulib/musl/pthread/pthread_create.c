@@ -47,10 +47,11 @@ int __pthread_create(pthread_t* restrict res, const pthread_attr_t* restrict att
         return ENOTSUP;
 
     char thread_name[ZX_MAX_NAME_LEN];
-    pthread_t new = __allocate_thread(&attr,
-                                      attr.__name != NULL ? attr.__name :
-                                      attr.__c11 ? "thrd_t" : "pthread_t",
-                                      thread_name);
+    thrd_t new = __allocate_thread(attr._a_guardsize,
+                                   attr._a_stacksize,
+                                   attr.__name != NULL ? attr.__name :
+                                   attr.__c11 ? "thrd_t" : "pthread_t",
+                                   thread_name);
     if (new == NULL)
         return EAGAIN;
 
@@ -169,7 +170,7 @@ _Noreturn void __pthread_exit(void* result) {
 
     __tls_run_dtors();
 
-    __pthread_tsd_run_dtors();
+    __thread_tsd_run_dtors();
 
     __dl_thread_cleanup();
 

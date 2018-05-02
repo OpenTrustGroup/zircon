@@ -1,0 +1,40 @@
+# Copyright 2018 The Fuchsia Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This file is used by scripts/download-prebuilt to control cipd.  When
+# cipd is not available, it uses zircon.versions instead to deduce URLs to
+# download directly from Google Storage.
+#
+# This file is the source of truth and the bits in CIPD are the canonical
+# bits.  They're also copied to Google Storage with URLs derived from the
+# CIPD package name (shown below, with $ substituions for platform) and
+# instance ID (which is the SHA1 of the file).  zircon.versions is
+# generated from this file by querying CIPD to gather the instance IDs.
+#
+# NOTE! NOTE! NOTE!  After changing this file in any way, always run
+# scripts/update-prebuilt-versions to update the zircon.versions file with
+# specific instance IDs for each version listed here.  The two files must
+# be kept in lock-step so that scripts/download-prebuilt gets the same
+# contents whether it uses cipd or direct downloads.
+
+# These lines tell scripts/update-prebuilt-versions what to look for.
+$VerifiedPlatform linux-amd64
+$VerifiedPlatform mac-amd64
+#MatchedPlatform linux-arm64
+
+# Clang
+@Subdir clang
+fuchsia/clang/${platform} git_revision:6b2da8b3f95f7e20331a1de4d9f93eb5fb4862a9
+
+# GCC
+@Subdir gcc
+fuchsia/gcc/${platform} git_revision:17571017f2555b523dec38ebe1c5c60ca9a18ff8,69bc498952e7e477d6f96f3b6f900a6112e82350
+
+# sysroot
+@Subdir sysroot
+fuchsia/sysroot/${os=linux}-${arch} git_revision:a96053c799a0f1ad0b7e8ab8199edbfa18adcbb6
+
+# Symbolizer tool.  This is a standalone executable, not a subdirectory.
+@Subdir
+fuchsia/tools/symbolize/${platform} git_revision:9262838ffc6f2d58d7844635c86f3fe5f0a7849c

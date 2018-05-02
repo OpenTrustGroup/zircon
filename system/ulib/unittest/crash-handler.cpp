@@ -145,7 +145,7 @@ static void process_exception(crash_list_t crash_list, const zx_port_packet_t* p
 static test_result_t watch_test_thread(zx_handle_t port, crash_list_t crash_list) {
     zx_port_packet_t packet;
     while (true) {
-        zx_status_t status = zx_port_wait(port, ZX_TIME_INFINITE, &packet, 0);
+        zx_status_t status = zx_port_wait(port, ZX_TIME_INFINITE, &packet, 1);
         if (status != ZX_OK) {
             UNITTEST_FAIL_TRACEF("failed to wait on port: error %s\n",
                                  zx_status_get_string(status));
@@ -243,8 +243,10 @@ static int run_test(void* arg) {
 // before starting the test.
 // If false, this will bind to the test thread's exception port once started
 // and add the thread to the expected crashes list.
-zx_status_t run_with_crash_handler(crash_list_t crash_list, bool (*fn_to_run)(void*), void* arg,
-                                   bool bind_to_job, test_result_t* test_result) {
+static zx_status_t run_with_crash_handler(crash_list_t crash_list,
+                                          bool (*fn_to_run)(void*), void* arg,
+                                          bool bind_to_job,
+                                          test_result_t* test_result) {
     zx_handle_t port;
     zx_status_t status = zx_port_create(0, &port);
     if (status != ZX_OK) {

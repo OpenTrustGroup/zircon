@@ -35,23 +35,25 @@
 
 #define LOCAL_TRACE 0
 
-static const uint64_t kLocalApicPhysBase =
+static constexpr uint64_t kLocalApicPhysBase =
     APIC_PHYS_BASE | IA32_APIC_BASE_XAPIC_ENABLE | IA32_APIC_BASE_X2APIC_ENABLE;
 
-static const uint64_t kX2ApicMsrBase = 0x800;
-static const uint64_t kX2ApicMsrMax = 0x83f;
+static constexpr uint64_t kX2ApicMsrBase = 0x800;
+static constexpr uint64_t kX2ApicMsrMax = 0x83f;
 
-static const uint64_t kMiscEnableFastStrings = 1u << 0;
+static constexpr uint64_t kMiscEnableFastStrings = 1u << 0;
 
-static const uint32_t kFirstExtendedStateComponent = 2;
-static const uint32_t kLastExtendedStateComponent = 9;
+static constexpr uint32_t kFirstExtendedStateComponent = 2;
+static constexpr uint32_t kLastExtendedStateComponent = 9;
 // From Volume 1, Section 13.4.
-static const uint32_t kXsaveLegacyRegionSize = 512;
-static const uint32_t kXsaveHeaderSize = 64;
+static constexpr uint32_t kXsaveLegacyRegionSize = 512;
+static constexpr uint32_t kXsaveHeaderSize = 64;
 
-static const char kHypVendorId[] = "KVMKVMKVM\0\0\0";
-static const size_t kHypVendorIdLength = 12;
+static constexpr char kHypVendorId[] = "KVMKVMKVM\0\0\0";
+static constexpr size_t kHypVendorIdLength = 12;
 static_assert(sizeof(kHypVendorId) - 1 == kHypVendorIdLength, "");
+
+static constexpr uint64_t kKvmFeatureNoIoDelay = 1u << 1;
 
 extern "C" void x86_call_external_interrupt_handler(uint64_t vector);
 
@@ -278,7 +280,8 @@ static zx_status_t handle_cpuid(const ExitInfo& exit_info, AutoVmcs* vmcs,
     }
     case X86_CPUID_KVM_FEATURES:
         // We support KVM clock.
-        guest_state->rax = kKvmFeatureClockSourceOld | kKvmFeatureClockSource;
+        guest_state->rax =
+            kKvmFeatureClockSourceOld | kKvmFeatureClockSource | kKvmFeatureNoIoDelay;
         guest_state->rbx = 0;
         guest_state->rcx = 0;
         guest_state->rdx = 0;
@@ -481,6 +484,8 @@ static zx_status_t handle_apic_rdmsr(const ExitInfo& exit_info, AutoVmcs* vmcs,
         return ZX_OK;
     case X2ApicMsr::LVT_LINT0:
     case X2ApicMsr::LVT_LINT1:
+    case X2ApicMsr::LVT_THERMAL_SENSOR:
+    case X2ApicMsr::LVT_CMCI:
         // LVT registers reset with the mask bit set. See Volume 3 Section 10.12.5.1.
         next_rip(exit_info, vmcs);
         guest_state->rax = LVT_MASKED;
@@ -645,6 +650,8 @@ static zx_status_t handle_apic_wrmsr(const ExitInfo& exit_info, AutoVmcs* vmcs,
     case X2ApicMsr::LVT_ERROR:
     case X2ApicMsr::LVT_LINT0:
     case X2ApicMsr::LVT_LINT1:
+    case X2ApicMsr::LVT_THERMAL_SENSOR:
+    case X2ApicMsr::LVT_CMCI:
         if (guest_state->rdx != 0 || guest_state->rax > UINT32_MAX)
             return ZX_ERR_INVALID_ARGS;
         next_rip(exit_info, vmcs);

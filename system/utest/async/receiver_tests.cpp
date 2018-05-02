@@ -4,93 +4,162 @@
 
 #include <lib/async/cpp/receiver.h>
 
+#include <lib/async-testutils/async_stub.h>
 #include <unittest/unittest.h>
-
-#include "async_stub.h"
 
 namespace {
 
-class MockAsync : public AsyncStub {
+class MockAsync : public async::AsyncStub {
 public:
     enum class Op {
         NONE,
         QUEUE_PACKET
     };
 
-    Op last_op = Op::NONE;
-    async_receiver_t* last_receiver = nullptr;
-    const zx_packet_user_t* last_data = nullptr;
-
     zx_status_t QueuePacket(async_receiver_t* receiver,
                             const zx_packet_user_t* data) override {
         last_op = Op::QUEUE_PACKET;
         last_receiver = receiver;
         last_data = data;
-        return ZX_OK;
-    }
-};
-
-struct Handler {
-    Handler(async::Receiver* receiver) {
-        receiver->set_handler([this](async_t* async, zx_status_t status,
-                                     const zx_packet_user_t* data) {
-            handler_ran = true;
-            last_status = status;
-            last_data = data;
-        });
+        return next_status;
     }
 
-    bool handler_ran = false;
-    zx_status_t last_status = ZX_ERR_INTERNAL;
+    Op last_op = Op::NONE;
+    async_receiver_t* last_receiver = nullptr;
     const zx_packet_user_t* last_data = nullptr;
+    zx_status_t next_status = ZX_OK;
 };
 
-bool wrapper_test() {
-    const uint32_t dummy_flags = ASYNC_FLAG_HANDLE_SHUTDOWN;
-    const zx_packet_user_t dummy_data{};
+class Harness {
+public:
+    Harness() { Reset(); }
 
+    void Reset() {
+        handler_ran = false;
+        last_receiver = nullptr;
+        last_status = ZX_ERR_INTERNAL;
+        last_data = nullptr;
+    }
+
+    void Handler(async_t* async, async::ReceiverBase* receiver,
+                 zx_status_t status, const zx_packet_user_t* data) {
+        handler_ran = true;
+        last_receiver = receiver;
+        last_status = status;
+        last_data = data;
+    }
+
+    virtual async::ReceiverBase& receiver() = 0;
+
+    bool handler_ran;
+    async::ReceiverBase* last_receiver;
+    zx_status_t last_status;
+    const zx_packet_user_t* last_data;
+};
+
+class LambdaHarness : public Harness {
+public:
+    async::ReceiverBase& receiver() override { return receiver_; }
+
+private:
+    async::Receiver receiver_{[this](async_t* async, async::Receiver* receiver,
+                                     zx_status_t status, const zx_packet_user_t* data) {
+        Handler(async, receiver, status, data);
+    }};
+};
+
+class MethodHarness : public Harness {
+public:
+    async::ReceiverBase& receiver() override { return receiver_; }
+
+private:
+    async::ReceiverMethod<Harness, &Harness::Handler> receiver_{this};
+};
+
+bool receiver_set_handler_test() {
     BEGIN_TEST;
 
     {
-        async::Receiver default_receiver;
-        EXPECT_EQ(0u, default_receiver.flags(), "default flags");
+        async::Receiver receiver;
+        EXPECT_FALSE(receiver.has_handler());
 
-        default_receiver.set_flags(dummy_flags);
-        EXPECT_EQ(dummy_flags, default_receiver.flags(), "set flags");
-
-        EXPECT_FALSE(!!default_receiver.handler(), "handler");
+        receiver.set_handler([](async_t* async, async::Receiver* receiver,
+                                zx_status_t status, const zx_packet_user_t* data) {});
+        EXPECT_TRUE(receiver.has_handler());
     }
 
     {
-        async::Receiver explicit_receiver(dummy_flags);
-        EXPECT_EQ(dummy_flags, explicit_receiver.flags(), "explicit flags");
-
-        EXPECT_FALSE(!!explicit_receiver.handler(), "handler");
-        Handler handler(&explicit_receiver);
-        EXPECT_TRUE(!!explicit_receiver.handler());
-
-        MockAsync async;
-
-        EXPECT_EQ(ZX_OK, explicit_receiver.Queue(&async, nullptr), "queue, null data");
-        EXPECT_EQ(MockAsync::Op::QUEUE_PACKET, async.last_op, "op");
-        EXPECT_EQ(dummy_flags, async.last_receiver->flags, "flags");
-        EXPECT_NULL(async.last_data, "data");
-
-        EXPECT_EQ(ZX_OK, explicit_receiver.Queue(&async, &dummy_data), "queue, non-null data");
-        EXPECT_EQ(MockAsync::Op::QUEUE_PACKET, async.last_op, "op");
-        EXPECT_EQ(dummy_flags, async.last_receiver->flags, "flags");
-        EXPECT_EQ(&dummy_data, async.last_data, "data");
-
-        async.last_receiver->handler(&async, async.last_receiver, ZX_OK, nullptr);
-        EXPECT_TRUE(handler.handler_ran, "handler ran");
-        EXPECT_EQ(ZX_OK, handler.last_status, "status");
-        EXPECT_NULL(handler.last_data, "data");
-
-        async.last_receiver->handler(&async, async.last_receiver, ZX_OK, &dummy_data);
-        EXPECT_TRUE(handler.handler_ran, "handler ran");
-        EXPECT_EQ(ZX_OK, handler.last_status, "status");
-        EXPECT_EQ(&dummy_data, handler.last_data, "data");
+        async::Receiver receiver([](async_t* async, async::Receiver* receiver,
+                                    zx_status_t status, const zx_packet_user_t* data) {});
+        EXPECT_TRUE(receiver.has_handler());
     }
+
+    END_TEST;
+}
+
+template <typename Harness>
+bool receiver_queue_packet_test() {
+    BEGIN_TEST;
+
+    const zx_packet_user_t dummy_data{};
+    MockAsync async;
+    Harness harness;
+
+    harness.Reset();
+    async.next_status = ZX_OK;
+    EXPECT_EQ(ZX_OK, harness.receiver().QueuePacket(&async, nullptr), "queue, null data");
+    EXPECT_EQ(MockAsync::Op::QUEUE_PACKET, async.last_op);
+    EXPECT_NULL(async.last_data);
+    EXPECT_FALSE(harness.handler_ran);
+
+    harness.Reset();
+    async.next_status = ZX_ERR_BAD_STATE;
+    EXPECT_EQ(ZX_ERR_BAD_STATE, harness.receiver().QueuePacket(&async, nullptr), "queue, null data");
+    EXPECT_EQ(MockAsync::Op::QUEUE_PACKET, async.last_op);
+    EXPECT_NULL(async.last_data);
+    EXPECT_FALSE(harness.handler_ran);
+
+    harness.Reset();
+    async.next_status = ZX_OK;
+    EXPECT_EQ(ZX_OK, harness.receiver().QueuePacket(&async, &dummy_data), "queue, non-null data");
+    EXPECT_EQ(MockAsync::Op::QUEUE_PACKET, async.last_op);
+    EXPECT_EQ(&dummy_data, async.last_data);
+    EXPECT_FALSE(harness.handler_ran);
+
+    harness.Reset();
+    async.next_status = ZX_ERR_BAD_STATE;
+    EXPECT_EQ(ZX_ERR_BAD_STATE, harness.receiver().QueuePacket(&async, &dummy_data), "queue, non-null data");
+    EXPECT_EQ(MockAsync::Op::QUEUE_PACKET, async.last_op);
+    EXPECT_EQ(&dummy_data, async.last_data);
+    EXPECT_FALSE(harness.handler_ran);
+
+    END_TEST;
+}
+
+template <typename Harness>
+bool receiver_run_handler_test() {
+    BEGIN_TEST;
+
+    const zx_packet_user_t dummy_data{};
+    MockAsync async;
+    Harness harness;
+
+    EXPECT_EQ(ZX_OK, harness.receiver().QueuePacket(&async, nullptr));
+    EXPECT_EQ(ZX_OK, harness.receiver().QueuePacket(&async, &dummy_data));
+
+    harness.Reset();
+    async.last_receiver->handler(&async, async.last_receiver, ZX_OK, nullptr);
+    EXPECT_TRUE(harness.handler_ran);
+    EXPECT_EQ(&harness.receiver(), harness.last_receiver);
+    EXPECT_EQ(ZX_OK, harness.last_status);
+    EXPECT_NULL(harness.last_data);
+
+    harness.Reset();
+    async.last_receiver->handler(&async, async.last_receiver, ZX_OK, &dummy_data);
+    EXPECT_TRUE(harness.handler_ran);
+    EXPECT_EQ(&harness.receiver(), harness.last_receiver);
+    EXPECT_EQ(ZX_OK, harness.last_status);
+    EXPECT_EQ(&dummy_data, harness.last_data);
 
     END_TEST;
 }
@@ -98,7 +167,7 @@ bool wrapper_test() {
 bool unsupported_queue_packet_test() {
     BEGIN_TEST;
 
-    AsyncStub async;
+    async::AsyncStub async;
     async_receiver_t receiver{};
     EXPECT_EQ(ZX_ERR_NOT_SUPPORTED, async_queue_packet(&async, &receiver, nullptr), "valid args without data");
     zx_packet_user_t data;
@@ -110,6 +179,10 @@ bool unsupported_queue_packet_test() {
 } // namespace
 
 BEGIN_TEST_CASE(receiver_tests)
-RUN_TEST(wrapper_test)
+RUN_TEST(receiver_set_handler_test)
+RUN_TEST((receiver_queue_packet_test<LambdaHarness>))
+RUN_TEST((receiver_queue_packet_test<MethodHarness>))
+RUN_TEST((receiver_run_handler_test<LambdaHarness>))
+RUN_TEST((receiver_run_handler_test<MethodHarness>))
 RUN_TEST(unsupported_queue_packet_test)
 END_TEST_CASE(receiver_tests)

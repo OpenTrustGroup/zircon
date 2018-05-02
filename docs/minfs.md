@@ -2,7 +2,7 @@
 
 MinFS is a simple, unix-like filesystem built for Zircon.
 
-It currently supports files up to 512MB in size.
+It currently supports files up to 4 GB in size.
 
 ## Using MinFS
 
@@ -20,7 +20,7 @@ $ mkfile -n 16g blk.bin
    wish to attach additional devices, you can supply them with '-hdb', '-hdc,
    and so on.
 ```shell
-$ ./scripts/run-zircon-x86-64 -- -hda blk.bin
+$ ./scripts/run-zircon-x64 -- -hda blk.bin
 ```
 
 ### Target Device (QEMU and Real Hardware)
@@ -102,5 +102,5 @@ Total: 0 partitions
  * To find out which block device/file system is mounted at each subdirectory
    under a given path, use the following command:
 ```
-> lsfs -b <PATH>
+> df <PATH>
 ```

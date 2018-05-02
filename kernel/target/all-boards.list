@@ -4,5 +4,6 @@ hikey960
 qemu
 qemu-tz
 vim2
+imx8mevk
 [x64]
 pc

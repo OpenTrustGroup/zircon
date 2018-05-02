@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <fbl/algorithm.h>
+#include <fbl/auto_lock.h>
 #include <fbl/string_buffer.h>
 #include <zircon/assert.h>
 
@@ -26,6 +27,29 @@ zx_koid_t GetCurrentThreadKoid() {
 }
 
 } // namespace
+
+void fx_logger::ActivateFallback(int fallback_fd) {
+    fbl::AutoLock lock(&fallback_mutex_);
+    if (logger_fd_.load(fbl::memory_order_relaxed) != -1) {
+        return;
+    }
+    ZX_DEBUG_ASSERT(fallback_fd >= -1);
+    if (tagstr_.empty()) {
+        for (size_t i = 0; i < tags_.size(); i++) {
+            if (tagstr_.empty()) {
+                tagstr_ = tags_[i];
+            } else {
+                tagstr_ = fbl::String::Concat({tagstr_, ", ", tags_[i]});
+            }
+        }
+    }
+    if (fallback_fd == -1) {
+        fallback_fd = STDERR_FILENO;
+    }
+    // Do not change fd_to_close_ as we don't want to close fallback_fd.
+    // We will still close original cosole_fd_
+    logger_fd_.store(fallback_fd, fbl::memory_order_relaxed);
+}
 
 zx_status_t fx_logger::VLogWriteToSocket(fx_log_severity_t severity,
                                          const char* tag, const char* msg,
@@ -65,6 +89,7 @@ zx_status_t fx_logger::VLogWriteToSocket(fx_log_severity_t severity,
     // Write msg
     int n = static_cast<int>(kDataSize - pos);
     int count = 0;
+    size_t msg_pos = pos;
     if (!perform_format) {
         size_t write_len =
             fbl::min(strlen(msg), static_cast<size_t>(n - 1));
@@ -86,21 +111,20 @@ zx_status_t fx_logger::VLogWriteToSocket(fx_log_severity_t severity,
                kEllipsisSize);
     }
     auto status = socket_.write(0, &packet, sizeof(packet), nullptr);
-    switch (status) {
-    case ZX_ERR_SHOULD_WAIT:
-    case ZX_ERR_PEER_CLOSED:
-    case ZX_ERR_NO_MEMORY:
-    case ZX_ERR_BAD_STATE:
-    case ZX_ERR_ACCESS_DENIED:
+    if (status == ZX_ERR_BAD_STATE || status == ZX_ERR_PEER_CLOSED) {
+        ActivateFallback(-1);
+        return VLogWriteToFd(logger_fd_.load(fbl::memory_order_relaxed),
+                             severity, tag, packet.data + msg_pos, args, false);
+    }
+    if (status != ZX_OK) {
         dropped_logs_.fetch_add(1);
-        break;
     }
     return status;
 }
 
-zx_status_t fx_logger::VLogWriteToConsoleFd(fx_log_severity_t severity,
-                                            const char* tag, const char* msg,
-                                            va_list args, bool perform_format) {
+zx_status_t fx_logger::VLogWriteToFd(int fd, fx_log_severity_t severity,
+                                     const char* tag, const char* msg,
+                                     va_list args, bool perform_format) {
     zx_time_t time = zx_clock_get(ZX_CLOCK_MONOTONIC);
     constexpr char kEllipsis[] = "...";
     constexpr size_t kEllipsisSize = sizeof(kEllipsis) - 1;
@@ -155,7 +179,7 @@ zx_status_t fx_logger::VLogWriteToConsoleFd(fx_log_severity_t severity,
         buf.Append(kEllipsis);
     }
     buf.Append('\n');
-    ssize_t status = write(console_fd_.get(), buf.data(), buf.size());
+    ssize_t status = write(fd, buf.data(), buf.size());
     if (status < 0) {
         return ZX_ERR_IO;
     }
@@ -172,10 +196,11 @@ zx_status_t fx_logger::VLogWrite(fx_log_severity_t severity, const char* tag,
     }
 
     zx_status_t status;
-    if (socket_.is_valid()) {
+    int fd = logger_fd_.load(fbl::memory_order_relaxed);
+    if (fd != -1) {
+        status = VLogWriteToFd(fd, severity, tag, msg, args, perform_format);
+    } else if (socket_.is_valid()) {
         status = VLogWriteToSocket(severity, tag, msg, args, perform_format);
-    } else if (console_fd_.get() != -1) {
-        status = VLogWriteToConsoleFd(severity, tag, msg, args, perform_format);
     } else {
         return ZX_ERR_BAD_STATE;
     }
@@ -191,7 +216,7 @@ zx_status_t fx_logger::AddTags(const char** tags, size_t ntags) {
         return ZX_ERR_INVALID_ARGS;
     }
 
-    auto fd_mode = console_fd_.get() != -1;
+    auto fd_mode = logger_fd_.load(fbl::memory_order_relaxed) != -1;
     for (size_t i = 0; i < ntags; i++) {
         auto len = strlen(tags[i]);
         fbl::String str(

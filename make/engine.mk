@@ -124,6 +124,7 @@ BUILDDIR := $(BUILDROOT)/build-$(PROJECT)$(BUILDDIR_SUFFIX)
 GENERATED_INCLUDES:=$(BUILDDIR)/gen/global/include
 OUTLKBIN := $(BUILDDIR)/$(LKNAME).bin
 OUTLKELF := $(BUILDDIR)/$(LKNAME).elf
+OUTLKELF_IMAGE := $(BUILDDIR)/$(LKNAME)-image.elf
 GLOBAL_CONFIG_HEADER := $(BUILDDIR)/config-global.h
 KERNEL_CONFIG_HEADER := $(BUILDDIR)/config-kernel.h
 USER_CONFIG_HEADER := $(BUILDDIR)/config-user.h
@@ -154,12 +155,9 @@ GLOBAL_COMPILEFLAGS += -Wno-nonnull-compare
 endif
 GLOBAL_CFLAGS := -std=c11 -Werror-implicit-function-declaration -Wstrict-prototypes -Wwrite-strings
 GLOBAL_CPPFLAGS := -std=c++14 -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wconversion -Wno-sign-conversion
-ifeq ($(call TOBOOL,$(ENABLE_NEW_IRQ_API)),true)
-GLOBAL_COMPILEFLAGS += -DENABLE_NEW_IRQ_API=1
-endif
 #GLOBAL_CPPFLAGS += -Weffc++
 GLOBAL_ASMFLAGS :=
-GLOBAL_LDFLAGS := -nostdlib --build-id
+GLOBAL_LDFLAGS := -nostdlib --build-id -z noexecstack
 ifeq ($(call TOBOOL,$(USE_LLD)),true)
 GLOBAL_LDFLAGS += -color-diagnostics
 endif
@@ -374,13 +372,6 @@ ALLEFI_LIBS :=
 # sysroot (exported libraries and headers)
 SYSROOT_DEPS :=
 
-# MDI source files used to generate the mdi-defs.h header file
-MDI_INCLUDES := system/public/zircon/mdi/zircon.mdi
-
-# Header file for MDI definitions
-MDI_GEN_HEADER_DIR := $(BUILDDIR)/gen/global/include
-MDI_HEADER := $(MDI_GEN_HEADER_DIR)/mdi/mdi-defs.h
-
 # For now always enable frame pointers so kernel backtraces
 # can work and define WITH_PANIC_BACKTRACE to enable them in panics
 # ZX-623
@@ -405,9 +396,10 @@ BUILDID ?=
 
 # Tool locations.
 TOOLS := $(BUILDDIR)/tools
-MDIGEN := $(TOOLS)/mdigen
+FIDL := $(TOOLS)/fidlc
 MKBOOTFS := $(TOOLS)/mkbootfs
 ABIGEN := $(TOOLS)/abigen
+ZBI := $(TOOLS)/zbi
 
 # set V=1 in the environment if you want to see the full command line of every command
 ifeq ($(V),1)
@@ -524,21 +516,6 @@ SAVED_USER_MANIFEST_LINES := $(USER_MANIFEST_LINES)
 # modules in the ALLMODULES list
 include make/recurse.mk
 
-ifeq ($(call TOBOOL,$(ENABLE_ULIB_ONLY)),false)
-# rule for generating MDI header file for C/C++ code
-$(MDI_HEADER): $(MDIGEN) $(MDI_INCLUDES)
-	$(call BUILDECHO,generating $@)
-	@$(MKDIR)
-	$(NOECHO)$(MDIGEN) $(MDI_INCLUDES) -h $@
-
-GENERATED += $(MDI_HEADER)
-EXTRA_BUILDDEPS += $(MDI_HEADER)
-
-# Make sure $(MDI_HEADER) is generated before it is included by any source files
-TARGET_MODDEPS += $(MDI_HEADER)
-GLOBAL_INCLUDES += $(MDI_GEN_HEADER_DIR)
-endif
-
 ifneq ($(EXTRA_IDFILES),)
 $(BUILDDIR)/ids.txt: $(EXTRA_IDFILES)
 	$(call BUILDECHO,generating $@)
@@ -568,7 +545,7 @@ tools:: $(ALLHOST_APPS) $(ALLHOST_LIBS)
 .PHONY: kernel
 kernel: $(OUTLKBIN) $(EXTRA_KERNELDEPS)
 ifeq ($(ENABLE_BUILD_LISTFILES),true)
-kernel: $(OUTLKELF).lst $(OUTLKELF).debug.lst  $(OUTLKELF).sym $(OUTLKELF).sym.sorted $(OUTLKELF).size
+kernel: $(OUTLKELF).lst $(OUTLKELF).sym $(OUTLKELF).sym.sorted $(OUTLKELF).size
 endif
 
 ifeq ($(call TOBOOL,$(ENABLE_ULIB_ONLY)),false)
@@ -715,12 +692,6 @@ ifneq ($(HOST_USE_CLANG),)
 HOST_CC      := $(GOMACC) $(HOST_TOOLCHAIN_PREFIX)clang
 HOST_CXX     := $(GOMACC) $(HOST_TOOLCHAIN_PREFIX)clang++
 HOST_AR      := $(HOST_TOOLCHAIN_PREFIX)llvm-ar
-HOST_OBJDUMP := $(HOST_TOOLCHAIN_PREFIX)llvm-objdump
-HOST_READELF := $(HOST_TOOLCHAIN_PREFIX)llvm-readelf
-HOST_CPPFILT := $(HOST_TOOLCHAIN_PREFIX)llvm-cxxfilt
-HOST_SIZE    := $(HOST_TOOLCHAIN_PREFIX)llvm-size
-HOST_NM      := $(HOST_TOOLCHAIN_PREFIX)llvm-nm
-HOST_LD      := $(HOST_TOOLCHAIN_PREFIX)lld-link
 else
 ifeq ($(FOUND_HOST_GCC),)
 $(error cannot find toolchain, please set HOST_TOOLCHAIN_PREFIX or add it to your path)
@@ -728,15 +699,7 @@ endif
 HOST_CC      := $(GOMACC) $(HOST_TOOLCHAIN_PREFIX)gcc
 HOST_CXX     := $(GOMACC) $(HOST_TOOLCHAIN_PREFIX)g++
 HOST_AR      := $(HOST_TOOLCHAIN_PREFIX)ar
-HOST_OBJDUMP := $(HOST_TOOLCHAIN_PREFIX)objdump
-HOST_READELF := $(HOST_TOOLCHAIN_PREFIX)readelf
-HOST_CPPFILT := $(HOST_TOOLCHAIN_PREFIX)c++filt
-HOST_SIZE    := $(HOST_TOOLCHAIN_PREFIX)size
-HOST_NM      := $(HOST_TOOLCHAIN_PREFIX)nm
-HOST_LD      := $(HOST_TOOLCHAIN_PREFIX)ld
 endif
-HOST_OBJCOPY := $(HOST_TOOLCHAIN_PREFIX)objcopy
-HOST_STRIP   := $(HOST_TOOLCHAIN_PREFIX)strip
 
 # Host compile flags
 HOST_COMPILEFLAGS := -g -O2 -Isystem/public -Isystem/private -I$(GENERATED_INCLUDES)
@@ -750,14 +713,20 @@ ifneq ($(HOST_USE_CLANG),)
 # dependency) rather than the host library. The only exception is the
 # case when we are cross-compiling the host tools in which case we use
 # the C++ library from the sysroot.
-# TODO: This can be removed once the Clang toolchain ships with a
-# cross-compiled C++ runtime.
+# TODO(TC-78): This can be removed once the Clang
+# toolchain ships with a cross-compiled C++ runtime.
 ifeq ($(HOST_TARGET),)
-HOST_CPPFLAGS += -stdlib=libc++
-HOST_LDFLAGS += -stdlib=libc++
-# We don't need to link libc++abi.a on OS X.
-ifneq ($(HOST_PLATFORM),darwin)
-HOST_LDFLAGS += -Lprebuilt/downloads/clang+llvm-$(HOST_ARCH)-$(HOST_PLATFORM)/lib -Wl,-Bstatic -lc++abi -Wl,-Bdynamic -lpthread
+ifeq ($(HOST_PLATFORM),linux)
+ifeq ($(HOST_ARCH),x86_64)
+HOST_SYSROOT ?= $(SYSROOT_linux-amd64_PATH)
+else ifeq ($(HOST_ARCH),aarch64)
+HOST_SYSROOT ?= $(SYSROOT_linux-arm64_PATH)
+endif
+# TODO(TC-77): Using explicit sysroot currently overrides location of C++
+# runtime so we need to explicitly add it here.
+HOST_LDFLAGS += -Lprebuilt/downloads/clang/lib
+# The implicitly linked static libc++.a depends on these.
+HOST_LDFLAGS += -ldl -lpthread
 endif
 endif
 HOST_LDFLAGS += -static-libstdc++
@@ -768,12 +737,10 @@ HOST_ASMFLAGS :=
 
 ifneq ($(HOST_TARGET),)
 HOST_COMPILEFLAGS += --target=$(HOST_TARGET)
-ifeq ($(call TOBOOL,$(HOST_USE_SYSROOT)),true)
 ifeq ($(HOST_TARGET),x86_64-linux-gnu)
 HOST_SYSROOT ?= $(SYSROOT_linux-amd64_PATH)
 else ifeq ($(HOST_TARGET),aarch64-linux-gnu)
 HOST_SYSROOT ?= $(SYSROOT_linux-arm64_PATH)
-endif
 endif
 endif
 
@@ -853,7 +820,7 @@ clean: $(EXTRA_CLEANDEPS)
 	rm -f $(ALLOBJS)
 	rm -f $(DEPS)
 	rm -f $(GENERATED)
-	rm -f $(OUTLKBIN) $(OUTLKELF) $(OUTLKELF).lst $(OUTLKELF).debug.lst $(OUTLKELF).sym $(OUTLKELF).sym.sorted $(OUTLKELF).size $(OUTLKELF).hex $(OUTLKELF).dump $(OUTLKELF)-gdb.py
+	rm -f $(OUTLKBIN) $(OUTLKELF_IMAGE) $(OUTLKELF) $(OUTLKELF).lst $(OUTLKELF).debug.lst $(OUTLKELF).sym $(OUTLKELF).sym.sorted $(OUTLKELF).size $(OUTLKELF).hex $(OUTLKELF).dump $(OUTLKELF)-gdb.py
 	rm -f $(foreach app,$(ALLUSER_APPS),$(app) $(app).lst $(app).dump $(app).strip)
 
 install: all

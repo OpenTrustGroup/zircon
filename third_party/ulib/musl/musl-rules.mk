@@ -44,11 +44,6 @@ endif
 LOCAL_CFLAGS += -ffreestanding
 
 LOCAL_SRCS := \
-    $(LOCAL_DIR)/zircon/get_startup_handle.c \
-    $(LOCAL_DIR)/zircon/getentropy.c \
-    $(LOCAL_DIR)/zircon/internal.c \
-    $(LOCAL_DIR)/zircon/thrd_get_zx_handle.c \
-    $(LOCAL_DIR)/pthread/allocate.c \
     $(LOCAL_DIR)/pthread/pthread_atfork.c \
     $(LOCAL_DIR)/pthread/pthread_attr_destroy.c \
     $(LOCAL_DIR)/pthread/pthread_attr_get.c \
@@ -80,7 +75,7 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/pthread/pthread_getcpuclockid.c \
     $(LOCAL_DIR)/pthread/pthread_getspecific.c \
     $(LOCAL_DIR)/pthread/pthread_join.c \
-    $(LOCAL_DIR)/pthread/pthread_key_create.c \
+    $(LOCAL_DIR)/pthread/pthread_key.c \
     $(LOCAL_DIR)/pthread/pthread_kill.c \
     $(LOCAL_DIR)/pthread/pthread_mutex_consistent.c \
     $(LOCAL_DIR)/pthread/pthread_mutex_destroy.c \
@@ -235,8 +230,8 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/env/unsetenv.c \
     $(LOCAL_DIR)/src/errno/__errno_location.c \
     $(LOCAL_DIR)/src/errno/strerror.c \
-    $(LOCAL_DIR)/src/exit/__cxa_thread_atexit.c \
     $(LOCAL_DIR)/src/exit/_Exit.c \
+    $(LOCAL_DIR)/src/exit/__cxa_thread_atexit.c \
     $(LOCAL_DIR)/src/exit/abort.c \
     $(LOCAL_DIR)/src/exit/assert.c \
     $(LOCAL_DIR)/src/exit/at_quick_exit.c \
@@ -594,10 +589,6 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/process/waitpid.c \
     $(LOCAL_DIR)/src/regex/fnmatch.c \
     $(LOCAL_DIR)/src/regex/glob.c \
-    $(LOCAL_DIR)/third_party/tre/regcomp.c \
-    $(LOCAL_DIR)/third_party/tre/regerror.c \
-    $(LOCAL_DIR)/third_party/tre/regexec.c \
-    $(LOCAL_DIR)/third_party/tre/tre-mem.c \
     $(LOCAL_DIR)/src/sched/affinity.c \
     $(LOCAL_DIR)/src/sched/sched_cpucount.c \
     $(LOCAL_DIR)/src/sched/sched_get_priority_max.c \
@@ -801,6 +792,7 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/thread/__timedwait.c \
     $(LOCAL_DIR)/src/thread/__tls_get_addr.c \
     $(LOCAL_DIR)/src/thread/__wait.c \
+    $(LOCAL_DIR)/src/thread/allocate.c \
     $(LOCAL_DIR)/src/thread/call_once.c \
     $(LOCAL_DIR)/src/thread/cnd_broadcast.c \
     $(LOCAL_DIR)/src/thread/cnd_destroy.c \
@@ -821,8 +813,7 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/src/thread/thrd_join.c \
     $(LOCAL_DIR)/src/thread/thrd_sleep.c \
     $(LOCAL_DIR)/src/thread/thrd_yield.c \
-    $(LOCAL_DIR)/src/thread/tss_create.c \
-    $(LOCAL_DIR)/src/thread/tss_delete.c \
+    $(LOCAL_DIR)/src/thread/tss.c \
     $(LOCAL_DIR)/src/thread/tss_set.c \
     $(LOCAL_DIR)/src/time/__asctime.c \
     $(LOCAL_DIR)/src/time/__map_file.c \
@@ -960,6 +951,14 @@ LOCAL_SRCS := \
     $(LOCAL_DIR)/third_party/math/tanf.c \
     $(LOCAL_DIR)/third_party/math/tgammal.c \
     $(LOCAL_DIR)/third_party/smoothsort/qsort.c \
+    $(LOCAL_DIR)/third_party/tre/regcomp.c \
+    $(LOCAL_DIR)/third_party/tre/regerror.c \
+    $(LOCAL_DIR)/third_party/tre/regexec.c \
+    $(LOCAL_DIR)/third_party/tre/tre-mem.c \
+    $(LOCAL_DIR)/zircon/get_startup_handle.c \
+    $(LOCAL_DIR)/zircon/getentropy.c \
+    $(LOCAL_DIR)/zircon/internal.c \
+    $(LOCAL_DIR)/zircon/thrd_get_zx_handle.c \
 
 # These refer to access.
 #    $(LOCAL_DIR)/pthread/sem_open.c \

@@ -8,15 +8,15 @@
 #include <reg.h>
 #include <stdio.h>
 #include <trace.h>
+#include <arch/arm64/periphmap.h>
 #include <lib/cbuf.h>
 #include <kernel/thread.h>
 #include <dev/interrupt.h>
 #include <dev/uart.h>
 #include <platform/debug.h>
-#include <mdi/mdi.h>
-#include <mdi/mdi-defs.h>
 #include <pdev/driver.h>
 #include <pdev/uart.h>
+#include <zircon/boot/driver-config.h>
 
 /* PL011 implementation */
 #define UART_DR    (0x00)
@@ -38,8 +38,8 @@
 
 #define RXBUF_SIZE 16
 
-// values read from MDI
-static uint64_t uart_base = 0;
+// values read from bootdata
+static vaddr_t uart_base = 0;
 static uint32_t uart_irq = 0;
 
 static cbuf_t uart_rx_buf;
@@ -97,7 +97,7 @@ static void pl011_uart_irq(void *arg)
     spin_unlock(&uart_spinlock);
 }
 
-static void pl011_uart_init(mdi_node_ref_t* node, uint level)
+static void pl011_uart_init(const void* driver_data, uint32_t length)
 {
     // create circular buffer to hold received data
     cbuf_initialize(&uart_rx_buf, RXBUF_SIZE);
@@ -139,7 +139,7 @@ static int pl011_uart_getc(bool wait)
         return c;
     }
 
-    return -1;
+    return ZX_ERR_INTERNAL;
 }
 
 /* panic-time getc/putc */
@@ -210,36 +210,19 @@ static const struct pdev_uart_ops uart_ops = {
     .dputs = pl011_dputs,
 };
 
-static void pl011_uart_init_early(mdi_node_ref_t* node, uint level) {
-    uint64_t uart_base_virt = 0;
-    bool got_uart_base_virt = false;
-    bool got_uart_irq = false;
+static void pl011_uart_init_early(const void* driver_data, uint32_t length) {
+    ASSERT(length >= sizeof(dcfg_simple_t));
+    const dcfg_simple_t* driver = driver_data;
+    ASSERT(driver->mmio_phys && driver->irq);
 
-    mdi_node_ref_t child;
-    mdi_each_child(node, &child) {
-        switch (mdi_id(&child)) {
-        case MDI_BASE_VIRT:
-            got_uart_base_virt = !mdi_node_uint64(&child, &uart_base_virt);
-            break;
-        case MDI_IRQ:
-            got_uart_irq = !mdi_node_uint32(&child, &uart_irq);
-            break;
-        }
-    }
-
-    if (!got_uart_base_virt) {
-        panic("pl011 uart: uart_base_virt not defined\n");
-    }
-    if (!got_uart_irq) {
-        panic("pl011 uart: uart_irq not defined\n");
-    }
-
-    uart_base = (uint64_t)uart_base_virt;
+    uart_base = periph_paddr_to_vaddr(driver->mmio_phys);
+    ASSERT(uart_base);
+    uart_irq = driver->irq;
 
     UARTREG(uart_base, UART_CR) = (1<<8)|(1<<0); // tx_enable, uarten
 
     pdev_register_uart(&uart_ops);
 }
 
-LK_PDEV_INIT(pl011_uart_init_early, MDI_ARM_PL011_UART, pl011_uart_init_early, LK_INIT_LEVEL_PLATFORM_EARLY);
-LK_PDEV_INIT(pl011_uart_init, MDI_ARM_PL011_UART, pl011_uart_init, LK_INIT_LEVEL_PLATFORM);
+LK_PDEV_INIT(pl011_uart_init_early, KDRV_PL011_UART, pl011_uart_init_early, LK_INIT_LEVEL_PLATFORM_EARLY);
+LK_PDEV_INIT(pl011_uart_init, KDRV_PL011_UART, pl011_uart_init, LK_INIT_LEVEL_PLATFORM);

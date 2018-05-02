@@ -8,18 +8,5 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 PLATFORM := generic-arm
 
-# Some boards need gzipped kernel image
-OUT_ZIRCON_ZIMAGE := $(BUILDDIR)/z$(LKNAME).bin
-
-$(OUT_ZIRCON_ZIMAGE): $(OUTLKBIN)
-	$(call BUILDECHO,gzipping image $@)
-	$(NOECHO)gzip -c $< > $@
-
-GENERATED += $(OUT_ZIRCON_ZIMAGE)
-EXTRA_BUILDDEPS += $(OUT_ZIRCON_ZIMAGE)
-
-GENERATED += $(OUT_ZIRCON_ZIMAGE)
-EXTRA_BUILDDEPS += $(OUT_ZIRCON_ZIMAGE)
-
 # include rules for our various arm64 boards
-include $(LOCAL_DIR)/*/rules.mk
+include $(LOCAL_DIR)/board/*/rules.mk

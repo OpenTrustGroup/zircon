@@ -28,7 +28,7 @@
 #include <zircon/errors.h>
 #include <zircon/status.h>
 #include <zircon/types.h>
-#include <zx/vmo.h>
+#include <lib/zx/vmo.h>
 #include <zxcrypt/volume.h>
 
 #define ZXDEBUG 0
@@ -53,6 +53,15 @@ const slot_num_t Volume::kNumSlots = 16;
 // The number of FVM-like slices reserved at the start of the device, each holding |kMetadataBlocks|
 // copies of the superblock.
 const size_t Volume::kReservedSlices = 2;
+
+// The amount of data that can "in-flight" to the underlying block device before the zxcrypt
+// driver begins queuing transactions
+//
+// TODO(aarongreen): See ZX-1616.  Tune this value.  Possibly break into several smaller VMOs if we
+// want to allow some to be recycled; support for this doesn't currently exist. Up to 64 MB may be
+// in flight at once.  The device's max_transfer_size will be capped at 1/4 of this value.
+const uint32_t Volume::kBufferSize = 1U << 24;
+static_assert(Volume::kBufferSize % PAGE_SIZE == 0, "kBufferSize must be page aligned");
 
 namespace {
 

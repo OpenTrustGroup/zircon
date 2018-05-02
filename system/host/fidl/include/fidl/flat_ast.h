@@ -21,73 +21,45 @@
 namespace fidl {
 namespace flat {
 
-template <typename T>
-struct PtrCompare {
-    bool operator()(const T* left, const T* right) const {
-        return *left < *right;
-    }
+template <typename T> struct PtrCompare {
+    bool operator()(const T* left, const T* right) const { return *left < *right; }
 };
 
 struct Decl;
 class Library;
 
 // This is needed (for now) to work around declaration order issues.
-StringView LibraryName(const Library* library);
+std::string LibraryName(const Library* library, StringView separator);
 
-// TODO(TO-701) Handle multipart names.
 struct Name {
-    Name()
-        : name_(SourceLocation()) {}
-
-    Name(const Library* library, std::vector<SourceLocation> nested_decls, SourceLocation name)
-        : library_(library), nested_decls_(std::move(nested_decls)), name_(name) {}
+    Name() : name_(SourceLocation()) {}
 
     Name(const Library* library, SourceLocation name)
-        : Name(library, {}, name) {}
+        : library_(library), name_(name) {}
 
     Name(Name&&) = default;
     Name& operator=(Name&&) = default;
 
     const Library* library() const { return library_; }
-    const std::vector<SourceLocation>& nested_decls() const { return nested_decls_; }
     SourceLocation name() const { return name_; }
 
     bool operator==(const Name& other) const {
-        if (LibraryName(library_) != LibraryName(other.library_)) {
+        if (LibraryName(library_, ".") != LibraryName(other.library_, ".")) {
             return false;
-        }
-        if (nested_decls_.size() != other.nested_decls_.size()) {
-            return false;
-        }
-        for (size_t idx = 0u; idx < nested_decls_.size(); ++idx) {
-            if (nested_decls_[idx].data() != other.nested_decls_[idx].data()) {
-                return false;
-            }
         }
         return name_.data() == other.name_.data();
     }
-    bool operator!=(const Name& other) const {
-        return name_.data() != other.name_.data();
-    }
+    bool operator!=(const Name& other) const { return name_.data() != other.name_.data(); }
 
     bool operator<(const Name& other) const {
-        if (LibraryName(library_) != LibraryName(other.library_)) {
-            return LibraryName(library_) < LibraryName(other.library_);
-        }
-        if (nested_decls_.size() != other.nested_decls_.size()) {
-            return nested_decls_.size() < other.nested_decls_.size();
-        }
-        for (size_t idx = 0u; idx < nested_decls_.size(); ++idx) {
-            if (nested_decls_[idx].data() != other.nested_decls_[idx].data()) {
-                return nested_decls_[idx].data() < other.nested_decls_[idx].data();
-            }
+        if (LibraryName(library_, ".") != LibraryName(other.library_, ".")) {
+            return LibraryName(library_, ".") < LibraryName(other.library_, ".");
         }
         return name_.data() < other.name_.data();
     }
 
 private:
     const Library* library_ = nullptr;
-    std::vector<SourceLocation> nested_decls_;
     SourceLocation name_;
 };
 
@@ -95,26 +67,24 @@ struct Constant {
     virtual ~Constant() {}
 
     enum struct Kind {
-        Identifier,
-        Literal,
+        kIdentifier,
+        kLiteral,
     };
 
-    explicit Constant(Kind kind)
-        : kind(kind) {}
+    explicit Constant(Kind kind) : kind(kind) {}
 
     const Kind kind;
 };
 
 struct IdentifierConstant : Constant {
-    explicit IdentifierConstant(Name name)
-        : Constant(Kind::Identifier), name(std::move(name)) {}
+    explicit IdentifierConstant(Name name) : Constant(Kind::kIdentifier), name(std::move(name)) {}
 
     Name name;
 };
 
 struct LiteralConstant : Constant {
     explicit LiteralConstant(std::unique_ptr<raw::Literal> literal)
-        : Constant(Kind::Literal), literal(std::move(literal)) {}
+        : Constant(Kind::kLiteral), literal(std::move(literal)) {}
 
     std::unique_ptr<raw::Literal> literal;
 };
@@ -130,16 +100,13 @@ private:
     uint32_t value_;
 };
 
-template <typename IntType>
-struct IntConstant {
+template <typename IntType> struct IntConstant {
     IntConstant(std::unique_ptr<Constant> constant, IntType value)
         : constant_(std::move(constant)), value_(value) {}
 
-    explicit IntConstant(IntType value)
-        : value_(value) {}
+    explicit IntConstant(IntType value) : value_(value) {}
 
-    IntConstant()
-        : value_(0) {}
+    IntConstant() : value_(0) {}
 
     IntType Value() const { return value_; }
 
@@ -179,17 +146,16 @@ struct Type {
     virtual ~Type() {}
 
     enum struct Kind {
-        Array,
-        Vector,
-        String,
-        Handle,
-        RequestHandle,
-        Primitive,
-        Identifier,
+        kArray,
+        kVector,
+        kString,
+        kHandle,
+        kRequestHandle,
+        kPrimitive,
+        kIdentifier,
     };
 
-    explicit Type(Kind kind, uint32_t size)
-        : kind(kind), size(size) {}
+    explicit Type(Kind kind, uint32_t size) : kind(kind), size(size) {}
 
     const Kind kind;
     // Set at construction time for most Types. Identifier types get
@@ -201,8 +167,7 @@ struct Type {
 
 struct ArrayType : public Type {
     ArrayType(uint32_t size, std::unique_ptr<Type> element_type, Size element_count)
-        : Type(Kind::Array, size),
-          element_type(std::move(element_type)),
+        : Type(Kind::kArray, size), element_type(std::move(element_type)),
           element_count(std::move(element_count)) {}
 
     std::unique_ptr<Type> element_type;
@@ -218,8 +183,7 @@ struct ArrayType : public Type {
 struct VectorType : public Type {
     VectorType(std::unique_ptr<Type> element_type, Size element_count,
                types::Nullability nullability)
-        : Type(Kind::Vector, 16u),
-          element_type(std::move(element_type)),
+        : Type(Kind::kVector, 16u), element_type(std::move(element_type)),
           element_count(std::move(element_count)), nullability(nullability) {}
 
     std::unique_ptr<Type> element_type;
@@ -237,8 +201,7 @@ struct VectorType : public Type {
 
 struct StringType : public Type {
     StringType(Size max_size, types::Nullability nullability)
-        : Type(Kind::String, 16u), max_size(std::move(max_size)),
-          nullability(nullability) {}
+        : Type(Kind::kString, 16u), max_size(std::move(max_size)), nullability(nullability) {}
 
     Size max_size;
     types::Nullability nullability;
@@ -252,7 +215,7 @@ struct StringType : public Type {
 
 struct HandleType : public Type {
     HandleType(types::HandleSubtype subtype, types::Nullability nullability)
-        : Type(Kind::Handle, 4u), subtype(subtype), nullability(nullability) {}
+        : Type(Kind::kHandle, 4u), subtype(subtype), nullability(nullability) {}
 
     types::HandleSubtype subtype;
     types::Nullability nullability;
@@ -266,7 +229,7 @@ struct HandleType : public Type {
 
 struct RequestHandleType : public Type {
     RequestHandleType(Name name, types::Nullability nullability)
-        : Type(Kind::RequestHandle, 4u), name(std::move(name)), nullability(nullability) {}
+        : Type(Kind::kRequestHandle, 4u), name(std::move(name)), nullability(nullability) {}
 
     Name name;
     types::Nullability nullability;
@@ -281,41 +244,39 @@ struct RequestHandleType : public Type {
 struct PrimitiveType : public Type {
     static uint32_t SubtypeSize(types::PrimitiveSubtype subtype) {
         switch (subtype) {
-        case types::PrimitiveSubtype::Bool:
-        case types::PrimitiveSubtype::Int8:
-        case types::PrimitiveSubtype::Uint8:
+        case types::PrimitiveSubtype::kBool:
+        case types::PrimitiveSubtype::kInt8:
+        case types::PrimitiveSubtype::kUint8:
             return 1u;
 
-        case types::PrimitiveSubtype::Int16:
-        case types::PrimitiveSubtype::Uint16:
+        case types::PrimitiveSubtype::kInt16:
+        case types::PrimitiveSubtype::kUint16:
             return 2u;
 
-        case types::PrimitiveSubtype::Float32:
-        case types::PrimitiveSubtype::Status:
-        case types::PrimitiveSubtype::Int32:
-        case types::PrimitiveSubtype::Uint32:
+        case types::PrimitiveSubtype::kFloat32:
+        case types::PrimitiveSubtype::kStatus:
+        case types::PrimitiveSubtype::kInt32:
+        case types::PrimitiveSubtype::kUint32:
             return 4u;
 
-        case types::PrimitiveSubtype::Float64:
-        case types::PrimitiveSubtype::Int64:
-        case types::PrimitiveSubtype::Uint64:
+        case types::PrimitiveSubtype::kFloat64:
+        case types::PrimitiveSubtype::kInt64:
+        case types::PrimitiveSubtype::kUint64:
             return 8u;
         }
     }
 
     explicit PrimitiveType(types::PrimitiveSubtype subtype)
-        : Type(Kind::Primitive, SubtypeSize(subtype)), subtype(subtype) {}
+        : Type(Kind::kPrimitive, SubtypeSize(subtype)), subtype(subtype) {}
 
     types::PrimitiveSubtype subtype;
 
-    bool operator<(const PrimitiveType& other) const {
-        return subtype < other.subtype;
-    }
+    bool operator<(const PrimitiveType& other) const { return subtype < other.subtype; }
 };
 
 struct IdentifierType : public Type {
     IdentifierType(Name name, types::Nullability nullability)
-        : Type(Kind::Identifier, 0u), name(std::move(name)), nullability(nullability) {}
+        : Type(Kind::kIdentifier, 0u), name(std::move(name)), nullability(nullability) {}
 
     Name name;
     types::Nullability nullability;
@@ -331,37 +292,37 @@ inline bool Type::operator<(const Type& other) const {
     if (kind != other.kind)
         return kind < other.kind;
     switch (kind) {
-    case Type::Kind::Array: {
+    case Type::Kind::kArray: {
         auto left_array = static_cast<const ArrayType*>(this);
         auto right_array = static_cast<const ArrayType*>(&other);
         return *left_array < *right_array;
     }
-    case Type::Kind::Vector: {
+    case Type::Kind::kVector: {
         auto left_vector = static_cast<const VectorType*>(this);
         auto right_vector = static_cast<const VectorType*>(&other);
         return *left_vector < *right_vector;
     }
-    case Type::Kind::String: {
+    case Type::Kind::kString: {
         auto left_string = static_cast<const StringType*>(this);
         auto right_string = static_cast<const StringType*>(&other);
         return *left_string < *right_string;
     }
-    case Type::Kind::Handle: {
+    case Type::Kind::kHandle: {
         auto left_handle = static_cast<const HandleType*>(this);
         auto right_handle = static_cast<const HandleType*>(&other);
         return *left_handle < *right_handle;
     }
-    case Type::Kind::RequestHandle: {
+    case Type::Kind::kRequestHandle: {
         auto left_request = static_cast<const RequestHandleType*>(this);
         auto right_request = static_cast<const RequestHandleType*>(&other);
         return *left_request < *right_request;
     }
-    case Type::Kind::Primitive: {
+    case Type::Kind::kPrimitive: {
         auto left_primitive = static_cast<const PrimitiveType*>(this);
         auto right_primitive = static_cast<const PrimitiveType*>(&other);
         return *left_primitive < *right_primitive;
     }
-    case Type::Kind::Identifier: {
+    case Type::Kind::kIdentifier: {
         auto left_identifier = static_cast<const IdentifierType*>(this);
         auto right_identifier = static_cast<const IdentifierType*>(&other);
         return *left_identifier < *right_identifier;
@@ -370,8 +331,10 @@ inline bool Type::operator<(const Type& other) const {
 }
 
 struct Const : public Decl {
-    Const(std::unique_ptr<raw::AttributeList> attributes, Name name, std::unique_ptr<Type> type, std::unique_ptr<Constant> value)
-        : Decl(Kind::kConst, std::move(attributes), std::move(name)), type(std::move(type)), value(std::move(value)) {}
+    Const(std::unique_ptr<raw::AttributeList> attributes, Name name, std::unique_ptr<Type> type,
+          std::unique_ptr<Constant> value)
+        : Decl(Kind::kConst, std::move(attributes), std::move(name)), type(std::move(type)),
+          value(std::move(value)) {}
     std::unique_ptr<Type> type;
     std::unique_ptr<Constant> value;
 };
@@ -384,8 +347,10 @@ struct Enum : public Decl {
         std::unique_ptr<Constant> value;
     };
 
-    Enum(std::unique_ptr<raw::AttributeList> attributes, Name name, types::PrimitiveSubtype type, std::vector<Member> members)
-        : Decl(Kind::kEnum, std::move(attributes), std::move(name)), type(type), members(std::move(members)) {}
+    Enum(std::unique_ptr<raw::AttributeList> attributes, Name name, types::PrimitiveSubtype type,
+         std::vector<Member> members)
+        : Decl(Kind::kEnum, std::move(attributes), std::move(name)), type(type),
+          members(std::move(members)) {}
 
     types::PrimitiveSubtype type;
     std::vector<Member> members;
@@ -410,12 +375,10 @@ struct Interface : public Decl {
         Method(Method&&) = default;
         Method& operator=(Method&&) = default;
 
-        Method(Ordinal ordinal, SourceLocation name,
-               std::unique_ptr<Message> maybe_request,
+        Method(Ordinal ordinal, SourceLocation name, std::unique_ptr<Message> maybe_request,
                std::unique_ptr<Message> maybe_response)
             : ordinal(std::move(ordinal)), name(std::move(name)),
-              maybe_request(std::move(maybe_request)),
-              maybe_response(std::move(maybe_response)) {
+              maybe_request(std::move(maybe_request)), maybe_response(std::move(maybe_response)) {
             assert(this->maybe_request != nullptr || this->maybe_response != nullptr);
         }
 
@@ -425,8 +388,10 @@ struct Interface : public Decl {
         std::unique_ptr<Message> maybe_response;
     };
 
-    Interface(std::unique_ptr<raw::AttributeList> attributes, Name name, std::vector<Method> methods)
-        : Decl(Kind::kInterface, std::move(attributes), std::move(name)), methods(std::move(methods)) {}
+    Interface(std::unique_ptr<raw::AttributeList> attributes, Name name,
+              std::vector<Method> methods)
+        : Decl(Kind::kInterface, std::move(attributes), std::move(name)),
+          methods(std::move(methods)) {}
 
     std::vector<Method> methods;
 };
@@ -444,7 +409,8 @@ struct Struct : public Decl {
     };
 
     Struct(std::unique_ptr<raw::AttributeList> attributes, Name name, std::vector<Member> members)
-        : Decl(Kind::kStruct, std::move(attributes), std::move(name)), members(std::move(members)) {}
+        : Decl(Kind::kStruct, std::move(attributes), std::move(name)), members(std::move(members)) {
+    }
 
     std::vector<Member> members;
     TypeShape typeshape;
@@ -471,41 +437,37 @@ struct Union : public Decl {
 
 class Library {
 public:
-    Library(const std::map<StringView, std::unique_ptr<Library>>* dependencies,
+    Library(const std::map<std::vector<StringView>, std::unique_ptr<Library>>* dependencies,
             ErrorReporter* error_reporter);
 
     bool ConsumeFile(std::unique_ptr<raw::File> file);
     bool Compile();
 
-    StringView name() const {
-        return library_name_.data();
-    }
+    const std::vector<StringView>& name() const { return library_name_; }
 
 private:
     bool Fail(StringView message);
     bool Fail(const SourceLocation& location, StringView message);
-    bool Fail(const Name& name, StringView message) {
-      return Fail(name.name(), message);
-    }
-    bool Fail(const Decl& decl, StringView message) {
-      return Fail(decl.name, message);
-    }
+    bool Fail(const Name& name, StringView message) { return Fail(name.name(), message); }
+    bool Fail(const Decl& decl, StringView message) { return Fail(decl.name, message); }
 
     bool CompileCompoundIdentifier(const raw::CompoundIdentifier* compound_identifier,
-                                   SourceLocation location,
-                                   Name* name_out);
+                                   SourceLocation location, Name* name_out);
 
     bool ParseSize(std::unique_ptr<Constant> constant, Size* out_size);
 
     void RegisterConst(Const* decl);
     bool RegisterDecl(Decl* decl);
 
-    bool ConsumeConstant(std::unique_ptr<raw::Constant> raw_constant, SourceLocation location, std::unique_ptr<Constant>* out_constant);
-    bool ConsumeType(std::unique_ptr<raw::Type> raw_type, SourceLocation location, std::unique_ptr<Type>* out_type);
+    bool ConsumeConstant(std::unique_ptr<raw::Constant> raw_constant, SourceLocation location,
+                         std::unique_ptr<Constant>* out_constant);
+    bool ConsumeType(std::unique_ptr<raw::Type> raw_type, SourceLocation location,
+                     std::unique_ptr<Type>* out_type);
 
     bool ConsumeConstDeclaration(std::unique_ptr<raw::ConstDeclaration> const_declaration);
     bool ConsumeEnumDeclaration(std::unique_ptr<raw::EnumDeclaration> enum_declaration);
-    bool ConsumeInterfaceDeclaration(std::unique_ptr<raw::InterfaceDeclaration> interface_declaration);
+    bool
+    ConsumeInterfaceDeclaration(std::unique_ptr<raw::InterfaceDeclaration> interface_declaration);
     bool ConsumeStructDeclaration(std::unique_ptr<raw::StructDeclaration> struct_declaration);
     bool ConsumeUnionDeclaration(std::unique_ptr<raw::UnionDeclaration> union_declaration);
 
@@ -538,6 +500,10 @@ private:
     bool CompileStruct(Struct* struct_declaration);
     bool CompileUnion(Union* union_declaration);
 
+    // Compiling a type both validates the type, and computes shape
+    // information for the type. In particular, we validate that
+    // optional identifier types refer to things that can in fact be
+    // nullable (ie not enums).
     bool CompileArrayType(ArrayType* array_type, TypeShape* out_type_metadata);
     bool CompileVectorType(VectorType* vector_type, TypeShape* out_type_metadata);
     bool CompileStringType(StringType* string_type, TypeShape* out_type_metadata);
@@ -589,23 +555,23 @@ public:
             return false;
         }
         switch (constant->kind) {
-        case Constant::Kind::Identifier: {
+        case Constant::Kind::kIdentifier: {
             auto identifier_constant = static_cast<const IdentifierConstant*>(constant);
             auto decl = LookupType(identifier_constant->name);
             if (!decl || decl->kind != Decl::Kind::kConst)
                 return false;
             return ParseIntegerConstant(static_cast<Const*>(decl)->value.get(), out_value);
         }
-        case Constant::Kind::Literal: {
+        case Constant::Kind::kLiteral: {
             auto literal_constant = static_cast<const LiteralConstant*>(constant);
             switch (literal_constant->literal->kind) {
-            case raw::Literal::Kind::String:
-            case raw::Literal::Kind::True:
-            case raw::Literal::Kind::False: {
+            case raw::Literal::Kind::kString:
+            case raw::Literal::Kind::kTrue:
+            case raw::Literal::Kind::kFalse: {
                 return false;
             }
 
-            case raw::Literal::Kind::Numeric: {
+            case raw::Literal::Kind::kNumeric: {
                 auto numeric_literal =
                     static_cast<const raw::NumericLiteral*>(literal_constant->literal.get());
                 return ParseIntegerLiteral<IntType>(numeric_literal, out_value);
@@ -615,9 +581,9 @@ public:
         }
     }
 
-    const std::map<StringView, std::unique_ptr<Library>>* dependencies_;
+    const std::map<std::vector<StringView>, std::unique_ptr<Library>>* dependencies_;
 
-    SourceLocation library_name_;
+    std::vector<StringView> library_name_;
 
     std::vector<std::unique_ptr<Const>> const_declarations_;
     std::vector<std::unique_ptr<Enum>> enum_declarations_;

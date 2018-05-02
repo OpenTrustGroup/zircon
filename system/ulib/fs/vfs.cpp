@@ -19,7 +19,7 @@
 #include <zircon/assert.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
-#include <zx/event.h>
+#include <lib/zx/event.h>
 #endif
 
 #include <fs/trace.h>
@@ -411,7 +411,7 @@ zx_status_t Vfs::ServeConnection(fbl::unique_ptr<Connection> connection) {
 void Vfs::OnConnectionClosedRemotely(Connection* connection) {
     ZX_DEBUG_ASSERT(connection);
 
-    UnregisterAndDestroyConnection(connection);
+    UnregisterConnection(connection);
 }
 
 zx_status_t Vfs::ServeDirectory(fbl::RefPtr<fs::Vnode> vn, zx::channel channel) {
@@ -433,12 +433,20 @@ zx_status_t Vfs::ServeDirectory(fbl::RefPtr<fs::Vnode> vn, zx::channel channel) 
     return vn->Serve(this, fbl::move(channel), ZX_FS_RIGHT_ADMIN);
 }
 
+void Vfs::Shutdown(ShutdownCallback closure) {
+    closure(ZX_ERR_NOT_SUPPORTED);
+}
+
+bool Vfs::IsTerminating() const {
+    return false;
+}
+
 void Vfs::RegisterConnection(fbl::unique_ptr<Connection> connection) {
-    // The connection will be destroyed by |UnregisterAndDestroyConnection()|
+    // The connection will be destroyed by |UnregisterConnection()|.
     __UNUSED auto ptr = connection.release();
 }
 
-void Vfs::UnregisterAndDestroyConnection(Connection* connection) {
+void Vfs::UnregisterConnection(Connection* connection) {
     delete connection;
 }
 

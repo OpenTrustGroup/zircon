@@ -122,25 +122,6 @@ void SocketDispatcher::OnPeerZeroHandlesLocked() {
     UpdateStateLocked(ZX_SOCKET_WRITABLE, ZX_SOCKET_PEER_CLOSED);
 }
 
-zx_status_t SocketDispatcher::user_signal(uint32_t clear_mask, uint32_t set_mask, bool peer)
-    TA_NO_THREAD_SAFETY_ANALYSIS {
-    canary_.Assert();
-
-    if ((set_mask & ~ZX_USER_SIGNAL_ALL) || (clear_mask & ~ZX_USER_SIGNAL_ALL))
-        return ZX_ERR_INVALID_ARGS;
-
-    if (!peer) {
-        UpdateState(clear_mask, set_mask);
-        return ZX_OK;
-    }
-
-    AutoLock lock(get_lock());
-    if (!peer_)
-        return ZX_ERR_PEER_CLOSED;
-
-    return peer_->UserSignalSelfLocked(clear_mask, set_mask);
-}
-
 zx_status_t SocketDispatcher::UserSignalSelfLocked(uint32_t clear_mask, uint32_t set_mask) {
     canary_.Assert();
     UpdateStateLocked(clear_mask, set_mask);
@@ -438,4 +419,31 @@ zx_status_t SocketDispatcher::Accept(HandleOwner* h) TA_NO_THREAD_SAFETY_ANALYSI
         peer_->UpdateStateLocked(0, ZX_SOCKET_SHARE);
 
     return ZX_OK;
+}
+
+size_t SocketDispatcher::ReceiveBufferMax() const {
+    canary_.Assert();
+    AutoLock lock(get_lock());
+    return data_.max_size();
+}
+
+size_t SocketDispatcher::ReceiveBufferSize() const {
+    canary_.Assert();
+    AutoLock lock(get_lock());
+    return data_.size();
+}
+
+// NOTE(abdulla): To access peer_ we must take get_lock(), to access peer_->data
+// we must take peer_->get_lock(). These two locks are aliases of one another,
+// however thread-safety analysis can not see that, so we must disable analysis.
+size_t SocketDispatcher::TransmitBufferMax() const TA_NO_THREAD_SAFETY_ANALYSIS {
+    canary_.Assert();
+    AutoLock lock(get_lock());
+    return peer_->data_.max_size();
+}
+
+size_t SocketDispatcher::TransmitBufferSize() const TA_NO_THREAD_SAFETY_ANALYSIS {
+    canary_.Assert();
+    AutoLock lock(get_lock());
+    return peer_->data_.size();
 }

@@ -30,7 +30,6 @@ public:
     zx_obj_type_t get_type() const final { return ZX_OBJ_TYPE_CHANNEL; }
     bool has_state_tracker() const final { return true; }
     zx_status_t add_observer(StateObserver* observer) final;
-    zx_status_t user_signal(uint32_t clear_mask, uint32_t set_mask, bool peer) final TA_NO_THREAD_SAFETY_ANALYSIS;
 
     void on_zero_handles() final;
 
@@ -55,6 +54,11 @@ public:
     zx_status_t ResumeInterruptedCall(MessageWaiter* waiter, zx_time_t deadline,
                                       fbl::unique_ptr<MessagePacket>* reply);
 
+    // Returns the maximum depth this channel endpoint will queue
+    // messages to. This value is accessible to userspace via the
+    // ZX_PROP_CHANNEL_TX_MSG_MAX object property.
+    size_t TxMessageMax() const;
+
     // MessageWaiter's state is guarded by the lock of the
     // owning ChannelDispatcher, and Deliver(), Signal(), Cancel(),
     // and EndWait() methods must only be called under
@@ -72,11 +76,12 @@ public:
 
         ~MessageWaiter();
 
-        zx_status_t BeginWait(fbl::RefPtr<ChannelDispatcher> channel, zx_txid_t txid);
+        zx_status_t BeginWait(fbl::RefPtr<ChannelDispatcher> channel);
         int Deliver(fbl::unique_ptr<MessagePacket> msg);
         int Cancel(zx_status_t status);
         fbl::RefPtr<ChannelDispatcher> get_channel() { return channel_; }
         zx_txid_t get_txid() const { return txid_; }
+        void set_txid(zx_txid_t txid) { txid_ = txid; };
         zx_status_t Wait(zx_time_t deadline);
         // Returns any delivered message via out and the status.
         zx_status_t EndWait(fbl::unique_ptr<MessagePacket>* out);
@@ -107,5 +112,7 @@ private:
 
     MessageList messages_ TA_GUARDED(get_lock());
     uint64_t message_count_ TA_GUARDED(get_lock()) = 0;
+    uint64_t max_message_count_ TA_GUARDED(get_lock()) = 0;
+    uint32_t txid_ TA_GUARDED(get_lock()) = 0;
     WaiterList waiters_ TA_GUARDED(get_lock());
 };

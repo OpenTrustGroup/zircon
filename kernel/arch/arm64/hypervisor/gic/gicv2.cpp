@@ -37,54 +37,48 @@ static_assert(__offsetof(Gich, lr) == 0x100, "");
 
 static volatile Gich* gich = NULL;
 
-/* Returns the GICH_HCR value */
-static uint32_t gicv2_read_gich_hcr(void) {
+static uint32_t gicv2_read_gich_hcr() {
     return gich->hcr;
 }
 
-/* Writes to the GICH_HCR register */
 static void gicv2_write_gich_hcr(uint32_t val) {
     gich->hcr = val;
 }
 
-/* Returns the GICH_VTR value */
-static uint32_t gicv2_read_gich_vtr(void) {
+static uint32_t gicv2_read_gich_vtr() {
     return gich->vtr;
 }
 
-/* Writes to the GICH_VTR register */
 static void gicv2_write_gich_vtr(uint32_t val) {
     gich->vtr = val;
 }
 
-/* Returns the GICH_VMCR value */
-static uint32_t gicv2_read_gich_vmcr(void) {
+static uint32_t gicv2_default_gich_vmcr() {
+    return GICH_VMCR_VPMR_MASK | GICH_VMCR_VENG0;
+}
+
+static uint32_t gicv2_read_gich_vmcr() {
     return gich->vmcr;
 }
 
-/* Writes to the GICH_VMCR register */
 static void gicv2_write_gich_vmcr(uint32_t val) {
     gich->vmcr = val;
 }
 
-/* Returns the GICH_ELRS value */
-static uint64_t gicv2_read_gich_elrs(void) {
+static uint64_t gicv2_read_gich_elrs() {
     return gich->elrs;
 }
 
-/* Writes to the GICH_ELRS register */
 static void gicv2_write_gich_elrs(uint64_t val) {
     gich->elrs = val;
 }
 
-/* Returns the GICH_LRn value */
-static uint32_t gicv2_read_gich_lr(uint32_t idx) {
+static uint64_t gicv2_read_gich_lr(uint32_t idx) {
     return gich->lr[idx];
 }
 
-/* Writes to the GICH_LR register */
-static void gicv2_write_gich_lr(uint32_t idx, uint32_t val) {
-    gich->lr[idx] = val;
+static void gicv2_write_gich_lr(uint32_t idx, uint64_t val) {
+    gich->lr[idx] = static_cast<uint32_t>(val);
 }
 
 static zx_status_t gicv2_get_gicv(paddr_t* gicv_paddr) {
@@ -95,11 +89,24 @@ static zx_status_t gicv2_get_gicv(paddr_t* gicv_paddr) {
     return ZX_OK;
 }
 
+static uint64_t gicv2_get_lr_from_vector(uint32_t vector) {
+    return (vector & GICH_LR_VIRTUAL_ID_MASK) | GICH_LR_PENDING;
+}
+
+static uint32_t gicv2_get_vector_from_lr(uint64_t lr) {
+    return lr & GICH_LR_VIRTUAL_ID_MASK;
+}
+
+static uint32_t gicv2_get_num_lrs() {
+    return (gicv2_read_gich_vtr() & GICH_VTR_LIST_REGS_MASK) + 1;
+}
+
 static const struct arm_gic_hw_interface_ops gic_hw_register_ops = {
     .read_gich_hcr = gicv2_read_gich_hcr,
     .write_gich_hcr = gicv2_write_gich_hcr,
     .read_gich_vtr = gicv2_read_gich_vtr,
     .write_gich_vtr = gicv2_write_gich_vtr,
+    .default_gich_vmcr = gicv2_default_gich_vmcr,
     .read_gich_vmcr = gicv2_read_gich_vmcr,
     .write_gich_vmcr = gicv2_write_gich_vmcr,
     .read_gich_elrs = gicv2_read_gich_elrs,
@@ -107,9 +114,12 @@ static const struct arm_gic_hw_interface_ops gic_hw_register_ops = {
     .read_gich_lr = gicv2_read_gich_lr,
     .write_gich_lr = gicv2_write_gich_lr,
     .get_gicv = gicv2_get_gicv,
+    .get_lr_from_vector = gicv2_get_lr_from_vector,
+    .get_vector_from_lr = gicv2_get_vector_from_lr,
+    .get_num_lrs = gicv2_get_num_lrs,
 };
 
-void gicv2_hw_interface_register(void) {
+void gicv2_hw_interface_register() {
     // Populate GICH
     gich = reinterpret_cast<volatile Gich*>(GICH_ADDRESS);
     arm_gic_hw_interface_register(&gic_hw_register_ops);

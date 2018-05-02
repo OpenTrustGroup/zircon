@@ -15,7 +15,7 @@
 #ifdef __Fuchsia__
 #include <fs/mapped-vmo.h>
 #include <zircon/syscalls.h>
-#include <zx/vmo.h>
+#include <lib/zx/vmo.h>
 #endif
 
 #include <fbl/unique_fd.h>
@@ -366,4 +366,15 @@ int open_partition(const uint8_t* uniqueGUID, const uint8_t* typeGUID,
     return info.out_partition.release();
 }
 
+zx_status_t destroy_partition(const uint8_t* uniqueGUID, const uint8_t* typeGUID) {
+    char path[PATH_MAX];
+    fbl::unique_fd fd(open_partition(uniqueGUID, typeGUID, 0, path));
+
+    if (!fd) {
+        return ZX_ERR_IO;
+    }
+
+    xprintf("Destroying partition %s\n", path);
+    return static_cast<zx_status_t>(ioctl_block_fvm_destroy(fd.get()));
+}
 #endif

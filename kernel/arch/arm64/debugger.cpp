@@ -17,18 +17,17 @@
 // readable and writable by userland on ARM64.
 static uint32_t kUserVisibleFlags = 0xf0000000;
 
+// SS (="Single Step") is bit 0 in MDSCR_EL1.
+static constexpr uint64_t kMdscrSSMask = 1;
+
+// Single Step for PSTATE, see ARMv8 Manual C5.2.18, enable Single step for Process
+static constexpr uint64_t kSSMaskSPSR = (1 << 21);
+
 zx_status_t arch_get_general_regs(struct thread* thread, zx_thread_state_general_regs_t* out) {
-    if (thread_stopped_in_exception(thread)) {
-        // TODO(dje): We could get called while processing a synthetic
-        // exception where there is no frame.
-        if (thread->exception_context->frame == NULL)
-            return ZX_ERR_NOT_SUPPORTED;
-    } else {
-        // TODO(dje): Punt if, for example, suspended in channel call.
-        // Can be removed when ZX-747 done.
-        if (thread->arch.suspended_general_regs == nullptr)
-            return ZX_ERR_NOT_SUPPORTED;
-    }
+    // Punt if registers aren't available. E.g.,
+    // ZX-563 (registers aren't available in synthetic exceptions)
+    if (thread->arch.suspended_general_regs == nullptr)
+        return ZX_ERR_NOT_SUPPORTED;
 
     struct arm64_iframe_long* in = thread->arch.suspended_general_regs;
     DEBUG_ASSERT(in);
@@ -44,17 +43,10 @@ zx_status_t arch_get_general_regs(struct thread* thread, zx_thread_state_general
 }
 
 zx_status_t arch_set_general_regs(struct thread* thread, const zx_thread_state_general_regs_t* in) {
-    if (thread_stopped_in_exception(thread)) {
-        // TODO(dje): We could get called while processing a synthetic
-        // exception where there is no frame.
-        if (thread->exception_context->frame == NULL)
-            return ZX_ERR_NOT_SUPPORTED;
-    } else {
-        // TODO(dje): Punt if, for example, suspended in channel call.
-        // Can be removed when ZX-747 done.
-        if (thread->arch.suspended_general_regs == nullptr)
-            return ZX_ERR_NOT_SUPPORTED;
-    }
+    // Punt if registers aren't available. E.g.,
+    // ZX-563 (registers aren't available in synthetic exceptions)
+    if (thread->arch.suspended_general_regs == nullptr)
+        return ZX_ERR_NOT_SUPPORTED;
 
     struct arm64_iframe_long* out = thread->arch.suspended_general_regs;
     DEBUG_ASSERT(out);
@@ -66,5 +58,35 @@ zx_status_t arch_set_general_regs(struct thread* thread, const zx_thread_state_g
     out->elr = in->pc;
     out->spsr = (out->spsr & ~kUserVisibleFlags) | (in->cpsr & kUserVisibleFlags);
 
+    return ZX_OK;
+}
+
+zx_status_t arch_get_single_step(struct thread* thread, bool* single_step) {
+    // Punt if registers aren't available. E.g.,
+    // ZX-563 (registers aren't available in synthetic exceptions)
+    if (thread->arch.suspended_general_regs == nullptr)
+        return ZX_ERR_NOT_SUPPORTED;
+    struct arm64_iframe_long* regs = thread->arch.suspended_general_regs;
+
+    const bool mdscr_ss_enable = !!(regs->mdscr & kMdscrSSMask);
+    const bool spsr_ss_enable = !!(regs->spsr & kSSMaskSPSR);
+
+    *single_step = mdscr_ss_enable && spsr_ss_enable;
+    return ZX_OK;
+}
+
+zx_status_t arch_set_single_step(struct thread* thread, bool single_step) {
+    // Punt if registers aren't available. E.g.,
+    // ZX-563 (registers aren't available in synthetic exceptions)
+    if (thread->arch.suspended_general_regs == nullptr)
+        return ZX_ERR_NOT_SUPPORTED;
+    struct arm64_iframe_long* regs = thread->arch.suspended_general_regs;
+    if (single_step) {
+        regs->mdscr |= kMdscrSSMask;
+        regs->spsr |= kSSMaskSPSR;
+    } else {
+        regs->mdscr &= ~kMdscrSSMask;
+        regs->spsr &= ~kSSMaskSPSR;
+    }
     return ZX_OK;
 }

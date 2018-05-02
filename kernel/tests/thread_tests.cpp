@@ -23,6 +23,13 @@
 #include <trace.h>
 #include <zircon/types.h>
 
+static uint rand_range(uint low, uint high) {
+    uint r = rand();
+    uint result = ((r ^ (r >> 16)) % (high - low + 1u)) + low;
+
+    return result;
+}
+
 static int sleep_thread(void* arg) {
     for (;;) {
         printf("sleeper %p\n", get_current_thread());
@@ -96,6 +103,78 @@ static int mutex_test(void) {
     thread_sleep_relative(ZX_MSEC(100));
 
     printf("done with mutex tests\n");
+
+    return 0;
+}
+
+static int mutex_inherit_test() {
+    printf("running mutex inheritance test\n");
+
+    constexpr uint inherit_test_mutex_count = 4;
+    constexpr uint inherit_test_thread_count = 5;
+
+    // working variables to pass the working thread
+    struct args {
+        event_t test_blocker = EVENT_INITIAL_VALUE(test_blocker, false, 0);
+        mutex_t test_mutex[inherit_test_mutex_count];
+    } args;
+
+    // worker thread to stress the priority inheritance mechanism
+    auto inherit_worker = [](void* arg) TA_NO_THREAD_SAFETY_ANALYSIS -> int {
+        struct args* args = static_cast<struct args*>(arg);
+
+        for (int count = 0; count < 100000; count++) {
+            uint r = rand_range(1, inherit_test_mutex_count);
+
+            // pick a random priority
+            thread_set_priority(
+                get_current_thread(), rand_range(DEFAULT_PRIORITY - 4, DEFAULT_PRIORITY + 4));
+
+            // grab a random number of mutexes
+            for (uint j = 0; j < r; j++) {
+                mutex_acquire(&args->test_mutex[j]);
+            }
+
+            if (count % 1000 == 0)
+                printf("%p: count %d\n", get_current_thread(), count);
+
+            // wait on a event for a period of time, to try to have other grabber threads
+            // need to tweak our priority in either one of the mutexes we hold or the
+            // blocking event
+            event_wait_deadline(&args->test_blocker, current_time() + ZX_USEC(rand() % 10u), true);
+
+            // release in reverse order
+            for (int j = r - 1; j >= 0; j--) {
+                mutex_release(&args->test_mutex[j]);
+            }
+        }
+
+        return 0;
+    };
+
+    // create a stack of mutexes and a few threads
+    for (auto &m: args.test_mutex) {
+        mutex_init(&m);
+    }
+
+    thread_t* test_thread[inherit_test_thread_count];
+    for (auto &t: test_thread) {
+        t = thread_create("mutex tester", inherit_worker, &args,
+                                   get_current_thread()->base_priority, DEFAULT_STACK_SIZE);
+        thread_resume(t);
+    }
+
+    for (auto &t: test_thread) {
+        thread_join(t, NULL, ZX_TIME_INFINITE);
+    }
+
+    for (auto &m: args.test_mutex) {
+        mutex_destroy(&m);
+    }
+
+    thread_sleep_relative(ZX_MSEC(100));
+
+    printf("done with mutex inheirit test\n");
 
     return 0;
 }
@@ -693,11 +772,102 @@ static void tls_tests() {
     printf("done with tls tests\n");
 }
 
+static int prio_test_thread(void* arg) {
+    thread_t* t = get_current_thread();
+    ASSERT(t->base_priority == LOW_PRIORITY);
+
+    auto ev = (event_t*)arg;
+    event_signal(ev, false);
+
+    // Busy loop until our priority changes.
+    volatile int* v_pri = &t->base_priority;
+    int count = 0;
+    for (;;) {
+        if (*v_pri == DEFAULT_PRIORITY) {
+            break;
+        }
+        ++count;
+    }
+
+    event_signal(ev, false);
+
+    // And then when it changes again.
+    for (;;) {
+        if (*v_pri == HIGH_PRIORITY) {
+            break;
+        }
+        ++count;
+    }
+
+    return count;
+}
+
+__NO_INLINE static void priority_test() {
+    printf("starting priority tests\n");
+
+    thread_t* t = get_current_thread();
+    int base_priority = t->base_priority;
+
+    if (base_priority != DEFAULT_PRIORITY) {
+        printf("unexpected intial state, aborting test\n");
+        return;
+    }
+
+    thread_set_priority(t, DEFAULT_PRIORITY + 2);
+    thread_sleep_relative(ZX_MSEC(1));
+    ASSERT(t->base_priority == DEFAULT_PRIORITY + 2);
+
+    thread_set_priority(t, DEFAULT_PRIORITY - 2);
+    thread_sleep_relative(ZX_MSEC(1));
+    ASSERT(t->base_priority == DEFAULT_PRIORITY - 2);
+
+    cpu_mask_t online = mp_get_online_mask();
+    if (!online || ispow2(online)) {
+        printf("skipping rest, not enough online cpus\n");
+        return;
+    }
+
+    event_t ev;
+    event_init(&ev, false, EVENT_FLAG_AUTOUNSIGNAL);
+
+    thread_t* nt = thread_create(
+        "prio-test", prio_test_thread, &ev, LOW_PRIORITY, DEFAULT_STACK_SIZE);
+
+    cpu_num_t curr = arch_curr_cpu_num();
+    cpu_num_t other;
+    if (mp_is_cpu_online(curr + 1)) {
+        other = curr + 1;
+    } else if (mp_is_cpu_online(curr -1)) {
+        other = curr - 1;
+    } else {
+        ASSERT(false);
+    }
+
+    thread_set_cpu_affinity(nt, cpu_num_to_mask(other));
+    thread_resume(nt);
+
+    zx_status_t status = event_wait_deadline(&ev, ZX_TIME_INFINITE, true);
+    ASSERT(status == ZX_OK);
+    thread_set_priority(nt, DEFAULT_PRIORITY);
+
+    status = event_wait_deadline(&ev, ZX_TIME_INFINITE, true);
+    ASSERT(status == ZX_OK);
+    thread_set_priority(nt, HIGH_PRIORITY);
+
+    int count = 0;
+    thread_join(nt, &count, ZX_TIME_INFINITE);
+    printf("%d loops\n", count);
+
+    printf("done with priority tests\n");
+}
+
+
 int thread_tests(void) {
     kill_tests();
 
     mutex_test();
     event_test();
+    mutex_inherit_test();
 
     spinlock_test();
     atomic_test();
@@ -712,6 +882,8 @@ int thread_tests(void) {
     affinity_test();
 
     tls_tests();
+
+    priority_test();
 
     return 0;
 }

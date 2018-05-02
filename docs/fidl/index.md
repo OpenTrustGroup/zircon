@@ -1,24 +1,24 @@
-# FIDL 2.0: Overview
+# FIDL: Overview
 
-This document is a description of the Fuchsia Interface Definition Language v2.0
+This document is a description of the Fuchsia Interface Definition Language
 (FIDL) purpose, high-level goals, and requirements.
 
 ## Related Documents
 
-*   [FIDL 2.0: Wire Format Specification]
-*   [FIDL 2.0: Language Specification]
-*   [FIDL 2.0: Compiler Specification]
-*   [FIDL 2.0: C Language Bindings]
-*   [FIDL 2.0: C++ Language Bindings]
+*   [FIDL: Wire Format Specification]
+*   [FIDL: Language Specification]
+*   [FIDL: Compiler Specification]
+*   [FIDL: C Language Bindings]
+*   [FIDL: C++ Language Bindings]
 *   [FIDL Examples]: Some small example code used during development
 
 <!-- Reference links because these are used again below. -->
 
-[FIDL 2.0: Wire Format Specification]: wire-format/index.md
-[FIDL 2.0: Language Specification]: language.md
-[FIDL 2.0: Compiler Specification]: compiler.md
-[FIDL 2.0: C Language Bindings]: c-language-bindings.md
-[FIDL 2.0: C++ Language Bindings]: c++-language-bindings.md
+[FIDL: Wire Format Specification]: wire-format/index.md
+[FIDL: Language Specification]: language.md
+[FIDL: Compiler Specification]: compiler.md
+[FIDL: C Language Bindings]: c-language-bindings.md
+[FIDL: C++ Language Bindings]: c++-language-bindings.md
 [FIDL Examples]: ../../system/host/fidl/examples
 
 [TOC]
@@ -90,9 +90,8 @@ Requirements
 
 *   Just as efficient (speed and memory) as using hand-rolled data structures
     would be.
-*   Wire format uses uncompressed native datatypes with host-endianness,
-    first-fit packing of elements, and correct alignment to support in-place
-    access of message contents.
+*   Wire format uses uncompressed native datatypes with host-endianness and
+    correct alignment to support in-place access of message contents.
 *   No dynamic memory allocation is required to produce or to consume messages
     when their size is statically known or bounded.
 *   Explicitly handle ownership with move-only semantics.
@@ -128,44 +127,44 @@ Requirements
 
 # Implementation
 
-*   Compiler is written in C++ to be usable by components built in Zircon.[^1]
+*   Compiler is written in C++ to be usable by components built in Zircon.
 
-*   Compiler is portable and can be built with a host toolchain.[^2]
+*   Compiler is portable and can be built with a host toolchain.
 
 *   We will not support FIDL bindings for any platform other than Fuchsia.
 
 ## Where to Find the Code
 
-- [_The compiler_](../../system/host/fidl)
-- [_C bindings_](../../system/ulib/fidl)
-- [_C++ bindings_](https://fuchsia.googlesource.com/garnet/+/master/public/lib/fidl/cpp)
-- [_Go bindings_](https://fuchsia.googlesource.com/garnet/+/master/public/lib/fidl/go)
-- [_Rust bindings_](https://fuchsia.googlesource.com/garnet/+/master/public/lib/fidl/rust)
+- [The compiler](../../system/host/fidl)
+- [C bindings](../../system/ulib/fidl)
+- [C++ bindings](https://fuchsia.googlesource.com/garnet/+/master/public/lib/fidl/cpp)
+- [Go bindings](https://fuchsia.googlesource.com/garnet/+/master/public/lib/fidl/go)
+- [Rust bindings](https://fuchsia.googlesource.com/garnet/+/master/public/lib/fidl/rust)
 
 ## Constituent Parts of Specification
 
-FIDL Wire Format
+### FIDL Wire Format
 
 The FIDL wire format specified how FIDL messages are represented in memory for
 transmission over IPC.
 
-Main topic: [FIDL 2.0: Wire Format Specification]
+The fidl wire format is documented [FIDL: Wire Format Specification].
 
-FIDL Language
+### FIDL Language
 
 The FIDL language is the syntax by which interfaces are described in ***.fidl**
 files.
 
-Main topic: [FIDL 2.0: Language Specification]
+The fidl language is documented [FIDL: Language Specification].
 
-FIDL Compiler
+### FIDL Compiler
 
 The FIDL compiler generates code for programs to use and implement interfaces
 described by the FIDL language.
 
-Main topic: [FIDL 2.0: Compiler Specification]
+The fidl compiler is documented [FIDL: Compiler Specification].
 
-FIDL Bindings
+### FIDL Bindings
 
 FIDL bindings are language-specific runtime support libraries and code
 generators which provide APIs for manipulating FIDL data structures and
@@ -173,8 +172,8 @@ interfaces.
 
 Languages-specific topics:
 
-*   [FIDL 2.0: C Language Bindings]
-*   [FIDL 2.0: C++ Language Bindings]
+*   [FIDL: C Language Bindings]
+*   [FIDL: C++ Language Bindings]
 
 Bindings are available in various flavors depending on the language:
 
@@ -258,13 +257,3 @@ targets for each library.
 
 In the Fuchsia SDK environment, generating code from FIDL libraries will be done
 as part of compiling the applications which use them.
-
-<!-- Footnotes themselves at the bottom. -->
-
-## Notes
-
-[^1]: FIDL 1.0 required a Go toolchain. Zircon only has C and C++ toolchains so
-    we need a new compiler.
-[^2]: FIDL 1.0 generated an intermediate representation of the file as FIDL
-    structures to be consumed by a Python-based template engine. FIDL 2.0 is
-    not portable so the host compiler must not use FIDL itself internally.

@@ -10,10 +10,13 @@ MODULE_TYPE := driver
 
 MODULE_SRCS := \
     $(LOCAL_DIR)/usb-xhci.c \
+    $(LOCAL_DIR)/xdc.c \
+    $(LOCAL_DIR)/xdc-transfer.c \
     $(LOCAL_DIR)/xhci.c \
     $(LOCAL_DIR)/xhci-device-manager.c \
     $(LOCAL_DIR)/xhci-root-hub.c \
     $(LOCAL_DIR)/xhci-transfer.c \
+    $(LOCAL_DIR)/xhci-transfer-common.c \
     $(LOCAL_DIR)/xhci-trb.c \
     $(LOCAL_DIR)/xhci-util.c \
 

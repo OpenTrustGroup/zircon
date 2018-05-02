@@ -16,9 +16,6 @@ struct zxrio {
 
     // event handle for device state signals, or socket handle
     zx_handle_t h2;
-
-    // transaction id used for synchronous remoteio calls
-    _Atomic zx_txid_t txid;
 };
 
 // These are for the benefit of namespace.c
@@ -81,7 +78,7 @@ zx_status_t fdio_from_handles(zx_handle_t handle, zxrio_object_info_t* info,
 // Wait/Read from a new client connection, with the expectation of
 // acquiring an Open response.
 //
-// Shared implementation between RemoteIO and FIDL2, since the response
+// Shared implementation between RemoteIO and FIDL, since the response
 // message is aligned.
 //
 // Does not close |h|, even on error.

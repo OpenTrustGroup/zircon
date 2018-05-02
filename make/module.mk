@@ -25,6 +25,7 @@
 #               "driver" for Zircon driver, "" for standard LK module
 # MODULE_LIBS : shared libraries for a userapp or userlib to depend on
 # MODULE_STATIC_LIBS : static libraries for a userapp or userlib to depend on
+# MODULE_FIDL_LIBS : fidl libraries for a userapp or userlib to depend on the C bindings of
 # MODULE_SO_NAME : linkage name for the shared library
 # MODULE_HOST_LIBS: static libraries for a hostapp or hostlib to depend on
 # MODULE_HOST_SYSLIBS: system libraries for a hostapp or hostlib to depend on
@@ -72,7 +73,7 @@ endif
 
 # all library deps go on the deps list
 _MODULE_DEPS := $(MODULE_DEPS) $(MODULE_LIBS) $(MODULE_STATIC_LIBS) \
-                $(MODULE_HOST_LIBS)
+                $(MODULE_HOST_LIBS) $(MODULE_FIDL_LIBS)
 
 # Catch the depends on nonexistant module error case
 # here where we can tell you what module has the bad deps.
@@ -93,6 +94,7 @@ MODULE_HEADER_DEPS := $(sort $(MODULE_HEADER_DEPS))
 MODULES += $(_MODULE_DEPS)
 
 MODULE_BUILDDIR := $(call TOBUILDDIR,$(MODULE))
+MODULE_GENDIR := $(MODULE_BUILDDIR)/gen
 
 # MODULE_NAME is used to generate installed names
 # it defaults to being derived from the MODULE directory
@@ -114,8 +116,14 @@ MODULE_COMPILEFLAGS += -I$(LOCAL_DIR)/include
 MODULE_COMPILEFLAGS += -Ithird_party/ulib/musl/include
 MODULE_DEFINES += MODULE_LIBS=\"$(subst $(SPACE),_,$(MODULE_LIBS))\"
 MODULE_DEFINES += MODULE_STATIC_LIBS=\"$(subst $(SPACE),_,$(MODULE_STATIC_LIBS))\"
+
+# depend on the generated-headers of the modules we depend on
+# to insure they are generated before we are built
+MODULE_SRCDEPS += $(patsubst %,$(BUILDDIR)/%/gen-hdr.stamp,$(_MODULE_DEPS))
+
 endif
 MODULE_COMPILEFLAGS += $(foreach DEP,$(MODULE_HEADER_DEPS),-I$(DEP)/include)
+MODULE_COMPILEFLAGS += $(foreach DEP,$(MODULE_HEADER_DEPS),-I$(call TOBUILDDIR,$(DEP))/gen/include)
 #TODO: is this right?
 MODULE_SRCDEPS += $(USER_CONFIG_HEADER)
 else
@@ -183,6 +191,9 @@ USER_MANIFEST_LINES := $(SAVED_USER_MANIFEST_LINES)
 
 else # MODULE_ELIDED
 
+# list of generated public headers, asssmbled by */*compile.mk
+MODULE_GEN_HDR :=
+
 # include compile rules appropriate to module type
 # typeless modules are kernel modules
 ifeq ($(MODULE_TYPE),)
@@ -194,13 +205,21 @@ else
 ifeq ($(MODULE_TYPE),efilib)
 include make/ecompile.mk
 else
+ifeq ($(MODULE_TYPE),fidl)
+include make/fcompile.mk
+else
 include make/ucompile.mk
+endif
 endif
 endif
 endif
 
 # MODULE_OBJS is passed back from *compile.mk
 #$(info MODULE_OBJS = $(MODULE_OBJS))
+
+$(MODULE_BUILDDIR)/gen-hdr.stamp: $(MODULE_GEN_HDR)
+	@$(MKDIR)
+	@touch $@
 
 # track all of the source files compiled
 ALLSRCS += $(MODULE_SRCS)
@@ -244,6 +263,7 @@ MODULE :=
 MODULE_ELIDED :=
 MODULE_SRCDIR :=
 MODULE_BUILDDIR :=
+MODULE_GENDIR :=
 MODULE_DEPS :=
 MODULE_HEADER_DEPS :=
 MODULE_SRCS :=
@@ -264,6 +284,7 @@ MODULE_NAME :=
 MODULE_EXPORT :=
 MODULE_LIBS :=
 MODULE_STATIC_LIBS :=
+MODULE_FIDL_LIBS :=
 MODULE_SO_NAME :=
 MODULE_INSTALL_PATH :=
 MODULE_SO_INSTALL_NAME :=

@@ -12,13 +12,14 @@
 
 #include <lib/async/cpp/wait.h>
 #include <fbl/intrusive_double_list.h>
-#include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
 #include <fs/vfs.h>
 #include <fs/vnode.h>
-#include <zx/event.h>
+#include <lib/zx/event.h>
 
 namespace fs {
+
+constexpr zx_signals_t kLocalTeardownSignal = ZX_USER_SIGNAL_1;
 
 // Connection represents an open connection to a Vnode (the server-side
 // component of a file descriptor).  The Vnode's methods will be invoked
@@ -49,12 +50,25 @@ public:
     // to prevent a race.
     ~Connection();
 
+    void SignalTeardown() {
+        if (channel_) {
+            ZX_ASSERT(channel_.signal(0, kLocalTeardownSignal) == ZX_OK);
+        }
+    }
+
     // Begins waiting for messages on the channel.
     //
     // Must be called at most once in the lifetime of the connection.
     zx_status_t Serve();
 
 private:
+    void HandleSignals(async_t* async, async::WaitBase* wait, zx_status_t status,
+                       const zx_packet_signal_t* signal);
+    // Closes the connection and unregisters it from the VFS object.
+    void Terminate(bool call_close);
+
+    // Method used to dispatch into filesystem.
+    // Invoked by |HandleMessage()| or synthesized internally.
     zx_status_t CallHandler();
 
     // Sends an explicit close message to the underlying vnode.
@@ -65,17 +79,18 @@ private:
     static zx_status_t HandleMessageThunk(zxrio_msg_t* msg, void* cookie);
     zx_status_t HandleMessage(zxrio_msg_t* msg);
 
-    bool is_waiting() const { return wait_.object() != ZX_HANDLE_INVALID; }
+    bool is_open() const { return wait_.object() != ZX_HANDLE_INVALID; }
+    void set_closed() { wait_.set_object(ZX_HANDLE_INVALID); }
 
     fs::Vfs* const vfs_;
-    fbl::RefPtr<fs::Vnode> const vnode_;
+    fbl::RefPtr<fs::Vnode> vnode_;
 
     // Channel on which the connection is being served.
     zx::channel channel_;
 
     // Asynchronous wait for incoming messages.
     // The object field is |ZX_HANDLE_INVALID| when not actively waiting.
-    async::Wait wait_;
+    async::WaitMethod<Connection, &Connection::HandleSignals> wait_;
 
     // Open flags such as |ZX_FS_RIGHT_READABLE|, and other bits.
     uint32_t flags_;

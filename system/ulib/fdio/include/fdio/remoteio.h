@@ -212,7 +212,7 @@ typedef struct {
 // A one-way message which may be emitted by the server without an
 // accompanying request. Optionally used as a part of the Open handshake.
 typedef struct {
-    zx_txid_t txid;                    // FIDL2 message header
+    zx_txid_t txid;                    // FIDL message header
     uint32_t reserved0;                // Padding
     uint32_t flags;
     uint32_t op;
@@ -223,7 +223,7 @@ typedef struct {
 } zxrio_describe_t;
 
 struct zxrio_msg {
-    zx_txid_t txid;                    // FIDL2 message header
+    zx_txid_t txid;                    // FIDL message header
     uint32_t reserved0;
     uint32_t flags;
     uint32_t op;
@@ -244,7 +244,15 @@ struct zxrio_msg {
 #define FDIO_MMAP_FLAG_READ    (1u << 0)
 #define FDIO_MMAP_FLAG_WRITE   (1u << 1)
 #define FDIO_MMAP_FLAG_EXEC    (1u << 2)
+// Require a copy-on-write clone of the underlying VMO.
+// The request should fail if the VMO is not cloned.
+// May not be supplied with FDIO_MMAP_FLAG_EXACT.
 #define FDIO_MMAP_FLAG_PRIVATE (1u << 16)
+// Require an exact (non-cloned) handle to the underlying VMO.
+// The request should fail if a handle to the exact VMO
+// is not returned.
+// May not be supplied with FDIO_MMAP_FLAG_PRIVATE.
+#define FDIO_MMAP_FLAG_EXACT   (1u << 17)
 
 static_assert(FDIO_MMAP_FLAG_READ == ZX_VM_FLAG_PERM_READ, "Vmar / Mmap flags should be aligned");
 static_assert(FDIO_MMAP_FLAG_WRITE == ZX_VM_FLAG_PERM_WRITE, "Vmar / Mmap flags should be aligned");

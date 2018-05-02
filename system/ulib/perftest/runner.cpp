@@ -6,12 +6,19 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <pthread.h>
 #include <regex.h>
 
 #include <fbl/function.h>
 #include <fbl/string.h>
 #include <fbl/vector.h>
+#include <lib/async-loop/cpp/loop.h>
+#include <trace-engine/context.h>
+#include <trace-engine/instrumentation.h>
+#include <trace-provider/provider.h>
+#include <trace/event.h>
 #include <unittest/unittest.h>
+#include <zircon/assert.h>
 #include <zircon/syscalls.h>
 
 namespace perftest {
@@ -48,6 +55,14 @@ public:
         return true;
     }
 
+    bool RunTestFunc(const internal::NamedTest* test) {
+        TRACE_DURATION("perftest", "test_group", "test_name", test->name);
+        overall_start_time_ = zx_ticks_get();
+        bool result = test->test_func(this);
+        overall_end_time_ = zx_ticks_get();
+        return result;
+    }
+
     bool Success() const {
         return runs_started_ == run_count_ && finishing_calls_ == 1;
     }
@@ -65,6 +80,49 @@ public:
         }
     }
 
+    // Output a trace event for each of the test runs.  Since we do this
+    // after the test runs took place (using the timestamps we recorded),
+    // we avoid incurring the overhead of the tracing system on each test
+    // run.
+    void WriteTraceEvents() {
+        trace_string_ref_t category_ref;
+        trace_context_t* context =
+            trace_acquire_context_for_category("perftest", &category_ref);
+        if (!context) {
+            return;
+        }
+        trace_thread_ref_t thread_ref;
+        trace_context_register_current_thread(context, &thread_ref);
+
+        auto WriteEvent = [&](trace_string_ref_t* name_ref,
+                              uint64_t start_time, uint64_t end_time) {
+            trace_context_write_duration_begin_event_record(
+                context, start_time,
+                &thread_ref, &category_ref, name_ref, nullptr, 0);
+            trace_context_write_duration_end_event_record(
+                context, end_time,
+                &thread_ref, &category_ref, name_ref, nullptr, 0);
+        };
+
+        trace_string_ref_t test_setup_string;
+        trace_string_ref_t test_run_string;
+        trace_string_ref_t test_teardown_string;
+        trace_context_register_string_literal(
+            context, "test_setup", &test_setup_string);
+        trace_context_register_string_literal(
+            context, "test_run", &test_run_string);
+        trace_context_register_string_literal(
+            context, "test_teardown", &test_teardown_string);
+
+        WriteEvent(&test_setup_string, overall_start_time_, timestamps_[0]);
+        for (uint32_t idx = 0; idx < run_count_; ++idx) {
+            WriteEvent(&test_run_string,
+                       timestamps_[idx], timestamps_[idx + 1]);
+        }
+        WriteEvent(&test_teardown_string,
+                   timestamps_[run_count_], overall_end_time_);
+    }
+
 private:
     // Number of test runs that we intend to do.
     uint32_t run_count_;
@@ -80,6 +138,10 @@ private:
     // extra comparison in the fast path of KeepRunning().
     uint32_t finishing_calls_ = 0;
     fbl::unique_ptr<uint64_t[]> timestamps_;
+    // Start time, before the test's setup phase.
+    uint64_t overall_start_time_;
+    // End time, after the test's teardown phase.
+    uint64_t overall_end_time_;
 };
 
 }  // namespace
@@ -125,7 +187,7 @@ bool RunTests(TestList* test_list, uint32_t run_count, const char* regex_string,
         fprintf(log_stream, "[ RUN      ] %s\n", test_name);
 
         RepeatStateImpl state(run_count);
-        bool result = test_case.test_func(&state);
+        bool result = state.RunTestFunc(&test_case);
 
         if (!result) {
             fprintf(log_stream, "[  FAILED  ] %s\n", test_name);
@@ -141,6 +203,7 @@ bool RunTests(TestList* test_list, uint32_t run_count, const char* regex_string,
         fprintf(log_stream, "[       OK ] %s\n", test_name);
 
         state.CopyTimeResults(test_name, results_set);
+        state.WriteTraceEvents();
     }
 
     regfree(&regex);
@@ -161,6 +224,8 @@ void ParseCommandArgs(int argc, char** argv, CommandArgs* dest) {
         {"out", required_argument, nullptr, 'o'},
         {"filter", required_argument, nullptr, 'f'},
         {"runs", required_argument, nullptr, 'r'},
+        {"enable-tracing", no_argument, nullptr, 't'},
+        {"startup-delay", required_argument, nullptr, 'd'},
     };
     optind = 1;
     for (;;) {
@@ -176,7 +241,7 @@ void ParseCommandArgs(int argc, char** argv, CommandArgs* dest) {
             dest->filter_regex = optarg;
             break;
         case 'r': {
-            // Convert string to number.
+            // Convert string to number (uint32_t).
             char* end;
             long val = strtol(optarg, &end, 0);
             // Check that the string contains only a positive number and
@@ -188,6 +253,22 @@ void ParseCommandArgs(int argc, char** argv, CommandArgs* dest) {
                 exit(1);
             }
             dest->run_count = static_cast<uint32_t>(val);
+            break;
+        }
+        case 't':
+            dest->enable_tracing = true;
+            break;
+        case 'd': {
+            // Convert string to number (double type).
+            char* end;
+            double val = strtod(optarg, &end);
+            if (*end != '\0' || *optarg == '\0') {
+                fprintf(stderr,
+                        "Invalid argument for --startup-delay: \"%s\"\n",
+                        optarg);
+                exit(1);
+            }
+            dest->startup_delay_seconds = val;
             break;
         }
         default:
@@ -203,9 +284,32 @@ void ParseCommandArgs(int argc, char** argv, CommandArgs* dest) {
 
 }  // namespace internal
 
+static void* TraceProviderThread(void* thread_arg) {
+    async::Loop loop;
+    trace::TraceProvider provider(loop.async());
+    loop.Run();
+    return nullptr;
+}
+
+static void StartTraceProvider() {
+    pthread_t tid;
+    int err = pthread_create(&tid, nullptr, TraceProviderThread, nullptr);
+    ZX_ASSERT(err == 0);
+    err = pthread_detach(tid);
+    ZX_ASSERT(err == 0);
+}
+
 static bool PerfTestMode(int argc, char** argv) {
     internal::CommandArgs args;
     internal::ParseCommandArgs(argc, argv, &args);
+
+    if (args.enable_tracing) {
+        StartTraceProvider();
+    }
+    zx_duration_t duration =
+        static_cast<zx_duration_t>(ZX_SEC(1) * args.startup_delay_seconds);
+    zx_nanosleep(zx_deadline_after(duration));
+
     ResultsSet results;
     bool success = RunTests(g_tests, args.run_count, args.filter_regex, stdout,
                             &results);
@@ -249,12 +353,24 @@ int PerfTestMain(int argc, char** argv) {
                "Options:\n"
                "  --out FILENAME\n"
                "      Filename to write JSON results data to.  If this is "
-               "omitted, no JSON output is produced.\n"
+               "omitted, no JSON output is produced. JSON output will conform to this schema: "
+               "//zircon/system/ulib/perftest/performance-results-schema.json\n"
                "  --filter REGEX\n"
                "      Regular expression that specifies a subset of tests "
                "to run.  By default, all the tests are run.\n"
                "  --runs NUMBER\n"
-               "      Number of times to run each test.\n",
+               "      Number of times to run each test.\n"
+               "  --enable-tracing\n"
+               "      Enable use of Fuchsia tracing: Enable registering as a "
+               "TraceProvider.  This is off by default because the "
+               "TraceProvider gets registered asynchronously on a background "
+               "thread (see TO-650), and that activity could introduce noise "
+               "to the tests.\n"
+               "  --startup-delay SECONDS\n"
+               "      Delay in seconds to wait on startup, after registering "
+               "a TraceProvider.  This allows working around a race condition "
+               "where tracing misses initial events from newly-registered "
+               "TraceProviders (see TO-650).\n",
                argv[0], argv[0]);
         return 1;
     }

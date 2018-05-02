@@ -17,6 +17,7 @@
 #include <arch/exception.h>
 
 #include <kernel/thread.h>
+#include <vm/kstack.h>
 #include <vm/vm.h>
 #include <vm/vm_aspace.h>
 #include <vm/vm_address_region.h>
@@ -83,97 +84,23 @@ ThreadDispatcher::~ThreadDispatcher() {
     case State::INITIAL:
         // this gets a pass, we can destruct a partially constructed thread
         break;
+    case State::INITIALIZED:
+        // as we've been initialized previously, forget the LK thread.
+        // note that thread_forget is not called for self since the thread is not running
+        thread_forget(&thread_);
+        break;
     default:
         DEBUG_ASSERT_MSG(false, "bad state %s, this %p\n", StateToString(state_), this);
     }
 
     // free the kernel stack
-    kstack_mapping_.reset();
-    if (kstack_vmar_) {
-        kstack_vmar_->Destroy();
-        kstack_vmar_.reset();
-    }
+    vm_free_kstack(&kstack_mapping_, &kstack_vmar_);
 #if __has_feature(safe_stack)
-    unsafe_kstack_mapping_.reset();
-    if (unsafe_kstack_vmar_) {
-        unsafe_kstack_vmar_->Destroy();
-        unsafe_kstack_vmar_.reset();
-    }
+    vm_free_kstack(&unsafe_kstack_mapping_, &unsafe_kstack_vmar_);
 #endif
 
     event_destroy(&exception_event_);
 }
-
-namespace {
-
-zx_status_t allocate_stack(const fbl::RefPtr<VmAddressRegion>& vmar, bool unsafe,
-                           fbl::RefPtr<VmMapping>* out_kstack_mapping,
-                           fbl::RefPtr<VmAddressRegion>* out_kstack_vmar) {
-    LTRACEF("allocating %s stack\n", unsafe ? "unsafe" : "safe");
-
-    // Create a VMO for our stack
-    fbl::RefPtr<VmObject> stack_vmo;
-    zx_status_t status = VmObjectPaged::Create(0, DEFAULT_STACK_SIZE, &stack_vmo);
-    if (status != ZX_OK) {
-        TRACEF("error allocating %s stack for thread\n",
-               unsafe ? "unsafe" : "safe");
-        return status;
-    }
-    const char* name = unsafe ? "unsafe-stack" : "safe-stack";
-    stack_vmo->set_name(name, strlen(name));
-
-    // create a vmar with enough padding for a page before and after the stack
-    const size_t padding_size = PAGE_SIZE;
-
-    fbl::RefPtr<VmAddressRegion> kstack_vmar;
-    status = vmar->CreateSubVmar(
-        0, 2 * padding_size + DEFAULT_STACK_SIZE, 0,
-        VMAR_FLAG_CAN_MAP_SPECIFIC |
-        VMAR_FLAG_CAN_MAP_READ |
-        VMAR_FLAG_CAN_MAP_WRITE,
-        unsafe ? "unsafe_kstack_vmar" : "kstack_vmar",
-        &kstack_vmar);
-    if (status != ZX_OK)
-        return status;
-
-    // destroy the vmar if we early abort
-    // this will also clean up any mappings that may get placed on the vmar
-    auto vmar_cleanup = fbl::MakeAutoCall([&kstack_vmar]() {
-            kstack_vmar->Destroy();
-        });
-
-    LTRACEF("%s stack vmar at %#" PRIxPTR "\n",
-            unsafe ? "unsafe" : "safe", kstack_vmar->base());
-
-    // create a mapping offset padding_size into the vmar we created
-    fbl::RefPtr<VmMapping> kstack_mapping;
-    status = kstack_vmar->CreateVmMapping(padding_size, DEFAULT_STACK_SIZE, 0,
-                                          VMAR_FLAG_SPECIFIC,
-                                          fbl::move(stack_vmo), 0,
-                                          ARCH_MMU_FLAG_PERM_READ |
-                                          ARCH_MMU_FLAG_PERM_WRITE,
-                                          unsafe ? "unsafe_kstack" : "kstack",
-                                          &kstack_mapping);
-    if (status != ZX_OK)
-        return status;
-
-    LTRACEF("%s stack mapping at %#" PRIxPTR "\n",
-            unsafe ? "unsafe" : "safe", kstack_mapping->base());
-
-    // fault in all the pages so we dont demand fault in the stack
-    status = kstack_mapping->MapRange(0, DEFAULT_STACK_SIZE, true);
-    if (status != ZX_OK)
-        return status;
-
-    // Cancel the cleanup handler on the vmar since we're about to save a
-    // reference to it.
-    vmar_cleanup.cancel();
-    *out_kstack_mapping = fbl::move(kstack_mapping);
-    *out_kstack_vmar = fbl::move(kstack_vmar);
-    return ZX_OK;
-}
-
-} // namespace
 
 // complete initialization of the thread object outside of the constructor
 zx_status_t ThreadDispatcher::Initialize(const char* name, size_t len) {
@@ -193,14 +120,12 @@ zx_status_t ThreadDispatcher::Initialize(const char* name, size_t len) {
     memset(thread_name + len, 0, ZX_MAX_NAME_LEN - len);
 
     // Map the kernel stack somewhere
-    auto vmar = VmAspace::kernel_aspace()->RootVmar()->as_vm_address_region();
-    DEBUG_ASSERT(!!vmar);
-
-    auto status = allocate_stack(vmar, false, &kstack_mapping_, &kstack_vmar_);
+    void *stack_top;
+    auto status = vm_allocate_kstack(false, &stack_top, &kstack_mapping_, &kstack_vmar_);
     if (status != ZX_OK)
         return status;
 #if __has_feature(safe_stack)
-    status = allocate_stack(vmar, true,
+    status = vm_allocate_kstack(true, &stack_top,
                             &unsafe_kstack_mapping_, &unsafe_kstack_vmar_);
     if (status != ZX_OK)
         return status;
@@ -222,9 +147,6 @@ zx_status_t ThreadDispatcher::Initialize(const char* name, size_t len) {
         return ZX_ERR_NO_MEMORY;
     }
     DEBUG_ASSERT(lkthread == &thread_);
-
-    // bump the ref on this object that the LK thread state will now own until the lk thread has exited
-    AddRef();
 
     // register an event handler with the LK kernel
     thread_set_user_callback(&thread_, &ThreadUserCallback);
@@ -284,6 +206,9 @@ zx_status_t ThreadDispatcher::Start(uintptr_t entry, uintptr_t sp,
     if (ret < 0)
         return ret;
 
+    // bump the ref on this object that the LK thread state will now own until the lk thread has exited
+    AddRef();
+
     // mark ourselves as running and resume the kernel thread
     SetStateLocked(State::RUNNING);
 
@@ -327,19 +252,9 @@ void ThreadDispatcher::Kill() {
 
     switch (state_) {
         case State::INITIAL:
-            // initial state, thread was never initialized, leave in this state
+        case State::INITIALIZED:
+            // thread was never started, leave in this state
             break;
-        case State::INITIALIZED: {
-            // as we've been initialized previously, forget the LK thread.
-            thread_forget(&thread_);
-            // reset our state, so that the destructor will properly shut down.
-            SetStateLocked(State::INITIAL);
-            // drop the ref, as the LK thread will not own this object.
-            auto ret = Release();
-            // if this was the last ref, something is terribly wrong
-            DEBUG_ASSERT(!ret);
-            break;
-        }
         case State::RUNNING:
         case State::SUSPENDED:
             // deliver a kernel kill signal to the thread
@@ -367,7 +282,13 @@ zx_status_t ThreadDispatcher::Suspend() {
     if (state_ != State::RUNNING && state_ != State::SUSPENDED)
         return ZX_ERR_BAD_STATE;
 
-    return thread_suspend(&thread_);
+    DEBUG_ASSERT(suspend_count_ >= 0);
+    suspend_count_++;
+    if (suspend_count_ == 1)
+      return thread_suspend(&thread_);
+
+    // It was already suspended.
+    return ZX_OK;
 }
 
 zx_status_t ThreadDispatcher::Resume() {
@@ -379,10 +300,19 @@ zx_status_t ThreadDispatcher::Resume() {
 
     LTRACEF("%p: state %s\n", this, StateToString(state_));
 
-    if (state_ != State::RUNNING && state_ != State::SUSPENDED)
+    // TODO(brettw) ZX-1072 :The suspend_count_ == 0 check can be removed and converted to an
+    // assertion when the bug is fixed. In that case, the suspend token shouldn't be calling Resume
+    // unless it's previously suspended it. Currently callers can bypass this invariant using the
+    // legacy suspend/resume API so give a good error.
+    // DEBUG_ASSERT(suspend_count_ > 0)
+    if ((state_ != State::RUNNING && state_ != State::SUSPENDED) || suspend_count_ == 0)
         return ZX_ERR_BAD_STATE;
 
-    return thread_resume(&thread_);
+    suspend_count_--;
+    if (suspend_count_ == 0)
+        thread_resume(&thread_);
+    // Otherwise there's still an out-standing Suspend() call so keep it suspended.
+    return ZX_OK;
 }
 
 static void ThreadCleanupDpc(dpc_t *d) {
@@ -626,26 +556,16 @@ zx_status_t ThreadDispatcher::ExceptionHandlerExchange(
 
     LTRACE_ENTRY_OBJ;
 
-    // Note: As far as userspace is concerned there is no state change
-    // that we would notify state tracker observers of, currently.
+    // Note: As far as userspace is concerned there is no state change that we would notify state
+    // tracker observers of, currently.
+    //
+    // Send message, wait for reply. Note that there is a "race" that we need handle: We need to
+    // send the exception report before going to sleep, but what if the receiver of the report gets
+    // it and processes it before we are asleep? This is handled by locking state_lock_ in places
+    // where the handler can see/modify thread state.
 
     {
         AutoLock lock(get_lock());
-
-        // Send message, wait for reply.
-        // Note that there is a "race" that we need handle: We need to send the
-        // exception report before going to sleep, but what if the receiver of the
-        // report gets it and processes it before we are asleep? This is handled by
-        // locking state_lock_ in places where the handler can see/modify
-        // thread state.
-
-        zx_status_t status = eport->SendPacket(this, report->header.type);
-        if (status != ZX_OK) {
-            LTRACEF("SendPacket returned %d\n", status);
-            // Treat the exception as unhandled.
-            *out_estatus = ExceptionStatus::TRY_NEXT;
-            return ZX_OK;
-        }
 
         // Mark that we're in an exception.
         thread_.exception_context = arch_context;
@@ -660,12 +580,23 @@ zx_status_t ThreadDispatcher::ExceptionHandlerExchange(
         exception_status_ = ExceptionStatus::UNPROCESSED;
     }
 
+    // There's no need to send the message under the lock, but we do need to
+    // make sure our exception state is up to date before sending the message:
+    // Otherwise a debugger could get the packet and observe our state before
+    // we've updated it. Thus send the packet after updating our state.
+    zx_status_t status = eport->SendPacket(this, report->header.type);
+    if (status != ZX_OK) {
+        // Can't send the request to the exception handler. Report the error, which will probably
+        // kill the process.
+        LTRACEF("SendPacket returned %d\n", status);
+        return status;
+    }
+
     // Continue to wait for the exception response if we get suspended.
     // If it is suspended, the suspension will be processed after the
     // exception response is received (requiring a second resume).
     // Exceptions and suspensions are essentially treated orthogonally.
 
-    zx_status_t status;
     do {
         status = event_wait_with_mask(&exception_event_, THREAD_SIGNAL_SUSPEND);
     } while (status == ZX_ERR_INTERNAL_INTR_RETRY);
@@ -705,6 +636,8 @@ zx_status_t ThreadDispatcher::ExceptionHandlerExchange(
     return status;
 }
 
+// TODO(brettw) ZX-1072 Remove this when all callers are updated to use
+// the exception port variant below.
 zx_status_t ThreadDispatcher::MarkExceptionHandled(ExceptionStatus estatus) {
     canary_.Assert();
 
@@ -724,6 +657,38 @@ zx_status_t ThreadDispatcher::MarkExceptionHandled(ExceptionStatus estatus) {
     // first, or we might get called a second time for the same exception.
     // It's critical that we don't re-arm the event after the thread wakes up.
     // To keep things simple we take a first-one-wins approach.
+    DEBUG_ASSERT(exception_status_ != ExceptionStatus::IDLE);
+    if (exception_status_ != ExceptionStatus::UNPROCESSED)
+        return ZX_ERR_BAD_STATE;
+
+    exception_status_ = estatus;
+    event_signal(&exception_event_, true);
+    return ZX_OK;
+}
+
+zx_status_t ThreadDispatcher::MarkExceptionHandled(PortDispatcher* eport,
+                                                   ExceptionStatus estatus) {
+    canary_.Assert();
+
+    LTRACEF("obj %p, estatus %d\n", this, static_cast<int>(estatus));
+    DEBUG_ASSERT(estatus != ExceptionStatus::IDLE &&
+                 estatus != ExceptionStatus::UNPROCESSED);
+
+    AutoLock lock(get_lock());
+    if (!InExceptionLocked())
+        return ZX_ERR_BAD_STATE;
+
+    // The exception port isn't used directly but is instead proof that the caller has permission to
+    // resume from the exception. So validate that it corresponds to the task being resumed.
+    if (!exception_wait_port_->PortMatches(eport, false))
+        return ZX_ERR_ACCESS_DENIED;
+
+    // The thread can be in several states at this point. Alas this is a bit complicated because
+    // there is a window in the middle of ExceptionHandlerExchange between the thread going to sleep
+    // and after the thread waking up where we can obtain the lock. Things are further complicated
+    // by the fact that OnExceptionPortRemoval could get there first, or we might get called a
+    // second time for the same exception. It's critical that we don't re-arm the event after the
+    // thread wakes up. To keep things simple we take a first-one-wins approach.
     DEBUG_ASSERT(exception_status_ != ExceptionStatus::IDLE);
     if (exception_status_ != ExceptionStatus::UNPROCESSED)
         return ZX_ERR_BAD_STATE;
@@ -904,8 +869,12 @@ zx_status_t ThreadDispatcher::ReadState(zx_thread_state_topic_t state_kind,
     case ZX_THREAD_STATE_SINGLE_STEP: {
         if (buffer_len != sizeof(zx_thread_state_single_step_t))
             return ZX_ERR_INVALID_ARGS;
+        bool single_step;
+        zx_status_t status = arch_get_single_step(&thread_, &single_step);
+        if (status != ZX_OK)
+            return status;
         *static_cast<zx_thread_state_single_step_t*>(buffer) =
-                static_cast<zx_thread_state_single_step_t>(thread_.single_step);
+              static_cast<zx_thread_state_single_step_t>(single_step);
         return ZX_OK;
     }
     default:
@@ -942,12 +911,23 @@ zx_status_t ThreadDispatcher::WriteState(zx_thread_state_topic_t state_kind,
                 static_cast<const zx_thread_state_single_step_t*>(buffer);
         if (*single_step != 0 && *single_step != 1)
             return ZX_ERR_INVALID_ARGS;
-        thread_.single_step = *single_step == 1;
-        return ZX_OK;
+        return arch_set_single_step(&thread_, !!*single_step);
     }
     default:
         return ZX_ERR_INVALID_ARGS;
     }
+}
+
+zx_status_t ThreadDispatcher::SetPriority(int32_t priority) {
+    AutoLock state_lock(get_lock());
+    if ((state_ == State::INITIAL) ||
+        (state_ == State::DYING) ||
+        (state_ == State::DEAD)) {
+        return ZX_ERR_BAD_STATE;
+    }
+    // The priority was already validated by the Profile dispatcher.
+    thread_set_priority(&thread_, priority);
+    return ZX_OK;
 }
 
 void get_user_thread_process_name(const void* user_thread,

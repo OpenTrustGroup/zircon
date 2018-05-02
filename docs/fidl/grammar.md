@@ -54,7 +54,7 @@ documentation generation system.
 ```
 file = library-header , using-list , declaration-list ;
 
-library-header = "library" , IDENTIFIER , ";" ;
+library-header = "library" , compound-identifier , ";" ;
 
 using-list = ( using )* ;
 
@@ -70,19 +70,17 @@ declaration = const-declaration | enum-declaration | interface-declaration |
 const-declaration = ( attribute-list ) , "const" , type , IDENTIFIER , "=" , constant ;
 
 enum-declaration = ( attribute-list ) , "enum" , IDENTIFIER , ( ":" , integer-type ) ,
-                   "{" , ( enum-member , ";" )* , "}" ;
+                   "{" , ( enum-member , ";" )+ , "}" ;
 
 enum-member = IDENTIFIER , ( "=" , enum-member-value ) ;
 
 enum-member-value = IDENTIFIER | NUMERIC-LITERAL ;
 
 interface-declaration = ( attribute-list ) , "interface" , IDENTIFIER ,
-                        ( ":" , super-interface-list ) , "{" , ( interface-member , ";" )*  , "}" ;
+                        ( ":" , super-interface-list ) , "{" , ( interface-method , ";" )*  , "}" ;
 
 super-interface-list = compound-identifier
                      | compound-identifier , "," , super-interface-list
-
-interface-member = interface-method | const-declaration | enum-declaration ;
 
 interface-method = ordinal , ":" , interface-parameters
 
@@ -95,15 +93,11 @@ parameters = parameter | parameter , "," , parameter-list ;
 
 parameter = type , IDENTIFIER ;
 
-struct-declaration = ( attribute-list ) , "struct" , IDENTIFIER , "{" , ( struct-member , ";" )* , "}" ;
-
-struct-member = struct-field | const-declaration | enum-declaration ;
+struct-declaration = ( attribute-list ) , "struct" , IDENTIFIER , "{" , ( struct-field , ";" )* , "}" ;
 
 struct-field = type , IDENTIFIER , ( "=" , constant ) ;
 
-union-declaration = ( attribute-list ) , "union" , IDENTIFIER , "{" , ( union-member , ";" )+ , "}" ;
-
-union-member = union-field | const-declaration | enum-declaration ;
+union-declaration = ( attribute-list ) , "union" , IDENTIFIER , "{" , ( union-field , ";" )+ , "}" ;
 
 union-field = type , IDENTIFIER ;
 

@@ -6,6 +6,5 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 
-# NOTE: Placeholder file for now. 
-#DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-#exec $DIR/fastboot-flash -b imx8edk "$@"
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+exec $DIR/fastboot-flash-bootdata -b imx8mevk -P boot_a "$@"

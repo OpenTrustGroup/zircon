@@ -13,6 +13,7 @@
 #include <zircon/device/block.h>
 #include <zircon/device/device.h>
 #include <zircon/processargs.h>
+#include <zircon/status.h>
 #include <zircon/syscalls.h>
 #include <fdio/util.h>
 
@@ -54,7 +55,7 @@ void launch_blob_init() {
         argv[1] = blob_init_arg;
     }
 
-    zx_status_t status = devmgr_launch(job, "blob:init", argc, &argv[0], NULL, -1,
+    zx_status_t status = devmgr_launch(job, "pkgfs", argc, &argv[0], NULL, -1,
                                        &handle, &type, 1, &proc, FS_DATA | FS_BLOB | FS_SVC);
 
     if (status != ZX_OK) {
@@ -172,7 +173,7 @@ static zx_status_t mount_minfs(int fd, mount_options_t* options) {
 
             zx_status_t st = mount(fd, "/fs" PATH_SYSTEM, DISK_FORMAT_MINFS, options, launch_minfs);
             if (st != ZX_OK) {
-                printf("devmgr: failed to mount %s, retcode = %d. Run fixfs to restore partition.\n", PATH_SYSTEM, st);
+                printf("devmgr: failed to mount %s: %s.\n", PATH_SYSTEM, zx_status_get_string(st));
             } else {
                 fuchsia_start();
             }
@@ -187,7 +188,7 @@ static zx_status_t mount_minfs(int fd, mount_options_t* options) {
 
             zx_status_t st = mount(fd, "/fs" PATH_DATA, DISK_FORMAT_MINFS, options, launch_minfs);
             if (st != ZX_OK) {
-                printf("devmgr: failed to mount %s, retcode = %d. Run fixfs to restore partition.\n", PATH_DATA, st);
+                printf("devmgr: failed to mount %s: %s.\n", PATH_DATA, zx_status_get_string(st));
             }
 
             return st;
@@ -201,7 +202,7 @@ static zx_status_t mount_minfs(int fd, mount_options_t* options) {
 
             zx_status_t st = mount(fd, "/fs" PATH_INSTALL, DISK_FORMAT_MINFS, options, launch_minfs);
             if (st != ZX_OK) {
-                printf("devmgr: failed to mount %s, retcode = %d. Run fixfs to restore partition.\n", PATH_INSTALL, st);
+                printf("devmgr: failed to mount %s: %s.\n", PATH_INSTALL, zx_status_get_string(st));
             }
 
             return st;
@@ -214,6 +215,7 @@ static zx_status_t mount_minfs(int fd, mount_options_t* options) {
 #define FVM_DRIVER_LIB "/boot/driver/fvm.so"
 #define GPT_DRIVER_LIB "/boot/driver/gpt.so"
 #define MBR_DRIVER_LIB "/boot/driver/mbr.so"
+#define BOOTPART_DRIVER_LIB "/boot/driver/bootpart.so"
 #define STRLEN(s) sizeof(s) / sizeof((s)[0])
 
 static zx_status_t block_device_added(int dirfd, int event, const char* name, void* cookie) {
@@ -226,6 +228,13 @@ static zx_status_t block_device_added(int dirfd, int event, const char* name, vo
 
     int fd;
     if ((fd = openat(dirfd, name, O_RDWR)) < 0) {
+        return ZX_OK;
+    }
+
+    block_info_t info;
+    if (ioctl_block_get_info(fd, &info) >= 0 && info.flags & BLOCK_FLAG_BOOTPART) {
+        ioctl_device_bind(fd, BOOTPART_DRIVER_LIB, STRLEN(BOOTPART_DRIVER_LIB));
+        close(fd);
         return ZX_OK;
     }
 
@@ -289,7 +298,8 @@ static zx_status_t block_device_added(int dirfd, int event, const char* name, vo
             zx_status_t status = mount(fd, "/fs" PATH_BLOB, DISK_FORMAT_BLOBFS,
                                        &options, launch_blobfs);
             if (status != ZX_OK) {
-                printf("devmgr: Failed to mount blobfs partition %s at %s: %d. Please run fixfs to reformat.\n", device_path, PATH_BLOB, status);
+                printf("devmgr: Failed to mount blobfs partition %s at %s: %s.\n",
+                       device_path, PATH_BLOB, zx_status_get_string(status));
             } else {
                 blob_mounted = true;
                 launch_blob_init();

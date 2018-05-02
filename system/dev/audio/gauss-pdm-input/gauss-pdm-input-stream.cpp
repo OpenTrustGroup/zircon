@@ -8,7 +8,7 @@
 #include <fbl/algorithm.h>
 #include <fbl/limits.h>
 #include <zircon/device/audio.h>
-#include <zx/vmar.h>
+#include <lib/zx/vmar.h>
 
 #include "a113-pdm.h"
 #include "dispatcher-pool/dispatcher-thread-pool.h"
@@ -108,7 +108,7 @@ void GaussPdmInputStream::DdkRelease() {
     zxlogf(DEBUG1, "%s\n", __func__);
 
     // Shutdown irq thread.
-    zx_interrupt_signal(audio_device_.pdm_irq, ZX_INTERRUPT_SLOT_USER, 0);
+    zx_interrupt_destroy(audio_device_.pdm_irq);
     thrd_join(irqthrd_, nullptr);
 
     zx_handle_close(audio_device_.pdm_irq);
@@ -429,8 +429,7 @@ int GaussPdmInputStream::IrqThread() {
     uint32_t last_notification_offset = 0;
 
     for (;;) {
-        uint64_t slots;
-        status = zx_interrupt_wait(audio_device_.pdm_irq, &slots);
+        status = zx_interrupt_wait(audio_device_.pdm_irq, nullptr);
         if (status != ZX_OK) {
             zxlogf(DEBUG1, "audio_pdm_input: interrupt error: %d.\n", status);
             break;

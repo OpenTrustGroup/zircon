@@ -7,7 +7,7 @@
 #ifdef __Fuchsia__
 #include <fbl/auto_lock.h>
 #include <fbl/mutex.h>
-#include <zx/vmo.h>
+#include <lib/zx/vmo.h>
 #endif
 
 #include <fbl/algorithm.h>
@@ -53,28 +53,26 @@ public:
     DISALLOW_COPY_ASSIGN_AND_MOVE(WriteTxn);
     explicit WriteTxn(Bcache* bc) : bc_(bc) {}
     ~WriteTxn() {
-        ZX_DEBUG_ASSERT_MSG(count_ == 0, "WriteTxn still has pending requests");
+        ZX_DEBUG_ASSERT_MSG(requests_.size() == 0, "WriteTxn still has pending requests");
     }
 
-    // Identify that a block should be written to disk
-    // as a later point in time.
+    // Identify that a block should be written to disk at a later point in time.
     void Enqueue(zx_handle_t vmo, uint64_t vmo_offset, uint64_t dev_offset, uint64_t nblocks);
-    size_t Count() const { return count_; }
-    write_request_t* Requests() { return &requests_[0]; }
 
+    fbl::Vector<write_request_t>& Requests() { return requests_; }
+
+    size_t BlkCount() const;
+
+protected:
     // Activate the transaction, writing it out to disk.
     //
     // Each transaction uses the |vmo| / |vmoid| pair supplied, since the
     // transactions should be all reading from a single in-memory buffer.
     zx_status_t Flush(zx_handle_t vmo, vmoid_t vmoid);
 
-    size_t BlkCount() const;
-
 private:
-    friend class WritebackBuffer;
     Bcache* bc_;
-    size_t count_ = 0;
-    write_request_t requests_[MAX_TXN_MESSAGES];
+    fbl::Vector<write_request_t> requests_;
 };
 
 #else
@@ -89,7 +87,8 @@ using WriteTxn = fs::WriteTxn<kMinfsBlockSize, Bcache>;
 //
 // Additionally, this class allows completions to be signalled when the transaction
 // has successfully completed.
-class WritebackWork : public fbl::SinglyLinkedListable<fbl::unique_ptr<WritebackWork>> {
+class WritebackWork : public WriteTxn,
+                      public fbl::SinglyLinkedListable<fbl::unique_ptr<WritebackWork>> {
 public:
     WritebackWork(Bcache* bc);
 
@@ -113,6 +112,7 @@ public:
     using SyncCallback = fs::Vnode::SyncCallback;
     void SetClosure(SyncCallback closure);
 #else
+    // Flushes any pending transactions.
     void Complete();
 #endif
 
@@ -120,12 +120,10 @@ public:
     // this writeback operation.
     void PinVnode(fbl::RefPtr<VnodeMinfs> vn);
 
-    WriteTxn* txn() { return &txn_; }
 private:
 #ifdef __Fuchsia__
     SyncCallback closure_; // Optional.
 #endif
-    WriteTxn txn_;
     size_t node_count_;
     // May be empty. Currently '4' is the maximum number of vnodes within a
     // single unit of writeback work, which occurs during a cross-directory

@@ -87,6 +87,8 @@
 
 #define BLOCK_FLAG_READONLY 0x00000001
 #define BLOCK_FLAG_REMOVABLE 0x00000002
+#define BLOCK_FLAG_BOOTPART 0x00000004  // block device has bootdata partition map
+                                        // provided by device metadata
 
 typedef struct {
     uint64_t block_count;       // The number of blocks in this block device
@@ -133,7 +135,6 @@ typedef uint16_t vmoid_t;
 // ssize_t ioctl_block_attach_vmo(int fd, zx_handle_t* in, vmoid_t* out_vmoid);
 IOCTL_WRAPPER_INOUT(ioctl_block_attach_vmo, IOCTL_BLOCK_ATTACH_VMO, zx_handle_t, vmoid_t);
 
-#define MAX_TXN_MESSAGES 16
 #define MAX_TXN_COUNT 256
 
 typedef uint16_t txnid_t;
@@ -228,12 +229,12 @@ IOCTL_WRAPPER_INOUT(ioctl_block_get_stats, IOCTL_BLOCK_GET_STATS, bool, block_st
 // be allocated at any point in time.
 //
 // "Transactions" are allocated with the "alloc_txn" ioctl. Allocating a transaction allows
-// MAX_TXN_MESSAGES to be buffered at once on a single txn before receiving a response.
+// multiple message to be buffered at once on a single txn before receiving a response.
 // Once a txn has been allocated, it can be re-used many times. It is recommended that
 // transactions are allocated on a "per-thread" basis, and only freed on thread teardown.
 //
 // The protocol to communicate with a single txn is as follows:
-// 1) SEND [N - 1] messages with an allocated txnid for any value of 1 <= N < MAX_TXN_MESSAGES.
+// 1) SEND [N - 1] messages with an allocated txnid for any value of 1 <= N.
 //    The BLOCKIO_TXN_END flag is not set for this step.
 // 2) SEND a final Nth message with the same txnid, but also the BLOCKIO_TXN_END flag.
 // 3) RECEIVE a single response from the Block IO server after all N requests have completed.
@@ -268,20 +269,30 @@ IOCTL_WRAPPER_INOUT(ioctl_block_get_stats, IOCTL_BLOCK_GET_STATS, bool, block_st
 // transaction is out of range, for example if 'length' is too large or if 'dev_offset' is beyond
 // the end of the device, ZX_ERR_OUT_OF_RANGE is returned.
 
-#define BLOCKIO_READ 0x0001      // Reads from the Block device into the VMO
-#define BLOCKIO_WRITE 0x0002     // Writes to the Block device from the VMO
-#define BLOCKIO_SYNC 0x0003      // Unimplemented
-#define BLOCKIO_CLOSE_VMO 0x0004 // Detaches the VMO from the block device; closes the handle to it.
-#define BLOCKIO_OP_MASK 0x00FF
+// Reads from the Block device into the VMO
+#define BLOCKIO_READ           0x00000001
+// Writes to the Block device from the VMO
+#define BLOCKIO_WRITE          0x00000002
+// Write any cached data to nonvolatile storage.
+// Implies BARRIER_BEFORE and BARRIER_AFTER.
+#define BLOCKIO_FLUSH          0x00000003
+// Detaches the VMO from the block device.
+#define BLOCKIO_CLOSE_VMO      0x00000004
+#define BLOCKIO_OP_MASK        0x000000FF
 
-#define BLOCKIO_TXN_END 0x0100 // Expects response after request (and all previous) have completed
-#define BLOCKIO_FLAG_MASK 0xFF00
+// Require that this operation will not begin until all prior operations
+// have completed.
+#define BLOCKIO_BARRIER_BEFORE 0x00000100
+// Require that this operation must complete before additional operations begin.
+#define BLOCKIO_BARRIER_AFTER  0x00000200
+// Respond after request (and all previous) have completed
+#define BLOCKIO_TXN_END        0x00000400
+#define BLOCKIO_FLAG_MASK      0x0000FF00
 
 typedef struct {
     txnid_t txnid;
     vmoid_t vmoid;
-    uint16_t opcode;
-    uint16_t reserved0;
+    uint32_t opcode;
     uint64_t length;
     uint64_t vmo_offset;
     uint64_t dev_offset;

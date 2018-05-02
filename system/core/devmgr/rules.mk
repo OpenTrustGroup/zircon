@@ -13,6 +13,7 @@ MODULE_TYPE := userapp
 MODULE_GROUP := core
 
 MODULE_SRCS += \
+    $(LOCAL_DIR)/bootfs.c \
     $(LOCAL_DIR)/devhost-shared.c \
     $(LOCAL_DIR)/devmgr.c \
     $(LOCAL_DIR)/devmgr-binding.c \
@@ -31,11 +32,11 @@ MODULE_HEADER_DEPS := \
 
 MODULE_STATIC_LIBS := \
     system/ulib/fidl \
-    system/ulib/gpt \
     system/ulib/bootdata \
     system/ulib/loader-service \
-    system/ulib/memfs \
-    system/ulib/async.loop \
+    system/ulib/async \
+    system/ulib/async-loop \
+    system/ulib/sync \
     third_party/ulib/lz4 \
     system/ulib/port \
     system/ulib/driver-info \
@@ -59,6 +60,7 @@ MODULE_TYPE := userapp
 MODULE_GROUP := core
 
 MODULE_SRCS := \
+    $(LOCAL_DIR)/bootfs.c \
     $(LOCAL_DIR)/block-watcher.c \
     $(LOCAL_DIR)/devmgr-fdio.c \
     $(LOCAL_DIR)/fshost.c \
@@ -70,11 +72,12 @@ MODULE_STATIC_LIBS := \
     system/ulib/loader-service \
     system/ulib/async.cpp \
     system/ulib/async \
-    system/ulib/async.loop-cpp \
-    system/ulib/async.loop \
+    system/ulib/async-loop.cpp \
+    system/ulib/async-loop \
     system/ulib/bootdata \
     system/ulib/fbl \
     system/ulib/gpt \
+    system/ulib/sync \
     system/ulib/trace \
     system/ulib/zx \
     system/ulib/zxcpp \

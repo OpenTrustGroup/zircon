@@ -8,8 +8,8 @@
              gerrithost="https://review.gerrithub.io"/>
   </projects>
   <hooks>
-    <hook name="download-toolchain"
+    <hook name="download-prebuilt"
           project="zircon"
-          action="scripts/download-toolchain"/>
+          action="scripts/download-prebuilt"/>
   </hooks>
 </manifest>

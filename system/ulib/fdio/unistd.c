@@ -22,6 +22,7 @@
 #include <threads.h>
 #include <unistd.h>
 
+#include <zircon/assert.h>
 #include <zircon/compiler.h>
 #include <zircon/device/vfs.h>
 #include <zircon/process.h>
@@ -573,7 +574,6 @@ void __libc_extensions_init(uint32_t handle_count,
             fdio_fdtab[arg]->dupcount++;
             LOG(1, "fdio: inherit fd=%d (socket)\n", arg_fd);
             break;
-                LOG(1, "fdio: inherit fd=%d (socket)\n", arg_fd);
         case PA_NS_DIR:
             // we always contine here to not steal the
             // handles from higher level code that may
@@ -625,15 +625,8 @@ void __libc_extensions_init(uint32_t handle_count,
     }
 
     if (fdio_root_ns) {
-        fdio_t* io = fdio_ns_open_root(fdio_root_ns);
-        if (io != NULL) {
-            // If we have a root from the legacy PA_FDIO_ROOT,
-            // a specified root namespace overrides it
-            if (fdio_root_handle) {
-                fdio_close(fdio_root_handle);
-            }
-            fdio_root_handle = io;
-        }
+        ZX_ASSERT(!fdio_root_handle);
+        fdio_root_handle = fdio_ns_open_root(fdio_root_ns);
     }
     if (fdio_root_handle) {
         fdio_root_init = true;
@@ -679,6 +672,7 @@ zx_status_t fdio_ns_install(fdio_ns_t* ns) {
         //TODO: support replacing an active namespace
         status = ZX_ERR_ALREADY_EXISTS;
     } else {
+        fdio_root_ns = ns;
         if (fdio_root_handle) {
             old_root = fdio_root_handle;
         }
@@ -694,17 +688,16 @@ zx_status_t fdio_ns_install(fdio_ns_t* ns) {
     return status;
 }
 
-
-zx_status_t fdio_clone_root(zx_handle_t* handles, uint32_t* types) {
-    // The root handle is established in the init hook called from
-    // libc startup (or, in the special case of devmgr, installed
-    // slightly later), and is never NULL and does not change
-    // in normal operation
-    zx_status_t r = fdio_root_handle->ops->clone(fdio_root_handle, handles, types);
-    if (r > 0) {
-        *types = PA_FDIO_REMOTE;
+zx_status_t fdio_ns_get_installed(fdio_ns_t** ns) {
+    zx_status_t status = ZX_OK;
+    mtx_lock(&fdio_lock);
+    if (fdio_root_ns == NULL) {
+        status = ZX_ERR_NOT_FOUND;
+    } else {
+        *ns = fdio_root_ns;
     }
-    return r;
+    mtx_unlock(&fdio_lock);
+    return status;
 }
 
 zx_status_t fdio_clone_cwd(zx_handle_t* handles, uint32_t* types) {
@@ -789,7 +782,7 @@ int fdio_stat(fdio_t* io, struct stat* s) {
     vnattr_t attr;
     int r = io->ops->misc(io, ZXRIO_STAT, 0, sizeof(attr), &attr, 0);
     if (r < 0) {
-        return ZX_ERR_BAD_HANDLE;
+        return r;
     }
     if (r < (int)sizeof(attr)) {
         return ZX_ERR_IO;
@@ -846,7 +839,7 @@ int fdio_status_to_errno(zx_status_t status) {
     case ZX_ERR_NOT_EMPTY: return ENOTEMPTY;
     case ZX_ERR_IO_REFUSED: return ECONNREFUSED;
     case ZX_ERR_IO_INVALID: return EIO;
-    case ZX_ERR_CANCELED: return ECANCELED;
+    case ZX_ERR_CANCELED: return EBADF;
     case ZX_ERR_PROTOCOL_NOT_SUPPORTED: return EPROTONOSUPPORT;
     case ZX_ERR_ADDRESS_UNREACHABLE: return ENETUNREACH;
     case ZX_ERR_ADDRESS_IN_USE: return EADDRINUSE;
@@ -2207,4 +2200,8 @@ int statfs(const char* path, struct statfs* buf) {
     int rv = fstatfs(fd, buf);
     close(fd);
     return rv;
+}
+
+int _fd_open_max(void) {
+    return FDIO_MAX_FD;
 }

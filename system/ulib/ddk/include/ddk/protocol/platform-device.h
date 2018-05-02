@@ -28,13 +28,14 @@ typedef struct {
     uint32_t i2c_channel_count;
     uint32_t clk_count;
     uint32_t bti_count;
+    uint32_t boot_metadata_count;
     uint32_t reserved[8];
 } pdev_device_info_t;
 
 typedef struct {
     zx_status_t (*map_mmio)(void* ctx, uint32_t index, uint32_t cache_policy, void** out_vaddr,
                             size_t* out_size, zx_handle_t* out_handle);
-    zx_status_t (*map_interrupt)(void* ctx, uint32_t index, zx_handle_t* out_handle);
+    zx_status_t (*map_interrupt)(void* ctx, uint32_t index, uint32_t flags, zx_handle_t* out_handle);
     zx_status_t (*get_bti)(void* ctx, uint32_t index, zx_handle_t* out_handle);
     zx_status_t (*get_device_info)(void* ctx, pdev_device_info_t* out_info);
 } platform_device_protocol_ops_t;
@@ -54,7 +55,14 @@ static inline zx_status_t pdev_map_mmio(platform_device_protocol_t* pdev, uint32
 // Returns an interrupt handle. "index" is relative to the list of IRQs for the device.
 static inline zx_status_t pdev_map_interrupt(platform_device_protocol_t* pdev, uint32_t index,
                                              zx_handle_t* out_handle) {
-    return pdev->ops->map_interrupt(pdev->ctx, index, out_handle);
+    return pdev->ops->map_interrupt(pdev->ctx, index, 0, out_handle);
+}
+
+// Returns an interrupt handle. "index" is relative to the list of IRQs for the device.
+// This API allows user to specify the mode
+static inline zx_status_t pdev_get_interrupt(platform_device_protocol_t* pdev, uint32_t index,
+                                             uint32_t flags, zx_handle_t* out_handle) {
+    return pdev->ops->map_interrupt(pdev->ctx, index, flags, out_handle);
 }
 
 // Returns an IOMMU bus transaction initiator handle.

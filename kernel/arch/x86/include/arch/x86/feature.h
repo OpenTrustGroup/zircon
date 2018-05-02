@@ -14,6 +14,7 @@
 __BEGIN_CDECLS
 
 #define MAX_SUPPORTED_CPUID     (0x17)
+#define MAX_SUPPORTED_CPUID_HYP (0x40000001)
 #define MAX_SUPPORTED_CPUID_EXT (0x8000001e)
 
 struct cpuid_leaf {
@@ -37,6 +38,7 @@ enum x86_cpuid_leaf_num {
     X86_CPUID_PT = 0x14,
     X86_CPUID_TSC = 0x15,
 
+    X86_CPUID_HYP_BASE = 0x40000000,
     X86_CPUID_HYP_VENDOR = 0x40000000,
     X86_CPUID_KVM_FEATURES = 0x40000001,
 
@@ -60,15 +62,22 @@ void x86_feature_init(void);
 static inline const struct cpuid_leaf *x86_get_cpuid_leaf(enum x86_cpuid_leaf_num leaf)
 {
     extern struct cpuid_leaf _cpuid[MAX_SUPPORTED_CPUID + 1];
+    extern struct cpuid_leaf _cpuid_hyp[MAX_SUPPORTED_CPUID_HYP - X86_CPUID_HYP_BASE + 1];
     extern struct cpuid_leaf _cpuid_ext[MAX_SUPPORTED_CPUID_EXT - X86_CPUID_EXT_BASE + 1];
     extern uint32_t max_cpuid;
     extern uint32_t max_ext_cpuid;
+    extern uint32_t max_hyp_cpuid;
 
-    if (leaf < X86_CPUID_EXT_BASE) {
+    if (leaf < X86_CPUID_HYP_BASE) {
         if (unlikely(leaf > max_cpuid))
             return NULL;
 
         return &_cpuid[leaf];
+    } else if (leaf < X86_CPUID_EXT_BASE) {
+        if (unlikely(leaf > max_hyp_cpuid))
+            return NULL;
+
+        return &_cpuid_hyp[(uint32_t)leaf - (uint32_t)X86_CPUID_HYP_BASE];
     } else {
         if (unlikely(leaf > max_ext_cpuid))
             return NULL;
@@ -105,54 +114,55 @@ void x86_feature_debug(void);
 
 /* add feature bits to test here */
 /* format: X86_CPUID_BIT(cpuid leaf, register (eax-edx:0-3), bit) */
-#define X86_FEATURE_SSE3         X86_CPUID_BIT(0x1, 2, 0)
-#define X86_FEATURE_MON          X86_CPUID_BIT(0x1, 2, 3)
-#define X86_FEATURE_VMX          X86_CPUID_BIT(0x1, 2, 5)
-#define X86_FEATURE_SSSE3        X86_CPUID_BIT(0x1, 2, 9)
-#define X86_FEATURE_PDCM         X86_CPUID_BIT(0x1, 2, 15)
-#define X86_FEATURE_PCID         X86_CPUID_BIT(0x1, 2, 17)
-#define X86_FEATURE_SSE4_1       X86_CPUID_BIT(0x1, 2, 19)
-#define X86_FEATURE_SSE4_2       X86_CPUID_BIT(0x1, 2, 20)
-#define X86_FEATURE_X2APIC       X86_CPUID_BIT(0x1, 2, 21)
-#define X86_FEATURE_TSC_DEADLINE X86_CPUID_BIT(0x1, 2, 24)
-#define X86_FEATURE_AESNI        X86_CPUID_BIT(0x1, 2, 25)
-#define X86_FEATURE_XSAVE        X86_CPUID_BIT(0x1, 2, 26)
-#define X86_FEATURE_AVX          X86_CPUID_BIT(0x1, 2, 28)
-#define X86_FEATURE_RDRAND       X86_CPUID_BIT(0x1, 2, 30)
-#define X86_FEATURE_HYPERVISOR   X86_CPUID_BIT(0x1, 2, 31)
-#define X86_FEATURE_FPU          X86_CPUID_BIT(0x1, 3, 0)
-#define X86_FEATURE_SEP          X86_CPUID_BIT(0x1, 3, 11)
-#define X86_FEATURE_CLFLUSH      X86_CPUID_BIT(0x1, 3, 19)
-#define X86_FEATURE_MMX          X86_CPUID_BIT(0x1, 3, 23)
-#define X86_FEATURE_FXSR         X86_CPUID_BIT(0x1, 3, 24)
-#define X86_FEATURE_SSE          X86_CPUID_BIT(0x1, 3, 25)
-#define X86_FEATURE_SSE2         X86_CPUID_BIT(0x1, 3, 26)
-#define X86_FEATURE_TM           X86_CPUID_BIT(0x1, 3, 29)
-#define X86_FEATURE_HWP          X86_CPUID_BIT(0x6, 0, 7)
-#define X86_FEATURE_HWP_NOT      X86_CPUID_BIT(0x6, 0, 8)
-#define X86_FEATURE_HWP_ACT      X86_CPUID_BIT(0x6, 0, 9)
-#define X86_FEATURE_HWP_PREF     X86_CPUID_BIT(0x6, 0, 10)
-#define X86_FEATURE_HW_FEEDBACK  X86_CPUID_BIT(0x6, 2, 0)
-#define X86_FEATURE_PERF_BIAS    X86_CPUID_BIT(0x6, 2, 3)
-#define X86_FEATURE_FSGSBASE     X86_CPUID_BIT(0x7, 1, 0)
-#define X86_FEATURE_TSC_ADJUST   X86_CPUID_BIT(0x7, 1, 1)
-#define X86_FEATURE_AVX2         X86_CPUID_BIT(0x7, 1, 5)
-#define X86_FEATURE_SMEP         X86_CPUID_BIT(0x7, 1, 7)
-#define X86_FEATURE_ERMS         X86_CPUID_BIT(0x7, 1, 9)
-#define X86_FEATURE_INVPCID      X86_CPUID_BIT(0x7, 1, 10)
-#define X86_FEATURE_RDSEED       X86_CPUID_BIT(0x7, 1, 18)
-#define X86_FEATURE_SMAP         X86_CPUID_BIT(0x7, 1, 20)
-#define X86_FEATURE_CLFLUSHOPT   X86_CPUID_BIT(0x7, 1, 23)
-#define X86_FEATURE_CLWB         X86_CPUID_BIT(0x7, 1, 24)
-#define X86_FEATURE_PT           X86_CPUID_BIT(0x7, 1, 25)
-#define X86_FEATURE_UMIP         X86_CPUID_BIT(0x7, 2, 2)
-#define X86_FEATURE_PKU          X86_CPUID_BIT(0x7, 2, 3)
-#define X86_FEATURE_AMD_TOPO     X86_CPUID_BIT(0x80000001, 2, 22)
-#define X86_FEATURE_SYSCALL      X86_CPUID_BIT(0x80000001, 3, 11)
-#define X86_FEATURE_NX           X86_CPUID_BIT(0x80000001, 3, 20)
-#define X86_FEATURE_HUGE_PAGE    X86_CPUID_BIT(0x80000001, 3, 26)
-#define X86_FEATURE_RDTSCP       X86_CPUID_BIT(0x80000001, 3, 27)
-#define X86_FEATURE_INVAR_TSC    X86_CPUID_BIT(0x80000007, 3, 8)
+#define X86_FEATURE_SSE3                X86_CPUID_BIT(0x1, 2, 0)
+#define X86_FEATURE_MON                 X86_CPUID_BIT(0x1, 2, 3)
+#define X86_FEATURE_VMX                 X86_CPUID_BIT(0x1, 2, 5)
+#define X86_FEATURE_SSSE3               X86_CPUID_BIT(0x1, 2, 9)
+#define X86_FEATURE_PDCM                X86_CPUID_BIT(0x1, 2, 15)
+#define X86_FEATURE_PCID                X86_CPUID_BIT(0x1, 2, 17)
+#define X86_FEATURE_SSE4_1              X86_CPUID_BIT(0x1, 2, 19)
+#define X86_FEATURE_SSE4_2              X86_CPUID_BIT(0x1, 2, 20)
+#define X86_FEATURE_X2APIC              X86_CPUID_BIT(0x1, 2, 21)
+#define X86_FEATURE_TSC_DEADLINE        X86_CPUID_BIT(0x1, 2, 24)
+#define X86_FEATURE_AESNI               X86_CPUID_BIT(0x1, 2, 25)
+#define X86_FEATURE_XSAVE               X86_CPUID_BIT(0x1, 2, 26)
+#define X86_FEATURE_AVX                 X86_CPUID_BIT(0x1, 2, 28)
+#define X86_FEATURE_RDRAND              X86_CPUID_BIT(0x1, 2, 30)
+#define X86_FEATURE_HYPERVISOR          X86_CPUID_BIT(0x1, 2, 31)
+#define X86_FEATURE_FPU                 X86_CPUID_BIT(0x1, 3, 0)
+#define X86_FEATURE_SEP                 X86_CPUID_BIT(0x1, 3, 11)
+#define X86_FEATURE_CLFLUSH             X86_CPUID_BIT(0x1, 3, 19)
+#define X86_FEATURE_MMX                 X86_CPUID_BIT(0x1, 3, 23)
+#define X86_FEATURE_FXSR                X86_CPUID_BIT(0x1, 3, 24)
+#define X86_FEATURE_SSE                 X86_CPUID_BIT(0x1, 3, 25)
+#define X86_FEATURE_SSE2                X86_CPUID_BIT(0x1, 3, 26)
+#define X86_FEATURE_TM                  X86_CPUID_BIT(0x1, 3, 29)
+#define X86_FEATURE_HWP                 X86_CPUID_BIT(0x6, 0, 7)
+#define X86_FEATURE_HWP_NOT             X86_CPUID_BIT(0x6, 0, 8)
+#define X86_FEATURE_HWP_ACT             X86_CPUID_BIT(0x6, 0, 9)
+#define X86_FEATURE_HWP_PREF            X86_CPUID_BIT(0x6, 0, 10)
+#define X86_FEATURE_HW_FEEDBACK         X86_CPUID_BIT(0x6, 2, 0)
+#define X86_FEATURE_PERF_BIAS           X86_CPUID_BIT(0x6, 2, 3)
+#define X86_FEATURE_FSGSBASE            X86_CPUID_BIT(0x7, 1, 0)
+#define X86_FEATURE_TSC_ADJUST          X86_CPUID_BIT(0x7, 1, 1)
+#define X86_FEATURE_AVX2                X86_CPUID_BIT(0x7, 1, 5)
+#define X86_FEATURE_SMEP                X86_CPUID_BIT(0x7, 1, 7)
+#define X86_FEATURE_ERMS                X86_CPUID_BIT(0x7, 1, 9)
+#define X86_FEATURE_INVPCID             X86_CPUID_BIT(0x7, 1, 10)
+#define X86_FEATURE_RDSEED              X86_CPUID_BIT(0x7, 1, 18)
+#define X86_FEATURE_SMAP                X86_CPUID_BIT(0x7, 1, 20)
+#define X86_FEATURE_CLFLUSHOPT          X86_CPUID_BIT(0x7, 1, 23)
+#define X86_FEATURE_CLWB                X86_CPUID_BIT(0x7, 1, 24)
+#define X86_FEATURE_PT                  X86_CPUID_BIT(0x7, 1, 25)
+#define X86_FEATURE_UMIP                X86_CPUID_BIT(0x7, 2, 2)
+#define X86_FEATURE_PKU                 X86_CPUID_BIT(0x7, 2, 3)
+#define X86_FEATURE_KVM_PVCLOCK_STABLE  X86_CPUID_BIT(0x40000001, 0, 24)
+#define X86_FEATURE_AMD_TOPO            X86_CPUID_BIT(0x80000001, 2, 22)
+#define X86_FEATURE_SYSCALL             X86_CPUID_BIT(0x80000001, 3, 11)
+#define X86_FEATURE_NX                  X86_CPUID_BIT(0x80000001, 3, 20)
+#define X86_FEATURE_HUGE_PAGE           X86_CPUID_BIT(0x80000001, 3, 26)
+#define X86_FEATURE_RDTSCP              X86_CPUID_BIT(0x80000001, 3, 27)
+#define X86_FEATURE_INVAR_TSC           X86_CPUID_BIT(0x80000007, 3, 8)
 
 /* legacy accessors */
 static inline uint8_t x86_linear_address_width(void)

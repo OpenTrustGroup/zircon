@@ -118,6 +118,7 @@ typedef struct ethdev {
     void* io_buf;
     size_t io_size;
     zx_paddr_t* paddr_map;
+    zx_handle_t pmt;
 
     tx_info_t all_tx_bufs[FIFO_DEPTH];
     mtx_t lock;  // Protects free_tx_bufs
@@ -282,7 +283,7 @@ static void eth_handle_rx(ethdev_t* edev, const void* data, size_t len, uint32_t
     uint32_t count;
 
     if (edev->rx_entry_count == 0) {
-        status = zx_fifo_read(edev->rx_fifo, edev->rx_entries, sizeof(edev->rx_entries), &count);
+        status = zx_fifo_read_old(edev->rx_fifo, edev->rx_entries, sizeof(edev->rx_entries), &count);
         if (status != ZX_OK) {
             if (status == ZX_ERR_SHOULD_WAIT) {
                 if ((edev->fail_rx_read++ % FAIL_REPORT_RATE) == 0) {
@@ -313,7 +314,7 @@ static void eth_handle_rx(ethdev_t* edev, const void* data, size_t len, uint32_t
         e->flags = ETH_FIFO_RX_OK | extra;
     }
 
-    if ((status = zx_fifo_write(edev->rx_fifo, e, sizeof(*e), &count)) < 0) {
+    if ((status = zx_fifo_write_old(edev->rx_fifo, e, sizeof(*e), &count)) < 0) {
         if (status == ZX_ERR_SHOULD_WAIT) {
             if ((edev->fail_rx_write++ % FAIL_REPORT_RATE) == 0) {
                 zxlogf(ERROR, "eth [%s]: no rx_fifo space available (%u times)\n",
@@ -345,7 +346,7 @@ static int tx_fifo_write(ethdev_t* edev, eth_fifo_entry_t* entries, uint32_t cou
     zx_status_t status;
     uint32_t actual;
     // Writing should never fail, or fail to write all entries
-    status = zx_fifo_write(edev->tx_fifo, entries, sizeof(eth_fifo_entry_t) * count, &actual);
+    status = zx_fifo_write_old(edev->tx_fifo, entries, sizeof(eth_fifo_entry_t) * count, &actual);
     if (status < 0) {
         zxlogf(ERROR, "eth [%s]: tx_fifo write failed %d\n", edev->name, status);
         return -1;
@@ -518,7 +519,7 @@ static int eth_tx_thread(void* arg) {
     uint32_t count;
 
     for (;;) {
-        if ((status = zx_fifo_read(edev->tx_fifo, entries, sizeof(entries), &count)) < 0) {
+        if ((status = zx_fifo_read_old(edev->tx_fifo, entries, sizeof(entries), &count)) < 0) {
             if (status == ZX_ERR_SHOULD_WAIT) {
                 zx_signals_t observed;
                 if ((status = zx_object_wait_one(edev->tx_fifo,
@@ -616,7 +617,7 @@ static ssize_t eth_set_iobuf_locked(ethdev_t* edev, const void* in_buf, size_t i
         }
         zx_handle_t bti = edev->edev0->mac.ops->get_bti(edev->edev0->mac.ctx);
         if ((status = zx_bti_pin(bti, ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE,
-                                 vmo, 0, size, edev->paddr_map, pages)) != ZX_OK) {
+                                 vmo, 0, size, edev->paddr_map, pages, &edev->pmt)) != ZX_OK) {
             zxlogf(ERROR, "eth [%s]: bti_pin failed, can't pin vmo: %d\n",
                    edev->name, status);
             goto fail;
@@ -882,12 +883,12 @@ static void eth_kill_locked(ethdev_t* edev) {
         edev->io_buf = NULL;
     }
     if (edev->paddr_map != NULL) {
-        zx_handle_t bti = edev->edev0->mac.ops->get_bti(edev->edev0->mac.ctx);
-        if (zx_bti_unpin(bti, edev->paddr_map[0]) != ZX_OK) {
+        if (zx_pmt_unpin(edev->pmt) != ZX_OK) {
             zxlogf(ERROR, "eth [%s]: cannot unpin vmo?!\n", edev->name);
         }
         free(edev->paddr_map);
         edev->paddr_map = NULL;
+        edev->pmt = ZX_HANDLE_INVALID;
     }
     zxlogf(TRACE, "eth [%s]: all resources released\n", edev->name);
 }

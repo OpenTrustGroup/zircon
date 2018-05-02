@@ -14,10 +14,13 @@
 #include <arch/x86/registers.h>
 #include <arch/defines.h>
 
-.align PAGE_SIZE
+// This code's only non-PIC instructions are movabs, which can be fixed up
+// safely (see gen-kaslr-fixups.sh).  This section name is specially known
+// by kernel.ld and gen-kaslr-fixups.sh.
+.section .text.bootstrap16,"ax",%progbits
+.balign PAGE_SIZE
 
-.section .text
-FUNCTION_LABEL(x86_bootstrap16_start)
+DATA(x86_bootstrap16_start)
 
 .code16
 FUNCTION_LABEL(x86_bootstrap16_entry)
@@ -130,7 +133,7 @@ FUNCTION_LABEL(_x86_secondary_cpu_long_mode_entry)
     mov %eax, %ss
 
     // Load the IDT
-    lidt _idtr(%rip)
+    call load_startup_idt
 
     mov %rdx, %rsi
     // Do an indirect call to keep this position independent
@@ -173,9 +176,6 @@ FUNCTION_LABEL(_x86_suspend_wakeup)
     mov %eax, %gs
     mov %eax, %ss
 
-    // Load the IDT
-    lidt _idtr(%rip)
-
     // Restore %gs.base to &bp_percpu.  We need to do this before
     // returning to C code, since the C code might use safe-stack
     // and/or stack-protector.
@@ -187,6 +187,12 @@ FUNCTION_LABEL(_x86_suspend_wakeup)
     shr $32, %rdx
     mov $X86_MSR_IA32_GS_BASE, %ecx
     wrmsr
+
+    // Restore the stack pointer first, so we can use the stack right now.
+    mov 120(%rdi), %rsp
+
+    // Load the IDT.  Note this uses the stack and clobbers %rax, but not %rdi.
+    call load_startup_idt
 
     mov 8(%rdi), %rsi
     mov 16(%rdi), %rbp
@@ -202,12 +208,10 @@ FUNCTION_LABEL(_x86_suspend_wakeup)
     mov 96(%rdi), %r13
     mov 104(%rdi), %r14
     mov 112(%rdi), %r15
-    mov 120(%rdi), %rsp
 
-    // Note: %rdi is not restored, but it is a caller-save register anyway.  If
-    // we want to restore %rdi, we could potentially use the stack here to do something
-    // like "push 128(%rdi); mov (%rdi), %rdi; ret", but that would require assuming RSP
-    // points to usable stack.
+    // Note: %rdi is not restored, but it is a caller-save register anyway.
+    // If we want to restore %rdi, we could potentially use the stack here
+    // to do something like "push 128(%rdi); mov (%rdi), %rdi; ret".
 
     // Restore RIP
     jmp *128(%rdi)

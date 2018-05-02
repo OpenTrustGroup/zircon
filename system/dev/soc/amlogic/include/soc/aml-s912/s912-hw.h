@@ -26,6 +26,8 @@
 #define S912_GPIO_LENGTH                0x1C00
 #define S912_GPIO_A0_BASE               0xc8100000
 #define S912_GPIO_AO_LENGTH             0x1000
+#define S912_GPIO_INTERRUPT_BASE        0xC1100000
+#define S912_GPIO_INTERRUPT_LENGTH      0x10000
 
 #define S912_I2C_A_BASE                 0xc1108500
 #define S912_I2C_A_LENGTH               0x20
@@ -47,7 +49,7 @@
 #define S912_UART_A_BASE                0xc11084c0
 #define S912_UART_A_LENGTH              0x18
 #define S912_UART_AO_B_BASE             0xc81004e0
-#define S912_UART_AO_B_LENGTH          0x18
+#define S912_UART_AO_B_LENGTH           0x18
 
 // IRQs
 #define S912_M_I2C_0_IRQ                53
@@ -71,6 +73,67 @@
 #define S912_A0_GPIO_IRQ_1              233
 #define S912_M_I2C_1_IRQ                246
 #define S912_M_I2C_2_IRQ                247
+
+// DMC registers
+#define DMC_REG_BASE        0xc8838000
+
+#define PERIPHS_REG_BASE        (0xc8834000)
+#define PERIPHS_REG_SIZE        (0x2000)
+//Offsets of peripheral control registers
+#define PER_ETH_REG0            (0x400 + (0x50 << 2))
+#define PER_ETH_REG1            (0x400 + (0x51 << 2))
+#define PER_ETH_REG2            (0x400 + (0x56 << 2))
+#define PER_ETH_REG3            (0x400 + (0x57 << 2))
+#define PER_ETH_REG4            (0x400 + (0x58 << 2))
+
+
+#define HHI_REG_BASE            (0xc883c000)
+#define HHI_REG_SIZE            (0x2000)
+//Offsets of HHI registers
+#define HHI_MEM_PD_REG0         (0x40 << 2)
+#define HHI_GCLK_MPEG1          (0x51 << 2)
+
+#define ETH_MAC_REG_BASE         (0xc9410000)
+#define ETH_MAC_REG_SIZE         (0x00010000)
+
+#define DMC_CAV_LUT_DATAL           (0x12 << 2)
+#define DMC_CAV_LUT_DATAH           (0x13 << 2)
+#define DC_CAV_LUT_ADDR             (0x14 << 2)
+
+#define DC_CAV_LUT_ADDR_INDEX_MASK  0x7
+#define DC_CAV_LUT_ADDR_RD_EN       (1 << 8)
+#define DC_CAV_LUT_ADDR_WR_EN       (2 << 8)
+// Alternate Functions for Ethernet
+#define S912_ETH_MDIO       S912_GPIOZ(0)
+#define S912_ETH_MDIO_FN    1
+#define S912_ETH_MDC        S912_GPIOZ(1)
+#define S912_ETH_MDC_FN     1
+
+#define S912_ETH_RGMII_RX_CLK        S912_GPIOZ(2)
+#define S912_ETH_RGMII_RX_CLK_FN     1
+#define S912_ETH_RX_DV               S912_GPIOZ(3)
+#define S912_ETH_RX_DV_FN            1
+#define S912_ETH_RXD0                S912_GPIOZ(4)
+#define S912_ETH_RXD0_FN             1
+#define S912_ETH_RXD1                S912_GPIOZ(5)
+#define S912_ETH_RXD1_FN             1
+#define S912_ETH_RXD2                S912_GPIOZ(6)
+#define S912_ETH_RXD2_FN             1
+#define S912_ETH_RXD3                S912_GPIOZ(7)
+#define S912_ETH_RXD3_FN             1
+
+#define S912_ETH_RGMII_TX_CLK        S912_GPIOZ(8)
+#define S912_ETH_RGMII_TX_CLK_FN     1
+#define S912_ETH_TX_EN               S912_GPIOZ(9)
+#define S912_ETH_TX_EN_FN            1
+#define S912_ETH_TXD0                S912_GPIOZ(10)
+#define S912_ETH_TXD0_FN             1
+#define S912_ETH_TXD1                S912_GPIOZ(11)
+#define S912_ETH_TXD1_FN             1
+#define S912_ETH_TXD2                S912_GPIOZ(12)
+#define S912_ETH_TXD2_FN             1
+#define S912_ETH_TXD3                S912_GPIOZ(13)
+#define S912_ETH_TXD3_FN             1
 
 // Alternate Functions for I2C
 #define S912_I2C_SDA_A      S912_GPIODV(24)
@@ -169,3 +232,28 @@
 #define S912_AO_PWM_MISC_REG_AB     0x56
 #define S912_AO_PWM_DELTA_SIGMA_AB  0x57
 
+// Alternate Functions for EMMC/NAND
+#define S912_EMMC_NAND_D0       S912_GPIOBOOT(0)
+#define S912_EMMC_NAND_D0_FN    1
+#define S912_EMMC_NAND_D1       S912_GPIOBOOT(1)
+#define S912_EMMC_NAND_D1_FN    1
+#define S912_EMMC_NAND_D2       S912_GPIOBOOT(2)
+#define S912_EMMC_NAND_D2_FN    1
+#define S912_EMMC_NAND_D3       S912_GPIOBOOT(3)
+#define S912_EMMC_NAND_D3_FN    1
+#define S912_EMMC_NAND_D4       S912_GPIOBOOT(4)
+#define S912_EMMC_NAND_D4_FN    1
+#define S912_EMMC_NAND_D5       S912_GPIOBOOT(5)
+#define S912_EMMC_NAND_D5_FN    1
+#define S912_EMMC_NAND_D6       S912_GPIOBOOT(6)
+#define S912_EMMC_NAND_D6_FN    1
+#define S912_EMMC_NAND_D7       S912_GPIOBOOT(7)
+#define S912_EMMC_NAND_D7_FN    1
+#define S912_EMMC_CLK           S912_GPIOBOOT(8)
+#define S912_EMMC_CLK_FN        1
+#define S912_EMMC_RST           S912_GPIOBOOT(9)
+#define S912_EMMC_RST_FN        1
+#define S912_EMMC_CMD           S912_GPIOBOOT(10)
+#define S912_EMMC_CMD_FN        1
+#define S912_EMMC_DS            S912_GPIOBOOT(15)
+#define S912_EMMC_DS_FN         1

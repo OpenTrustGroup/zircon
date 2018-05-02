@@ -10,10 +10,10 @@
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/exception.h>
 #include <zircon/syscalls/port.h>
-#include <zx/port.h>
-#include <zx/process.h>
-#include <zx/thread.h>
-#include <zx/time.h>
+#include <lib/zx/port.h>
+#include <lib/zx/process.h>
+#include <lib/zx/thread.h>
+#include <lib/zx/time.h>
 
 enum class Instruction {
     SGDT,
@@ -109,7 +109,7 @@ bool test_instruction(Instruction isn) {
 
     // Wait for crash or thread completion.
     zx_port_packet_t packet;
-    while (port.wait(zx::time::infinite(), &packet, 0) == ZX_OK) {
+    while (port.wait(zx::time::infinite(), &packet, 1) == ZX_OK) {
         if (ZX_PKT_IS_EXCEPTION(packet.type)) {
             zx_exception_report_t report;
             ASSERT_EQ(thread.get_info(ZX_INFO_THREAD_EXCEPTION_REPORT, &report, sizeof(report),

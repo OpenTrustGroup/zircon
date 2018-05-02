@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <lib/async/cpp/loop.h>
+#include <lib/async-loop/cpp/loop.h>
 #include <fbl/unique_free_ptr.h>
 #include <fbl/unique_ptr.h>
 #include <fs/trace.h>
@@ -27,16 +27,12 @@
 
 namespace {
 
-typedef struct minfs_options {
-    bool readonly;
-    bool verbose;
-} minfs_options_t;
-
 int do_minfs_check(fbl::unique_ptr<minfs::Bcache> bc) {
     return minfs_check(fbl::move(bc));
 }
 
-int do_minfs_mount(fbl::unique_ptr<minfs::Bcache> bc, minfs_options_t* options) {
+int do_minfs_mount(fbl::unique_ptr<minfs::Bcache> bc,
+                   minfs::minfs_options_t* options) {
     zx_handle_t h = zx_get_startup_handle(PA_HND(PA_USER0, 0));
     if (h == ZX_HANDLE_INVALID) {
         FS_TRACE_ERROR("minfs: Could not access startup handle to mount point\n");
@@ -44,12 +40,12 @@ int do_minfs_mount(fbl::unique_ptr<minfs::Bcache> bc, minfs_options_t* options) 
     }
 
     async::Loop loop;
-    fs::Vfs vfs(loop.async());
     trace::TraceProvider trace_provider(loop.async());
-    vfs.SetReadonly(options->readonly);
 
+    auto loop_quit = [&loop]() { loop.Quit(); };
     zx_status_t status;
-    if ((status = MountAndServe(&vfs, fbl::move(bc), zx::channel(h)) != ZX_OK)) {
+    if ((status = MountAndServe(options, loop.async(), fbl::move(bc),
+                                zx::channel(h), fbl::move(loop_quit)) != ZX_OK)) {
         if (options->verbose) {
             fprintf(stderr, "minfs: Failed to mount: %d\n", status);
         }
@@ -86,6 +82,7 @@ int usage() {
             "\n"
             "options:  -v|--verbose     Some debug messages\n"
             "          -r|--readonly    Mount filesystem read-only\n"
+            "          -m|--metrics     Collect filesystem metrics\n"
             "          -h|--help        Display this message\n"
             "\n"
             "On Fuchsia, MinFS takes the block device argument by handle.\n"
@@ -113,13 +110,15 @@ off_t get_size(int fd) {
 } // namespace
 
 int main(int argc, char** argv) {
-    minfs_options_t options;
+    minfs::minfs_options_t options;
     options.readonly = false;
+    options.metrics = false;
     options.verbose = false;
 
     while (1) {
         static struct option opts[] = {
             {"readonly", no_argument, nullptr, 'r'},
+            {"metrics", no_argument, nullptr, 'm'},
             {"verbose", no_argument, nullptr, 'v'},
             {"help", no_argument, nullptr, 'h'},
             {nullptr, 0, nullptr, 0},
@@ -132,6 +131,9 @@ int main(int argc, char** argv) {
         switch (c) {
         case 'r':
             options.readonly = true;
+            break;
+        case 'm':
+            options.metrics = true;
             break;
         case 'v':
             options.verbose = true;

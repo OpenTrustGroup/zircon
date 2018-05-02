@@ -8,9 +8,9 @@
 #include <stdio.h>
 #include <zircon/syscalls/exception.h>
 #include <zircon/syscalls/port.h>
-#include <zx/port.h>
-#include <zx/process.h>
-#include <zx/thread.h>
+#include <lib/zx/port.h>
+#include <lib/zx/process.h>
+#include <lib/zx/thread.h>
 
 namespace {
 
@@ -59,7 +59,7 @@ bool do_probe(ProbeOperation op, const void* addr) {
 
     // Wait for crash or thread completion.
     zx_port_packet_t packet;
-    if (port.wait(zx::time::infinite(), &packet, 0) == ZX_OK) {
+    if (port.wait(zx::time::infinite(), &packet, 1) == ZX_OK) {
         if (ZX_PKT_IS_EXCEPTION(packet.type)) {
             // Thread crashed so the operation failed. The thread is now in a suspended state and
             // needs to be explicitly terminated.

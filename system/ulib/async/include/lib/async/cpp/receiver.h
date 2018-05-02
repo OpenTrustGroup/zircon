@@ -4,62 +4,108 @@
 
 #pragma once
 
-#include <lib/async/dispatcher.h>
-#include <lib/async/receiver.h>
 #include <fbl/function.h>
-#include <fbl/macros.h>
+#include <lib/async/receiver.h>
 
 namespace async {
 
-// C++ wrapper for a packet receiver.
-// The same instance may be used to receive arbitrarily many queued packets.
+// Holds content for a packet receiver and its handler.
 //
-// This class is thread-safe.
-class Receiver final : private async_receiver_t {
+// After successfully queuing packets to the receiver, the client is responsible
+// for retaining the structure in memory (and unmodified) until all packets have
+// been received by the handler or the dispatcher shuts down.  There is no way
+// to cancel a packet which has been queued.
+//
+// Multiple packets may be delivered to the same receiver concurrently.
+//
+// Concrete implementations: |async::Receiver|, |async::ReceiverMethod|.
+// Please do not create subclasses of ReceiverBase outside of this library.
+class ReceiverBase {
+protected:
+    explicit ReceiverBase(async_receiver_handler_t* handler);
+    ~ReceiverBase();
+
+    ReceiverBase(const ReceiverBase&) = delete;
+    ReceiverBase(ReceiverBase&&) = delete;
+    ReceiverBase& operator=(const ReceiverBase&) = delete;
+    ReceiverBase& operator=(ReceiverBase&&) = delete;
+
 public:
-    // Receives packets containing user supplied data.
+    // Enqueues a packet of data for delivery to a receiver.
     //
-    // Reports the |status| of the receiver.  If the status is |ZX_OK| then |data|
-    // describes the contents of the packet which was received, otherwise |data|
-    // is null.
+    // The |data| will be copied into the packet.  May be NULL to create a
+    // zero-initialized packet payload.
     //
-    // It is safe for the handler to destroy itself when there are no remaining
-    // packets pending delivery to it.
+    // Returns |ZX_OK| if the packet was successfully enqueued.
+    // Returns |ZX_ERR_BAD_STATE| if the dispatcher is shutting down.
+    // Returns |ZX_ERR_NOT_SUPPORTED| if not supported by the dispatcher.
+    zx_status_t QueuePacket(async_t* async, const zx_packet_user_t* data = nullptr);
+
+protected:
+    template <typename T>
+    static T* Dispatch(async_receiver_t* receiver) {
+        static_assert(offsetof(ReceiverBase, receiver_) == 0, "");
+        auto self = reinterpret_cast<ReceiverBase*>(receiver);
+        return static_cast<T*>(self);
+    }
+
+private:
+    async_receiver_t receiver_;
+};
+
+// A receiver whose handler is bound to a |async::Task::Handler| function.
+//
+// Prefer using |async::ReceiverMethod| instead for binding to a fixed class member
+// function since it is more efficient to dispatch.
+class Receiver final : public ReceiverBase {
+public:
+    // Handles receipt of packets containing user supplied data.
+    //
+    // The |status| is |ZX_OK| if the packet was successfully delivered and |data|
+    // contains the information from the packet, otherwise |data| is null.
     using Handler = fbl::Function<void(async_t* async,
+                                       async::Receiver* receiver,
                                        zx_status_t status,
                                        const zx_packet_user_t* data)>;
 
-    // Initializes the properties of the receiver.
-    explicit Receiver(uint32_t flags = 0u);
-
-    // Destroys the receiver.
-    //
-    // This object must not be destroyed until all packets destined for it
-    // have been delivered or the asynchronous dispatcher itself has been
-    // destroyed.
+    explicit Receiver(Handler handler = nullptr);
     ~Receiver();
 
-    // Gets or sets the handler to invoke when a packet is received.
-    // Must be set before queuing any packets.
-    const Handler& handler() const { return handler_; }
     void set_handler(Handler handler) { handler_ = fbl::move(handler); }
-
-    // Valid flags: None, set to zero.
-    uint32_t flags() const { return async_receiver_t::flags; }
-    void set_flags(uint32_t flags) { async_receiver_t::flags = flags; }
-
-    // Enqueues a packet of data for delivery to the receiver.
-    //
-    // See |async_queue_packet()| for details.
-    zx_status_t Queue(async_t* async, const zx_packet_user_t* data = nullptr);
+    bool has_handler() const { return !!handler_; }
 
 private:
     static void CallHandler(async_t* async, async_receiver_t* receiver,
                             zx_status_t status, const zx_packet_user_t* data);
 
     Handler handler_;
+};
 
-    DISALLOW_COPY_ASSIGN_AND_MOVE(Receiver);
+// A receiver whose handler is bound to a fixed class member function.
+//
+// Usage:
+//
+// class Foo {
+//     void Handle(async_t* async, async::ReceiverBase* receiver, zx_status_t status,
+//                 const zx_packet_user_t* data) { ... }
+//     async::ReceiverMethod<Foo, &Foo::Handle> receiver_{this};
+// };
+template <class Class,
+          void (Class::*method)(async_t* async, async::ReceiverBase* receiver,
+                                zx_status_t status, const zx_packet_user_t* data)>
+class ReceiverMethod final : public ReceiverBase {
+public:
+    explicit ReceiverMethod(Class* instance)
+        : ReceiverBase(&ReceiverMethod::CallHandler), instance_(instance) {}
+
+private:
+    static void CallHandler(async_t* async, async_receiver_t* receiver,
+                            zx_status_t status, const zx_packet_user_t* data) {
+        auto self = Dispatch<ReceiverMethod>(receiver);
+        (self->instance_->*method)(async, self, status, data);
+    }
+
+    Class* const instance_;
 };
 
 } // namespace async

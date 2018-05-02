@@ -87,16 +87,12 @@ static int aml_uart_irq_thread(void *arg) {
     aml_uart_t* uart = arg;
 
     while (1) {
-        uint64_t slots;
-        zx_status_t result = zx_interrupt_wait(uart->irq_handle, &slots);
-        if (result != ZX_OK) {
-            zxlogf(ERROR, "aml_uart_irq_thread: zx_interrupt_wait got %d\n", result);
+        zx_status_t status;
+        status = zx_interrupt_wait(uart->irq_handle, NULL);
+        if (status != ZX_OK) {
+            zxlogf(ERROR, "aml_uart_irq_thread: zx_interrupt_wait got %d\n", status);
             break;
         }
-        if (slots & (1ul << ZX_INTERRUPT_SLOT_USER)) {
-            break;
-        }
-
         // this will call the notify_cb if the serial state has changed
         aml_uart_read_state(uart);
     }
@@ -261,7 +257,7 @@ static zx_status_t aml_serial_enable(void* ctx, bool enable) {
             return thrd_status_to_zx_status(rc);
         }
     } else if (!enable && uart->enabled) {
-        zx_interrupt_signal(uart->irq_handle, ZX_INTERRUPT_SLOT_USER, 0);
+        zx_interrupt_destroy(uart->irq_handle);
         thrd_join(uart->irq_thread, NULL);
         aml_serial_enable_locked(uart, false);
         zx_handle_close(uart->irq_handle);

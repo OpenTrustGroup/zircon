@@ -28,8 +28,7 @@ namespace fidl {
 namespace raw {
 
 struct Identifier {
-    explicit Identifier(SourceLocation location)
-        : location(location) {}
+    explicit Identifier(SourceLocation location) : location(location) {}
 
     SourceLocation location;
 };
@@ -45,73 +44,66 @@ struct Literal {
     virtual ~Literal() {}
 
     enum struct Kind {
-        String,
-        Numeric,
-        True,
-        False,
+        kString,
+        kNumeric,
+        kTrue,
+        kFalse,
     };
 
-    explicit Literal(Kind kind)
-        : kind(kind) {}
+    explicit Literal(Kind kind) : kind(kind) {}
 
     const Kind kind;
 };
 
 struct StringLiteral : public Literal {
-    explicit StringLiteral(SourceLocation location)
-        : Literal(Kind::String), location(location) {}
+    explicit StringLiteral(SourceLocation location) : Literal(Kind::kString), location(location) {}
 
     SourceLocation location;
 };
 
 struct NumericLiteral : public Literal {
-    NumericLiteral(SourceLocation location)
-        : Literal(Kind::Numeric), location(location) {}
+    NumericLiteral(SourceLocation location) : Literal(Kind::kNumeric), location(location) {}
 
     SourceLocation location;
 };
 
 struct TrueLiteral : public Literal {
-    TrueLiteral()
-        : Literal(Kind::True) {}
+    TrueLiteral() : Literal(Kind::kTrue) {}
 };
 
 struct FalseLiteral : public Literal {
-    FalseLiteral()
-        : Literal(Kind::False) {}
+    FalseLiteral() : Literal(Kind::kFalse) {}
 };
 
 struct Constant {
     virtual ~Constant() {}
 
     enum struct Kind {
-        Identifier,
-        Literal,
+        kIdentifier,
+        kLiteral,
     };
 
-    explicit Constant(Kind kind)
-        : kind(kind) {}
+    explicit Constant(Kind kind) : kind(kind) {}
 
     const Kind kind;
 };
 
 struct IdentifierConstant : Constant {
     explicit IdentifierConstant(std::unique_ptr<CompoundIdentifier> identifier)
-        : Constant(Kind::Identifier), identifier(std::move(identifier)) {}
+        : Constant(Kind::kIdentifier), identifier(std::move(identifier)) {}
 
     std::unique_ptr<CompoundIdentifier> identifier;
 };
 
 struct LiteralConstant : Constant {
     explicit LiteralConstant(std::unique_ptr<Literal> literal)
-        : Constant(Kind::Literal), literal(std::move(literal)) {}
+        : Constant(Kind::kLiteral), literal(std::move(literal)) {}
 
     std::unique_ptr<Literal> literal;
 };
 
 struct Attribute {
-    Attribute(std::unique_ptr<Identifier> name,
-              std::unique_ptr<StringLiteral> value)
+    Attribute(std::unique_ptr<Identifier> name, std::unique_ptr<StringLiteral> value)
         : name(std::move(name)), value(std::move(value)) {}
 
     std::unique_ptr<Identifier> name;
@@ -129,24 +121,23 @@ struct Type {
     virtual ~Type() {}
 
     enum struct Kind {
-        Array,
-        Vector,
-        String,
-        Handle,
-        RequestHandle,
-        Primitive,
-        Identifier,
+        kArray,
+        kVector,
+        kString,
+        kHandle,
+        kRequestHandle,
+        kPrimitive,
+        kIdentifier,
     };
 
-    explicit Type(Kind kind)
-        : kind(kind) {}
+    explicit Type(Kind kind) : kind(kind) {}
 
     const Kind kind;
 };
 
 struct ArrayType : public Type {
     ArrayType(std::unique_ptr<Type> element_type, std::unique_ptr<Constant> element_count)
-        : Type(Kind::Array), element_type(std::move(element_type)),
+        : Type(Kind::kArray), element_type(std::move(element_type)),
           element_count(std::move(element_count)) {}
 
     std::unique_ptr<Type> element_type;
@@ -156,8 +147,7 @@ struct ArrayType : public Type {
 struct VectorType : public Type {
     VectorType(std::unique_ptr<Type> element_type, std::unique_ptr<Constant> maybe_element_count,
                types::Nullability nullability)
-        : Type(Kind::Vector),
-          element_type(std::move(element_type)),
+        : Type(Kind::kVector), element_type(std::move(element_type)),
           maybe_element_count(std::move(maybe_element_count)), nullability(nullability) {}
 
     std::unique_ptr<Type> element_type;
@@ -167,7 +157,7 @@ struct VectorType : public Type {
 
 struct StringType : public Type {
     StringType(std::unique_ptr<Constant> maybe_element_count, types::Nullability nullability)
-        : Type(Kind::String), maybe_element_count(std::move(maybe_element_count)),
+        : Type(Kind::kString), maybe_element_count(std::move(maybe_element_count)),
           nullability(nullability) {}
 
     std::unique_ptr<Constant> maybe_element_count;
@@ -176,15 +166,16 @@ struct StringType : public Type {
 
 struct HandleType : public Type {
     HandleType(types::HandleSubtype subtype, types::Nullability nullability)
-        : Type(Kind::Handle), subtype(subtype), nullability(nullability) {}
+        : Type(Kind::kHandle), subtype(subtype), nullability(nullability) {}
 
     types::HandleSubtype subtype;
     types::Nullability nullability;
 };
 
 struct RequestHandleType : public Type {
-    RequestHandleType(std::unique_ptr<CompoundIdentifier> identifier, types::Nullability nullability)
-        : Type(Kind::RequestHandle), identifier(std::move(identifier)), nullability(nullability) {}
+    RequestHandleType(std::unique_ptr<CompoundIdentifier> identifier,
+                      types::Nullability nullability)
+        : Type(Kind::kRequestHandle), identifier(std::move(identifier)), nullability(nullability) {}
 
     std::unique_ptr<CompoundIdentifier> identifier;
     types::Nullability nullability;
@@ -192,14 +183,14 @@ struct RequestHandleType : public Type {
 
 struct PrimitiveType : public Type {
     explicit PrimitiveType(types::PrimitiveSubtype subtype)
-        : Type(Kind::Primitive), subtype(subtype) {}
+        : Type(Kind::kPrimitive), subtype(subtype) {}
 
     types::PrimitiveSubtype subtype;
 };
 
 struct IdentifierType : public Type {
     IdentifierType(std::unique_ptr<CompoundIdentifier> identifier, types::Nullability nullability)
-        : Type(Kind::Identifier), identifier(std::move(identifier)), nullability(nullability) {}
+        : Type(Kind::kIdentifier), identifier(std::move(identifier)), nullability(nullability) {}
 
     std::unique_ptr<CompoundIdentifier> identifier;
     types::Nullability nullability;
@@ -262,15 +253,12 @@ struct ParameterList {
     std::vector<std::unique_ptr<Parameter>> parameter_list;
 };
 
-struct InterfaceMemberMethod {
-    InterfaceMemberMethod(std::unique_ptr<NumericLiteral> ordinal,
-                          std::unique_ptr<Identifier> identifier,
-                          std::unique_ptr<ParameterList> maybe_request,
-                          std::unique_ptr<ParameterList> maybe_response)
-        : ordinal(std::move(ordinal)),
-          identifier(std::move(identifier)),
-          maybe_request(std::move(maybe_request)),
-          maybe_response(std::move(maybe_response)) {}
+struct InterfaceMethod {
+    InterfaceMethod(std::unique_ptr<NumericLiteral> ordinal, std::unique_ptr<Identifier> identifier,
+                    std::unique_ptr<ParameterList> maybe_request,
+                    std::unique_ptr<ParameterList> maybe_response)
+        : ordinal(std::move(ordinal)), identifier(std::move(identifier)),
+          maybe_request(std::move(maybe_request)), maybe_response(std::move(maybe_response)) {}
 
     std::unique_ptr<NumericLiteral> ordinal;
     std::unique_ptr<Identifier> identifier;
@@ -282,19 +270,14 @@ struct InterfaceDeclaration {
     InterfaceDeclaration(std::unique_ptr<AttributeList> attributes,
                          std::unique_ptr<Identifier> identifier,
                          std::vector<std::unique_ptr<CompoundIdentifier>> superinterfaces,
-                         std::vector<std::unique_ptr<ConstDeclaration>> const_members,
-                         std::vector<std::unique_ptr<EnumDeclaration>> enum_members,
-                         std::vector<std::unique_ptr<InterfaceMemberMethod>> method_members)
+                         std::vector<std::unique_ptr<InterfaceMethod>> methods)
         : attributes(std::move(attributes)), identifier(std::move(identifier)),
-          superinterfaces(std::move(superinterfaces)), const_members(std::move(const_members)),
-          enum_members(std::move(enum_members)), method_members(std::move(method_members)) {}
+          superinterfaces(std::move(superinterfaces)), methods(std::move(methods)) {}
 
     std::unique_ptr<AttributeList> attributes;
     std::unique_ptr<Identifier> identifier;
     std::vector<std::unique_ptr<CompoundIdentifier>> superinterfaces;
-    std::vector<std::unique_ptr<ConstDeclaration>> const_members;
-    std::vector<std::unique_ptr<EnumDeclaration>> enum_members;
-    std::vector<std::unique_ptr<InterfaceMemberMethod>> method_members;
+    std::vector<std::unique_ptr<InterfaceMethod>> methods;
 };
 
 struct StructMember {
@@ -311,17 +294,12 @@ struct StructMember {
 struct StructDeclaration {
     StructDeclaration(std::unique_ptr<AttributeList> attributes,
                       std::unique_ptr<Identifier> identifier,
-                      std::vector<std::unique_ptr<ConstDeclaration>> const_members,
-                      std::vector<std::unique_ptr<EnumDeclaration>> enum_members,
                       std::vector<std::unique_ptr<StructMember>> members)
         : attributes(std::move(attributes)), identifier(std::move(identifier)),
-          const_members(std::move(const_members)), enum_members(std::move(enum_members)),
           members(std::move(members)) {}
 
     std::unique_ptr<AttributeList> attributes;
     std::unique_ptr<Identifier> identifier;
-    std::vector<std::unique_ptr<ConstDeclaration>> const_members;
-    std::vector<std::unique_ptr<EnumDeclaration>> enum_members;
     std::vector<std::unique_ptr<StructMember>> members;
 };
 
@@ -336,36 +314,31 @@ struct UnionMember {
 struct UnionDeclaration {
     UnionDeclaration(std::unique_ptr<AttributeList> attributes,
                      std::unique_ptr<Identifier> identifier,
-                     std::vector<std::unique_ptr<ConstDeclaration>> const_members,
-                     std::vector<std::unique_ptr<EnumDeclaration>> enum_members,
                      std::vector<std::unique_ptr<UnionMember>> members)
         : attributes(std::move(attributes)), identifier(std::move(identifier)),
-          const_members(std::move(const_members)), enum_members(std::move(enum_members)),
           members(std::move(members)) {}
 
     std::unique_ptr<AttributeList> attributes;
     std::unique_ptr<Identifier> identifier;
-    std::vector<std::unique_ptr<ConstDeclaration>> const_members;
-    std::vector<std::unique_ptr<EnumDeclaration>> enum_members;
     std::vector<std::unique_ptr<UnionMember>> members;
 };
 
 struct File {
-    File(std::unique_ptr<Identifier> identifier,
+    File(std::unique_ptr<CompoundIdentifier> library_name,
          std::vector<std::unique_ptr<Using>> using_list,
          std::vector<std::unique_ptr<ConstDeclaration>> const_declaration_list,
          std::vector<std::unique_ptr<EnumDeclaration>> enum_declaration_list,
          std::vector<std::unique_ptr<InterfaceDeclaration>> interface_declaration_list,
          std::vector<std::unique_ptr<StructDeclaration>> struct_declaration_list,
          std::vector<std::unique_ptr<UnionDeclaration>> union_declaration_list)
-        : identifier(std::move(identifier)), using_list(std::move(using_list)),
+        : library_name(std::move(library_name)), using_list(std::move(using_list)),
           const_declaration_list(std::move(const_declaration_list)),
           enum_declaration_list(std::move(enum_declaration_list)),
           interface_declaration_list(std::move(interface_declaration_list)),
           struct_declaration_list(std::move(struct_declaration_list)),
           union_declaration_list(std::move(union_declaration_list)) {}
 
-    std::unique_ptr<Identifier> identifier;
+    std::unique_ptr<CompoundIdentifier> library_name;
     std::vector<std::unique_ptr<Using>> using_list;
     std::vector<std::unique_ptr<ConstDeclaration>> const_declaration_list;
     std::vector<std::unique_ptr<EnumDeclaration>> enum_declaration_list;

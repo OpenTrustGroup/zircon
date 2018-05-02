@@ -9,10 +9,15 @@ MODULE := $(LOCAL_DIR)
 MODULE_TYPE := driver
 
 MODULE_SRCS += \
-    $(LOCAL_DIR)/audio-util.c \
+    $(LOCAL_DIR)/binding.c \
     $(LOCAL_DIR)/midi.c \
-    $(LOCAL_DIR)/usb-audio.c \
+    $(LOCAL_DIR)/usb-audio-control-interface.cpp \
+    $(LOCAL_DIR)/usb-audio-descriptors.cpp \
+    $(LOCAL_DIR)/usb-audio-device.cpp \
+    $(LOCAL_DIR)/usb-audio-path.cpp \
     $(LOCAL_DIR)/usb-audio-stream.cpp \
+    $(LOCAL_DIR)/usb-audio-stream-interface.cpp \
+    $(LOCAL_DIR)/usb-audio-units.cpp \
     $(LOCAL_DIR)/usb-midi-sink.c \
     $(LOCAL_DIR)/usb-midi-source.c \
 
@@ -28,6 +33,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/ddk \
     system/ulib/ddktl \
     system/ulib/fbl \
+    system/ulib/pretty \
     system/ulib/sync \
     system/ulib/zx \
     system/ulib/zxcpp \

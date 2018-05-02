@@ -42,11 +42,9 @@ BusTransactionInitiatorDispatcher::~BusTransactionInitiatorDispatcher() {
 
 zx_status_t BusTransactionInitiatorDispatcher::Pin(fbl::RefPtr<VmObject> vmo, uint64_t offset,
                                                    uint64_t size, uint32_t perms,
-                                                   bool compress_results,
-                                                   dev_vaddr_t* mapped_addrs,
-                                                   size_t mapped_addrs_count) {
+                                                   fbl::RefPtr<Dispatcher>* pmt,
+                                                   zx_rights_t* pmt_rights) {
 
-    DEBUG_ASSERT(mapped_addrs);
     DEBUG_ASSERT(IS_PAGE_ALIGNED(offset));
     DEBUG_ASSERT(IS_PAGE_ALIGNED(size));
 
@@ -60,64 +58,69 @@ zx_status_t BusTransactionInitiatorDispatcher::Pin(fbl::RefPtr<VmObject> vmo, ui
         return ZX_ERR_BAD_STATE;
     }
 
-    fbl::unique_ptr<PinnedMemoryObject> pmo;
-    zx_status_t status = PinnedMemoryObject::Create(*this, fbl::move(vmo),
-                                                    offset, size, perms, &pmo);
-    if (status != ZX_OK) {
-        return status;
-    }
-
-    const fbl::Array<dev_vaddr_t>& pmo_addrs = pmo->mapped_addrs();
-    const size_t found_addrs = pmo_addrs.size();
-    if (compress_results) {
-        if (found_addrs != mapped_addrs_count) {
-            return ZX_ERR_INVALID_ARGS;
-        }
-        memcpy(mapped_addrs, pmo_addrs.get(), found_addrs * sizeof(dev_vaddr_t));
-    } else {
-        const size_t num_pages = size / PAGE_SIZE;
-        if (num_pages != mapped_addrs_count) {
-            return ZX_ERR_INVALID_ARGS;
-        }
-        const size_t min_contig = minimum_contiguity();
-        size_t next_idx = 0;
-        for (size_t i = 0; i < found_addrs; ++i) {
-            dev_vaddr_t extent_base = pmo_addrs[i];
-            for (dev_vaddr_t addr = extent_base;
-                 addr < extent_base + min_contig && next_idx < num_pages;
-                 addr += PAGE_SIZE, ++next_idx) {
-                mapped_addrs[next_idx] = addr;
-            }
-        }
-    }
-
-    pinned_memory_.push_back(fbl::move(pmo));
-    return ZX_OK;
+    return PinnedMemoryTokenDispatcher::Create(fbl::WrapRefPtr(this), fbl::move(vmo),
+                                               offset, size, perms, pmt, pmt_rights);
 }
 
-zx_status_t BusTransactionInitiatorDispatcher::Unpin(const dev_vaddr_t base_addr) {
-    fbl::AutoLock guard(&lock_);
+void BusTransactionInitiatorDispatcher::ReleaseQuarantine() {
+    QuarantineList tmp;
 
-    if (zero_handles_) {
-        return ZX_ERR_BAD_STATE;
+    // The PMT dtor will call RemovePmo, which will reacquire this BTI's lock.
+    // To avoid deadlock, drop the lock before letting the quarantined PMTs go.
+    {
+        fbl::AutoLock guard(&lock_);
+        quarantine_.swap(tmp);
     }
-
-    for (auto& pmo : pinned_memory_) {
-        const fbl::Array<dev_vaddr_t>& pmo_addrs = pmo.mapped_addrs();
-        if (pmo_addrs[0] == base_addr) {
-            // The PMO dtor will take care of the actual unpinning.
-            pinned_memory_.erase(pmo);
-            return ZX_OK;
-        }
-    }
-
-    return ZX_ERR_INVALID_ARGS;
 }
 
 void BusTransactionInitiatorDispatcher::on_zero_handles() {
     fbl::AutoLock guard(&lock_);
-    while (!pinned_memory_.is_empty()) {
-        pinned_memory_.pop_front();
-    }
+    // Prevent new pinning from happening.  The Dispatcher will stick around
+    // until all of the PMTs are closed.
     zero_handles_ = true;
+
+    // Do not clear out the quarantine list.  PMTs hold a reference to the BTI
+    // and the BTI holds a reference to each quarantined PMT.  We intentionally
+    // leak the BTI, all quarantined PMTs, and their underlying VMOs.  We could
+    // get away with freeing the BTI and the PMTs, but for safety we must leak
+    // at least the pinned parts of the VMOs, since we have no assurance that
+    // hardware is not still reading/writing to it.
+    if (!quarantine_.is_empty()) {
+        PrintQuarantineWarningLocked();
+    }
+}
+
+void BusTransactionInitiatorDispatcher::AddPmoLocked(PinnedMemoryTokenDispatcher* pmt) {
+    DEBUG_ASSERT(!pmt->dll_pmt_.InContainer());
+    pinned_memory_.push_back(pmt);
+}
+
+void BusTransactionInitiatorDispatcher::RemovePmo(PinnedMemoryTokenDispatcher* pmt) {
+    fbl::AutoLock guard(&lock_);
+    DEBUG_ASSERT(pmt->dll_pmt_.InContainer());
+    pinned_memory_.erase(*pmt);
+}
+
+void BusTransactionInitiatorDispatcher::Quarantine(fbl::RefPtr<PinnedMemoryTokenDispatcher> pmt) {
+    fbl::AutoLock guard(&lock_);
+
+    DEBUG_ASSERT(pmt->dll_pmt_.InContainer());
+    quarantine_.push_back(fbl::move(pmt));
+
+    if (zero_handles_) {
+        // If we quarantine when at zero handles, this PMT will be leaked.  See
+        // the comment in on_zero_handles().
+        PrintQuarantineWarningLocked();
+    }
+}
+
+void BusTransactionInitiatorDispatcher::PrintQuarantineWarningLocked() {
+    uint64_t leaked_pages = 0;
+    size_t num_entries = 0;
+    for (const auto& pmt : quarantine_) {
+        leaked_pages += pmt.size() / PAGE_SIZE;
+        num_entries++;
+    }
+    printf("Bus Transaction Initiator 0x%lx has leaked %" PRIu64 " pages in %zu VMOs\n",
+           bti_id_, leaked_pages, num_entries);
 }

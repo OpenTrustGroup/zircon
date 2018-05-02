@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include <zircon/compiler.h>
 #include <zircon/errors.h>
+#include <zircon/limits.h>
+
 #ifndef __cplusplus
 #ifndef _KERNEL
 // We don't want to include <stdatomic.h> from the kernel code because the
@@ -38,6 +40,8 @@ typedef int32_t zx_status_t;
 typedef uint64_t zx_time_t;
 // a duration in nanoseconds
 typedef uint64_t zx_duration_t;
+// a duration in hardware ticks
+typedef uint64_t zx_ticks_t;
 #define ZX_TIME_INFINITE UINT64_MAX
 #define ZX_NSEC(n) ((zx_duration_t)(1ULL * (n)))
 #define ZX_USEC(n) ((zx_duration_t)(1000ULL * (n)))
@@ -237,7 +241,7 @@ typedef uint32_t zx_rights_t;
 #define ZX_VMO_OP_DECOMMIT               2u
 #define ZX_VMO_OP_LOCK                   3u
 #define ZX_VMO_OP_UNLOCK                 4u
-#define ZX_VMO_OP_LOOKUP                 5u
+// opcode 5 was ZX_VMO_OP_LOOKUP, but is now unused.
 #define ZX_VMO_OP_CACHE_SYNC             6u
 #define ZX_VMO_OP_CACHE_INVALIDATE       7u
 #define ZX_VMO_OP_CACHE_CLEAN            8u
@@ -370,7 +374,9 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_IOMMU           ((zx_obj_type_t)23u)
 #define ZX_OBJ_TYPE_BTI             ((zx_obj_type_t)24u)
 #define ZX_OBJ_TYPE_PROFILE         ((zx_obj_type_t)25u)
-#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)26u)
+#define ZX_OBJ_TYPE_PMT             ((zx_obj_type_t)26u)
+#define ZX_OBJ_TYPE_SUSPEND_TOKEN   ((zx_obj_type_t)27u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)28u)
 
 typedef struct {
     zx_handle_t handle;

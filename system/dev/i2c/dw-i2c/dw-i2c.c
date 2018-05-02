@@ -145,8 +145,7 @@ static int i2c_dw_irq_thread(void* arg) {
     zx_status_t status;
 
     while (1) {
-        uint64_t slots;
-        status = zx_interrupt_wait(dev->irq_handle, &slots);
+        status = zx_interrupt_wait(dev->irq_handle, NULL);
         if (status != ZX_OK) {
             zxlogf(ERROR, "%s: irq wait failed, retcode = %d\n", __FUNCTION__, status);
             continue;

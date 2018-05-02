@@ -20,12 +20,12 @@
 #include <lib/fidl/cpp/string_view.h>
 #include <lib/fidl/cpp/vector_view.h>
 #include <fdio/debug.h>
-#include <fdio/io.fidl2.h>
+#include <fdio/io.fidl.h>
 #include <fdio/io.h>
 #include <fdio/remoteio.h>
 #include <fdio/util.h>
 #include <fdio/vfs.h>
-#include <zx/channel.h>
+#include <lib/zx/channel.h>
 
 #include "private-fidl.h"
 
@@ -53,12 +53,11 @@ T* to_primary(const fidl::Message* msg) {
     return reinterpret_cast<T*>(msg->bytes().data());
 }
 
-// Semantic sugar for creating a new FIDL request object,
-// setting the TXID, and setting the ordinal.
+// Semantic sugar for creating a new FIDL request object
+// and setting the ordinal.
 template <typename T, uint32_t Ordinal>
 T* new_request(zxrio_t* rio, fidl::Builder* builder) {
     T* request = builder->New<T>();
-    zxrio_new_txid(rio, &request->hdr.txid);
     request->hdr.ordinal = Ordinal;
     return request;
 }

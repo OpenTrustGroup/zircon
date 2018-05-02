@@ -9,17 +9,19 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include <lib/async/cpp/loop.h>
+#include <lib/async-loop/cpp/loop.h>
 #include <fbl/algorithm.h>
 #include <fbl/alloc_checker.h>
 #include <fbl/atomic.h>
 #include <fbl/auto_lock.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
+#include <fdio/namespace.h>
 #include <fdio/vfs.h>
 #include <fs/vfs.h>
 #include <memfs/memfs.h>
 #include <memfs/vnode.h>
+#include <sync/completion.h>
 #include <zircon/device/vfs.h>
 
 #include "dnode.h"
@@ -132,7 +134,7 @@ zx_status_t memfs_create_filesystem(async_t* async, memfs_filesystem_t** fs_out,
     }
 
     fbl::unique_ptr<memfs_filesystem_t> fs = fbl::make_unique<memfs_filesystem_t>();
-    fs->vfs.set_async(async);
+    fs->vfs.SetAsync(async);
 
     fbl::RefPtr<memfs::VnodeDir> root;
     if ((status = memfs::createFilesystem("<tmp>", &fs->vfs, &root)) != ZX_OK) {
@@ -147,9 +149,36 @@ zx_status_t memfs_create_filesystem(async_t* async, memfs_filesystem_t** fs_out,
     return ZX_OK;
 }
 
-zx_status_t memfs_free_filesystem(memfs_filesystem_t* fs, zx_duration_t timeout) {
+zx_status_t memfs_install_at(async_t* async, const char* path) {
+    fdio_ns_t* ns;
+    zx_status_t status = fdio_ns_get_installed(&ns);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    memfs_filesystem_t* fs;
+    zx_handle_t root;
+    status = memfs_create_filesystem(async, &fs, &root);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    status = fdio_ns_bind(ns, path, root);
+    if (status != ZX_OK) {
+        memfs_free_filesystem(fs, nullptr);
+        zx_handle_close(root);
+        return status;
+    }
+
+    return ZX_OK;
+}
+
+void memfs_free_filesystem(memfs_filesystem_t* fs, completion_t* unmounted) {
     ZX_DEBUG_ASSERT(fs != nullptr);
-    zx_status_t status = fs->vfs.UninstallAll(zx_deadline_after(timeout));
-    delete fs;
-    return status;
+    fs->vfs.Shutdown([fs, unmounted](zx_status_t status) {
+        delete fs;
+        if (unmounted) {
+            completion_signal(unmounted);
+        }
+    });
 }

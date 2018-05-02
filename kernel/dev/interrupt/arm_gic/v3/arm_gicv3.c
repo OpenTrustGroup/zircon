@@ -5,6 +5,7 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
+#include <arch/arm64/periphmap.h>
 #include <assert.h>
 #include <bits.h>
 #include <dev/interrupt.h>
@@ -21,10 +22,9 @@
 #include <vm/vm.h>
 #include <zircon/types.h>
 
-#include <mdi/mdi-defs.h>
-#include <mdi/mdi.h>
 #include <pdev/driver.h>
 #include <pdev/interrupt.h>
+#include <zircon/boot/driver-config.h>
 
 #define LOCAL_TRACE 0
 
@@ -33,11 +33,29 @@
 
 #include <arch/arch_ops.h>
 
-// values read from MDI
-static uint64_t arm_gicv3_gic_base = 0;
+// values read from bootdata
+static vaddr_t arm_gicv3_gic_base = 0;
 static uint64_t arm_gicv3_gicd_offset = 0;
 static uint64_t arm_gicv3_gicr_offset = 0;
 static uint64_t arm_gicv3_gicr_stride = 0;
+
+/*
+IMX8M Errata: e11171: CA53: Cannot support single-core runtime wakeup
+
+According to the GIC500 specification and the Arm Trusted Firmware design, when a CPU
+core enters the deepest CPU idle state (power-down), it must disable the GIC500 CPU
+interface and set the Redistributor register to indicate that this CPU is in sleep state.
+
+On NXP IMX8M, However, if the CPU core is in WFI or power-down with CPU interface disabled,
+another core cannot wake-up the powered-down core using SGI interrupt.
+
+One workaround is to use another A53 core for the IRQ0 which is controlled by the IOMUX
+GPR to generate an external interrupt to wake-up the powered-down core.
+The SW workaround is implemented into default BSP release. The workaround commit tag is
+“MLK-16804-04 driver: irqchip: Add IPI SW workaround for imx8mq" on the linux-imx project
+*/
+static uint64_t mx8_gpr_virt = 0;
+
 static uint32_t ipi_base = 0;
 
 // this header uses the arm_gicv3_gic_* variables above
@@ -68,7 +86,8 @@ static void gic_set_enable(uint vector, bool enable) {
         for (uint i = 0; i < arch_max_num_cpus(); i++) {
             if (enable) {
                 GICREG(0, GICR_ISENABLER0(i)) = mask;
-            } else {
+            }
+            else {
                 GICREG(0, GICR_ICENABLER0(i)) = mask;
             }
             gic_wait_for_rwp(GICR_CTLR(i));
@@ -76,7 +95,8 @@ static void gic_set_enable(uint vector, bool enable) {
     } else {
         if (enable) {
             GICREG(0, GICD_ISENABLER(reg)) = mask;
-        } else {
+        }
+        else {
             GICREG(0, GICD_ICENABLER(reg)) = mask;
         }
         gic_wait_for_rwp(GICD_CTLR);
@@ -192,6 +212,18 @@ static zx_status_t arm_gic_sgi(u_int irq, u_int flags, u_int cpu_mask) {
 
         gic_write_sgi1r(val);
         cluster += 1;
+        // Work around
+        if (mx8_gpr_virt) {
+            uint32_t regVal;
+            // peinding irq32 to wakeup core
+            regVal = *(volatile uint32_t *)(mx8_gpr_virt + 0x4);
+            regVal |= (1 << 12);
+            *(volatile uint32_t *)(mx8_gpr_virt + 0x4) = regVal;
+            // delay
+            spin(50);
+            regVal &= ~(1 << 12);
+            *(volatile uint32_t *)(mx8_gpr_virt + 0x4) = regVal;
+        }
     }
 
     return ZX_OK;
@@ -349,7 +381,8 @@ static void gic_init_percpu(void) {
 }
 
 static void gic_shutdown(void) {
-    PANIC_UNIMPLEMENTED;
+    // Turn off all GIC0 interrupts at the distributor.
+    GICREG(0, GICD_CTLR) = 0;
 }
 
 static const struct pdev_interrupt_ops gic_ops = {
@@ -367,67 +400,38 @@ static const struct pdev_interrupt_ops gic_ops = {
     .shutdown = gic_shutdown,
 };
 
-static void arm_gic_v3_init(mdi_node_ref_t* node, uint level) {
-    uint64_t gic_base_virt = 0;
+static void arm_gic_v3_init(const void* driver_data, uint32_t length) {
+    ASSERT(length >= sizeof(dcfg_arm_gicv3_driver_t));
+    const dcfg_arm_gicv3_driver_t* driver = driver_data;
+    ASSERT(driver->mmio_phys);
 
     LTRACE_ENTRY;
 
-    bool got_gic_base_virt = false;
-    bool got_gicd_offset = false;
-    bool got_gicr_offset = false;
-    bool got_gicr_stride = false;
-    bool got_ipi_base = false;
-    bool optional = false;
-
-    mdi_node_ref_t child;
-    mdi_each_child(node, &child) {
-        switch (mdi_id(&child)) {
-        case MDI_BASE_VIRT:
-            got_gic_base_virt = !mdi_node_uint64(&child, &gic_base_virt);
-            break;
-        case MDI_ARM_GIC_V3_GICD_OFFSET:
-            got_gicd_offset = !mdi_node_uint64(&child, &arm_gicv3_gicd_offset);
-            break;
-        case MDI_ARM_GIC_V3_GICR_OFFSET:
-            got_gicr_offset = !mdi_node_uint64(&child, &arm_gicv3_gicr_offset);
-            break;
-        case MDI_ARM_GIC_V3_GICR_STRIDE:
-            got_gicr_stride = !mdi_node_uint64(&child, &arm_gicv3_gicr_stride);
-            break;
-        case MDI_ARM_GIC_V3_IPI_BASE:
-            got_ipi_base = !mdi_node_uint32(&child, &ipi_base);
-            break;
-        case MDI_ARM_GIC_V3_OPTIONAL:
-            mdi_node_boolean(&child, &optional);
-            break;
-        }
-    }
-
-    if (!got_gic_base_virt) {
-        printf("arm-gic-v3: gic_base_virt not defined\n");
-        return;
-    }
-    if (!got_gicd_offset) {
-        printf("arm-gic-v3: gicd_offset not defined\n");
-        return;
-    }
-    if (!got_gicr_offset) {
-        printf("arm-gic-v3: gicr_offset not defined\n");
-        return;
-    }
-    if (!got_gicr_stride) {
-        printf("arm-gic-v3: gicr_stride not defined\n");
-        return;
-    }
-    if (!got_ipi_base) {
-        printf("arm-gic-v3: ipi_base not defined\n");
+    // If a GIC driver is already registered to the GIC interface it's means we are running GICv2
+    // and we do not need to initialize GICv3. Since we have added both GICv3 and GICv2 in board.mdi,
+    // both drivers are initialized
+    if(gicv3_is_gic_registered()) {
         return;
     }
 
-    arm_gicv3_gic_base = (uint64_t)gic_base_virt;
+    if (driver->mx8_gpr_phys) {
+        printf("arm-gic-v3: Applying Errata e11171 for NXP MX8!\n");
+        mx8_gpr_virt = periph_paddr_to_vaddr(driver->mx8_gpr_phys);
+        ASSERT(mx8_gpr_virt);
+    }
+
+    arm_gicv3_gic_base = periph_paddr_to_vaddr(driver->mmio_phys);
+    ASSERT(arm_gicv3_gic_base);
+    arm_gicv3_gicd_offset = driver->gicd_offset;
+    arm_gicv3_gicr_offset = driver->gicr_offset;
+    arm_gicv3_gicr_stride = driver->gicr_stride;
+    ipi_base = driver->ipi_base;
+
+    arm_gicv3_gic_base = periph_paddr_to_vaddr(driver->mmio_phys);
+    ASSERT(arm_gicv3_gic_base);
 
     if (gic_init() != ZX_OK) {
-        if (optional) {
+        if (driver->optional) {
             // failed to detect gic v3 but it's marked optional. continue
             return;
         }
@@ -451,4 +455,4 @@ static void arm_gic_v3_init(mdi_node_ref_t* node, uint level) {
     LTRACE_EXIT;
 }
 
-LK_PDEV_INIT(arm_gic_v3_init, MDI_ARM_GIC_V3, arm_gic_v3_init, LK_INIT_LEVEL_PLATFORM_EARLY);
+LK_PDEV_INIT(arm_gic_v3_init, KDRV_ARM_GIC_V3, arm_gic_v3_init, LK_INIT_LEVEL_PLATFORM_EARLY);

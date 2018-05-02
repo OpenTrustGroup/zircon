@@ -8,6 +8,7 @@
 #include <ddk/protocol/platform-defs.h>
 
 #include <soc/aml-s905d2/s905d2-gpio.h>
+#include <soc/aml-s905d2/s905d2-hw.h>
 
 #include <limits.h>
 
@@ -18,66 +19,54 @@
 
 static const pbus_mmio_t gpio_mmios[] = {
     {
-        .base = 0xff634400,
-        .length = 0x11C00,
+        .base = S905D2_GPIO_BASE,
+        .length = S905D2_GPIO_LENGTH,
     },
     {
-        .base = 0xff800000,
-        .length = PAGE_SIZE,
+        .base = S905D2_GPIO_A0_BASE,
+        .length = S905D2_GPIO_AO_LENGTH,
+    },
+    {
+        .base = S905D2_GPIO_INTERRUPT_BASE,
+        .length = S905D2_GPIO_INTERRUPT_LENGTH,
     },
 };
 
 static const pbus_irq_t gpio_irqs[] = {
     {
-        // gpio_irq0
-        .irq = 94,
+        .irq = S905D2_GPIO_IRQ_0,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_1,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_2,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_3,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_4,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_5,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_6,
+    },
+    {
+        .irq = S905D2_GPIO_IRQ_7,
+    },
+    /*
+    {
+        .irq = S905D2_A0_GPIO_IRQ_0,
         .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
-        // gpio_irq1
-        .irq = 95,
+        .irq = S905D2_A0_GPIO_IRQ_1,
         .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
-    {
-        // gpio_irq2
-        .irq = 96,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // gpio_irq3
-        .irq = 97,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // gpio_irq4
-        .irq = 98,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // gpio_irq5
-        .irq = 99,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // gpio_irq6
-        .irq = 100,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // gpio_irq7
-        .irq = 101,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // ao_gpio_irq0
-        .irq = 238,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        // ao_gpio_irq1
-        .irq = 239,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
+    */
 };
 
 static pbus_dev_t gpio_dev = {
@@ -116,6 +105,10 @@ zx_status_t aml_gpio_init(aml_bus_t* bus) {
             // SYS_LED
             .gpio = S905D2_GPIOAO(11),
         },
+        {
+            // JTAG Adapter Pin
+            .gpio = S905D2_GPIOAO(6),
+        }
     };
 
     const pbus_dev_t gpio_test_dev = {

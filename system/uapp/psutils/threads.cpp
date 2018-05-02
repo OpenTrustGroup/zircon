@@ -22,6 +22,7 @@
 #include <fbl/vector.h>
 #include <inspector/inspector.h>
 #include <pretty/hexdump.h>
+#include <task-utils/get.h>
 
 static int verbosity_level = 0;
 
@@ -249,7 +250,7 @@ int self_dump_func(void* arg) {
 
     while (true) {
         zx_port_packet_t packet;
-        zx_port_wait(data->excp_port, ZX_TIME_INFINITE, &packet, 0);
+        zx_port_wait(data->excp_port, ZX_TIME_INFINITE, &packet, 1);
         if (packet.key != kSelfExceptionKey) {
             print_error("invalid crash key");
             return 1;
@@ -354,9 +355,15 @@ int main(int argc, char** argv) {
     }
 
     zx_handle_t process;
-    status = zx_object_get_child(ZX_HANDLE_INVALID, pid, ZX_RIGHT_SAME_RIGHTS, &process);
+    zx_obj_type_t type;
+    status = get_task_by_koid(pid, &type, &process);
     if (status < 0) {
         print_zx_error(status, "unable to get a handle to %" PRIu64, pid);
+        return 1;
+    }
+
+    if (type != ZX_OBJ_TYPE_PROCESS) {
+        print_error("PID %" PRIu64 " is not a process. Threads can only be dumped from processes", pid);
         return 1;
     }
 

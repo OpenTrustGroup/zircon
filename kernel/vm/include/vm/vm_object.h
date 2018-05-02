@@ -50,6 +50,9 @@ public:
 
     // Returns true if the object is backed by RAM.
     virtual bool is_paged() const { return false; }
+    // Returns true if the object is backed by a contiguous range of physical
+    // memory.
+    virtual bool is_contiguous() const { return false; }
 
     // Returns the number of physical pages currently allocated to the
     // object where (offset <= page_offset < offset+len).
@@ -64,12 +67,6 @@ public:
 
     // find physical pages to back the range of the object
     virtual zx_status_t CommitRange(uint64_t offset, uint64_t len, uint64_t* committed) {
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-
-    // find a contiguous run of physical pages to back the range of the object
-    virtual zx_status_t CommitRangeContiguous(uint64_t offset, uint64_t len, uint64_t* committed,
-                                              uint8_t alignment_log2) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 

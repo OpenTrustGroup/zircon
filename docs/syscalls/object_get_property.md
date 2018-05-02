@@ -102,6 +102,59 @@ Additional errors:
 
 *   **ZX_ERR_OUT_OF_RANGE**: If the importance value is not valid
 
+### ZX_PROP_SOCKET_RX_BUF_MAX
+
+*handle* type: **Socket**
+
+*value* type: **size_t**
+
+Allowed operations: **get**
+
+The maximum size of the receive buffer of a socket, in bytes. The receive
+buffer may become full at a capacity less than the maximum due to overheads.
+
+### ZX_PROP_SOCKET_RX_BUF_SIZE
+
+*handle* type: **Socket**
+
+*value* type: **size_t**
+
+Allowed operations: **get**
+
+The size of the receive buffer of a socket, in bytes.
+
+### ZX_PROP_SOCKET_TX_BUF_MAX
+
+*handle* type: **Socket**
+
+*value* type: **size_t**
+
+Allowed operations: **get**
+
+The maximum size of the transmit buffer of a socket, in bytes. The transmit
+buffer may become full at a capacity less than the maximum due to overheads.
+
+### ZX_PROP_SOCKET_TX_BUF_SIZE
+
+*handle* type: **Socket**
+
+*value* type: **size_t**
+
+Allowed operations: **get**
+
+The size of the transmit buffer of a socket, in bytes.
+
+### ZX_PROP_CHANNEL_TX_MSG_MAX
+
+*handle* type: **Channel**
+
+*value* type: **size_t**
+
+Allowed operations: **get**
+
+The maximum number of packets a channel endpoint can have pending in
+its outgoing direction.
+
 ## RETURN VALUE
 
 **zx_object_get_property**() returns **ZX_OK** on success. In the event of

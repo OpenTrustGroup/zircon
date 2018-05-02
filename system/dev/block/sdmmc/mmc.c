@@ -65,7 +65,6 @@ static zx_status_t mmc_set_bus_width(sdmmc_device_t* dev, sdmmc_bus_width_t bus_
             return ZX_ERR_INTERNAL;
         }
     }
-
     dev->bus_width = bus_width;
     return ZX_OK;
 }
@@ -75,7 +74,7 @@ static uint8_t mmc_select_bus_width(sdmmc_device_t* dev) {
     uint8_t bus_widths[] = { SDMMC_BUS_WIDTH_8, MMC_EXT_CSD_BUS_WIDTH_8,
                              SDMMC_BUS_WIDTH_4, MMC_EXT_CSD_BUS_WIDTH_4,
                              SDMMC_BUS_WIDTH_1, MMC_EXT_CSD_BUS_WIDTH_1 };
-    for (unsigned i = 0; i < sizeof(bus_widths)/sizeof(unsigned); i += 2) {
+    for (unsigned i = 0; i < (sizeof(bus_widths)/sizeof(uint8_t)); i += 2) {
         if (mmc_set_bus_width(dev, bus_widths[i], bus_widths[i+1]) == ZX_OK) {
             break;
         }
@@ -135,29 +134,33 @@ static zx_status_t mmc_switch_freq(sdmmc_device_t* dev, uint32_t new_freq) {
 
 static zx_status_t mmc_decode_cid(sdmmc_device_t* dev, const uint8_t* raw_cid) {
     printf("mmc: product name=%c%c%c%c%c%c\n",
-            raw_cid[6], raw_cid[7], raw_cid[8], raw_cid[9], raw_cid[10], raw_cid[11]);
-    printf("       revision=%u.%u\n", (raw_cid[5] >> 4) & 0xf, raw_cid[5] & 0xf);
-    printf("       serial=%u\n", *((uint32_t*)&raw_cid[1]));
+            raw_cid[MMC_CID_PRODUCT_NAME_START], raw_cid[MMC_CID_PRODUCT_NAME_START + 1],
+            raw_cid[MMC_CID_PRODUCT_NAME_START + 2], raw_cid[MMC_CID_PRODUCT_NAME_START + 3],
+            raw_cid[MMC_CID_PRODUCT_NAME_START + 4], raw_cid[MMC_CID_PRODUCT_NAME_START + 5]);
+    printf("       revision=%u.%u\n", (raw_cid[MMC_CID_REVISION] >> 4) & 0xf,
+            raw_cid[MMC_CID_REVISION] & 0xf);
+    printf("       serial=%u\n", *((uint32_t*)&raw_cid[MMC_CID_SERIAL]));
     return ZX_OK;
 }
 
 static zx_status_t mmc_decode_csd(sdmmc_device_t* dev, const uint8_t* raw_csd) {
-    uint8_t spec_vrsn = (raw_csd[14] >> 2) & 0xf;
+    uint8_t spec_vrsn = (raw_csd[MMC_CSD_SPEC_VERSION] >> 2) & 0xf;
     // Only support spec version > 4.0
     if (spec_vrsn < MMC_CID_SPEC_VRSN_40) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
-    zxlogf(SPEW, "mmc: CSD version %u spec version %u\n", (raw_csd[14] >> 6) & 0x3, spec_vrsn);
+    zxlogf(SPEW, "mmc: CSD version %u spec version %u\n",
+           (raw_csd[MMC_CSD_SPEC_VERSION] >> 6) & 0x3, spec_vrsn);
     if (driver_get_log_flags() & DDK_LOG_SPEW) {
         zxlogf(SPEW, "CSD:\n");
         hexdump8_ex(raw_csd, 16, 0);
     }
 
     // Only support high capacity (> 2GB) cards
-    uint16_t c_size = ((raw_csd[6] >> 6) & 0x3) |
-                      (raw_csd[7] << 2) |
-                      ((raw_csd[8] & 0x3) << 10);
+    uint16_t c_size = ((raw_csd[MMC_CSD_SIZE_START] >> 6) & 0x3) |
+                      (raw_csd[MMC_CSD_SIZE_START + 1] << 2) |
+                      ((raw_csd[MMC_CSD_SIZE_START + 2] & 0x3) << 10);
     if (c_size != 0xfff) {
         zxlogf(ERROR, "mmc: unsupported C_SIZE 0x%04x\n", c_size);
         return ZX_ERR_NOT_SUPPORTED;

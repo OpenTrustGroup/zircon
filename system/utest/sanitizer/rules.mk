@@ -16,7 +16,8 @@ MODULE_USERTEST_GROUP := libc
 
 MODULE_STATIC_LIBS := \
     system/ulib/loader-service \
-    system/ulib/async.loop \
+    system/ulib/async \
+    system/ulib/async-loop \
     system/ulib/ldmsg \
 
 MODULE_LIBS := \

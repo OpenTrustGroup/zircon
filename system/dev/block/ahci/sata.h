@@ -35,6 +35,8 @@
 
 #define SATA_MAX_BLOCK_COUNT  0x10000 // 16-bit count
 
+#define BLOCK_OP(op) ((op) & BLOCK_OP_MASK)
+
 typedef struct sata_txn {
     block_op_t bop;
     list_node_t node;
@@ -45,7 +47,7 @@ typedef struct sata_txn {
     uint8_t device;
 
     zx_status_t status;
-    zx_paddr_t phys;
+    zx_handle_t pmt;
 } sata_txn_t;
 
 typedef struct ahci_device ahci_device_t;

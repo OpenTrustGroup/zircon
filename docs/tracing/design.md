@@ -154,7 +154,7 @@ The trace provider requires an asynchronous dispatcher to operate.
 #### C++ Example
 
 ```c++
-#include <lib/async/cpp/loop.h>
+#include <lib/async-loop/cpp/loop.h>
 #include <trace-provider/provider.h>
 
 int main(int argc, char** argv) {
@@ -179,24 +179,25 @@ int main(int argc, char** argv) {
 #### C Example
 
 ```c
-#include <lib/async/cpp/loop.h>
+#include <lib/async-loop/cpp/loop.h>
 #include <trace-provider/provider.h>
 
 int main(int argc, char** argv) {
   zx_status_t status;
-  async_t* async;
+  async_loop_t* loop;
   trace_provider_t* trace_provider;
 
   // Create a message loop.
-  status = async_loop_create(NULL, &async);
+  status = async_loop_create(NULL, &loop);
   if (status != ZX_OK) exit(1);
 
   // Start a thread for the loop to run on.
   // We could instead use async_loop_run() to run on the current thread.
-  status = async_loop_start_thread(async, "loop", NULL);
+  status = async_loop_start_thread(loop, "loop", NULL);
   if (status != ZX_OK) exit(1);
 
   // Create the trace provider.
+  async_t* async = async_loop_get_dispatcher(loop);
   trace_provider = trace_provider_create(async);
   if (!trace_provider) exit(1);
 
@@ -204,7 +205,7 @@ int main(int argc, char** argv) {
 
   // Tear down.
   trace_provider_destroy(trace_provider);
-  async_loop_shutdown(async);
+  async_loop_shutdown(loop);
   return 0;
 }
 ```

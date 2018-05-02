@@ -68,9 +68,9 @@ struct GichState {
 
     // GICH state to be restored between VM exits.
     uint32_t num_lrs;
-    uint32_t vmcr = 0;
+    uint32_t vmcr;
     uint64_t elrs;
-    uint32_t lr[64] = {};
+    uint64_t lr[64] = {};
 };
 
 // Loads a GICH within a given scope.

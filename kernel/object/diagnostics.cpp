@@ -57,10 +57,11 @@ static void DumpProcessListKeyMap() {
     printf("#so: number of sockets\n");
     printf("#tm : number of timers\n");
     printf("#fi : number of fifos\n");
+    printf("#?? : number of all other handle types\n");
 }
 
 static const char* ObjectTypeToString(zx_obj_type_t type) {
-    static_assert(ZX_OBJ_TYPE_LAST == 26, "need to update switch below");
+    static_assert(ZX_OBJ_TYPE_LAST == 28, "need to update switch below");
 
     switch (type) {
         case ZX_OBJ_TYPE_PROCESS: return "process";
@@ -85,6 +86,8 @@ static const char* ObjectTypeToString(zx_obj_type_t type) {
         case ZX_OBJ_TYPE_IOMMU: return "iommu";
         case ZX_OBJ_TYPE_BTI: return "bti";
         case ZX_OBJ_TYPE_PROFILE: return "profile";
+        case ZX_OBJ_TYPE_PMT: return "pmt";
+        case ZX_OBJ_TYPE_SUSPEND_TOKEN: return "suspend-token";
         default: return "???";
     }
 }
@@ -113,10 +116,12 @@ static uint32_t BuildHandleStats(const ProcessDispatcher& pd,
 // buffer as strings.
 static void FormatHandleTypeCount(const ProcessDispatcher& pd,
                                   char *buf, size_t buf_len) {
+    static_assert(ZX_OBJ_TYPE_LAST == 28, "need to update table below");
+
     uint32_t types[ZX_OBJ_TYPE_LAST] = {0};
     uint32_t handle_count = BuildHandleStats(pd, types, sizeof(types));
 
-    snprintf(buf, buf_len, "%4u: %3u %3u %3u %3u %3u %3u %3u %3u %3u %3u %3u",
+    snprintf(buf, buf_len, "%4u: %4u %3u %3u %3u %3u %3u %3u %3u %3u %3u %3u %3u",
              handle_count,
              types[ZX_OBJ_TYPE_JOB],
              types[ZX_OBJ_TYPE_PROCESS],
@@ -128,12 +133,18 @@ static void FormatHandleTypeCount(const ProcessDispatcher& pd,
              types[ZX_OBJ_TYPE_PORT],
              types[ZX_OBJ_TYPE_SOCKET],
              types[ZX_OBJ_TYPE_TIMER],
-             types[ZX_OBJ_TYPE_FIFO]
+             types[ZX_OBJ_TYPE_FIFO],
+             types[ZX_OBJ_TYPE_INTERRUPT] + types[ZX_OBJ_TYPE_PCI_DEVICE] +
+             types[ZX_OBJ_TYPE_LOG] + types[ZX_OBJ_TYPE_RESOURCE] +
+             types[ZX_OBJ_TYPE_GUEST] + types[ZX_OBJ_TYPE_VCPU] +
+             types[ZX_OBJ_TYPE_IOMMU] + types[ZX_OBJ_TYPE_BTI] +
+             types[ZX_OBJ_TYPE_PROFILE] + types[ZX_OBJ_TYPE_PMT] +
+             types[ZX_OBJ_TYPE_SUSPEND_TOKEN]
              );
 }
 
 void DumpProcessList() {
-    printf("%7s  #h:  #jb #pr #th #vo #vm #ch #ev #po #so #tm #fi [name]\n", "id");
+    printf("%7s  #h:  #jb #pr #th #vo #vm #ch #ev #po #so #tm #fi #?? [name]\n", "id");
 
     auto walker = MakeProcessWalker([](ProcessDispatcher* process) {
         char handle_counts[(ZX_OBJ_TYPE_LAST * 4) + 1 + /*slop*/ 16];

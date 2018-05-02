@@ -201,8 +201,12 @@ void PortDispatcher::on_zero_handles() {
             eport->OnPortZeroHandles();
             get_lock()->Acquire();
         }
+
+        // Free any queued packets.
+        while (!packets_.is_empty()) {
+            FreePacket(packets_.pop_front());
+        }
     }
-    while (Dequeue(0ull, nullptr) == ZX_OK) {}
 }
 
 zx_status_t PortDispatcher::QueueUser(const zx_port_packet_t& packet) {
@@ -224,28 +228,26 @@ zx_status_t PortDispatcher::QueueUser(const zx_port_packet_t& packet) {
 zx_status_t PortDispatcher::Queue(PortPacket* port_packet, zx_signals_t observed, uint64_t count) {
     canary_.Assert();
 
-    int wake_count = 0;
-    {
-        AutoLock al(get_lock());
-        if (zero_handles_)
-            return ZX_ERR_BAD_STATE;
+    AutoReschedDisable resched_disable; // Must come before the AutoLock.
+    AutoLock al(get_lock());
+    if (zero_handles_)
+        return ZX_ERR_BAD_STATE;
 
-        if (observed) {
-            if (port_packet->InContainer()) {
-                port_packet->packet.signal.observed |= observed;
-                // |count| is deliberately left as is.
-                return ZX_OK;
-            }
-            port_packet->packet.signal.observed = observed;
-            port_packet->packet.signal.count = count;
+    if (observed) {
+        if (port_packet->InContainer()) {
+            port_packet->packet.signal.observed |= observed;
+            // |count| is deliberately left as is.
+            return ZX_OK;
         }
-
-        packets_.push_back(port_packet);
-        wake_count = sema_.Post();
+        port_packet->packet.signal.observed = observed;
+        port_packet->packet.signal.count = count;
     }
 
-    if (wake_count)
-        thread_reschedule();
+    packets_.push_back(port_packet);
+    // This Disable() call must come before Post() to be useful, but doing
+    // it earlier would also be OK.
+    resched_disable.Disable();
+    sema_.Post();
 
     return ZX_OK;
 }
@@ -261,20 +263,8 @@ zx_status_t PortDispatcher::Dequeue(zx_time_t deadline, zx_port_packet_t* out_pa
             if (port_packet == nullptr)
                 goto wait;
 
-            if (out_packet != nullptr)
-                *out_packet = port_packet->packet;
-
-            PortObserver* observer = port_packet->observer;
-
-            if (observer) {
-                // Deleting the observer under the lock is fine because
-                // the reference that holds to this PortDispatcher is by
-                // construction not the last one. We need to do this under
-                // the lock because another thread can call CanReap().
-                delete observer;
-            } else if (port_packet->is_ephemeral()) {
-                port_packet->Free();
-            }
+            *out_packet = port_packet->packet;
+            FreePacket(port_packet);
         }
 
         return ZX_OK;
@@ -283,6 +273,20 @@ wait:
         zx_status_t st = sema_.Wait(deadline, nullptr);
         if (st != ZX_OK)
             return st;
+    }
+}
+
+void PortDispatcher::FreePacket(PortPacket* port_packet) {
+    PortObserver* observer = port_packet->observer;
+
+    if (observer) {
+        // Deleting the observer under the lock is fine because the
+        // reference that holds to this PortDispatcher is by construction
+        // not the last one. We need to do this under the lock because
+        // another thread can call CanReap().
+        delete observer;
+    } else if (port_packet->is_ephemeral()) {
+        port_packet->Free();
     }
 }
 

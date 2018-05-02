@@ -58,7 +58,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
     std::ostringstream member_value;
 
     switch (type) {
-    case types::PrimitiveSubtype::Int8: {
+    case types::PrimitiveSubtype::kInt8: {
         int8_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -69,7 +69,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << static_cast<int>(value);
         break;
     }
-    case types::PrimitiveSubtype::Int16: {
+    case types::PrimitiveSubtype::kInt16: {
         int16_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -78,7 +78,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << value;
         break;
     }
-    case types::PrimitiveSubtype::Int32: {
+    case types::PrimitiveSubtype::kInt32: {
         int32_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -87,7 +87,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << value;
         break;
     }
-    case types::PrimitiveSubtype::Int64: {
+    case types::PrimitiveSubtype::kInt64: {
         int64_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -96,7 +96,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << value;
         break;
     }
-    case types::PrimitiveSubtype::Uint8: {
+    case types::PrimitiveSubtype::kUint8: {
         uint8_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -107,7 +107,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << static_cast<unsigned int>(value);
         break;
     }
-    case types::PrimitiveSubtype::Uint16: {
+    case types::PrimitiveSubtype::kUint16: {
         uint16_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -116,7 +116,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << value;
         break;
     }
-    case types::PrimitiveSubtype::Uint32: {
+    case types::PrimitiveSubtype::kUint32: {
         uint32_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -125,7 +125,7 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << value;
         break;
     }
-    case types::PrimitiveSubtype::Uint64: {
+    case types::PrimitiveSubtype::kUint64: {
         uint64_t value;
         bool success = library->ParseIntegerConstant(constant, &value);
         if (!success) {
@@ -134,10 +134,10 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         member_value << value;
         break;
     }
-    case types::PrimitiveSubtype::Bool:
-    case types::PrimitiveSubtype::Status:
-    case types::PrimitiveSubtype::Float32:
-    case types::PrimitiveSubtype::Float64:
+    case types::PrimitiveSubtype::kBool:
+    case types::PrimitiveSubtype::kStatus:
+    case types::PrimitiveSubtype::kFloat32:
+    case types::PrimitiveSubtype::kFloat64:
         assert(false && "bad primitive type for an enum");
         break;
     }
@@ -150,7 +150,7 @@ std::vector<uint32_t> ArrayCounts(const flat::Library* library, const flat::Type
     for (;;) {
         switch (type->kind) {
         default: { return array_counts; }
-        case flat::Type::Kind::Array: {
+        case flat::Type::Kind::kArray: {
             auto array_type = static_cast<const flat::ArrayType*>(type);
             uint32_t element_count = array_type->element_count.Value();
             array_counts.push_back(element_count);
@@ -161,14 +161,16 @@ std::vector<uint32_t> ArrayCounts(const flat::Library* library, const flat::Type
     }
 }
 
-CGenerator::Member CreateMember(const flat::Library* library, const flat::Type* type, StringView name) {
+CGenerator::Member CreateMember(const flat::Library* library, const flat::Type* type,
+                                StringView name) {
     auto type_name = NameFlatCType(type);
     std::vector<uint32_t> array_counts = ArrayCounts(library, type);
     return CGenerator::Member{type_name, name, std::move(array_counts)};
 }
 
 std::vector<CGenerator::Member>
-GenerateMembers(const flat::Library* library, const std::vector<flat::Union::Member>& union_members) {
+GenerateMembers(const flat::Library* library,
+                const std::vector<flat::Union::Member>& union_members) {
     std::vector<CGenerator::Member> members;
     members.reserve(union_members.size());
     for (const auto& union_member : union_members) {
@@ -187,7 +189,6 @@ void CGenerator::GeneratePrologues() {
     EmitIncludeHeader(&header_file_, "<stdalign.h>");
     EmitIncludeHeader(&header_file_, "<stdbool.h>");
     EmitIncludeHeader(&header_file_, "<stdint.h>");
-    EmitIncludeHeader(&header_file_, "<lib/fidl/coding.h>");
     EmitIncludeHeader(&header_file_, "<zircon/fidl.h>");
     EmitIncludeHeader(&header_file_, "<zircon/syscalls/object.h>");
     EmitIncludeHeader(&header_file_, "<zircon/types.h>");
@@ -247,7 +248,8 @@ void CGenerator::GenerateTaggedUnionDeclaration(StringView name,
 
 // TODO(TO-702) These should maybe check for global name
 // collisions? Otherwise, is there some other way they should fail?
-std::map<const flat::Decl*, CGenerator::NamedConst> CGenerator::NameConsts(const std::vector<std::unique_ptr<flat::Const>>& const_infos) {
+std::map<const flat::Decl*, CGenerator::NamedConst>
+CGenerator::NameConsts(const std::vector<std::unique_ptr<flat::Const>>& const_infos) {
     std::map<const flat::Decl*, NamedConst> named_consts;
     for (const auto& const_info : const_infos) {
         named_consts.emplace(const_info.get(), NamedConst{"", *const_info});
@@ -255,16 +257,18 @@ std::map<const flat::Decl*, CGenerator::NamedConst> CGenerator::NameConsts(const
     return named_consts;
 }
 
-std::map<const flat::Decl*, CGenerator::NamedEnum> CGenerator::NameEnums(const std::vector<std::unique_ptr<flat::Enum>>& enum_infos) {
+std::map<const flat::Decl*, CGenerator::NamedEnum>
+CGenerator::NameEnums(const std::vector<std::unique_ptr<flat::Enum>>& enum_infos) {
     std::map<const flat::Decl*, NamedEnum> named_enums;
     for (const auto& enum_info : enum_infos) {
-        std::string enum_name = NameName(enum_info->name);
+        std::string enum_name = NameName(enum_info->name, "_", "_");
         named_enums.emplace(enum_info.get(), NamedEnum{std::move(enum_name), *enum_info});
     }
     return named_enums;
 }
 
-std::map<const flat::Decl*, CGenerator::NamedInterface> CGenerator::NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& interface_infos) {
+std::map<const flat::Decl*, CGenerator::NamedInterface>
+CGenerator::NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& interface_infos) {
     std::map<const flat::Decl*, NamedInterface> named_interfaces;
     for (const auto& interface_info : interface_infos) {
         NamedInterface named_interface;
@@ -275,19 +279,25 @@ std::map<const flat::Decl*, CGenerator::NamedInterface> CGenerator::NameInterfac
             named_method.ordinal = method.ordinal.Value();
             named_method.ordinal_name = NameOrdinal(method_name);
             if (method.maybe_request != nullptr) {
-                std::string c_name = NameMessage(LibraryName(library_), method_name, types::MessageKind::kRequest);
+                std::string c_name = NameMessage(method_name, types::MessageKind::kRequest);
                 std::string coded_name = NameTable(c_name);
-                named_method.request = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_request->parameters});
+                named_method.request = std::make_unique<NamedMessage>(NamedMessage{
+                    std::move(c_name), std::move(coded_name), method.maybe_request->parameters});
             }
             if (method.maybe_response != nullptr) {
                 if (method.maybe_request == nullptr) {
-                    std::string c_name = NameMessage(LibraryName(library_), method_name, types::MessageKind::kEvent);
+                    std::string c_name =
+                        NameMessage(method_name, types::MessageKind::kEvent);
                     std::string coded_name = NameTable(c_name);
-                    named_method.response = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_response->parameters});
+                    named_method.response = std::make_unique<NamedMessage>(
+                        NamedMessage{std::move(c_name), std::move(coded_name),
+                                     method.maybe_response->parameters});
                 } else {
-                    std::string c_name = NameMessage(LibraryName(library_), method_name, types::MessageKind::kResponse);
+                    std::string c_name = NameMessage(method_name, types::MessageKind::kResponse);
                     std::string coded_name = NameTable(c_name);
-                    named_method.response = std::make_unique<NamedMessage>(NamedMessage{std::move(c_name), std::move(coded_name), method.maybe_response->parameters});
+                    named_method.response = std::make_unique<NamedMessage>(
+                        NamedMessage{std::move(c_name), std::move(coded_name),
+                                     method.maybe_response->parameters});
                 }
             }
             named_interface.methods.push_back(std::move(named_method));
@@ -297,20 +307,23 @@ std::map<const flat::Decl*, CGenerator::NamedInterface> CGenerator::NameInterfac
     return named_interfaces;
 }
 
-std::map<const flat::Decl*, CGenerator::NamedStruct> CGenerator::NameStructs(const std::vector<std::unique_ptr<flat::Struct>>& struct_infos) {
+std::map<const flat::Decl*, CGenerator::NamedStruct>
+CGenerator::NameStructs(const std::vector<std::unique_ptr<flat::Struct>>& struct_infos) {
     std::map<const flat::Decl*, NamedStruct> named_structs;
     for (const auto& struct_info : struct_infos) {
-        std::string c_name = NameName(struct_info->name);
-        std::string coded_name = NameName(struct_info->name) + "Coded";
-        named_structs.emplace(struct_info.get(), NamedStruct{std::move(c_name), std::move(coded_name), *struct_info});
+        std::string c_name = NameName(struct_info->name, "_", "_");
+        std::string coded_name = c_name + "Coded";
+        named_structs.emplace(struct_info.get(),
+                              NamedStruct{std::move(c_name), std::move(coded_name), *struct_info});
     }
     return named_structs;
 }
 
-std::map<const flat::Decl*, CGenerator::NamedUnion> CGenerator::NameUnions(const std::vector<std::unique_ptr<flat::Union>>& union_infos) {
+std::map<const flat::Decl*, CGenerator::NamedUnion>
+CGenerator::NameUnions(const std::vector<std::unique_ptr<flat::Union>>& union_infos) {
     std::map<const flat::Decl*, NamedUnion> named_unions;
     for (const auto& union_info : union_infos) {
-        std::string union_name = NameName(union_info->name);
+        std::string union_name = NameName(union_info->name, "_", "_");
         named_unions.emplace(union_info.get(), NamedUnion{std::move(union_name), *union_info});
     }
     return named_unions;
@@ -326,8 +339,7 @@ void CGenerator::ProduceEnumForwardDeclaration(const NamedEnum& named_enum) {
     for (const auto& member : named_enum.enum_info.members) {
         std::string member_name = named_enum.name + "_" + NameIdentifier(member.name);
         std::string member_value;
-        EnumValue(named_enum.enum_info.type, member.value.get(),
-                  library_, &member_value);
+        EnumValue(named_enum.enum_info.type, member.value.get(), library_, &member_value);
         GenerateIntegerDefine(member_name, subtype, std::move(member_value));
     }
 
@@ -336,7 +348,8 @@ void CGenerator::ProduceEnumForwardDeclaration(const NamedEnum& named_enum) {
 
 void CGenerator::ProduceInterfaceForwardDeclaration(const NamedInterface& named_interface) {
     for (const auto& method_info : named_interface.methods) {
-        header_file_ << "#define " << method_info.ordinal_name << " ((uint32_t)" << method_info.ordinal << ")\n";
+        header_file_ << "#define " << method_info.ordinal_name << " ((uint32_t)"
+                     << method_info.ordinal << ")\n";
         if (method_info.request)
             GenerateStructTypedef(method_info.request->c_name);
         if (method_info.response)
@@ -357,7 +370,8 @@ void CGenerator::ProduceInterfaceExternDeclaration(const NamedInterface& named_i
         if (method_info.request)
             header_file_ << "extern const fidl_type_t " << method_info.request->coded_name << ";\n";
         if (method_info.response)
-            header_file_ << "extern const fidl_type_t " << method_info.response->coded_name << ";\n";
+            header_file_ << "extern const fidl_type_t " << method_info.response->coded_name
+                         << ";\n";
     }
 }
 
@@ -405,13 +419,14 @@ void CGenerator::ProduceStructDeclaration(const NamedStruct& named_struct) {
 }
 
 void CGenerator::ProduceUnionDeclaration(const NamedUnion& named_union) {
-    std::vector<CGenerator::Member> members = GenerateMembers(library_, named_union.union_info.members);
+    std::vector<CGenerator::Member> members =
+        GenerateMembers(library_, named_union.union_info.members);
     GenerateTaggedUnionDeclaration(named_union.name, members);
 
     uint32_t tag = 0u;
     for (const auto& member : named_union.union_info.members) {
         std::string tag_name = NameUnionTag(named_union.name, member);
-        auto union_tag_type = types::PrimitiveSubtype::Uint32;
+        auto union_tag_type = types::PrimitiveSubtype::kUint32;
         std::ostringstream value;
         value << tag;
         GenerateIntegerDefine(std::move(tag_name), union_tag_type, value.str());
@@ -424,31 +439,55 @@ void CGenerator::ProduceUnionDeclaration(const NamedUnion& named_union) {
 std::ostringstream CGenerator::Produce() {
     GeneratePrologues();
 
-    std::map<const flat::Decl*, NamedConst> named_consts = NameConsts(library_->const_declarations_);
+    std::map<const flat::Decl*, NamedConst> named_consts =
+        NameConsts(library_->const_declarations_);
     std::map<const flat::Decl*, NamedEnum> named_enums = NameEnums(library_->enum_declarations_);
-    std::map<const flat::Decl*, NamedInterface> named_interfaces = NameInterfaces(library_->interface_declarations_);
-    std::map<const flat::Decl*, NamedStruct> named_structs = NameStructs(library_->struct_declarations_);
-    std::map<const flat::Decl*, NamedUnion> named_unions = NameUnions(library_->union_declarations_);
+    std::map<const flat::Decl*, NamedInterface> named_interfaces =
+        NameInterfaces(library_->interface_declarations_);
+    std::map<const flat::Decl*, NamedStruct> named_structs =
+        NameStructs(library_->struct_declarations_);
+    std::map<const flat::Decl*, NamedUnion> named_unions =
+        NameUnions(library_->union_declarations_);
 
     header_file_ << "\n// Forward declarations\n\n";
 
     for (const auto* decl : library_->declaration_order_) {
         switch (decl->kind) {
-        case flat::Decl::Kind::kConst:
-            ProduceConstForwardDeclaration(named_consts.find(decl)->second);
+        case flat::Decl::Kind::kConst: {
+            auto iter = named_consts.find(decl);
+            if (iter != named_consts.end()) {
+                ProduceConstForwardDeclaration(iter->second);
+            }
             break;
-        case flat::Decl::Kind::kEnum:
-            ProduceEnumForwardDeclaration(named_enums.find(decl)->second);
+        }
+        case flat::Decl::Kind::kEnum: {
+            auto iter = named_enums.find(decl);
+            if (iter != named_enums.end()) {
+                ProduceEnumForwardDeclaration(iter->second);
+            }
             break;
-        case flat::Decl::Kind::kInterface:
-            ProduceInterfaceForwardDeclaration(named_interfaces.find(decl)->second);
+        }
+        case flat::Decl::Kind::kInterface: {
+            auto iter = named_interfaces.find(decl);
+            if (iter != named_interfaces.end()) {
+                ProduceInterfaceForwardDeclaration(iter->second);
+            }
             break;
-        case flat::Decl::Kind::kStruct:
-            ProduceStructForwardDeclaration(named_structs.find(decl)->second);
+        }
+        case flat::Decl::Kind::kStruct: {
+            auto iter = named_structs.find(decl);
+            if (iter != named_structs.end()) {
+                ProduceStructForwardDeclaration(iter->second);
+            }
             break;
-        case flat::Decl::Kind::kUnion:
-            ProduceUnionForwardDeclaration(named_unions.find(decl)->second);
+        }
+        case flat::Decl::Kind::kUnion: {
+            auto iter = named_unions.find(decl);
+            if (iter != named_unions.end()) {
+                ProduceUnionForwardDeclaration(iter->second);
+            }
             break;
+        }
         default:
             abort();
         }
@@ -464,9 +503,13 @@ std::ostringstream CGenerator::Produce() {
         case flat::Decl::Kind::kUnion:
             // Only messages have extern fidl_type_t declarations.
             break;
-        case flat::Decl::Kind::kInterface:
-            ProduceInterfaceExternDeclaration(named_interfaces.find(decl)->second);
+        case flat::Decl::Kind::kInterface: {
+            auto iter = named_interfaces.find(decl);
+            if (iter != named_interfaces.end()) {
+                ProduceInterfaceExternDeclaration(iter->second);
+            }
             break;
+        }
         default:
             abort();
         }
@@ -476,22 +519,38 @@ std::ostringstream CGenerator::Produce() {
 
     for (const auto* decl : library_->declaration_order_) {
         switch (decl->kind) {
-        case flat::Decl::Kind::kConst:
-            ProduceConstDeclaration(named_consts.find(decl)->second);
+        case flat::Decl::Kind::kConst: {
+            auto iter = named_consts.find(decl);
+            if (iter != named_consts.end()) {
+                ProduceConstDeclaration(named_consts.find(decl)->second);
+            }
             break;
+        }
         case flat::Decl::Kind::kEnum:
             // Enums can be entirely forward declared, as they have no
             // dependencies other than standard headers.
             break;
-        case flat::Decl::Kind::kInterface:
-            ProduceInterfaceDeclaration(named_interfaces.find(decl)->second);
+        case flat::Decl::Kind::kInterface: {
+            auto iter = named_interfaces.find(decl);
+            if (iter != named_interfaces.end()) {
+                ProduceInterfaceDeclaration(named_interfaces.find(decl)->second);
+            }
             break;
-        case flat::Decl::Kind::kStruct:
-            ProduceStructDeclaration(named_structs.find(decl)->second);
+        }
+        case flat::Decl::Kind::kStruct: {
+            auto iter = named_structs.find(decl);
+            if (iter != named_structs.end()) {
+                ProduceStructDeclaration(named_structs.find(decl)->second);
+            }
             break;
-        case flat::Decl::Kind::kUnion:
-            ProduceUnionDeclaration(named_unions.find(decl)->second);
+        }
+        case flat::Decl::Kind::kUnion: {
+            auto iter = named_unions.find(decl);
+            if (iter != named_unions.end()) {
+                ProduceUnionDeclaration(named_unions.find(decl)->second);
+            }
             break;
+        }
         default:
             abort();
         }

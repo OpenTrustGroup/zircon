@@ -60,7 +60,7 @@ zx_status_t writeblk_offset(int fd, uint64_t bno, off_t offset, const void* data
     return ZX_OK;
 }
 
-zx_status_t blobfs_create(fbl::RefPtr<Blobfs>* out, fbl::unique_fd fd) {
+zx_status_t blobfs_create(fbl::unique_ptr<Blobfs>* out, fbl::unique_fd fd) {
     info_block_t info_block;
 
     if (readblk(fd.get(), 0, (void*)info_block.block) < 0) {
@@ -95,7 +95,7 @@ zx_status_t blobfs_create(fbl::RefPtr<Blobfs>* out, fbl::unique_fd fd) {
     return ZX_OK;
 }
 
-zx_status_t blobfs_create_sparse(fbl::RefPtr<Blobfs>* out, fbl::unique_fd fd, off_t start,
+zx_status_t blobfs_create_sparse(fbl::unique_ptr<Blobfs>* out, fbl::unique_fd fd, off_t start,
                                  off_t end, const fbl::Vector<size_t>& extent_vector) {
     if (start >= end) {
         fprintf(stderr, "blobfs: Insufficient space allocated\n");
@@ -206,11 +206,11 @@ zx_status_t blobfs_add_blob(Blobfs* bs, int data_fd) {
 
 zx_status_t blobfs_fsck(fbl::unique_fd fd, off_t start, off_t end,
                         const fbl::Vector<size_t>& extent_lengths) {
-    fbl::RefPtr<Blobfs> blob;
+    fbl::unique_ptr<Blobfs> blob;
     zx_status_t status;
     if ((status = blobfs_create_sparse(&blob, fbl::move(fd), start, end, extent_lengths)) != ZX_OK) {
         return status;
-    } else if ((status = blobfs_check(blob)) != ZX_OK) {
+    } else if ((status = blobfs_check(fbl::move(blob))) != ZX_OK) {
         return status;
     }
     return ZX_OK;
@@ -239,7 +239,7 @@ Blobfs::Blobfs(fbl::unique_fd fd, off_t offset, const info_block_t& info_block,
 
 zx_status_t Blobfs::Create(fbl::unique_fd blockfd_, off_t offset, const info_block_t& info_block,
                            const fbl::Array<size_t>& extent_lengths,
-                           fbl::RefPtr<Blobfs>* out) {
+                           fbl::unique_ptr<Blobfs>* out) {
     zx_status_t status = blobfs_check_info(&info_block.info, TotalBlocks(info_block.info));
     if (status < 0) {
         fprintf(stderr, "blobfs: Check info failure\n");
@@ -254,19 +254,15 @@ zx_status_t Blobfs::Create(fbl::unique_fd blockfd_, off_t offset, const info_blo
         }
     }
 
-    fbl::AllocChecker ac;
-    fbl::RefPtr<Blobfs> fs = fbl::AdoptRef(new (&ac) Blobfs(fbl::move(blockfd_), offset,
-                                                            info_block, extent_lengths));
-    if (!ac.check()) {
-        return ZX_ERR_NO_MEMORY;
-    }
+    auto fs = fbl::unique_ptr<Blobfs>(new Blobfs(fbl::move(blockfd_), offset,
+                                                 info_block, extent_lengths));
 
     if ((status = fs->LoadBitmap()) < 0) {
         fprintf(stderr, "blobfs: Failed to load bitmaps\n");
         return status;
     }
 
-    *out = fs;
+    *out = fbl::move(fs);
     return ZX_OK;
 }
 
@@ -463,6 +459,27 @@ blobfs_inode_t* Blobfs::GetNode(size_t index) {
 
     auto iblock = reinterpret_cast<blobfs_inode_t*>(cache_.blk);
     return &iblock[index % kBlobfsInodesPerBlock];
+}
+
+zx_status_t Blobfs::VerifyBlob(size_t node_index) {
+    blobfs_inode_t inode = *GetNode(node_index);
+
+    fbl::AllocChecker ac;
+    fbl::unique_ptr<uint8_t[]> data(new (&ac) uint8_t[inode.num_blocks * kBlobfsBlockSize]);
+    if (!ac.check()) {
+        return ZX_ERR_NO_MEMORY;
+    }
+
+    for (unsigned i = 0; i < inode.num_blocks; i++) {
+        ReadBlock(data_start_block_ + inode.start_block + i);
+        memcpy(data.get() + (i * kBlobfsBlockSize), cache_.blk, kBlobfsBlockSize);
+    }
+
+    uint8_t* data_ptr = data.get() + (MerkleTreeBlocks(inode) * kBlobfsBlockSize);
+    Digest digest(&inode.merkle_root_hash[0]);
+    return MerkleTree::Verify(data_ptr, inode.blob_size, data.get(),
+                              MerkleTree::GetTreeLength(inode.blob_size), 0,
+                              inode.blob_size, digest);
 }
 } // namespace blobfs
 

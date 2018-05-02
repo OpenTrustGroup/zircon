@@ -12,14 +12,14 @@
 #include <sys/stat.h>
 
 #include <fdio/debug.h>
-#include <fdio/io.fidl2.h>
+#include <fdio/io.fidl.h>
 #include <fdio/io.h>
 #include <fdio/remoteio.h>
 #include <fdio/vfs.h>
 #include <fs/trace.h>
 #include <fs/vnode.h>
 #include <zircon/assert.h>
-#include <zx/handle.h>
+#include <lib/zx/handle.h>
 
 #define ZXDEBUG 0
 
@@ -122,51 +122,27 @@ void OpenAt(Vfs* vfs, fbl::RefPtr<Vnode> parent, zx::channel channel,
 
 } // namespace
 
+constexpr zx_signals_t kWakeSignals = ZX_CHANNEL_READABLE |
+                                      ZX_CHANNEL_PEER_CLOSED | kLocalTeardownSignal;
+
 Connection::Connection(Vfs* vfs, fbl::RefPtr<Vnode> vnode,
                        zx::channel channel, uint32_t flags)
     : vfs_(vfs), vnode_(fbl::move(vnode)), channel_(fbl::move(channel)),
-      wait_(ZX_HANDLE_INVALID, ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED,
-            ASYNC_FLAG_HANDLE_SHUTDOWN),
-      flags_(flags) {
+      wait_(this, ZX_HANDLE_INVALID, kWakeSignals), flags_(flags) {
     ZX_DEBUG_ASSERT(vfs);
     ZX_DEBUG_ASSERT(vnode_);
     ZX_DEBUG_ASSERT(channel_);
-
-    wait_.set_handler([this](async_t* async, zx_status_t status,
-                             const zx_packet_signal_t* signal) {
-        ZX_DEBUG_ASSERT(is_waiting());
-
-        // Handle the message.
-        if (status == ZX_OK && (signal->observed & ZX_CHANNEL_READABLE)) {
-            status = CallHandler();
-            switch (status) {
-            case ZX_OK:
-                return ASYNC_WAIT_AGAIN;
-            case ERR_DISPATCHER_ASYNC:
-                return ASYNC_WAIT_FINISHED;
-            }
-        }
-        wait_.set_object(ZX_HANDLE_INVALID);
-
-        // Give the dispatcher a chance to clean up.
-        if (status != ERR_DISPATCHER_DONE) {
-            CallClose();
-        }
-
-        // Tell the VFS that the connection closed remotely.
-        // This might have the side-effect of destroying this object.
-        vfs_->OnConnectionClosedRemotely(this);
-        return ASYNC_WAIT_FINISHED;
-    });
 }
 
 Connection::~Connection() {
     // Stop waiting and clean up if still connected.
-    if (is_waiting()) {
-        zx_status_t status = wait_.Cancel(vfs_->async());
+    if (wait_.is_pending()) {
+        zx_status_t status = wait_.Cancel();
         ZX_DEBUG_ASSERT_MSG(status == ZX_OK, "Could not cancel wait: status=%d", status);
-        wait_.set_object(ZX_HANDLE_INVALID);
+    }
 
+    // Invoke a "close" call to the underlying object if we haven't already.
+    if (is_open()) {
         CallClose();
     }
 
@@ -178,14 +154,53 @@ Connection::~Connection() {
 }
 
 zx_status_t Connection::Serve() {
-    ZX_DEBUG_ASSERT(!is_waiting());
-
     wait_.set_object(channel_.get());
-    zx_status_t status = wait_.Begin(vfs_->async());
-    if (status != ZX_OK) {
-        wait_.set_object(ZX_HANDLE_INVALID);
+    return wait_.Begin(vfs_->async());
+}
+
+void Connection::HandleSignals(async_t* async, async::WaitBase* wait, zx_status_t status,
+                               const zx_packet_signal_t* signal) {
+    ZX_DEBUG_ASSERT(is_open());
+
+    if (status == ZX_OK) {
+        if (vfs_->IsTerminating()) {
+            // Short-circuit locally destroyed connections, rather than servicing
+            // requests on their behalf. This prevents new requests from being
+            // opened while filesystems are torn down.
+            status = ZX_ERR_PEER_CLOSED;
+        } else if (signal->observed & ZX_CHANNEL_READABLE) {
+            // Handle the message.
+            status = CallHandler();
+            switch (status) {
+            case ERR_DISPATCHER_ASYNC:
+                return;
+            case ZX_OK:
+                status = wait_.Begin(async);
+                if (status == ZX_OK) {
+                    return;
+                }
+                break;
+            }
+        }
     }
-    return status;
+
+    bool call_close = (status != ERR_DISPATCHER_DONE);
+    Terminate(call_close);
+}
+
+void Connection::Terminate(bool call_close) {
+    if (call_close) {
+        // Give the dispatcher a chance to clean up.
+        CallClose();
+    } else {
+        // It's assumed that someone called the close handler
+        // prior to calling this function.
+        set_closed();
+    }
+
+    // Tell the VFS that the connection closed remotely.
+    // This might have the side-effect of destroying this object.
+    vfs_->OnConnectionClosedRemotely(this);
 }
 
 zx_status_t Connection::CallHandler() {
@@ -195,6 +210,7 @@ zx_status_t Connection::CallHandler() {
 void Connection::CallClose() {
     channel_.reset();
     CallHandler();
+    set_closed();
 }
 
 zx_status_t Connection::HandleMessageThunk(zxrio_msg_t* msg, void* cookie) {
@@ -724,8 +740,29 @@ zx_status_t Connection::HandleMessage(zxrio_msg_t* msg) {
             do_ioctl = false;
             break;
         }
+        case IOCTL_VFS_UNMOUNT_FS: {
+            // Unmounting ioctls require Connection privileges
+            if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
+                return ZX_ERR_ACCESS_DENIED;
+            }
+            bool fidl = ZXRIO_FIDL_MSG(msg->op);
+            zx_txid_t txid = msg->txid;
+
+            // "IOCTL_VFS_UNMOUNT_FS" is fatal to the requesting connections.
+            Vfs::ShutdownCallback closure([ch = fbl::move(channel_), txid, fidl]
+                                           (zx_status_t status) {
+                zxrio_msg_t msg;
+                memset(&msg, 0, sizeof(msg));
+                msg.txid = txid;
+                msg.op = fidl ? ZXFIDL_IOCTL : ZXRIO_IOCTL;
+                zxrio_write_response(ch.get(), status, &msg);
+            });
+            Vfs* vfs = vfs_;
+            Terminate(/* call_close= */ true);
+            vfs->Shutdown(fbl::move(closure));
+            return ERR_DISPATCHER_ASYNC;
+        }
         case IOCTL_VFS_UNMOUNT_NODE:
-        case IOCTL_VFS_UNMOUNT_FS:
         case IOCTL_VFS_GET_DEVICE_PATH:
             // Unmounting ioctls require Connection privileges
             if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
@@ -880,7 +917,9 @@ zx_status_t Connection::HandleMessage(zxrio_msg_t* msg) {
             handle = &msg->handle[0];
         }
 
-        if ((flags_ & ZX_FS_FLAG_APPEND) && flags & FDIO_MMAP_FLAG_WRITE) {
+        if ((flags & FDIO_MMAP_FLAG_PRIVATE) && (flags & FDIO_MMAP_FLAG_EXACT)) {
+            return ZX_ERR_INVALID_ARGS;
+        } else if ((flags_ & ZX_FS_FLAG_APPEND) && flags & FDIO_MMAP_FLAG_WRITE) {
             return ZX_ERR_ACCESS_DENIED;
         } else if (!IsWritable(flags_) && (flags & FDIO_MMAP_FLAG_WRITE)) {
             return ZX_ERR_ACCESS_DENIED;
@@ -902,15 +941,15 @@ zx_status_t Connection::HandleMessage(zxrio_msg_t* msg) {
         }
         bool fidl = ZXRIO_FIDL_MSG(msg->op);
         zx_txid_t txid = msg->txid;
-        Vnode::SyncCallback closure([this, txid, fidl](zx_status_t status) {
+        Vnode::SyncCallback closure([this, txid, fidl] (zx_status_t status) {
             zxrio_msg_t msg;
             memset(&msg, 0, ZXRIO_HDR_SZ);
             msg.txid = txid;
             msg.op = fidl ? ZXFIDL_SYNC : ZXRIO_SYNC;
             zxrio_write_response(channel_.get(), status, &msg);
 
-            // Reset the wait object
-            ZX_ASSERT(wait_.Begin(vfs_->async()) == ZX_OK);
+            // Try to reset the wait object
+            ZX_ASSERT_MSG(wait_.Begin(vfs_->async()) == ZX_OK, "Dispatch loop unexpectedly ended");
         });
 
         vnode_->Sync(fbl::move(closure));

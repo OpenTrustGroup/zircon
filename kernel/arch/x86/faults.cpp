@@ -18,6 +18,7 @@
 
 #include <debug.h>
 
+#include <kernel/interrupt.h>
 #include <kernel/thread.h>
 
 #include <platform.h>
@@ -103,27 +104,19 @@ static zx_status_t call_dispatch_user_exception(uint kind,
     x86_set_suspended_general_regs(&thread->arch, X86_GENERAL_REGS_IFRAME, frame);
     zx_status_t status = dispatch_user_exception(kind, context);
     x86_reset_suspended_general_regs(&thread->arch);
-
-    // Set or clear the trap flag according to the thread single-step state.
-    if (unlikely(thread->single_step)) {
-      frame->flags |= X86_FLAGS_TF;
-    } else {
-      frame->flags &= ~X86_FLAGS_TF;
-    }
-
     return status;
 }
 
 static bool try_dispatch_user_exception(x86_iframe_t* frame, uint kind) {
     if (is_from_user(frame)) {
         struct arch_exception_context context = {false, frame, 0};
-        get_current_thread()->preempt_disable--;
+        thread_preempt_reenable_no_resched();
         arch_set_in_int_handler(false);
         arch_enable_ints();
         zx_status_t erc = call_dispatch_user_exception(kind, &context, frame);
         arch_disable_ints();
         arch_set_in_int_handler(true);
-        get_current_thread()->preempt_disable++;
+        thread_preempt_disable();
         if (erc == ZX_OK)
             return true;
     }
@@ -255,7 +248,7 @@ static zx_status_t x86_pfe_handler(x86_iframe_t* frame) {
     vaddr_t va = x86_get_cr2();
 
     /* reenable interrupts */
-    get_current_thread()->preempt_disable--;
+    thread_preempt_reenable_no_resched();
     arch_set_in_int_handler(false);
     arch_enable_ints();
 
@@ -263,7 +256,7 @@ static zx_status_t x86_pfe_handler(x86_iframe_t* frame) {
     auto ac = fbl::MakeAutoCall([]() {
         arch_disable_ints();
         arch_set_in_int_handler(true);
-        get_current_thread()->preempt_disable++;
+        thread_preempt_disable();
     });
 
     /* check for flags we're not prepared to handle */
@@ -444,8 +437,8 @@ void x86_exception_handler(x86_iframe_t* frame) {
         exception_die(frame, "recursion in interrupt handler\n");
     }
 
-    arch_set_in_int_handler(true);
-    thread_preempt_disable();
+    int_handler_saved_state_t state;
+    int_handler_start(&state);
 
     // did we come from user or kernel space?
     bool from_user = is_from_user(frame);
@@ -455,16 +448,7 @@ void x86_exception_handler(x86_iframe_t* frame) {
 
     handle_exception_types(frame);
 
-    /* at this point we're able to be rescheduled, so we're 'outside' of the int handler */
-    bool preempt_pending = false;
-    /* This logic is similar to thread_preempt_reenable() except that we
-     * call thread_preempt() below instead of thread_reschedule(). */
-    thread_t* current_thread = get_current_thread();
-    DEBUG_ASSERT(current_thread->preempt_disable > 0);
-    if (--current_thread->preempt_disable == 0) {
-        preempt_pending = current_thread->preempt_pending;
-    }
-    arch_set_in_int_handler(false);
+    bool do_preempt = int_handler_finish(&state);
 
     /* if we came from user space, check to see if we have any signals to handle */
     if (unlikely(from_user)) {
@@ -474,7 +458,7 @@ void x86_exception_handler(x86_iframe_t* frame) {
         x86_iframe_process_pending_signals(frame);
     }
 
-    if (preempt_pending)
+    if (do_preempt)
         thread_preempt();
 
     ktrace_tiny(TAG_IRQ_EXIT, ((uint)frame->vector << 8) | arch_curr_cpu_num());

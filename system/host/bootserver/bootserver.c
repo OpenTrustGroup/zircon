@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
     char cmdline[4096];
     char* cmdnext = cmdline;
     char* nodename = NULL;
-    int r, s, n = 1;
+    int r, s = 1;
     int num_fvms = 0;
     const char* efi_image = NULL;
     const char* kernc_image = NULL;
@@ -398,7 +398,7 @@ int main(int argc, char** argv) {
         argc--;
         argv++;
     }
-    if (kernel_fn == NULL) {
+    if (!kernel_fn && !efi_image && !kernc_image && !fvm_images[0]) {
         usage();
     }
     if (!nodename) {
@@ -436,9 +436,8 @@ int main(int argc, char** argv) {
         log("cannot create socket %d", s);
         return -1;
     }
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &n, sizeof(n));
     if ((r = bind(s, (void*)&addr, sizeof(addr))) < 0) {
-        log("cannot bind to %s %d: %s\n",
+        log("cannot bind to %s %d: %s\nthere may be another bootserver running\n",
             sockaddr_str(&addr),
             errno, strerror(errno));
         return -1;
@@ -514,8 +513,8 @@ int main(int argc, char** argv) {
         }
 
         if (strcmp(BOOTLOADER_VERSION, adv_version)) {
-            log("%sWARNING: Bootloader version '%s' != '%s'. Please Upgrade%s",
-                ANSI(RED), adv_version, BOOTLOADER_VERSION, ANSI(RESET));
+            log("%sWARNING: Bootserver version '%s' != remote bootloader '%s'. Please Upgrade%s",
+                ANSI(RED), BOOTLOADER_VERSION, adv_version, ANSI(RESET));
             if (!strcmp(adv_version, "0.5.5")) {
                 use_filename_prefix = false;
             }
@@ -552,8 +551,7 @@ int main(int argc, char** argv) {
             status = xfer(&ra, kernc_image, use_filename_prefix ? NB_KERNC_FILENAME
                           : NB_KERNC_HOST_FILENAME);
         }
-
-        if (status == 0) {
+        if (status == 0 && kernel_fn) {
             status = xfer(&ra, kernel_fn, use_filename_prefix ? NB_KERNEL_FILENAME : "kernel.bin");
             if (status == 0) {
                 send_boot_command(&ra);

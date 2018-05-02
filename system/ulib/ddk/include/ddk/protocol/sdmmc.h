@@ -47,7 +47,8 @@ typedef struct sdmmc_req sdmmc_req_t;
 
 // sdmmc requests. one per command
 struct sdmmc_req {
-    uint32_t cmd;
+    uint32_t cmd_idx;
+    uint32_t cmd_flags;
     uint32_t arg;
 
     // (optional) related txn
@@ -60,7 +61,7 @@ struct sdmmc_req {
 
     bool use_dma;
     void* virt;
-    zx_paddr_t phys;
+    zx_handle_t pmt;
 
     // response data
     uint32_t response[4];
@@ -76,6 +77,7 @@ typedef struct sdmmc_host_info {
 #define SDMMC_HOST_CAP_ADMA2         (1 << 1)
 #define SDMMC_HOST_CAP_64BIT         (1 << 2)
 #define SDMMC_HOST_CAP_VOLTAGE_330   (1 << 3)
+#define SDMMC_HOST_CAP_AUTO_CMD12    (1 << 4)
     // Maximum data request size
     uint64_t max_transfer_size;
 } sdmmc_host_info_t;

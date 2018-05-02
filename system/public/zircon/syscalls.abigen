@@ -205,7 +205,7 @@ syscall channel_call_finish internal
     returns (zx_status_t, actual_bytes: uint32_t,
                 actual_handles: uint32_t, read_status: zx_status_t optional);
 
-syscall channel_call vdsocall
+syscall channel_call blocking vdsocall
     (handle: zx_handle_t, options: uint32_t, deadline: zx_time_t,
         args: zx_channel_call_args_t[1] IN)
     returns (zx_status_t, actual_bytes: uint32_t,
@@ -313,6 +313,14 @@ syscall task_suspend
 
 syscall task_resume
     (task_handle: zx_handle_t, options: uint32_t)
+    returns (zx_status_t);
+
+syscall task_suspend_token
+    (task_handle: zx_handle_t)
+    returns (zx_status_t, token: zx_handle_t handle_acquire);
+
+syscall task_resume_from_exception
+    (task_handle: zx_handle_t, eport: zx_handle_t, options: uint32_t)
     returns (zx_status_t);
 
 syscall task_kill
@@ -453,11 +461,19 @@ syscall fifo_create
     returns (zx_status_t,
         out0: zx_handle_t handle_acquire, out1: zx_handle_t handle_acquire);
 
-syscall fifo_read
+syscall fifo_read deprecated
     (handle: zx_handle_t, data: any[len] OUT, len: size_t)
     returns (zx_status_t, num_written: uint32_t);
 
-syscall fifo_write
+syscall fifo_read_old
+    (handle: zx_handle_t, data: any[len] OUT, len: size_t)
+    returns (zx_status_t, num_written: uint32_t);
+
+syscall fifo_write deprecated
+    (handle: zx_handle_t, data: any[len] IN, len: size_t)
+    returns (zx_status_t, num_written: uint32_t);
+
+syscall fifo_write_old
     (handle: zx_handle_t, data: any[len] IN, len: size_t)
     returns (zx_status_t, num_written: uint32_t);
 
@@ -536,60 +552,40 @@ syscall mtrace_control
 # Legacy LK debug syscalls
 
 syscall debug_read
-    (handle: zx_handle_t, buffer: any[length] OUT, length: uint32_t)
+    (handle: zx_handle_t, buffer: char[length] OUT, length: size_t[1] INOUT)
     returns (zx_status_t);
 
 syscall debug_write
-    (buffer: any[length] IN, length: uint32_t)
+    (buffer: char[length] IN, length: size_t)
     returns (zx_status_t);
 
 syscall debug_send_command
-    (resource_handle: zx_handle_t, buffer: any[length] IN, length: uint32_t)
+    (resource_handle: zx_handle_t, buffer: char[length] IN, length: size_t)
     returns (zx_status_t);
 
 # DDK Syscalls: Interrupts
 
 syscall interrupt_create
-    (hrsrc: zx_handle_t, options: uint32_t)
-    returns (zx_status_t, out_handle: zx_handle_t handle_acquire);
+    (src_obj: zx_handle_t, src_num: uint32_t, options: uint32_t)
+    returns (zx_status_t, out_handle: zx_handle_t);
 
 syscall interrupt_bind
-    (handle: zx_handle_t, slot: uint32_t, hrsrc: zx_handle_t, vector: uint32_t, options: uint32_t)
+    (inth: zx_handle_t, porth: zx_handle_t, key: uint64_t, options: uint32_t)
     returns (zx_status_t);
 
 syscall interrupt_wait blocking
     (handle: zx_handle_t)
-    returns (zx_status_t, slots: uint64_t);
+    returns (zx_status_t, out_timestamp: zx_time_t optional);
 
-syscall interrupt_get_timestamp
-    (handle: zx_handle_t, slot: uint32_t)
-    returns (zx_status_t, timestamp: zx_time_t);
-
-syscall interrupt_signal
-    (handle: zx_handle_t, slot: uint32_t, timestamp: zx_time_t)
-    returns (zx_status_t);
-
-syscall irq_create
-    (src_obj: zx_handle_t, src_num: uint32_t, options: uint32_t)
-    returns (zx_status_t, out_handle: zx_handle_t);
-
-syscall irq_bind
-    (inth: zx_handle_t, porth: zx_handle_t, key: uint64_t, options: uint32_t)
-    returns (zx_status_t);
-
-syscall irq_wait blocking
-    (handle: zx_handle_t)
-    returns (zx_status_t, out_timestamp: zx_time_t);
-
-syscall irq_destroy
+syscall interrupt_destroy
     (handle: zx_handle_t)
     returns (zx_status_t);
 
-syscall irq_ack
+syscall interrupt_ack
     (handle: zx_handle_t)
     returns (zx_status_t);
 
-syscall irq_trigger
+syscall interrupt_trigger
     (handle: zx_handle_t, options: uint32_t, timestamp: zx_time_t)
     returns (zx_status_t);
 
@@ -600,7 +596,7 @@ syscall mmap_device_io
     returns (zx_status_t);
 
 syscall vmo_create_contiguous
-    (rsrc_handle: zx_handle_t, size: size_t, alignment_log2: uint32_t)
+    (bti: zx_handle_t, size: size_t, alignment_log2: uint32_t)
     returns (zx_status_t, out: zx_handle_t handle_acquire);
 
 syscall vmo_create_physical
@@ -620,10 +616,14 @@ syscall bti_create
 syscall bti_pin
     (bti: zx_handle_t, options: uint32_t, vmo: zx_handle_t, offset: uint64_t, size: uint64_t,
         addrs: zx_paddr_t[addrs_count] OUT, addrs_count: size_t)
+    returns (zx_status_t, out: zx_handle_t handle_acquire);
+
+syscall bti_release_quarantine
+    (bti: zx_handle_t)
     returns (zx_status_t);
 
-syscall bti_unpin
-    (bti: zx_handle_t, base_addr: zx_paddr_t)
+syscall pmt_unpin
+    (pmt: zx_handle_t handle_release)
     returns (zx_status_t);
 
 # DDK Syscalls: Misc Info
@@ -695,9 +695,16 @@ syscall pci_add_subtract_io_range
 
 # DDK Syscalls: ACPI Glue
 
-syscall acpi_uefi_rsdp
+syscall pc_firmware_tables
     (handle: zx_handle_t)
-    returns (uint64_t);
+    returns (zx_status_t, acpi_rsdp: zx_paddr_t, smbios: zx_paddr_t);
+
+# DDK Syscalls: SMC Calls
+
+syscall smc_call
+    (rsrc_handle: zx_handle_t, arg0: uint64_t, arg1: uint64_t,
+        arg2: uint64_t, arg3: uint64_t, out_smc_status: uint64_t[1] OUT)
+    returns (zx_status_t);
 
 # Resources
 

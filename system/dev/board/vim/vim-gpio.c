@@ -28,56 +28,50 @@ static const pbus_mmio_t gpio_mmios[] = {
         .base = S912_GPIO_A0_BASE,
         .length = S912_GPIO_AO_LENGTH,
     },
+    {
+        .base = S912_GPIO_INTERRUPT_BASE,
+        .length = S912_GPIO_INTERRUPT_LENGTH,
+    },
 };
 
 // S905X and S912 have same GPIO IRQ numbers
 static const pbus_irq_t gpio_irqs[] = {
     {
         .irq = S912_GPIO_IRQ_0,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_1,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_2,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_3,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_4,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_5,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_6,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_GPIO_IRQ_7,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_A0_GPIO_IRQ_0,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
     {
         .irq = S912_A0_GPIO_IRQ_1,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
     },
 };
 
-static pbus_dev_t gpio_dev = {
+static const pbus_dev_t gpio_dev = {
     .name = "gpio",
     .vid = PDEV_VID_AMLOGIC,
-//    .pid = filled in later,
+    .pid = PDEV_PID_AMLOGIC_S912,
     .did = PDEV_DID_AMLOGIC_GPIO,
     .mmios = gpio_mmios,
     .mmio_count = countof(gpio_mmios),
@@ -87,7 +81,6 @@ static pbus_dev_t gpio_dev = {
 
 
 zx_status_t vim_gpio_init(vim_bus_t* bus) {
-    gpio_dev.pid = bus->soc_pid;
 
     zx_status_t status = pbus_device_add(&bus->pbus, &gpio_dev, PDEV_ADD_PBUS_DEVHOST);
     if (status != ZX_OK) {
@@ -111,7 +104,11 @@ zx_status_t vim_gpio_init(vim_bus_t* bus) {
     const pbus_gpio_t gpio_test_gpios[] = {
         {
             // SYS_LED
-            .gpio = (bus->soc_pid == PDEV_PID_AMLOGIC_S912 ? S912_GPIOAO(9) : S905X_GPIOAO(9)),
+            .gpio = S912_GPIOAO(9),
+        },
+        {
+            // GPIO PIN
+            .gpio = S912_GPIOAO(2),
         },
     };
 

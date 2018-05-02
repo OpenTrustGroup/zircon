@@ -8,7 +8,7 @@
 #include <err.h>
 #include <fbl/alloc_checker.h>
 #include <fbl/array.h>
-#include <unittest.h>
+#include <lib/unittest/unittest.h>
 #include <vm/vm.h>
 #include <vm/vm_address_region.h>
 #include <vm/vm_aspace.h>
@@ -322,6 +322,7 @@ static bool vmo_create_test() {
     zx_status_t status = VmObjectPaged::Create(PMM_ALLOC_FLAG_ANY, PAGE_SIZE, &vmo);
     EXPECT_EQ(status, ZX_OK, "");
     EXPECT_TRUE(vmo, "");
+    EXPECT_FALSE(vmo->is_contiguous(), "vmo is not contig\n");
     END_TEST;
 }
 
@@ -472,20 +473,85 @@ static bool vmo_odd_size_commit_test() {
     END_TEST;
 }
 
-// Creates a vm object, commits contiguous memory.
-static bool vmo_contiguous_commit_test() {
+static bool vmo_create_physical_test() {
+    BEGIN_TEST;
+
+    paddr_t pa;
+    vm_page_t* vm_page = pmm_alloc_page(0, &pa);
+    uint32_t cache_policy;
+
+    ASSERT_TRUE(vm_page, "");
+
+    fbl::RefPtr<VmObject> vmo;
+    zx_status_t status = VmObjectPhysical::Create(pa, PAGE_SIZE, &vmo);
+    ASSERT_EQ(status, ZX_OK, "vmobject creation\n");
+    EXPECT_TRUE(vmo, "vmobject creation\n");
+    EXPECT_EQ(ZX_OK, vmo->GetMappingCachePolicy(&cache_policy), "try get");
+    EXPECT_EQ(ARCH_MMU_FLAG_UNCACHED, cache_policy, "check initial cache policy");
+    EXPECT_TRUE(vmo->is_contiguous(), "check contiguous");
+
+    pmm_free_page(vm_page);
+
+    END_TEST;
+}
+
+// Creates a vm object that commits contiguous memory.
+static bool vmo_create_contiguous_test() {
     BEGIN_TEST;
     static const size_t alloc_size = PAGE_SIZE * 16;
     fbl::RefPtr<VmObject> vmo;
-    zx_status_t status = VmObjectPaged::Create(PMM_ALLOC_FLAG_ANY, alloc_size, &vmo);
+    zx_status_t status = VmObjectPaged::CreateContiguous(PMM_ALLOC_FLAG_ANY, alloc_size, 0, &vmo);
+    ASSERT_EQ(status, ZX_OK, "vmobject creation\n");
+    EXPECT_TRUE(vmo, "vmobject creation\n");
+
+    EXPECT_TRUE(vmo->is_contiguous(), "vmo is contig\n");
+
+    paddr_t last_pa;
+    auto lookup_func = [](void* ctx, size_t offset, size_t index, paddr_t pa) {
+        paddr_t* last_pa = static_cast<paddr_t*>(ctx);
+        if (index != 0 && *last_pa + PAGE_SIZE != pa) {
+            return ZX_ERR_BAD_STATE;
+        }
+        *last_pa = pa;
+        return ZX_OK;
+    };
+    status = vmo->Lookup(0, alloc_size, 0, lookup_func, &last_pa);
+    EXPECT_EQ(status, ZX_OK, "vmo lookup\n");
+
+    END_TEST;
+}
+
+// Make sure decommitting is disallowed
+static bool vmo_contiguous_decommit_test() {
+    BEGIN_TEST;
+
+    static const size_t alloc_size = PAGE_SIZE * 16;
+    fbl::RefPtr<VmObject> vmo;
+    zx_status_t status = VmObjectPaged::CreateContiguous(PMM_ALLOC_FLAG_ANY, alloc_size, 0, &vmo);
     ASSERT_EQ(status, ZX_OK, "vmobject creation\n");
     ASSERT_TRUE(vmo, "vmobject creation\n");
 
-    uint64_t committed;
-    auto ret = vmo->CommitRangeContiguous(0, alloc_size, &committed, 0);
-    EXPECT_EQ(0, ret, "committing vm object contig\n");
-    EXPECT_EQ(ROUNDUP_PAGE_SIZE(alloc_size), committed,
-              "committing vm object contig\n");
+    uint64_t n;
+    status = vmo->DecommitRange(PAGE_SIZE, 4 * PAGE_SIZE, &n);
+    ASSERT_EQ(status, ZX_ERR_NOT_SUPPORTED, "decommit fails due to pinned pages\n");
+    status = vmo->DecommitRange(0, 4 * PAGE_SIZE, &n);
+    ASSERT_EQ(status, ZX_ERR_NOT_SUPPORTED, "decommit fails due to pinned pages\n");
+    status = vmo->DecommitRange(alloc_size - PAGE_SIZE, PAGE_SIZE, &n);
+    ASSERT_EQ(status, ZX_ERR_NOT_SUPPORTED, "decommit fails due to pinned pages\n");
+
+    // Make sure all pages are still present and contiguous
+    paddr_t last_pa;
+    auto lookup_func = [](void* ctx, size_t offset, size_t index, paddr_t pa) {
+        paddr_t* last_pa = static_cast<paddr_t*>(ctx);
+        if (index != 0 && *last_pa + PAGE_SIZE != pa) {
+            return ZX_ERR_BAD_STATE;
+        }
+        *last_pa = pa;
+        return ZX_OK;
+    };
+    status = vmo->Lookup(0, alloc_size, 0, lookup_func, &last_pa);
+    ASSERT_EQ(status, ZX_OK, "vmo lookup\n");
+
     END_TEST;
 }
 
@@ -968,7 +1034,9 @@ VM_UNITTEST(vmo_pin_test)
 VM_UNITTEST(vmo_multiple_pin_test)
 VM_UNITTEST(vmo_commit_test)
 VM_UNITTEST(vmo_odd_size_commit_test)
-VM_UNITTEST(vmo_contiguous_commit_test)
+VM_UNITTEST(vmo_create_physical_test)
+VM_UNITTEST(vmo_create_contiguous_test)
+VM_UNITTEST(vmo_contiguous_decommit_test)
 VM_UNITTEST(vmo_precommitted_map_test)
 VM_UNITTEST(vmo_demand_paged_map_test)
 VM_UNITTEST(vmo_dropped_ref_test)

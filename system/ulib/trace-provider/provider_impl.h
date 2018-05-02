@@ -8,10 +8,10 @@
 #include <fbl/string.h>
 #include <fbl/vector.h>
 #include <lib/async/cpp/wait.h>
+#include <lib/zx/channel.h>
+#include <lib/zx/eventpair.h>
+#include <lib/zx/vmo.h>
 #include <trace-provider/provider.h>
-#include <zx/channel.h>
-#include <zx/eventpair.h>
-#include <zx/vmo.h>
 
 // Provide a definition for the opaque type declared in provider.h.
 struct trace_provider {};
@@ -31,9 +31,10 @@ private:
         ~Connection();
 
     private:
-        async_wait_result_t Handle(async_t* async,
-                                   zx_status_t status,
-                                   const zx_packet_signal_t* signal);
+        void Handle(async_t* async,
+                    async::WaitBase* wait,
+                    zx_status_t status,
+                    const zx_packet_signal_t* signal);
 
         bool ReadMessage();
         bool DecodeAndDispatch(uint8_t* buffer, uint32_t num_bytes,

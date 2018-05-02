@@ -206,14 +206,14 @@ ACPI_STATUS AcpiOsTerminate() {
  * @return The physical address of the RSDP
  */
 ACPI_PHYSICAL_ADDRESS AcpiOsGetRootPointer() {
-    ACPI_PHYSICAL_ADDRESS TableAddress = 0;
-    ACPI_STATUS status = AcpiFindRootPointer(&TableAddress);
-
-    uint32_t uefi_rsdp = (uint32_t)zx_acpi_uefi_rsdp(root_resource_handle);
-    if (uefi_rsdp != 0) {
-        return uefi_rsdp;
+    zx_paddr_t acpi_rsdp, smbios;
+    zx_status_t zx_status = zx_pc_firmware_tables(root_resource_handle, &acpi_rsdp, &smbios);
+    if (zx_status == ZX_OK && acpi_rsdp != 0) {
+        return acpi_rsdp;
     }
 
+    ACPI_PHYSICAL_ADDRESS TableAddress = 0;
+    ACPI_STATUS status = AcpiFindRootPointer(&TableAddress);
     if (status != AE_OK) {
         return 0;
     }
@@ -828,12 +828,10 @@ struct acpi_irq_thread_arg {
 static int acpi_irq_thread(void *arg) {
     struct acpi_irq_thread_arg *real_arg = (struct acpi_irq_thread_arg *)arg;
     while (1) {
-        uint64_t slots;
-        zx_status_t status = zx_interrupt_wait(real_arg->irq_handle, &slots);
+        zx_status_t status = zx_interrupt_wait(real_arg->irq_handle, NULL);
         if (status != ZX_OK) {
             continue;
         }
-
         // TODO: Should we do something with the return value from the handler?
         real_arg->handler(real_arg->context);
     }
@@ -880,19 +878,12 @@ ACPI_STATUS AcpiOsInstallInterruptHandler(
     }
 
     zx_handle_t handle;
-    zx_status_t status = zx_interrupt_create(root_resource_handle, 0, &handle);
+    zx_status_t status = zx_interrupt_create(root_resource_handle, InterruptLevel,
+                        ZX_INTERRUPT_REMAP_IRQ, &handle);
     if (status != ZX_OK) {
         free(arg);
         return AE_ERROR;
     }
-    status = zx_interrupt_bind(handle, 0, root_resource_handle, InterruptLevel,
-                               ZX_INTERRUPT_REMAP_IRQ);
-    if (status != ZX_OK) {
-        zx_handle_close(handle);
-        free(arg);
-        return AE_ERROR;
-    }
-
     arg->handler = Handler;
     arg->context = Context;
     arg->irq_handle = handle;

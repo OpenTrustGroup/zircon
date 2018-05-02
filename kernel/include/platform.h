@@ -19,6 +19,7 @@ typedef enum {
     HALT_ACTION_HALT = 0,           // Spin forever.
     HALT_ACTION_REBOOT,             // Reset the CPU.
     HALT_ACTION_REBOOT_BOOTLOADER,  // Reboot into the bootloader.
+    HALT_ACTION_REBOOT_RECOVERY,    // Reboot into the recovery partition.
     HALT_ACTION_SHUTDOWN,           // Shutdown and power off.
 } platform_halt_action;
 
@@ -40,10 +41,10 @@ typedef enum {
 zx_time_t current_time(void);
 
 /* high-precision timer ticks per second */
-uint64_t ticks_per_second(void);
+zx_ticks_t ticks_per_second(void);
 
 /* high-precision timer current_ticks */
-uint64_t current_ticks(void);
+zx_ticks_t current_ticks(void);
 
 /* super early platform initialization, before almost everything */
 void platform_early_init(void);

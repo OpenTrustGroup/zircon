@@ -6,14 +6,14 @@
 #include <stdio.h>
 #include <threads.h>
 
-#include <zx/channel.h>
-#include <zx/event.h>
-#include <zx/handle.h>
-#include <zx/job.h>
-#include <zx/port.h>
-#include <zx/process.h>
-#include <zx/thread.h>
-#include <zx/vmar.h>
+#include <lib/zx/channel.h>
+#include <lib/zx/event.h>
+#include <lib/zx/handle.h>
+#include <lib/zx/job.h>
+#include <lib/zx/port.h>
+#include <lib/zx/process.h>
+#include <lib/zx/thread.h>
+#include <lib/zx/vmar.h>
 
 #include <fbl/algorithm.h>
 #include <fbl/type_support.h>
@@ -294,7 +294,7 @@ static bool test_invoking_policy_with_exception(
 
     // Check that we receive an exception message.
     zx_port_packet_t packet;
-    ASSERT_EQ(zx_port_wait(exc_port, ZX_TIME_INFINITE, &packet, 0), ZX_OK);
+    ASSERT_EQ(zx_port_wait(exc_port, ZX_TIME_INFINITE, &packet, 1), ZX_OK);
 
     // Check the exception message contents.
     ASSERT_EQ(packet.key, kExceptionPortKey);

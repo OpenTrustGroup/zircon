@@ -6,6 +6,7 @@
 
 #ifndef __ASSEMBLER__
 #include <zircon/compiler.h>
+#include <stdbool.h>
 #include <stdint.h>
 #endif
 
@@ -26,6 +27,11 @@
 // Bootdata items with the CRC32 flag must have a valid crc32.
 // Otherwise their crc32 field must contain BOOTITEM_NO_CRC32
 #define BOOTDATA_FLAG_CRC32      (0x00020000)
+
+// Bootdata types that have least significant byte set to 'm'
+// are reserved for driver metadata
+#define BOOTDATA_KIND_METADATA   (0x0000006D)
+#define BOOTDATA_KIND_MASK       (0x000000FF)
 
 // Containers are used to wrap a set of bootdata items
 // written to a file or partition.  The "length" is the
@@ -49,12 +55,21 @@
 // compression is a raw disk image rather than BOOTFS format.
 #define BOOTDATA_RAMDISK          (0x4b534452) // RDSK
 
-// MDI data.  The "extra" field is unused and set to 0.
-#define BOOTDATA_MDI              (0x3149444d) // MDI1
-
 // A Zircon Kernel Image
 // Content: bootdata_kernel_t
 #define BOOTDATA_KERNEL           (0x4c4e524b) // KRNL
+
+// A Zircon Partition Map
+// Content: bootdata_partition_map_t
+// The bootdata_t.extra field is used as a board specific index
+// to specify which device the partition map applies to.
+#define BOOTDATA_PARTITION_MAP    (0x5452506D) // mPRT
+
+// MAC Address for Ethernet, Wifi, Bluetooth, etc.
+// Content: uint8_t[] (variable length based on type of MAC address)
+// The bootdata_t.extra field is used as a board specific index
+// to specify which device the MAC address applies to.
+#define BOOTDATA_MAC_ADDRESS      (0x43414D6D) // mMAC
 
 // Flag indicating that the bootfs is compressed.
 #define BOOTDATA_BOOTFS_FLAG_COMPRESSED  (1 << 0)
@@ -109,6 +124,18 @@
 // Last crashlog
 // Content: ascii/utf8 log data from previous boot
 #define BOOTDATA_LAST_CRASHLOG    (0x4d4f4f42) // BOOM
+
+// CPU configuration
+// Content: bootdata_cpu_config_t
+#define BOOTDATA_CPU_CONFIG       (0x43555043) // CPUC
+
+// Memory configuration
+// Content: one or more of bootdata_mem_range_t (count determined by bootdata_t length)
+#define BOOTDATA_MEM_CONFIG       (0x434D454D) // MEMC
+
+// Kernel driver configuration
+// Content: driver specific struct, with type determined by bootdata "extra" field
+#define BOOTDATA_KERNEL_DRIVER    (0x5652444B) // KDRV
 
 #define BOOTDATA_IGNORE           (0x50494b53) // SKIP
 
@@ -168,6 +195,27 @@ typedef struct {
     bootdata_kernel_t data_kernel;
 } zircon_kernel_t;
 
+#define BOOTDATA_PART_NAME_LEN 32
+#define BOOTDATA_PART_GUID_LEN 16
+
+typedef struct {
+    uint8_t type_guid[BOOTDATA_PART_GUID_LEN];
+    uint8_t uniq_guid[BOOTDATA_PART_GUID_LEN];
+    uint64_t first_block;
+    uint64_t last_block;
+    uint64_t flags;
+    char name[BOOTDATA_PART_NAME_LEN];
+} bootdata_partition_t;
+
+typedef struct {
+    uint64_t block_count;
+    uint64_t block_size;
+    uint32_t partition_count;
+    uint32_t reserved;
+    char guid[BOOTDATA_PART_GUID_LEN];
+    bootdata_partition_t partitions[];
+} bootdata_partition_map_t;
+
 typedef struct {
     uint64_t base;
     uint64_t length;
@@ -187,6 +235,29 @@ typedef struct {
     uint32_t pid;
     char board_name[32];
 } bootdata_platform_id_t;
+
+typedef struct {
+    uint32_t cpu_count;     // number of CPU cores in the cluster
+    uint32_t type;          // for future use
+    uint32_t flags;         // for future use
+    uint32_t reserved;
+} bootdata_cpu_cluster_t;
+
+typedef struct {
+    uint32_t cluster_count;
+    uint32_t reserved[3];
+    bootdata_cpu_cluster_t clusters[];
+} bootdata_cpu_config_t;
+
+#define BOOTDATA_MEM_RANGE_RAM          1
+#define BOOTDATA_MEM_RANGE_PERIPHERAL   2
+#define BOOTDATA_MEM_RANGE_RESERVED     3
+typedef struct {
+    uint64_t    paddr;
+    uint64_t    length;
+    uint32_t    type;
+    uint32_t    reserved;
+} bootdata_mem_range_t;
 
 /* EFI Variable for Crash Log */
 #define ZIRCON_VENDOR_GUID \
@@ -215,6 +286,10 @@ __END_CDECLS;
 //lsw of sha256("bootfs")
 #define BOOTFS_MAGIC (0xa56d3ff9)
 
+#define BOOTFS_PAGE_SIZE (4096)
+#define BOOTFS_PAGE_ALIGN(size) \
+    (((size) + BOOTFS_PAGE_SIZE - 1) & -BOOTFS_PAGE_SIZE)
+
 #define BOOTFS_MAX_NAME_LEN 256
 
 typedef struct bootfs_header {
@@ -240,5 +315,9 @@ typedef struct bootfs_entry {
 #define BOOTFS_ALIGN(nlen) (((nlen) + 3) & (~3))
 #define BOOTFS_RECSIZE(entry) \
     (sizeof(bootfs_entry_t) + BOOTFS_ALIGN(entry->name_len))
+
+static inline bool bootdata_is_metadata(uint32_t type) {
+    return ((type & BOOTDATA_KIND_MASK) == BOOTDATA_KIND_METADATA);
+}
 
 #endif

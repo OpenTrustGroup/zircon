@@ -33,7 +33,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/message_packet.cpp \
     $(LOCAL_DIR)/pci_device_dispatcher.cpp \
     $(LOCAL_DIR)/pci_interrupt_dispatcher.cpp \
-    $(LOCAL_DIR)/pinned_memory_object.cpp \
+    $(LOCAL_DIR)/pinned_memory_token_dispatcher.cpp \
     $(LOCAL_DIR)/policy_manager.cpp \
     $(LOCAL_DIR)/port_dispatcher.cpp \
     $(LOCAL_DIR)/process_dispatcher.cpp \
@@ -43,6 +43,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/semaphore.cpp \
     $(LOCAL_DIR)/socket_dispatcher.cpp \
     $(LOCAL_DIR)/smc_dispatcher.cpp \
+    $(LOCAL_DIR)/suspend_token_dispatcher.cpp \
     $(LOCAL_DIR)/thread_dispatcher.cpp \
     $(LOCAL_DIR)/timer_dispatcher.cpp \
     $(LOCAL_DIR)/vcpu_dispatcher.cpp \
@@ -53,6 +54,7 @@ MODULE_SRCS := \
 # Tests
 MODULE_SRCS += \
     $(LOCAL_DIR)/mbuf_tests.cpp \
+    $(LOCAL_DIR)/message_packet_tests.cpp \
     $(LOCAL_DIR)/state_tracker_tests.cpp \
 
 MODULE_DEPS := \

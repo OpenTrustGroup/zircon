@@ -15,6 +15,8 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/vim-mali.c \
     $(LOCAL_DIR)/vim-uart.c \
     $(LOCAL_DIR)/vim-usb.c \
+    $(LOCAL_DIR)/vim-sd-emmc.c \
+    $(LOCAL_DIR)/vim-eth.c \
 
 MODULE_STATIC_LIBS := \
     system/ulib/ddk \

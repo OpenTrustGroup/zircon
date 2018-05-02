@@ -4,28 +4,26 @@
 
 #include <assert.h>
 #include <stdio.h>
-
-#include <zx/bti.h>
-#include <zx/channel.h>
-#include <zx/event.h>
-#include <zx/eventpair.h>
-#include <zx/handle.h>
-#include <zx/job.h>
-#include <zx/port.h>
-#include <zx/process.h>
-#include <zx/socket.h>
-#include <zx/thread.h>
-#include <zx/time.h>
-#include <zx/vmar.h>
+#include <unistd.h>
 
 #include <fbl/type_support.h>
-
+#include <lib/fzl/time.h>
+#include <lib/zx/bti.h>
+#include <lib/zx/channel.h>
+#include <lib/zx/event.h>
+#include <lib/zx/eventpair.h>
+#include <lib/zx/handle.h>
+#include <lib/zx/job.h>
+#include <lib/zx/port.h>
+#include <lib/zx/process.h>
+#include <lib/zx/socket.h>
+#include <lib/zx/thread.h>
+#include <lib/zx/time.h>
+#include <lib/zx/vmar.h>
+#include <unittest/unittest.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/object.h>
 #include <zircon/syscalls/port.h>
-
-#include <unistd.h>
-#include <unittest/unittest.h>
 
 static zx_status_t validate_handle(zx_handle_t handle) {
     return zx_object_get_info(handle, ZX_INFO_HANDLE_VALID,
@@ -117,6 +115,13 @@ static bool event_duplicate_test() {
 static bool bti_compilation_test() {
     BEGIN_TEST;
     zx::bti bti;
+    // TODO(teisenbe): test more.
+    END_TEST;
+}
+
+static bool pmt_compilation_test() {
+    BEGIN_TEST;
+    zx::pmt pmt;
     // TODO(teisenbe): test more.
     END_TEST;
 }
@@ -229,7 +234,7 @@ static bool port_test() {
     ASSERT_EQ(channel[1].write(0u, "12345", 5, nullptr, 0u), ZX_OK);
 
     zx_port_packet_t packet = {};
-    ASSERT_EQ(port.wait(zx::time(), &packet, 0u), ZX_OK);
+    ASSERT_EQ(port.wait(zx::time(), &packet, 1u), ZX_OK);
     ASSERT_EQ(packet.key, key);
     ASSERT_EQ(packet.type, ZX_PKT_TYPE_SIGNAL_ONE);
     ASSERT_EQ(packet.signal.count, 1u);
@@ -246,11 +251,17 @@ static bool time_test() {
     ASSERT_EQ(zx::duration::infinite().get(), ZX_TIME_INFINITE);
 
     ASSERT_EQ(zx::nsec(10).get(), ZX_NSEC(10));
+    ASSERT_EQ(zx::nsec(10).to_nsecs(), 10);
     ASSERT_EQ(zx::usec(10).get(), ZX_USEC(10));
+    ASSERT_EQ(zx::usec(10).to_usecs(), 10);
     ASSERT_EQ(zx::msec(10).get(), ZX_MSEC(10));
+    ASSERT_EQ(zx::msec(10).to_msecs(), 10);
     ASSERT_EQ(zx::sec(10).get(), ZX_SEC(10));
+    ASSERT_EQ(zx::sec(10).to_secs(), 10);
     ASSERT_EQ(zx::min(10).get(), ZX_MIN(10));
+    ASSERT_EQ(zx::min(10).to_mins(), 10);
     ASSERT_EQ(zx::hour(10).get(), ZX_HOUR(10));
+    ASSERT_EQ(zx::hour(10).to_hours(), 10);
 
     ASSERT_EQ((zx::time() + zx::usec(19)).get(), ZX_USEC(19));
     ASSERT_EQ((zx::time::infinite() - zx::time()).get(), ZX_TIME_INFINITE);
@@ -277,6 +288,36 @@ static bool time_test() {
 
     // Just a smoke test
     ASSERT_GE(zx::deadline_after(zx::usec(10)).get(), ZX_USEC(10));
+
+    END_TEST;
+}
+
+static bool ticks_test() {
+    BEGIN_TEST;
+
+    ASSERT_EQ(zx::ticks().get(), 0);
+
+    zx::ticks before = zx::ticks::now();
+    ASSERT_GT(before.get(), 0);
+    zx::ticks after = before + zx::ticks(1);
+
+    ASSERT_LT(before.get(), after.get());
+    ASSERT_TRUE(before < after);
+    after -= zx::ticks(1);
+    ASSERT_EQ(before.get(), after.get());
+    ASSERT_TRUE(before == after);
+
+    ASSERT_EQ(zx::ticks::per_second().get(), zx_ticks_per_second());
+
+    // Compare a duration (nanoseconds) with the ticks equivalent.
+    zx::ticks second = zx::ticks::per_second();
+    ASSERT_EQ(fzl::TicksToNs(second).get(), zx::sec(1).get());
+    ASSERT_TRUE(fzl::TicksToNs(second) == zx::sec(1));
+
+    // Hopefully, we haven't moved backwards in time.
+    after = zx::ticks::now();
+    ASSERT_LE(before.get(), after.get());
+    ASSERT_TRUE(before <= after);
 
     END_TEST;
 }
@@ -348,6 +389,17 @@ static bool job_default_test() {
     END_TEST;
 }
 
+static bool takes_any_handle(const zx::handle& handle) {
+    return handle.is_valid();
+}
+
+static bool handle_conversion_test() {
+    BEGIN_TEST;
+    EXPECT_TRUE(takes_any_handle(zx::unowned_handle::wrap(zx_thread_self())));
+    ASSERT_EQ(validate_handle(zx_thread_self()), ZX_OK);
+    END_TEST;
+}
+
 BEGIN_TEST_CASE(libzx_tests)
 RUN_TEST(handle_invalid_test)
 RUN_TEST(handle_close_test)
@@ -357,6 +409,7 @@ RUN_TEST(handle_replace_test)
 RUN_TEST(event_test)
 RUN_TEST(event_duplicate_test)
 RUN_TEST(bti_compilation_test)
+RUN_TEST(pmt_compilation_test)
 RUN_TEST(channel_test)
 RUN_TEST(channel_rw_test)
 RUN_TEST(channel_rw_etc_test)
@@ -365,6 +418,7 @@ RUN_TEST(eventpair_test)
 RUN_TEST(vmar_test)
 RUN_TEST(port_test)
 RUN_TEST(time_test)
+RUN_TEST(ticks_test)
 RUN_TEST(thread_self_test)
 RUN_TEST(process_self_test)
 RUN_TEST(vmar_root_self_test)

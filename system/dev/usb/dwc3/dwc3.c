@@ -350,9 +350,7 @@ usb_mode_switch_protocol_ops_t dwc_ums_protocol = {
 
 static void dwc3_unbind(void* ctx) {
     dwc3_t* dwc = ctx;
-
-    zx_interrupt_signal(dwc->irq_handle, ZX_INTERRUPT_SLOT_USER, 0);
-
+    zx_interrupt_destroy(dwc->irq_handle);
     thrd_join(dwc->irq_thread, NULL);
     device_remove(dwc->zxdev);
 }

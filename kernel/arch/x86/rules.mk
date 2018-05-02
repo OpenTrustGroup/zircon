@@ -9,6 +9,7 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
+BOOT_HEADER_SIZE ?= 0x70
 KERNEL_LOAD_OFFSET ?= 0x00100000 # 1MB
 KERNEL_BASE ?= 0xffffffff80100000 # has KERNEL_LOAD_OFFSET baked into it
 KERNEL_SIZE ?= 0x40000000 # 1GB
@@ -48,7 +49,6 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/faults.cpp \
 	$(LOCAL_DIR)/feature.cpp \
 	$(LOCAL_DIR)/gdt.S \
-	$(LOCAL_DIR)/header.S \
 	$(LOCAL_DIR)/hwp.cpp \
 	$(LOCAL_DIR)/idt.cpp \
 	$(LOCAL_DIR)/ioapic.cpp \
@@ -119,6 +119,9 @@ endif
 GLOBAL_LDFLAGS += -z max-page-size=4096
 ifeq ($(call TOBOOL,$(USE_CLANG)),false)
 KERNEL_COMPILEFLAGS += -falign-jumps=1 -falign-loops=1 -falign-functions=4
+# Don't over-align data by default, which GCC always did before.
+# Newer binutils complains about over-aligned SHT_NOTE sections.
+GLOBAL_COMPILEFLAGS += -malign-data=abi
 endif
 
 # hard disable floating point in the kernel
@@ -145,10 +148,5 @@ endif
 ifeq ($(call TOBOOL,$(ENABLE_NEW_BOOTDATA)),true)
 MODULE_DEFINES += ENABLE_NEW_BOOTDATA=1
 endif
-
-LINKER_SCRIPT += $(LOCAL_BUILDDIR)/kernel.ld
-
-# potentially generated files that should be cleaned out with clean make rule
-GENERATED += $(LOCAL_BUILDDIR)/kernel.ld
 
 include make/module.mk

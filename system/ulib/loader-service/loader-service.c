@@ -9,7 +9,7 @@
 #include <fdio/io.h>
 #include <inttypes.h>
 #include <ldmsg/ldmsg.h>
-#include <lib/async/loop.h>
+#include <lib/async-loop/loop.h>
 #include <lib/async/wait.h>
 #include <limits.h>
 #include <stdatomic.h>
@@ -294,10 +294,6 @@ static zx_status_t loader_service_rpc(zx_handle_t h, loader_service_session_t* s
         status = loader_service_attach(svc, req_handle);
         req_handle = ZX_HANDLE_INVALID;
         break;
-    case LDMSG_OP_DEBUG_PRINT:
-        fprintf(stderr, "dlsvc: debug: %s\n", data);
-        status = ZX_OK;
-        break;
     case LDMSG_OP_DONE:
         zx_handle_close(req_handle);
         return ZX_ERR_PEER_CLOSED;
@@ -345,18 +341,21 @@ zx_status_t loader_service_create(async_t* async,
     }
 
     if (!async) {
-        zx_status_t status = async_loop_create(NULL, &async);
+        async_loop_t* loop;
+        zx_status_t status = async_loop_create(NULL, &loop);
         if (status != ZX_OK) {
             free(svc);
             return status;
         }
 
-        status = async_loop_start_thread(async, "loader-service", NULL);
+        status = async_loop_start_thread(loop, "loader-service", NULL);
         if (status != ZX_OK) {
             free(svc);
-            async_loop_destroy(async);
+            async_loop_destroy(loop);
             return status;
         }
+
+        async = async_loop_get_dispatcher(loop);
     }
 
     svc->async = async;
@@ -397,22 +396,25 @@ zx_status_t loader_service_create_fd(async_t* async,
     return status;
 }
 
-static async_wait_result_t loader_service_handler(async_t* async,
-                                                  async_wait_t* wait,
-                                                  zx_status_t status,
-                                                  const zx_packet_signal_t* signal) {
+static void loader_service_handler(async_t* async,
+                                   async_wait_t* wait,
+                                   zx_status_t status,
+                                   const zx_packet_signal_t* signal) {
     loader_service_session_t* session = (loader_service_session_t*)wait;
     if (status != ZX_OK)
         goto stop;
     status = loader_service_rpc(wait->object, session);
     if (status != ZX_OK)
         goto stop;
-    return ASYNC_WAIT_AGAIN;
+    status = async_begin_wait(async, wait);
+    if (status != ZX_OK)
+        goto stop;
+    return;
 stop:
     zx_handle_close(wait->object);
-    free(wait);
-    loader_service_deref(session->svc); // Balanced in |loader_service_attach|.
-    return ASYNC_WAIT_FINISHED;
+    loader_service_t* svc = session->svc;
+    free(session);
+    loader_service_deref(svc); // Balanced in |loader_service_attach|.
 }
 
 zx_status_t loader_service_attach(loader_service_t* svc, zx_handle_t h) {
@@ -433,7 +435,6 @@ zx_status_t loader_service_attach(loader_service_t* svc, zx_handle_t h) {
     session->wait.handler = loader_service_handler;
     session->wait.object = h;
     session->wait.trigger = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
-    session->wait.flags = ASYNC_FLAG_HANDLE_SHUTDOWN;
     session->svc = svc;
 
     status = async_begin_wait(svc->async, &session->wait);

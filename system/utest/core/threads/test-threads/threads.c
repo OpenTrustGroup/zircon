@@ -33,6 +33,23 @@ void threads_test_wait_detach_fn(void* arg) {
     zx_thread_exit();
 }
 
+void threads_test_wait_break_infinite_sleep_fn(void* arg) {
+    zx_handle_t event = *(zx_handle_t*)arg;
+    zx_object_wait_one(event, ZX_USER_SIGNAL_0, ZX_TIME_INFINITE, NULL);
+
+    // Don't use builtin_trap since the compiler might assume everything after that call can't
+    // execute and will remove the zx_nanosleep below.
+#if defined(__aarch64__)
+    __asm__ volatile("brk 0");
+#elif defined(__x86_64__)
+    __asm__ volatile("int3");
+#else
+#error Not supported on this platform.
+#endif
+
+    zx_nanosleep(UINT64_MAX);
+}
+
 void threads_test_busy_fn(void* arg) {
     volatile uint64_t i = 0u;
     while (true) {
@@ -55,9 +72,9 @@ void threads_test_infinite_wait_fn(void* arg) {
 void threads_test_port_fn(void* arg) {
     zx_handle_t* port = (zx_handle_t*)arg;
     zx_port_packet_t packet = {};
-    zx_port_wait(port[0], ZX_TIME_INFINITE, &packet, 0u);
+    zx_port_wait(port[0], ZX_TIME_INFINITE, &packet, 1u);
     packet.key += 5u;
-    zx_port_queue(port[1], &packet, 0u);
+    zx_port_queue(port[1], &packet, 1u);
 }
 
 void threads_test_channel_call_fn(void* arg_) {
@@ -81,10 +98,10 @@ void threads_test_channel_call_fn(void* arg_) {
     arg->read_status = ZX_OK;
     arg->call_status = zx_channel_call(arg->channel, 0, ZX_TIME_INFINITE, &call_args,
                                        &actual_bytes, &actual_handles, &arg->read_status);
-
     if (arg->call_status == ZX_OK) {
         arg->read_status = ZX_OK;
-        if (actual_bytes != sizeof(recv_buf) || memcmp(recv_buf, "abcdefghj", sizeof(recv_buf))) {
+        if (actual_bytes != sizeof(recv_buf) ||
+            memcmp(recv_buf + sizeof(zx_txid_t), "abcdefghj" + sizeof(zx_txid_t), sizeof(recv_buf) - sizeof(zx_txid_t))) {
             arg->call_status = ZX_ERR_BAD_STATE;
         }
     }

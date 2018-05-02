@@ -30,14 +30,16 @@ using digest::Digest;
 namespace blobfs {
 
 void VnodeBlob::fbl_recycle() {
-    // If the blob was not purged, it is still in the hash, so we need to remove it here
-    if (GetState() != kBlobStatePurged) {
-        blobfs_->VnodeRelease(this);
+    if (GetState() != kBlobStatePurged && !IsDirectory()) {
+        // Relocate blobs which haven't been deleted to the closed cache.
+        blobfs_->VnodeReleaseSoft(this);
+    } else {
+        // Destroy blobs which have been purged.
+        delete this;
     }
-    delete this;
 }
 
-VnodeBlob::~VnodeBlob() {
+void VnodeBlob::TearDown() {
     ZX_ASSERT(clone_watcher_.object() == ZX_HANDLE_INVALID);
     if (blob_ != nullptr) {
         block_fifo_request_t request;
@@ -46,6 +48,11 @@ VnodeBlob::~VnodeBlob() {
         request.opcode = BLOCKIO_CLOSE_VMO;
         blobfs_->Txn(&request, 1);
     }
+    blob_ = nullptr;
+}
+
+VnodeBlob::~VnodeBlob() {
+    TearDown();
 }
 
 zx_status_t VnodeBlob::ValidateFlags(uint32_t flags) {
@@ -130,8 +137,7 @@ zx_status_t VnodeBlob::Getattr(vnattr_t* a) {
     a->inode = 0;
     a->size = IsDirectory() ? 0 : SizeData();
     a->blksize = kBlobfsBlockSize;
-    a->blkcount = blobfs_->GetNode(map_index_)->num_blocks *
-                  (kBlobfsBlockSize / VNATTR_BLKSIZE);
+    a->blkcount = inode_.num_blocks * (kBlobfsBlockSize / VNATTR_BLKSIZE);
     a->nlink = 1;
     a->create_time = 0;
     a->modify_time = 0;
@@ -182,19 +188,6 @@ zx_status_t VnodeBlob::Ioctl(uint32_t op, const void* in_buf, size_t in_len, voi
         memcpy(info->name, kFsName, strlen(kFsName));
         *out_actual = sizeof(vfs_query_info_t) + strlen(kFsName);
         return ZX_OK;
-    }
-    case IOCTL_VFS_UNMOUNT_FS: {
-        // TODO(ZX-1577): Avoid calling completion_wait here.
-        // Prefer to use dispatcher's async_t to be notified
-        // whenever Sync completes.
-        completion_t completion;
-        SyncCallback closure([&completion](zx_status_t status) {
-            completion_signal(&completion);
-        });
-        Sync(fbl::move(closure));
-        completion_wait(&completion, ZX_TIME_INFINITE);
-        *out_actual = 0;
-        return blobfs_->Unmount();
     }
 #ifdef __Fuchsia__
     case IOCTL_VFS_GET_DEVICE_PATH: {
@@ -252,11 +245,17 @@ zx_status_t VnodeBlob::GetVmo(int flags, zx_handle_t* out) {
     if (IsDirectory()) {
         return ZX_ERR_NOT_SUPPORTED;
     }
-    if ((flags & FDIO_MMAP_FLAG_WRITE) || !(flags & FDIO_MMAP_FLAG_PRIVATE)) {
+    if (flags & FDIO_MMAP_FLAG_WRITE) {
+        return ZX_ERR_NOT_SUPPORTED;
+    } else if (flags & FDIO_MMAP_FLAG_EXACT) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
-    zx_rights_t rights = ZX_RIGHTS_BASIC | ZX_RIGHT_MAP;
+    // Let clients map and set the names of their VMOs.
+    zx_rights_t rights = ZX_RIGHTS_BASIC | ZX_RIGHT_MAP | ZX_RIGHTS_PROPERTY;
+    // We can ignore FDIO_MMAP_FLAG_PRIVATE, since private / shared access
+    // to the underlying VMO can both be satisfied with a clone due to
+    // the immutability of blobfs blobs.
     rights |= (flags & FDIO_MMAP_FLAG_READ) ? ZX_RIGHT_READ : 0;
     rights |= (flags & FDIO_MMAP_FLAG_EXEC) ? ZX_RIGHT_EXECUTE : 0;
     return CloneVmo(rights, out);

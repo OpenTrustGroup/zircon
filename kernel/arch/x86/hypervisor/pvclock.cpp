@@ -73,10 +73,8 @@ zx_status_t pvclock_update_boot_time(hypervisor::GuestPhysicalAddressSpace* gpas
     static uint32_t version __TA_GUARDED(mutex);
 
     hypervisor::GuestPtr guest_ptr;
-    zx_status_t status = gpas->CreateGuestPtr(guest_paddr,
-                                              sizeof(pvclock_boot_time),
-                                              "pvclock-boot-time-guest-mapping",
-                                              &guest_ptr);
+    zx_status_t status = gpas->CreateGuestPtr(guest_paddr, sizeof(pvclock_boot_time),
+                                              "pvclock-boot-time-guest-mapping", &guest_ptr);
     if (status != ZX_OK) {
         return status;
     }
@@ -98,10 +96,9 @@ zx_status_t pvclock_update_boot_time(hypervisor::GuestPhysicalAddressSpace* gpas
 
 zx_status_t pvclock_reset_clock(PvClockState* pvclock, hypervisor::GuestPhysicalAddressSpace* gpas,
                                 zx_vaddr_t guest_paddr) {
-    zx_status_t status = gpas->CreateGuestPtr(guest_paddr,
-                                              sizeof(pvclock_system_time),
-                                              "pvclock-system-time-guest-mapping",
-                                              &pvclock->guest_ptr);
+    zx_status_t status =
+        gpas->CreateGuestPtr(guest_paddr, sizeof(pvclock_system_time),
+                             "pvclock-system-time-guest-mapping", &pvclock->guest_ptr);
     if (status != ZX_OK) {
         return status;
     }
@@ -116,20 +113,19 @@ void pvclock_update_system_time(PvClockState* pvclock,
         return;
     }
 
-    pvclock_system_time* system_time = pvclock->system_time;
     uint32_t tsc_mul;
     int8_t tsc_shift;
-
     calculate_scale_factor(ticks_per_second(), &tsc_mul, &tsc_shift);
 
     // See the comment for pvclock_boot_time structure above
+    pvclock_system_time* system_time = pvclock->system_time;
     atomic_store_relaxed_u32(&system_time->version, pvclock->version + 1);
     atomic_fence();
     system_time->tsc_mul = tsc_mul;
     system_time->tsc_shift = tsc_shift;
     system_time->system_time = current_time();
     system_time->tsc_timestamp = rdtsc();
-    system_time->flags = 0;
+    system_time->flags = pvclock->is_stable ? kKvmSystemTimeStable : 0;
     atomic_fence();
     atomic_store_relaxed_u32(&system_time->version, pvclock->version + 2);
     pvclock->version += 2;

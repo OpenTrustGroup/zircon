@@ -1,9 +1,9 @@
-# FIDL 2.0: Language Specification
+# FIDL: Language Specification
 
 This document is a specification of the Fuchsia Interface Definition Language
-(FIDL) v2.0 syntax.
+(FIDL) syntax.
 
-See [FIDL 2.0: Overview](index.md) for more information about FIDL's overall
+See [FIDL: Overview](index.md) for more information about FIDL's overall
 purpose, goals, and requirements, as well as links to related documents.
 
 [TOC]
@@ -18,13 +18,6 @@ FIDL declarations are stored in plain text UTF-8 files. Each file consists of a
 sequence of semicolon delimited declarations. The order of declarations within a
 FIDL file or among FIDL files within a library is irrelevant. FIDL does not
 require (or support) forward declarations of any kind.
-
-Topics for discussion:
-
-*   Previously we defined FIDL files as standalone units loosely organized into
-    modules which caused problems for languages such as Dart and Rust which
-    prefer to work with more granular units, hence the idea of formalizing the
-    concept of FIDL libraries. Is this the right approach?
 
 ### Tokens
 
@@ -88,9 +81,6 @@ FIDL always looks for unqualified symbols within the scope of the current
 library. To reference symbols in other libraries, they must be qualified by
 prefixing the identifier with the library name or alias.
 
-Names may also require qualification when they refer to symbols which have been
-declared within the scope of a **struct**, **union**, **enum**, or **interface**.
-
 **objects.fidl:**
 
 ```
@@ -118,11 +108,6 @@ declared within the scope of a **struct**, **union**, **enum**, or **interface**
     };
 ```
 
-Topics for discussion:
-
-*   Should we provide shortcuts for referencing types in other libraries? Should
-    we support importing symbols into the library's own scope?
-
 #### Literals
 
 FIDL supports the following literal types using C-like syntax: bools, signed
@@ -137,21 +122,10 @@ integers, unsigned integers, floats, strings.
     const float32 kFloat = 1.0;
 ```
 
-Topics for discussion:
-
-*   Provide more formal definition.
-*   Describe special constants like float.NAN and uint32.MAX.
-
 #### Declaration Separator
 
 FIDL uses the semi-colon **';'** to separate adjacent declarations within the
-file, much like C. Although it is somewhat of a nuisance, it makes the grammar
-more regular (constant, member, and type declarations look the same) which
-simplifies parsing.
-
-NB: I am sure there are other viewpoints on this… Ideally the grammar should be
-LL(1) but whoever ultimately writes the new compiler can weigh in on what's
-simple to parse or not.
+file, much like C.
 
 ### Libraries
 
@@ -183,16 +157,6 @@ The scope of "library" and "using" declarations is limited to a single file.
 Each individual file within a FIDL library must restate the "library"
 declaration together with any "using" declarations needed by that file.
 
-When the FIDL compiler encounters a library name such as "mozart.geometry",
-searches the library path to find the directory which contains that library's
-FIDL files, then loads the files. The compiler emits an error ifs any referenced
-library cannot be found.
-
-The build system generally takes care of providing the FIDL compiler with a
-suitable library path argument derived from the build dependencies for the
-target. eg. `--library mozart.geometry=apps/mozart/services/geometry --library
-mozart.buffers=apps/mozart/services/buffers`
-
 The library's name may be used by certain language bindings to provide scoping
 for symbols emitted by the code generator.
 
@@ -200,16 +164,6 @@ For example, the C++ bindings generator places declarations for the FIDL library
 "mozart.composition" within the C++ namespace "mozart::composition". Similarly,
 for languages such as Dart and Rust which have their own module system, each
 FIDL library is compiled as a module for that language.
-
-Topics for discussion:
-
-*   Are there any attributes we would like to define at the library level? eg.
-    C++ namespace or other code generator hints
-*   Should the individual FIDL files which make up a library be collated (merged
-    into one combined file archive) or is the one-to-one mapping of library to
-    directory good enough?
-*   Do FIDL libraries need any auxiliary metadata represented separately from the
-    FIDL files themselves?
 
 ### Types and Type Declarations
 
@@ -247,14 +201,13 @@ struct Sprite {
 *   Discrete subset of named values chosen from an underlying integer primitive
     type.
 *   Not nullable.
+*   Enums must have at least one member.
 
 ##### Declaration
 
 The ordinal index is **required** for each enum element. The underlying type of
 an enum must be one of: **int8, uint8, int16, uint16, int32, uint32, int64,
 uint64**. If omitted, the underlying type is assumed to be **uint32**.
-
-Enums may be scoped within: **library, struct, union, interface**.
 
 ```
 // An enum declared at library scope.
@@ -272,15 +225,6 @@ enum Vessel {
     BOWL = 1;
     TUREEN = 2;
     JUG = 3;
-};
-
-// An enum declared within an interface scope.
-interface VendingMachine {
-    enum PaymentMethod {
-        CASH = 0;
-        CREDIT = 1;
-        HONOR_SYSTEM = 2;
-    };
 };
 ```
 
@@ -410,8 +354,9 @@ Handles are denoted:
 *   **`handle<H>?`** : nullable Zircon handle of
     type _H_
 
-_H_ can be one of[¹](#footnote1): **`channel, event, eventpair, fifo, job,
-process, port, resource, socket, thread, vmo`**
+_H_ can be one of: `channel, event, eventpair, fifo, job,
+process, port, resource, socket, thread, vmo`. New types will
+be added to the fidl language as they are added to Zircon.
 
 ```
 // A record which contains some handles.
@@ -448,7 +393,7 @@ struct Color {
 };
 ```
 
-##### Use
+#### Use
 
 Structs are denoted by their declared name (eg. **Circle**) and nullability:
 
@@ -596,16 +541,9 @@ struct Record {
 Constant declarations introduce a name within their scope. The constant's type
 must be either a primitive or an enum.
 
-Constants may be scoped within: **library, struct, union, interface**.
-
 ```
 // a constant declared at library scope
 const int32 kFavoriteNumber = 42;
-
-// a constant declared within an interface scope
-interface VendingMachine {
-    const Beverage kFavoriteBeverage = WHISKEY;
-};
 ```
 
 ### Constant Expressions
@@ -615,11 +553,4 @@ constant expressions.
 
 ## Grammar
 
-[Grammar is here](grammar.md).
-
-## Notes
-
-### 1 {#footnote1}
-
-New handle types can easily be added to the language
-without affecting the  wire format since all handles are transferred the same way.
+A modified [EBNF description of the fidl grammar is here](grammar.md).

@@ -14,12 +14,12 @@
 class InterruptEventDispatcher final : public InterruptDispatcher {
 public:
     static zx_status_t Create(fbl::RefPtr<Dispatcher>* dispatcher,
-                              zx_rights_t* rights);
+                              zx_rights_t* rights,
+                              uint32_t vector,
+                              uint32_t options);
 
     InterruptEventDispatcher(const InterruptDispatcher &) = delete;
     InterruptEventDispatcher& operator=(const InterruptDispatcher &) = delete;
-
-    zx_status_t Bind(uint32_t slot, uint32_t vector, uint32_t options) final;
 
 protected:
     void MaskInterrupt(uint32_t vector) final;

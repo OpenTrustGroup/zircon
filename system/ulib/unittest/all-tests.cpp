@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <libgen.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <unittest/unittest.h>
 
+#include "watchdog.h"
+
 static test_case_element* test_case_list = nullptr;
 static test_case_element* failed_test_case_list = nullptr;
+
+static unittest_help_printer_type* print_test_help = nullptr;
 
 // Registers a test case with the unit test framework.
 void unittest_register_test_case(test_case_element* elem) {
@@ -17,6 +23,10 @@ void unittest_register_test_case(test_case_element* elem) {
 bool unittest_run_one_test(test_case_element* elem, test_type_t type) {
     utest_test_type = type;
     return elem->test_case(false, nullptr);
+}
+
+void unittest_register_test_help_printer(unittest_help_printer_type* func) {
+    print_test_help = func;
 }
 
 // Case name and test name are optional parameters that will cause only the
@@ -76,62 +86,83 @@ static bool unittest_run_all_tests_etc(const char* test_binary_name, test_type_t
     return n_failed == 0;
 }
 
-static void print_help() {
-    printf("Arguments: [--help] [--list] [--case <test_case>] [--test <test>]\n"
-           "\n"
-           "    --help\n"
-           "        Prints this screen and exits.\n"
-           "\n"
-           "    --list\n"
-           "        Prints the test names instead of running them.\n"
-           "\n"
-           "    --case <test_case>\n"
-           "        Only the tests from the matching test case will be run.\n"
-           "        <test_case> is case-sensitive; regex is not supported\n"
-           "\n"
-           "    --test <test>\n"
-           "        Only the tests from the matching test will be run\n"
-           "        <test> is case-sensitive; regex is not supported\n"
-           "\n"
-           "    v=<level>\n"
-           "        Set the unit test verbosity level to <level>\n"
-           "\n"
-           );
+static void print_help(const char* prog_name, FILE* f) {
+    fprintf(f, "Usage: %s [OPTIONS]\n", prog_name);
+    fprintf(f, "\nOptions:\n"
+            "  -h | --help\n"
+            "      Prints this text and exits.\n"
+            "\n"
+            "  --list\n"
+            "      Prints the test names instead of running them.\n"
+            "\n"
+            "  --case <test_case>\n"
+            "      Only the tests from the matching test case will be run.\n"
+            "      <test_case> is case-sensitive; regex is not supported\n"
+            "\n"
+            "  --test <test>\n"
+            "      Only the tests from the matching test will be run\n"
+            "      <test> is case-sensitive; regex is not supported\n"
+            "\n"
+            "  v=<level>\n"
+            "      Set the unit test verbosity level to <level>\n"
+            );
+    if (print_test_help) {
+        fprintf(f, "\nTest-specific options:\n");
+        print_test_help(f);
+    }
+    fprintf(f, "\n"
+            "Environment variables:\n"
+            "  %s=<types-mask>\n"
+            "      Specifies the types of tests to run.\n"
+            "      Must be the OR of the following values, in base 10:\n"
+            "        0x01 = small\n"
+            "        0x02 = medium\n"
+            "        0x04 = large\n"
+            "        0x08 = performance\n"
+            "      If unspecified then all tests are run.\n"
+            "\n"
+            "  %s=<timeout-in-seconds>\n"
+            "      Specifies the watchdog timeout, in seconds.\n"
+            "      A value of zero disables the watchdog.\n"
+            "      If unspecified then the timeout is %d seconds.\n",
+            TEST_ENV_NAME, WATCHDOG_ENV_NAME, WATCHDOG_DEFAULT_TIMEOUT_SECONDS);
 }
 
 /*
  * Runs all registered test cases.
  */
 bool unittest_run_all_tests(int argc, char** argv) {
+    const char* prog_name = basename(argv[0]);
     bool list_tests_only = false;
     const char* case_matcher = nullptr;
     const char* test_matcher = nullptr;
 
     int i = 1;
     while (i < argc) {
-        if (argv[i][0] == '-') {
+        const char* arg = argv[i];
+        if (arg[0] == '-') {
             // Got a switch.
-            if (strcmp(argv[i], "--help") == 0) {
-                // Specifying --help in any way prints the help and exits.
-                print_help();
-                return 0;
-            } else if (strcmp(argv[i], "--list") == 0) {
+            if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
+                // Specifying --help at any point prints the help and exits.
+                print_help(prog_name, stdout);
+                return true;
+            } else if (strcmp(arg, "--list") == 0) {
                 list_tests_only = true;
-            } else if (strcmp(argv[i], "--case") == 0) {
+            } else if (strcmp(arg, "--case") == 0) {
                 if (i + 1 >= argc) {
-                    print_help();
-                    return 1;
+                    fprintf(stderr, "Error: missing arg to %s\n", arg);
+                    return false;
                 }
                 case_matcher = argv[++i];
-            } else if (strcmp(argv[i], "--test") == 0) {
+            } else if (strcmp(arg, "--test") == 0) {
                 if (i + 1 >= argc) {
-                    print_help();
-                    return 0;
+                    fprintf(stderr, "Error: missing arg to %s\n", arg);
+                    return false;
                 }
                 test_matcher = argv[++i];
             }
-        } else if ((strlen(argv[i]) == 3) && (argv[i][0] == 'v') && (argv[i][1] == '=')) {
-            unittest_set_verbosity_level(argv[i][2] - '0');
+        } else if ((strlen(arg) == 3) && (arg[0] == 'v') && (arg[1] == '=')) {
+            unittest_set_verbosity_level(arg[2] - '0');
         } // Ignore other parameters
         i++;
     }
@@ -147,6 +178,25 @@ bool unittest_run_all_tests(int argc, char** argv) {
         test_type = static_cast<test_type_t>(atoi(test_type_str));
     }
 
-    return unittest_run_all_tests_etc(argv[0], test_type, case_matcher, test_matcher,
-                                      list_tests_only);
+    // Rely on the WATCHDOG_ENV_NAME environment variable to tell us
+    // the timeout to use.
+    const char* watchdog_timeout_str = getenv(WATCHDOG_ENV_NAME);
+    if (watchdog_timeout_str != nullptr) {
+        char* end;
+        long timeout = strtol(watchdog_timeout_str, &end, 0);
+        if (*watchdog_timeout_str == '\0' || *end != '\0' ||
+            timeout < 0 || timeout > INT_MAX) {
+            fprintf(stderr, "Error: bad watchdog timeout\n");
+            return false;
+        }
+        watchdog_set_timeout((int) timeout);
+    }
+
+    watchdog_initialize();
+
+    auto result = unittest_run_all_tests_etc(argv[0], test_type, case_matcher, test_matcher,
+                                             list_tests_only);
+
+    watchdog_terminate();
+    return result;
 }

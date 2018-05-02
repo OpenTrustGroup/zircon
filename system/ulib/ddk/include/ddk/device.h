@@ -33,6 +33,7 @@ typedef struct zx_protocol_device zx_protocol_device_t;
 
 // reboot modifiers
 #define DEVICE_SUSPEND_FLAG_REBOOT_BOOTLOADER   (DEVICE_SUSPEND_FLAG_REBOOT | 0x01)
+#define DEVICE_SUSPEND_FLAG_REBOOT_RECOVERY     (DEVICE_SUSPEND_FLAG_REBOOT | 0x02)
 
 //@doc(docs/ddk/device-ops.md)
 
@@ -228,6 +229,21 @@ zx_off_t device_get_size(zx_device_t* dev);
 zx_status_t device_ioctl(zx_device_t* dev, uint32_t op,
                          const void* in_buf, size_t in_len,
                          void* out_buf, size_t out_len, size_t* out_actual);
+
+// Device Metadata Support
+
+// retrieves metadata for a specific device
+// searches parent devices to find a match
+zx_status_t device_get_metadata(zx_device_t* dev, uint32_t type, void* buf, size_t buflen,
+                                size_t* actual);
+
+// adds metadata to a specific device
+zx_status_t device_add_metadata(zx_device_t* dev, uint32_t type, const void* data, size_t length);
+
+
+// adds metadata to be provided to future devices matching the specified topo path
+zx_status_t device_publish_metadata(zx_device_t* dev, const char* path, uint32_t type,
+                                    const void* data, size_t length);
 
 // Device State Change Functions
 //@ #### Device State Bits

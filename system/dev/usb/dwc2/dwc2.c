@@ -861,9 +861,7 @@ static int dwc_irq_thread(void* arg) {
 
     while (1) {
         zx_status_t wait_res;
-        uint64_t slots;
-
-        wait_res = zx_interrupt_wait(dwc->irq_handle, &slots);
+        wait_res = zx_interrupt_wait(dwc->irq_handle, NULL);
         if (wait_res != ZX_OK)
             zxlogf(ERROR, "dwc_usb: irq wait failed, retcode = %d\n", wait_res);
 
@@ -1284,6 +1282,10 @@ static void dwc_start_transfer(uint8_t chan, dwc_usb_transfer_request_t* req,
 
     if (transfer.packet_count == 0) {
         transfer.packet_count = 1;
+    } else if (req->usb_req->header.send_zlp &&
+                transfer.size % characteristics.max_packet_size == 0) {
+        // TODO: verify ZLP support once we have this driver running on hardware again
+        transfer.packet_count++;
     }
 
     req->bytes_queued = transfer.size;

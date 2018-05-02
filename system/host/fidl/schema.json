@@ -2,6 +2,7 @@
     "$schema": "http://json-schema.org/draft-04/schema#",
     "type": "object",
     "required": [
+        "version",
         "name",
         "const_declarations",
         "enum_declarations",
@@ -13,8 +14,11 @@
         "library_dependencies"
     ],
     "properties": {
+        "version": {
+            "$ref": "#/definitions/version"
+        },
         "name": {
-            "$ref": "#/definitions/identifier"
+            "$ref": "#/definitions/library-identifier"
         },
         "const_declarations": {
             "type": "array",
@@ -354,7 +358,7 @@
             ],
             "properties": {
                 "name": {
-                    "$ref": "#/definitions/identifier"
+                    "$ref": "#/definitions/library-identifier"
                 },
                 "declarations": {
                     "$ref": "#/definitions/declarations-map"
@@ -498,7 +502,7 @@
                 }
             }
         },
-        "attribute-list": {
+        "attributes-list": {
             "type": "array",
             "items": {
                 "$ref": "#/definitions/attribute"
@@ -760,16 +764,25 @@
         },
         "compound-identifier": {
             "type": "string",
-            "pattern": "([_A-Za-z][_A-Za-z0-9]*/)?([_A-Za-z][_A-Za-z0-9]*-)*[_A-Za-z][_A-Za-z0-9]*"
+            "pattern": "([_A-Za-z][_A-Za-z0-9]*-)*[_A-Za-z][_A-Za-z0-9]*/[_A-Za-z][_A-Za-z0-9]*"
         },
         "identifier": {
             "type": "string",
             "pattern": "^[_A-Za-z][_A-Za-z0-9]*$"
         },
+        "library-identifier": {
+            "type": "string",
+            "pattern": "([_A-Za-z][_A-Za-z0-9]*-)*[_A-Za-z][_A-Za-z0-9]*"
+        },
         "size": {
             "type": "integer",
             "minimum": 0,
             "maximum": 4294967295
+        },
+        "version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
         }
-    }
+    },
+    "additionalProperties": false
 }

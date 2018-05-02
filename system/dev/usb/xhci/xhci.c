@@ -15,10 +15,12 @@
 #include <threads.h>
 #include <unistd.h>
 
+#include "xdc.h"
 #include "xhci.h"
 #include "xhci-device-manager.h"
 #include "xhci-root-hub.h"
 #include "xhci-transfer.h"
+#include "xhci-util.h"
 
 #define ROUNDUP_TO(x, multiple) ((x + multiple - 1) & ~(multiple - 1))
 #define PAGE_ROUNDUP(x) ROUNDUP_TO(x, PAGE_SIZE)
@@ -46,14 +48,9 @@ int xhci_get_root_hub_index(xhci_t* xhci, uint32_t device_id) {
     return index;
 }
 
-static void xhci_read_extended_caps(xhci_t* xhci, volatile uint32_t* hccparams1) {
-    uint32_t offset = XHCI_GET_BITS32(hccparams1, HCCPARAMS1_EXT_CAP_PTR_START,
-                                      HCCPARAMS1_EXT_CAP_PTR_BITS);
-    if (!offset) return;
-    // offset is 32-bit words from MMIO base
-    uint32_t* cap_ptr = (uint32_t *)(xhci->mmio + (offset << 2));
-
-    while (cap_ptr) {
+static void xhci_read_extended_caps(xhci_t* xhci) {
+    uint32_t* cap_ptr = NULL;
+    while ((cap_ptr = xhci_get_next_ext_cap(xhci->mmio, cap_ptr, NULL))) {
         uint32_t cap_id = XHCI_GET_BITS32(cap_ptr, EXT_CAP_CAPABILITY_ID_START,
                                           EXT_CAP_CAPABILITY_ID_BITS);
 
@@ -106,10 +103,6 @@ static void xhci_read_extended_caps(xhci_t* xhci, volatile uint32_t* hccparams1)
         } else if (cap_id == EXT_CAP_USB_LEGACY_SUPPORT) {
             xhci->usb_legacy_support_cap = (xhci_usb_legacy_support_cap_t*)cap_ptr;
         }
-
-        // offset is 32-bit words from cap_ptr
-        offset = XHCI_GET_BITS32(cap_ptr, EXT_CAP_NEXT_PTR_START, EXT_CAP_NEXT_PTR_BITS);
-        cap_ptr = (offset ? cap_ptr + offset : NULL);
     }
 }
 
@@ -204,7 +197,7 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         result = ZX_ERR_NO_MEMORY;
         goto fail;
     }
-    xhci_read_extended_caps(xhci, hccparams1);
+    xhci_read_extended_caps(xhci);
 
     // We need to claim before we write to any other registers on the
     // controller, but after we've read the extended capabilities.
@@ -228,16 +221,27 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         goto fail;
     }
 
+    bool scratch_pad_is_contig = false;
     if (scratch_pad_bufs > 0) {
         // map scratchpad buffers read-only
-        uint32_t flags = xhci->page_size > PAGE_SIZE ?
-                            (IO_BUFFER_RO | IO_BUFFER_CONTIG) : IO_BUFFER_RO;
+        uint32_t flags = IO_BUFFER_RO;
+        if (xhci->page_size > PAGE_SIZE) {
+            flags |= IO_BUFFER_CONTIG;
+            scratch_pad_is_contig = true;
+        }
         size_t scratch_pad_pages_size = scratch_pad_bufs * xhci->page_size;
         result = io_buffer_init(&xhci->scratch_pad_pages_buffer, xhci->bti_handle,
                                 scratch_pad_pages_size, flags);
         if (result != ZX_OK) {
-            zxlogf(ERROR, "xhci_vmo_init failed for xhci->scratch_pad_pages_buffer\n");
+            zxlogf(ERROR, "io_buffer_init failed for xhci->scratch_pad_pages_buffer\n");
             goto fail;
+        }
+        if (!scratch_pad_is_contig) {
+            result = io_buffer_physmap(&xhci->scratch_pad_pages_buffer);
+            if (result != ZX_OK) {
+                zxlogf(ERROR, "io_buffer_physmap failed for xhci->scratch_pad_pages_buffer\n");
+                goto fail;
+            }
         }
         size_t scratch_pad_index_size = PAGE_ROUNDUP(scratch_pad_bufs * sizeof(uint64_t));
         result = io_buffer_init(&xhci->scratch_pad_index_buffer, xhci->bti_handle,
@@ -281,12 +285,14 @@ zx_status_t xhci_init(xhci_t* xhci, xhci_mode_t mode, uint32_t num_interrupts) {
         off_t offset = 0;
         for (uint32_t i = 0; i < scratch_pad_bufs; i++) {
             zx_paddr_t scratch_pad_phys;
-            result = io_buffer_physmap_range(&xhci->scratch_pad_pages_buffer, offset, PAGE_SIZE, 1,
-                                             &scratch_pad_phys);
-            if (result != ZX_OK) {
-                zxlogf(ERROR, "io_buffer_physmap failed for xhci->scratch_pad_pages_buffer\n");
-                goto fail;
+            if (scratch_pad_is_contig) {
+                scratch_pad_phys = io_buffer_phys(&xhci->scratch_pad_pages_buffer) + offset;
+            } else {
+                size_t index = offset / PAGE_SIZE;
+                size_t suboffset = offset & (PAGE_SIZE - 1);
+                scratch_pad_phys = xhci->scratch_pad_pages_buffer.phys_list[index] + suboffset;
             }
+
             scratch_pad_index[i] = scratch_pad_phys;
             offset += xhci->page_size;
         }
@@ -445,6 +451,13 @@ zx_status_t xhci_start(xhci_t* xhci) {
     xhci_wait_bits(usbsts, USBSTS_HCH, 0);
 
     xhci_start_device_thread(xhci);
+
+    // TODO(jocelyndang): start xdc in a new process.
+    zx_status_t status = xdc_bind(xhci->zxdev, xhci->bti_handle, xhci->mmio);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "xhci_start: xdc_bind failed %d\n", status);
+    }
+
     return ZX_OK;
 }
 

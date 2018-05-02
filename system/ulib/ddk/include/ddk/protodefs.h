@@ -38,6 +38,7 @@ DDK_PROTOCOL_DEF(USB_DEVICE,     'pUSD', "usb-device", 0)
 DDK_PROTOCOL_DEF(USB_FUNCTION,   'pUSF', "usb-function", 0)
 DDK_PROTOCOL_DEF(USB_HCI,        'pUHI', "usb-hci", 0)  // Host Controller Interface
 DDK_PROTOCOL_DEF(USB_MODE_SWITCH,'pUMS', "usb-mode-switch", 0)
+DDK_PROTOCOL_DEF(USB_DBC,        'pUDB', "usb-dbc", 0) // Debug Capability
 DDK_PROTOCOL_DEF(BT_HCI,         'pBHC', "bt-hci", 0)
 DDK_PROTOCOL_DEF(BT_TRANSPORT,   'pBTR', "bt-transport", 0)
 DDK_PROTOCOL_DEF(BT_HOST,        'pBTH', "bt-host", 0)
@@ -58,6 +59,7 @@ DDK_PROTOCOL_DEF(PTY,            'pPTY', "pty", 0)
 DDK_PROTOCOL_DEF(IHDA,           'pHDA', "intel-hda", 0)
 DDK_PROTOCOL_DEF(IHDA_CODEC,     'pIHC', "intel-hda-codec", 0)
 DDK_PROTOCOL_DEF(TEST,           'pTST', "test", 0)
+DDK_PROTOCOL_DEF(TEST_PARENT,    'pTSP', "test-parent", PF_NOPUB)
 DDK_PROTOCOL_DEF(PLATFORM_BUS,   'pPBU', "platform-bus", 0)
 DDK_PROTOCOL_DEF(PLATFORM_DEV,   'pPDV', "platform-dev", 0)
 DDK_PROTOCOL_DEF(I2C_HID,        'pIHD', "i2c-hid", 0)
@@ -66,6 +68,7 @@ DDK_PROTOCOL_DEF(SERIAL_IMPL,    'pSri', "serial-impl", 0)
 DDK_PROTOCOL_DEF(CLK,            'pCLK', "clock", 0)
 DDK_PROTOCOL_DEF(INTEL_GPU_CORE, 'pIGC', "intel-gpu-core", 0)
 DDK_PROTOCOL_DEF(IOMMU,          'pIOM', "iommu", 0)
+DDK_PROTOCOL_DEF(NAND,           'pNND', "nand", 0)
 // Protocol definition at garnet/magma/src/magma_util/platform/zircon/zircon_platform_ioctl.h
 DDK_PROTOCOL_DEF(GPU,            'pGPU', "gpu", 0)
 #undef DDK_PROTOCOL_DEF

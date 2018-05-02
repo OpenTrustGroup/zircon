@@ -34,64 +34,23 @@ inline async_task_t* NodeToTask(list_node_t* node) {
 inline void InsertTask(list_node_t* task_list, async_task_t* task) {
     list_node_t* node;
     for (node = task_list->prev; node != task_list; node = node->prev) {
-        if (task->deadline >= NodeToTask(node)->deadline)
-            break;
+        if (task->deadline >= NodeToTask(node)->deadline) break;
     }
     list_add_after(node, TaskToNode(task));
 }
-
-// async_t operations via those of the TestLoopDispatcher wrapper.
-zx_time_t test_now(async_t* async) {
-  return (static_cast<TestLoopDispatcher*>(async)->Now()).get();
-}
-
-zx_status_t test_begin_wait(async_t* async, async_wait_t* wait) {
-    return static_cast<TestLoopDispatcher*>(async)->BeginWait(wait);
-}
-
-zx_status_t test_cancel_wait(async_t* async, async_wait_t* wait) {
-    return static_cast<TestLoopDispatcher*>(async)->CancelWait(wait);
-}
-
-zx_status_t test_post_task(async_t* async, async_task_t* task) {
-    return static_cast<TestLoopDispatcher*>(async)->PostTask(task);
-}
-
-zx_status_t test_cancel_task(async_t* async, async_task_t* task) {
-    return static_cast<TestLoopDispatcher*>(async)->CancelTask(task);
-}
-
-zx_status_t test_queue_packet(async_t* async, async_receiver_t* receiver,
-                              const zx_packet_user_t* data) {
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
-zx_status_t test_set_guest_bell_trap(async_t* async, async_guest_bell_trap_t* trap) {
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
-const async_ops_t test_ops = {
-    .now = test_now,
-    .begin_wait = test_begin_wait,
-    .cancel_wait = test_cancel_wait,
-    .post_task = test_post_task,
-    .cancel_task = test_cancel_task,
-    .queue_packet = test_queue_packet,
-    .set_guest_bell_trap = test_set_guest_bell_trap,
-};
-
 } // namespace
 
-TestLoopDispatcher::TestLoopDispatcher(zx::time* current_time)
-    : async_t{&test_ops}, current_time_(current_time) {
-    ZX_DEBUG_ASSERT(current_time);
+TestLoopDispatcher::TestLoopDispatcher() {
     list_initialize(&wait_list_);
     list_initialize(&task_list_);
+    list_initialize(&due_list_);
     zx_status_t status = zx::port::create(0u, &port_);
     ZX_ASSERT_MSG(status == ZX_OK, "status=%d", status);
 }
 
-TestLoopDispatcher::~TestLoopDispatcher() = default;
+TestLoopDispatcher::~TestLoopDispatcher() {
+  Shutdown();
+};
 
 zx_status_t TestLoopDispatcher::BeginWait(async_wait_t* wait) {
     ZX_DEBUG_ASSERT(wait);
@@ -135,70 +94,138 @@ zx_status_t TestLoopDispatcher::CancelTask(async_task_t* task) {
     return ZX_OK;
 }
 
-zx_status_t TestLoopDispatcher::DispatchNextWait() {
-    zx_port_packet_t packet;
-    zx_status_t status = port_.wait(zx::time(0), &packet, 0);
-    if (status != ZX_OK) {
-        return status;
-    }
-    async_wait_t* wait = reinterpret_cast<async_wait_t*>(packet.key);
-    list_delete(WaitToNode(wait));
-    async_wait_result_t result = wait->handler(this, wait, status, &packet.signal);
-
-    if (result == ASYNC_WAIT_AGAIN) {
-        status = zx_object_wait_async(wait->object, port_.get(),
-                                      reinterpret_cast<uintptr_t>(wait),
-                                      wait->trigger, ZX_WAIT_ASYNC_ONCE);
-        if (status != ZX_OK) {
-            wait->handler(this, wait, status, NULL);
-            result = ASYNC_WAIT_FINISHED;
-        }
-    }
-
-    if (result == ASYNC_WAIT_AGAIN) {
-        list_add_head(&wait_list_, WaitToNode(wait));
-    }
-    return ZX_OK;
+void TestLoopDispatcher::AdvanceTimeTo(zx::time time) {
+  ZX_ASSERT_MSG(!is_dispatching_, "Cannot advance time while dispatching.");
+  if (current_time_ < time) {
+    current_time_ = time;
+  }
 }
 
-void TestLoopDispatcher::DispatchTasks() {
-    zx::time dispatch_time = *current_time_;
+bool TestLoopDispatcher::RunUntil(zx::time deadline) {
+  ZX_ASSERT(!is_dispatching_);
 
-    // Dequeue and dispatch one task at a time in case an earlier task wants
-    // to cancel a later task which has also come due.
-    list_node_t* node;
-    while ((node = list_peek_head(&task_list_))) {
-        async_task_t* task = NodeToTask(node);
-        if (task->deadline > current_time_->get()) {
-            break;
-        }
-        list_delete(node);
+  bool did_work = false;
+  for (;;) {
+    bool ran_handler = false;
+    is_dispatching_ = true;
 
-        // Invoke the handler. Note that it might destroy itself.
-        async_task_result_t result = task->handler(this, task, ZX_OK);
-        if (result == ASYNC_TASK_REPEAT) {
-            InsertTask(&task_list_, task);
-        }
+    if (has_quit_) break;
+    ran_handler |= DispatchPendingTasks();
+    did_work |= ran_handler;
+
+    if (has_quit_) break;
+    ran_handler |= DispatchPendingWaits();
+    did_work |= ran_handler;
+
+    if (ran_handler) continue;
+    is_dispatching_ = false;
+
+    zx::time next_due_time = GetNextTaskDueTime();
+    if (next_due_time > deadline) {
+     AdvanceTimeTo(deadline);
+     break;
     }
+    AdvanceTimeTo(next_due_time);
+  }
+  is_dispatching_ = false;
+  has_quit_ = false;
+  return did_work;
+}
 
-    // The following check fails when a task captures the TestLoop and advances
-    // time. For one thing, this prevents the prospect of an infinte run.
-    ZX_ASSERT(dispatch_time == *current_time_);
+zx::time TestLoopDispatcher::GetNextTaskDueTime() {
+  list_node_t* node = list_peek_head(&task_list_);
+  if (!node) {
+    return zx::time::infinite();
+  }
+  return zx::time(NodeToTask(node)->deadline);
+}
+
+bool TestLoopDispatcher::DispatchPendingWaits() {
+    // First, enqueue a user packet into |port_| to mark the tail of the waits
+    // queued at the time of this method call.
+    // Set the key of this packet to |wait_id|, to uniquely identify this packet
+    // from others that might be left queued at the port from previous iterations
+    // that prematurely broke due to a quit.
+    zx_port_packet_t user_packet{};
+    user_packet.key = wait_id_;
+    user_packet.type = ZX_PKT_TYPE_USER;
+    ZX_ASSERT(ZX_OK == port_.queue(&user_packet, 1u));
+
+    bool did_work = false;
+    for (;;) {
+        if (has_quit_) break;
+
+        zx_port_packet_t packet;
+        // Grace of the user packet, |port_| should always have a queued wait.
+        ZX_ASSERT(ZX_OK == port_.wait(zx::time(0), &packet, 1));
+        if (packet.type == ZX_PKT_TYPE_USER) {
+          if (packet.key == wait_id_) {
+              // The packet is one we queued at the beginning of this call:
+              // all pending waits have been dispatched.
+              break;
+          } else {
+              // The packet is a leftover from a previously quit iteration:
+              // carry on.
+              continue;
+          }
+        }
+
+        async_wait_t* wait = reinterpret_cast<async_wait_t*>(packet.key);
+        list_delete(WaitToNode(wait));
+        wait->handler(this, wait, ZX_OK, &packet.signal);
+        did_work = true;
+    }
+    ++wait_id_;
+    return did_work;
+}
+
+bool TestLoopDispatcher::DispatchPendingTasks() {
+  ExtractDueTasks();
+
+  // Dequeue and dispatch due tasks one at a time.
+  bool did_work = false;
+  list_node_t* node;
+  while ((node = list_peek_head(&due_list_))) {
+      if (has_quit_) break;
+      list_delete(node);
+      async_task_t* task = NodeToTask(node);
+      task->handler(this, task, ZX_OK);
+      did_work = true;
+  }
+  return did_work;
+}
+
+void TestLoopDispatcher::ExtractDueTasks() {
+  list_node_t* node;
+  list_node_t* tail = NULL;
+  list_for_every(&task_list_, node) {
+      if (NodeToTask(node)->deadline > current_time_.get()) break;
+      tail = node;
+  }
+  if (tail) {
+      list_node_t* head = task_list_.next;
+      task_list_.next = tail->next;
+      tail->next->prev = &task_list_;
+      due_list_.next = head;
+      head->prev = &due_list_;
+      due_list_.prev = tail;
+      tail->next = &due_list_;
+  }
 }
 
 void TestLoopDispatcher::Shutdown() {
     list_node_t* node;
     while ((node = list_remove_head(&wait_list_))) {
         async_wait_t* wait = NodeToWait(node);
-        if (wait->flags & ASYNC_FLAG_HANDLE_SHUTDOWN) {
-            wait->handler(this, wait, ZX_ERR_CANCELED, NULL);
-        }
+        wait->handler(this, wait, ZX_ERR_CANCELED, NULL);
+    }
+    while ((node = list_remove_head(&due_list_))) {
+        async_task_t* task = NodeToTask(node);
+        task->handler(this, task, ZX_ERR_CANCELED);
     }
     while ((node = list_remove_head(&task_list_))) {
         async_task_t* task = NodeToTask(node);
-        if (task->flags & ASYNC_FLAG_HANDLE_SHUTDOWN) {
-            task->handler(this, task, ZX_ERR_CANCELED);
-        }
+        task->handler(this, task, ZX_ERR_CANCELED);
     }
 }
 

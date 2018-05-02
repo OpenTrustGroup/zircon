@@ -99,6 +99,8 @@ static display_protocol_ops_t vc_display_proto = {
 static void display_release(void* ctx) {
     vim2_display_t* display = ctx;
 
+    gpio_release_interrupt(&display->gpio, 0);
+    zx_handle_close(display->inth);
     if (display) {
         io_buffer_release(&display->mmio_preset);
         io_buffer_release(&display->mmio_hdmitx);
@@ -215,8 +217,11 @@ static zx_status_t setup_hdmi(vim2_display_t* display)
     display->disp_info.format = ZX_PIXEL_FORMAT_RGB_x888;
     display->disp_info.width  = display->p->timings.hactive;
     display->disp_info.height = display->p->timings.vactive;
-    display->disp_info.stride = display->p->timings.hactive;
     display->disp_info.pixelsize = ZX_PIXEL_FORMAT_BYTES(display->disp_info.format);
+    // The vim2 display controller needs buffers with a stride that is an even
+    // multiple of 32.
+    display->disp_info.stride = ROUNDUP(display->p->timings.hactive,
+                                        32 / display->disp_info.pixelsize);
 
     status = io_buffer_init(&display->fbuffer, display->bti,
                             (display->disp_info.stride * display->disp_info.height *
@@ -265,48 +270,59 @@ static zx_status_t setup_hdmi(vim2_display_t* display)
     return ZX_OK;
 }
 
+static int hdmi_irq_handler(void *arg) {
+    vim2_display_t* display = arg;
+    zx_status_t status;
+    while(1) {
+        status = zx_interrupt_wait(display->inth, NULL);
+        if (status != ZX_OK) {
+            DISP_ERROR("Waiting in Interrupt failed %d\n", status);
+            return -1;
+        }
+        usleep(500000);
+        uint8_t hpd;
+        status = gpio_read(&display->gpio, 0, &hpd);
+        if (status != ZX_OK) {
+            DISP_ERROR("gpio_read failed HDMI HPD\n");
+        }
+        if(hpd & !display->hdmi_inited) {
+            if (setup_hdmi(display) == ZX_OK) {
+                display->hdmi_inited = true;
+                DISP_ERROR("Display is connected\n");
+                gpio_set_polarity(&display->gpio, 0, GPIO_POLARITY_LOW);
+            }
+        } else if (display->hdmi_inited) {
+            DISP_ERROR("Display Disconnected!\n");
+            hdmi_shutdown(display);
+            io_buffer_release(&display->fbuffer);
+            device_remove(display->fbdevice);
+            display->hdmi_inited = false;
+            gpio_set_polarity(&display->gpio, 0, GPIO_POLARITY_HIGH);
+        }
+    }
+    return 0;
+}
+
 static int main_hdmi_thread(void *arg)
 {
     vim2_display_t* display = arg;
-    static bool hdmi_inited = false;
-    static bool print_once = true;
-    uint8_t hpd_val;
-
-    if (gpio_config(&display->gpio, 0, GPIO_DIR_IN) != ZX_OK) {
-        DISP_ERROR("Invalid HPD Pin!! Will try and connect to display anyways\n");
-        // try once
-        setup_hdmi(display);
-        return ZX_OK;
+    zx_status_t status;
+    status = gpio_config(&display->gpio, 0, GPIO_DIR_IN | GPIO_PULL_DOWN);
+    if (status!= ZX_OK) {
+        DISP_ERROR("gpio_config failed for gpio\n");
+        return status;
     }
 
-    while (1) {
-        // check HPD GPIO Pins
-        gpio_read(&display->gpio, 0, &hpd_val);
-
-        if (hpd_val == 0) {
-            if (print_once) {
-                DISP_ERROR("No Display Connected. Will try again later\n");
-                print_once = false;
-            }
-            if (hdmi_inited) {
-                // let's shutdown hdmi
-                DISP_ERROR("Display Disconnected!\n");
-                hdmi_shutdown(display);
-                io_buffer_release(&display->fbuffer);
-                device_remove(display->fbdevice);
-                hdmi_inited = false;
-            }
-        } else {
-            if (!hdmi_inited) {
-                DISP_ERROR("Display is connected\n");
-                if (setup_hdmi(display) != ZX_OK) {
-                    return ZX_ERR_UNAVAILABLE;
-                }
-                hdmi_inited = true;
-            }
-        }
-        usleep(500000); // sleep with 500ms
+    status = gpio_get_interrupt(&display->gpio, 0,
+                       ZX_INTERRUPT_MODE_LEVEL_HIGH,
+                       &display->inth);
+    if (status != ZX_OK) {
+        DISP_ERROR("gpio_get_interrupt failed for gpio\n");
+        return status;
     }
+
+    thrd_create_with_name(&display->main_thread, hdmi_irq_handler, display, "hdmi_irq_handler thread");
+    return ZX_OK;
 }
 
 zx_status_t vim2_display_bind(void* ctx, zx_device_t* parent) {

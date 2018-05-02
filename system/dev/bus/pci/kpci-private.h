@@ -44,11 +44,6 @@ typedef enum {
     PCI_OP_MAX,
 } pci_op_t;
 
-extern _Atomic zx_txid_t pci_global_txid;
-static inline uint32_t pci_next_txid(void) {
-    return atomic_fetch_add(&pci_global_txid, 1);
-}
-
 typedef struct {
     uint16_t offset;
     uint16_t width;
@@ -67,7 +62,7 @@ typedef struct {
 
 #define PCI_MAX_DATA 4096
 typedef struct {
-    zx_txid_t txid; // FIDL2 message header
+    zx_txid_t txid; // FIDL message header
     uint32_t reserved0;
     uint32_t flags;
     uint32_t ordinal;

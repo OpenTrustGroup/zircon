@@ -20,12 +20,13 @@
 #ifdef __Fuchsia__
 #include <lib/async/dispatcher.h>
 #include <fdio/io.h>
-#include <zx/channel.h>
-#include <zx/event.h>
-#include <zx/vmo.h>
+#include <lib/zx/channel.h>
+#include <lib/zx/event.h>
+#include <lib/zx/vmo.h>
 #include <fbl/mutex.h>
 #endif // __Fuchsia__
 
+#include <fbl/function.h>
 #include <fbl/intrusive_double_list.h>
 #include <fbl/macros.h>
 #include <fbl/ref_counted.h>
@@ -128,6 +129,16 @@ public:
     void SetReadonly(bool value) __TA_EXCLUDES(vfs_lock_);
 
 #ifdef __Fuchsia__
+    // Unmounts the underlying filesystem.
+    using ShutdownCallback = fbl::Function<void(zx_status_t status)>;
+    virtual void Shutdown(ShutdownCallback closure);
+
+    // Identifies if the filesystem is in the process of terminating.
+    // May be checked by active connections, which, upon reading new
+    // port packets, should ignore them and close immediately.
+    virtual bool IsTerminating() const;
+
+
     void TokenDiscard(zx::event ios_token) __TA_EXCLUDES(vfs_lock_);
     zx_status_t VnodeToToken(fbl::RefPtr<Vnode> vn, zx::event* ios_token,
                              zx::event* out) __TA_EXCLUDES(vfs_lock_);
@@ -143,7 +154,7 @@ public:
     Vfs(async_t* async);
 
     async_t* async() { return async_; }
-    void set_async(async_t* async) { async_ = async; }
+    void SetAsync(async_t* async) { async_ = async; }
 
     // Begins serving VFS messages over the specified connection.
     zx_status_t ServeConnection(fbl::unique_ptr<Connection> connection) __TA_EXCLUDES(vfs_lock_);
@@ -233,8 +244,8 @@ protected:
     // Starts tracking the lifetime of the connection.
     virtual void RegisterConnection(fbl::unique_ptr<Connection> connection);
 
-    // Stops tracking the lifetime of the connection and destroys it.
-    virtual void UnregisterAndDestroyConnection(Connection* connection);
+    // Stops tracking the lifetime of the connection.
+    virtual void UnregisterConnection(Connection* connection);
 
 #endif // ifdef __Fuchsia__
 };

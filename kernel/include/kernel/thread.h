@@ -157,26 +157,40 @@ typedef struct thread {
     thread_start_routine entry;
     void* arg;
 
-    /* Indicates whether a debugger is single stepping this thread. */
-    bool single_step;
-
     /* return code */
     int retcode;
     struct wait_queue retcode_wait_queue;
 
-    /* Preemption of the thread is disabled while this counter is non-zero.
+    /* disable_counts contains two fields:
      *
-     * The preempt_disable field is modified by interrupt handlers, but it
-     * is always restored to its original value before the interrupt
-     * handler returns, so modifications are not visible to the interrupted
-     * thread.  Despite that, "volatile" is still technically needed.
-     * Otherwise the compiler is technically allowed to compile
-     * "++thread->preempt_disable" into code that stores a junk value into
+     *  * Bottom 16 bits: the preempt_disable counter.  See
+     *    thread_preempt_disable().
+     *  * Top 16 bits: the resched_disable counter.  See
+     *    thread_resched_disable().
+     *
+     * This is a single field so that both counters can be compared against
+     * zero with a single memory access and comparison.
+     *
+     * disable_counts is modified by interrupt handlers, but it is always
+     * restored to its original value before the interrupt handler returns,
+     * so modifications are not visible to the interrupted thread.  Despite
+     * that, "volatile" is still technically needed.  Otherwise the
+     * compiler is technically allowed to compile
+     * "++thread->disable_counts" into code that stores a junk value into
      * preempt_disable temporarily. */
-    volatile uint32_t preempt_disable;
-    /* This tracks whether a thread reschedule is pending.  This is
-     * volatile because it can get set from true to false asynchronously by
-     * an interrupt handler. */
+    volatile uint32_t disable_counts;
+
+    /* preempt_pending tracks whether a thread reschedule is pending.
+     *
+     * This is volatile because it can be changed asynchronously by an
+     * interrupt handler: If preempt_disable is set, an interrupt handler
+     * may change this from false to true.  Otherwise, if resched_disable
+     * is set, an interrupt handler may change this from true to false.
+     *
+     * preempt_pending should only be true:
+     *  * if preempt_disable or resched_disable are non-zero, or
+     *  * after preempt_disable or resched_disable have been decremented,
+     *    while preempt_pending is being checked. */
     volatile bool preempt_pending;
 
     /* thread local storage, intialized to zero */
@@ -219,11 +233,11 @@ void thread_secondary_cpu_entry(void) __NO_RETURN;
 void thread_construct_first(thread_t* t, const char* name);
 thread_t* thread_create_idle_thread(uint cpu_num);
 void thread_set_name(const char* name);
-void thread_set_priority(int priority);
+void thread_set_priority(thread_t* t, int priority);
 void thread_set_user_callback(thread_t* t, thread_user_callback_t cb);
 thread_t* thread_create(const char* name, thread_start_routine entry, void* arg, int priority, size_t stack_size);
 thread_t* thread_create_etc(thread_t* t, const char* name, thread_start_routine entry, void* arg, int priority, void* stack, void* unsafe_stack, size_t stack_size, thread_trampoline_routine alt_trampoline);
-zx_status_t thread_resume(thread_t*);
+void thread_resume(thread_t*);
 zx_status_t thread_suspend(thread_t*);
 void thread_signal_policy_exception(void);
 void thread_exit(int retcode) __NO_RETURN;
@@ -350,31 +364,95 @@ static inline void tls_set_callback(uint entry, thread_tls_callback_t cb) {
 
 void thread_check_preempt_pending(void);
 
-/* thread_preempt_disable() disables preempting the current thread until
- * thread_preempt_reenable() is called.  During this time, any call to
- * sched_reschedule() will only record that a reschedule is pending, and
- * won't do a context switch.
+static inline uint32_t thread_preempt_disable_count(void) {
+    return get_current_thread()->disable_counts & 0xffff;
+}
+
+static inline uint32_t thread_resched_disable_count(void) {
+    return get_current_thread()->disable_counts >> 16;
+}
+
+/* thread_preempt_disable() increments the preempt_disable counter for the
+ * current thread.  While preempt_disable is non-zero, preemption of the
+ * thread is disabled, including preemption from interrupt handlers.
+ * During this time, any call to thread_reschedule() or sched_reschedule()
+ * will only record that a reschedule is pending, and won't do a context
+ * switch.
  *
  * Note that this does not disallow blocking operations
  * (e.g. mutex_acquire()).  Disabling preemption does not prevent switching
- * away from the current thread if it blocks. */
+ * away from the current thread if it blocks.
+ *
+ * A call to thread_preempt_disable() must be matched by a later call to
+ * thread_preempt_reenable() to decrement the preempt_disable counter. */
 static inline void thread_preempt_disable(void) {
+    DEBUG_ASSERT(thread_preempt_disable_count() < 0xffff);
+
     thread_t* current_thread = get_current_thread();
     atomic_signal_fence();
-    ++current_thread->preempt_disable;
+    ++current_thread->disable_counts;
     atomic_signal_fence();
 }
 
-/* thread_preempt_reenable() re-enables preempting the current thread,
- * following a call to thread_preempt_disable(). */
+/* thread_preempt_reenable() decrements the preempt_disable counter.  See
+ * thread_preempt_disable(). */
 static inline void thread_preempt_reenable(void) {
-    DEBUG_ASSERT(!arch_ints_disabled());
     DEBUG_ASSERT(!arch_in_int_handler());
+    DEBUG_ASSERT(thread_preempt_disable_count() > 0);
 
     thread_t* current_thread = get_current_thread();
-    DEBUG_ASSERT(current_thread->preempt_disable > 0);
     atomic_signal_fence();
-    uint32_t new_count = --current_thread->preempt_disable;
+    uint32_t new_count = --current_thread->disable_counts;
+    atomic_signal_fence();
+
+    if (new_count == 0)
+        thread_check_preempt_pending();
+}
+
+/* This is the same as thread_preempt_reenable(), except that it does not
+ * check for any pending reschedules.  This is useful in interrupt handlers
+ * when we know that no reschedules should have become pending since
+ * calling thread_preempt_disable(). */
+static inline void thread_preempt_reenable_no_resched(void) {
+    DEBUG_ASSERT(thread_preempt_disable_count() > 0);
+
+    thread_t* current_thread = get_current_thread();
+    atomic_signal_fence();
+    --current_thread->disable_counts;
+    atomic_signal_fence();
+}
+
+/* thread_resched_disable() increments the resched_disable counter for the
+ * current thread.  When resched_disable is non-zero, preemption of the
+ * thread from outside interrupt handlers is disabled.  However, interrupt
+ * handlers may still preempt the thread.
+ *
+ * This is a weaker version of thread_preempt_disable().
+ *
+ * As with preempt_disable, blocking operations are still allowed while
+ * resched_disable is non-zero.
+ *
+ * A call to thread_resched_disable() must be matched by a later call to
+ * thread_resched_reenable() to decrement the preempt_disable counter. */
+static inline void thread_resched_disable(void) {
+    DEBUG_ASSERT(thread_resched_disable_count() < 0xffff);
+
+    thread_t* current_thread = get_current_thread();
+    atomic_signal_fence();
+    current_thread->disable_counts += 1 << 16;
+    atomic_signal_fence();
+}
+
+/* thread_resched_reenable() decrements the preempt_disable counter.  See
+ * thread_resched_disable(). */
+static inline void thread_resched_reenable(void) {
+    DEBUG_ASSERT(!arch_in_int_handler());
+    DEBUG_ASSERT(thread_resched_disable_count() > 0);
+
+    thread_t* current_thread = get_current_thread();
+    atomic_signal_fence();
+    uint32_t new_count = current_thread->disable_counts - (1 << 16);
+    current_thread->disable_counts = new_count;
     atomic_signal_fence();
 
     if (new_count == 0)
@@ -393,7 +471,7 @@ static inline void thread_preempt_set_pending(void) {
     DEBUG_ASSERT(arch_ints_disabled());
     DEBUG_ASSERT(arch_in_int_handler());
     thread_t* current_thread = get_current_thread();
-    DEBUG_ASSERT(current_thread->preempt_disable);
+    DEBUG_ASSERT(thread_preempt_disable_count() > 0);
 
     current_thread->preempt_pending = true;
 }
@@ -418,6 +496,49 @@ public:
 
 private:
     spin_lock_saved_state_t state_;
+};
+
+// AutoReschedDisable is an RAII helper for disabling rescheduling
+// using thread_resched_disable()/thread_resched_reenable().
+//
+// A typical use case is when we wake another thread while holding a
+// mutex.  If the other thread is likely to claim the same mutex when
+// runs (either immediately or later), then it is useful to defer
+// waking the thread until after we have released the mutex.  We can
+// do that by disabling rescheduling while holding the lock.  This is
+// beneficial when there are no free CPUs for running the woken thread
+// on.
+//
+// Example usage:
+//
+//   AutoReschedDisable resched_disable;
+//   AutoLock al(&lock_);
+//   // Do some initial computation...
+//   resched_disable.Disable();
+//   // Possibly wake another thread...
+//
+// The AutoReschedDisable must be placed before the AutoLock to ensure that
+// rescheduling is re-enabled only after releasing the mutex.
+class AutoReschedDisable {
+public:
+    AutoReschedDisable() {}
+    ~AutoReschedDisable() {
+        if (started_) {
+            thread_resched_reenable();
+        }
+    }
+
+    void Disable() {
+        if (!started_) {
+            thread_resched_disable();
+            started_ = true;
+        }
+    }
+
+    DISALLOW_COPY_ASSIGN_AND_MOVE(AutoReschedDisable);
+
+private:
+    bool started_ = false;
 };
 
 #endif // __cplusplus
