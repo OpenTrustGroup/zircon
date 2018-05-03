@@ -168,7 +168,20 @@ boot_shim_return_t boot_shim(void* device_tree) {
     // We will do this relocation after we are done appending new bootdata items.
     bool relocate_kernel = (bootdata != NULL);
 
-#if HAS_DEVICE_TREE
+#if HAS_EXTERNAL_BOOTDATA
+    // find our bootdata first
+    if (!bootdata) {
+        if (device_tree) {
+            bootdata = (bootdata_t*)device_tree;
+            if (bootdata->type != BOOTDATA_CONTAINER || bootdata->extra != BOOTDATA_MAGIC ||
+                bootdata->magic != BOOTITEM_MAGIC) {
+                fail("bad magic for external bootdata\n");
+            }
+        } else {
+            fail("could not find external bootdata\n");
+        }
+    }
+#elif HAS_DEVICE_TREE
     // Parse the Linux device tree to find our bootdata, kernel command line and RAM size
     device_tree_context_t ctx;
     ctx.node = NODE_NONE;
