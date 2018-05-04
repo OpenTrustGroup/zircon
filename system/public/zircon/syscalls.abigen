@@ -762,7 +762,7 @@ syscall job_set_relative_importance
 
 # SMC
 syscall smc_create
-    (options: uint32_t)
+    (options: uint32_t, buffer: any[len] OUT, len: uint32_t)
     returns (zx_status_t, smc_out: zx_handle_t handle_acquire,
         vmo_out: zx_handle_t handle_acquire);
 

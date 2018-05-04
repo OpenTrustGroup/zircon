@@ -4,6 +4,7 @@
 // found in the LICENSE file.
 
 #include <assert.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -20,7 +21,14 @@ static bool smc_create_test(void) {
 
     zx_handle_t smc_handle;
     zx_handle_t shm_vmo_handle;
-    ASSERT_EQ(zx_smc_create(0, &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    zx_info_smc_t smc_info = {};
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+
+    EXPECT_GT(smc_info.ns_shm.base_phys, (uint32_t)0, "ns-shm pa should not be zero");
+    EXPECT_GT(smc_info.ns_shm.size, (uint32_t)0, "ns-shm size should not be zero");
+    EXPECT_EQ(smc_info.ns_shm.base_phys % PAGE_SIZE, (uint32_t)0, "ns-shm pa should be page aligned");
+    EXPECT_EQ(smc_info.ns_shm.size % PAGE_SIZE, (uint32_t)0, "ns-shm size should be page aligned");
+    EXPECT_EQ(smc_info.ns_shm.use_cache, (bool)true, "default ns-shm cache policy is enabled");
 
     zx_info_handle_basic_t info = {};
     zx_status_t status = zx_object_get_info(smc_handle, ZX_INFO_HANDLE_BASIC, &info, sizeof(info), NULL, NULL);
@@ -47,9 +55,10 @@ static bool smc_create_multiple_test(void) {
     zx_handle_t shm_vmo_handle1;
     zx_handle_t smc_handle2;
     zx_handle_t shm_vmo_handle2;
-    ASSERT_EQ(zx_smc_create(0, &smc_handle1, &shm_vmo_handle1), ZX_OK,
+    zx_info_smc_t smc_info = {};
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle1, &shm_vmo_handle1), ZX_OK,
             "failed to create smc object");
-    ASSERT_EQ(zx_smc_create(0, &smc_handle2, &shm_vmo_handle2), ZX_ERR_BAD_STATE,
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle2, &shm_vmo_handle2), ZX_ERR_BAD_STATE,
             "smc object can not create twice");
 
     EXPECT_EQ(zx_handle_close(smc_handle1), ZX_OK, "failed to close smc handle");
@@ -63,7 +72,8 @@ static bool smc_handle_request_test(void) {
 
     zx_handle_t smc_handle;
     zx_handle_t shm_vmo_handle;
-    ASSERT_EQ(zx_smc_create(0, &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    zx_info_smc_t smc_info = {};
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
 
     /* trigger fake smc request from smc kernel object */
     ASSERT_EQ(zx_object_signal(smc_handle, 0, ZX_SMC_FAKE_REQUEST), ZX_OK,
@@ -97,19 +107,20 @@ static bool smc_shm_vmo_basic_test(void) {
 
     zx_handle_t smc_handle;
     zx_handle_t shm_vmo_handle;
-    ASSERT_EQ(zx_smc_create(0, &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    zx_info_smc_t smc_info = {};
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
 
-    zx_info_handle_basic_t info = {};
-    zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &info, sizeof(info), NULL, NULL);
+    zx_info_handle_basic_t basic_info = {};
+    zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &basic_info, sizeof(basic_info), NULL, NULL);
     ASSERT_EQ(status, ZX_OK, "handle should be valid");
 
     const zx_rights_t expected_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP;
 
-    EXPECT_GT(info.koid, 0ULL, "object id should be positive");
-    EXPECT_EQ(info.type, (uint32_t)ZX_OBJ_TYPE_VMO, "handle should be an vmo");
-    EXPECT_EQ(info.rights, expected_rights, "wrong set of rights");
-    EXPECT_EQ(info.props, (uint32_t)ZX_OBJ_PROP_WAITABLE, "should have waitable property");
-    EXPECT_EQ(info.related_koid, 0ULL, "vmo don't have associated koid");
+    EXPECT_GT(basic_info.koid, 0ULL, "object id should be positive");
+    EXPECT_EQ(basic_info.type, (uint32_t)ZX_OBJ_TYPE_VMO, "handle should be an vmo");
+    EXPECT_EQ(basic_info.rights, expected_rights, "wrong set of rights");
+    EXPECT_EQ(basic_info.props, (uint32_t)ZX_OBJ_PROP_WAITABLE, "should have waitable property");
+    EXPECT_EQ(basic_info.related_koid, 0ULL, "vmo don't have associated koid");
 
     zx_handle_t dup_handle;
     ASSERT_EQ(zx_handle_duplicate(shm_vmo_handle, ZX_RIGHT_SAME_RIGHTS, &dup_handle),
@@ -127,11 +138,10 @@ static bool smc_shm_vmo_write_test(void) {
 
     zx_handle_t smc_handle;
     zx_handle_t shm_vmo_handle;
-    ASSERT_EQ(zx_smc_create(0, &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    zx_info_smc_t smc_info = {};
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
 
-    uint64_t vmo_size = 0;
-    ASSERT_EQ(zx_vmo_get_size(shm_vmo_handle, &vmo_size), ZX_OK, "failed to get vmo size");
-    ASSERT_EQ(vmo_size, 0x500000UL, "default shm size is 5MB");
+    size_t vmo_size = smc_info.ns_shm.size;
 
     uintptr_t virt;
     ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(), 0, shm_vmo_handle, 0, vmo_size,
@@ -167,11 +177,10 @@ static bool smc_shm_vmo_read_test(void) {
 
     zx_handle_t smc_handle;
     zx_handle_t shm_vmo_handle;
-    ASSERT_EQ(zx_smc_create(0, &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    zx_info_smc_t smc_info = {};
+    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
 
-    uint64_t vmo_size = 0;
-    ASSERT_EQ(zx_vmo_get_size(shm_vmo_handle, &vmo_size), ZX_OK, "failed to get vmo size");
-    ASSERT_EQ(vmo_size, 0x500000UL, "default shm size is 5MB");
+    size_t vmo_size = smc_info.ns_shm.size;
 
     uintptr_t virt;
     ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(), 0, shm_vmo_handle, 0, vmo_size,
