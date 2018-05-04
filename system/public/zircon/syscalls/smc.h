@@ -22,7 +22,7 @@
  */
 #pragma once
 
-#include "smc_defs.h"
+#include <zircon/syscalls/smc_defs.h>
 #include <zircon/types.h>
 
 __BEGIN_CDECLS
