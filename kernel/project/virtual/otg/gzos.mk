@@ -35,7 +35,6 @@ MODULES += \
     system/uapp/runtests \
     system/ulib/syslog \
     system/ulib/virtio \
-    system/ulib/hid \
     third_party/uapp/dash \
 
 MODULES += \
