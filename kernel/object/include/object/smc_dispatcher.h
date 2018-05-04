@@ -13,11 +13,8 @@
 
 #include <fbl/canary.h>
 #include <fbl/mutex.h>
+#include <zircon/syscalls/object.h>
 #include <zircon/syscalls/smc.h>
-
-#if WITH_LIB_SM
-#include <lib/sm.h>
-#endif
 
 class SmcObserver : public StateObserver {
 public:
@@ -55,9 +52,10 @@ public:
     /* called by smc service via syscalls */
     zx_status_t WaitForRequest(smc32_args_t* args);
     zx_status_t SetResult(long result);
+    zx_info_smc_t GetSmcInfo();
 
 private:
-    explicit SmcDispatcher(uint32_t options);
+    explicit SmcDispatcher(uint32_t options, zx_info_smc_t info);
 
     fbl::Canary<fbl::magic("SMCD")> canary_;
 
@@ -66,4 +64,5 @@ private:
     long smc_result TA_GUARDED(get_lock());
     event_t request_event_;
     event_t result_event_;
+    zx_info_smc_t smc_info;
 };

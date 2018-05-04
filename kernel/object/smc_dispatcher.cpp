@@ -26,6 +26,7 @@
 
 #define LOCAL_TRACE 0
 #if WITH_LIB_SM
+#include <lib/sm.h>
 #define ENABLE_SMC_TEST 1
 #endif
 
@@ -45,13 +46,13 @@ static bool generate_fake_smc() {
     return (result != (long)smc_args.smc_nr) ? true : false;
 }
 
-static void* map_shm(ns_shm_info_t* shm_info) {
+static void* map_shm(zx_info_smc_t* smc_info) {
     void* shm_vaddr = nullptr;
 
     /* TODO(james): share memory should be mapped as non-secure in page table */
     zx_status_t status = VmAspace::kernel_aspace()->AllocPhysical(
-            "smc_ns_shm", shm_info->size, &shm_vaddr, PAGE_SIZE_SHIFT,
-            static_cast<paddr_t>(shm_info->pa), VmAspace::VMM_FLAG_COMMIT,
+            "smc_ns_shm", smc_info->ns_shm_size, &shm_vaddr, PAGE_SIZE_SHIFT,
+            static_cast<paddr_t>(smc_info->ns_shm_base_phys), VmAspace::VMM_FLAG_COMMIT,
             ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE /*| ARCH_MMU_FLAG_NS*/);
     if (status != ZX_OK) {
         TRACEF("failed to map shm into kernel address space, status %d\n", status);
@@ -68,16 +69,15 @@ static void unmap_shm(void* va) {
 
 static bool write_shm() {
     bool is_fail = false;
-    ns_shm_info_t shm_info = {};
-    sm_get_shm_config(&shm_info);
+    zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
 
-    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
+    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&smc_info));
     if (shm_va == nullptr) {
         is_fail = true;
         goto exit;
     }
 
-    for (size_t i = 0; i < shm_info.size; i++) {
+    for (size_t i = 0; i < smc_info.ns_shm_size; i++) {
         shm_va[i] = static_cast<uint8_t>((i & 0xff) ^ 0xaa);
     }
 
@@ -88,16 +88,15 @@ exit:
 
 static bool verify_shm() {
     bool is_fail = false;
-    ns_shm_info_t shm_info = {};
-    sm_get_shm_config(&shm_info);
+    zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
 
-    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
+    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&smc_info));
     if (shm_va == nullptr) {
         is_fail = true;
         goto exit;
     }
 
-    for (uint32_t i = 0; i < shm_info.size; i++) {
+    for (uint32_t i = 0; i < smc_info.ns_shm_size; i++) {
         if (shm_va[i] != (i & 0xff)) {
             TRACEF("error: shm_va[%u] 0x%02x, expected 0x%02x\n",
                         i, shm_va[i], (i & 0xff));
@@ -194,8 +193,14 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
             if (status != ZX_OK) return status;
         }
 
+        zx_info_smc_t smc_info = {
+            .ns_shm_base_phys = info.pa,
+            .ns_shm_size = info.size,
+            .ns_shm_use_cache = info.use_cache,
+        };
+
         fbl::AllocChecker ac;
-        auto disp = new (&ac) SmcDispatcher(options);
+        auto disp = new (&ac) SmcDispatcher(options, smc_info);
         if (!ac.check()) {
             return ZX_ERR_NO_MEMORY;
         }
@@ -221,8 +226,9 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
 
 }
 
-SmcDispatcher::SmcDispatcher(uint32_t options)
-    : options(options), smc_args(nullptr), smc_result(SM_ERR_INTERNAL_FAILURE) {
+SmcDispatcher::SmcDispatcher(uint32_t options, zx_info_smc_t info)
+    : options(options), smc_args(nullptr),
+      smc_result(SM_ERR_INTERNAL_FAILURE), smc_info(info) {
     event_init(&request_event_, false, EVENT_FLAG_AUTOUNSIGNAL);
     event_init(&result_event_, false, EVENT_FLAG_AUTOUNSIGNAL);
 }
@@ -235,6 +241,10 @@ SmcDispatcher::~SmcDispatcher() {
 #endif
     LTRACEF("free smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
     smc_disp = nullptr;
+}
+
+zx_info_smc_t SmcDispatcher::GetSmcInfo() {
+    return smc_info;
 }
 
 zx_status_t SmcDispatcher::NotifyUser(smc32_args_t* args) {

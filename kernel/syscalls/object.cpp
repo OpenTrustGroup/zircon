@@ -22,6 +22,7 @@
 #include <object/process_dispatcher.h>
 #include <object/resource_dispatcher.h>
 #include <object/resources.h>
+#include <object/smc_dispatcher.h>
 #include <object/socket_dispatcher.h>
 #include <object/thread_dispatcher.h>
 #include <object/vm_address_region_dispatcher.h>
@@ -573,6 +574,16 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
                 return ZX_OK;
             });
 
+            return single_record_result(
+                _buffer, buffer_size, _actual, _avail, &info, sizeof(info));
+        }
+        case ZX_INFO_SMC: {
+            fbl::RefPtr<SmcDispatcher> dispatcher;
+            auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &dispatcher);
+            if (status != ZX_OK)
+                return status;
+
+            zx_info_smc_t info = dispatcher->GetSmcInfo();
             return single_record_result(
                 _buffer, buffer_size, _actual, _avail, &info, sizeof(info));
         }

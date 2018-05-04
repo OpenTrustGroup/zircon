@@ -33,6 +33,7 @@ typedef enum {
     ZX_INFO_HANDLE_COUNT               = 19, // zx_info_handle_count_t[1]
     ZX_INFO_BTI                        = 20, // zx_info_bti_t[1]
     ZX_INFO_PROCESS_HANDLE_STATS       = 21, // zx_info_process_handle_stats_t[1]
+    ZX_INFO_SMC                        = 22, // zx_info_smc_t[1]
     ZX_INFO_LAST
 } zx_object_info_topic_t;
 
@@ -349,6 +350,12 @@ typedef struct zx_info_resource {
 } zx_info_resource_t;
 
 #define ZX_INFO_CPU_STATS_FLAG_ONLINE       (1u<<0)
+
+typedef struct zx_info_smc {
+    uint32_t ns_shm_base_phys;
+    uint32_t ns_shm_size;
+    bool ns_shm_use_cache;
+} zx_info_smc_t;
 
 // Object properties.
 

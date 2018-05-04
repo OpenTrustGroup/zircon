@@ -99,21 +99,28 @@ static bool smc_shm_vmo_basic_test(void) {
     zx_handle_t shm_vmo_handle;
     ASSERT_EQ(zx_smc_create(0, &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
 
-    zx_info_handle_basic_t info = {};
-    zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &info, sizeof(info), NULL, NULL);
+    zx_info_handle_basic_t basic_info = {};
+    zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &basic_info, sizeof(basic_info), NULL, NULL);
     ASSERT_EQ(status, ZX_OK, "handle should be valid");
 
     const zx_rights_t expected_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP;
 
-    EXPECT_GT(info.koid, 0ULL, "object id should be positive");
-    EXPECT_EQ(info.type, (uint32_t)ZX_OBJ_TYPE_VMO, "handle should be an vmo");
-    EXPECT_EQ(info.rights, expected_rights, "wrong set of rights");
-    EXPECT_EQ(info.props, (uint32_t)ZX_OBJ_PROP_WAITABLE, "should have waitable property");
-    EXPECT_EQ(info.related_koid, 0ULL, "vmo don't have associated koid");
+    EXPECT_GT(basic_info.koid, 0ULL, "object id should be positive");
+    EXPECT_EQ(basic_info.type, (uint32_t)ZX_OBJ_TYPE_VMO, "handle should be an vmo");
+    EXPECT_EQ(basic_info.rights, expected_rights, "wrong set of rights");
+    EXPECT_EQ(basic_info.props, (uint32_t)ZX_OBJ_PROP_WAITABLE, "should have waitable property");
+    EXPECT_EQ(basic_info.related_koid, 0ULL, "vmo don't have associated koid");
 
     zx_handle_t dup_handle;
     ASSERT_EQ(zx_handle_duplicate(shm_vmo_handle, ZX_RIGHT_SAME_RIGHTS, &dup_handle),
             ZX_ERR_ACCESS_DENIED, "shm vmo can't be duplicated");
+
+    zx_info_smc_t smc_info = {};
+    status = zx_object_get_info(smc_handle, ZX_INFO_SMC, &smc_info, sizeof(smc_info), NULL, NULL);
+    ASSERT_EQ(status, ZX_OK, "handle should be valid");
+    EXPECT_EQ(smc_info.ns_shm_base_phys, (uint32_t)0x42000000, "ns-shm pa is not 0x42000000");
+    EXPECT_EQ(smc_info.ns_shm_size, (uint32_t)0x500000UL, "default ns-shm size is 5MB");
+    EXPECT_EQ(smc_info.ns_shm_use_cache, (bool)true, "default ns-shm cache policy is enabled");
 
     EXPECT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
     EXPECT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
