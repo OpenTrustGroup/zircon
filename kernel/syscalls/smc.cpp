@@ -22,6 +22,7 @@
 
 #include <fbl/auto_lock.h>
 #include <fbl/ref_ptr.h>
+#include <zircon/syscalls/object.h>
 #include <zircon/syscalls/policy.h>
 
 #include "priv.h"
@@ -30,7 +31,9 @@ using fbl::AutoLock;
 
 #define LOCAL_TRACE 1
 
-zx_status_t sys_smc_create(uint32_t options, user_out_handle* smc_out, user_out_handle* vmo_out) {
+zx_status_t sys_smc_create(uint32_t options,
+                        user_out_ptr<void> user_buffer, uint32_t len,
+                        user_out_handle* smc_out, user_out_handle* vmo_out) {
     auto up = ProcessDispatcher::GetCurrent();
     zx_status_t res = up->QueryPolicy(ZX_POL_NEW_SMC);
     if (res != ZX_OK) return res;
@@ -45,6 +48,14 @@ zx_status_t sys_smc_create(uint32_t options, user_out_handle* smc_out, user_out_
     zx_rights_t vmo_rights;
     res = VmObjectDispatcher::Create(fbl::move(shm_vmo), &vmo_disp, &vmo_rights);
     if (res != ZX_OK) return res;
+
+    zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
+    if (len != sizeof(zx_info_smc_t)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    res = user_buffer.copy_array_to_user(static_cast<void*>(&smc_info), sizeof(zx_info_smc_t));
+    if (res != ZX_OK) return ZX_ERR_INVALID_ARGS;
 
     res = smc_out->make(fbl::move(smc_disp), smc_rights);
     if (res == ZX_OK) {

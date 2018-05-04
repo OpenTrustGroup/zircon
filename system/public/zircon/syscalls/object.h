@@ -350,6 +350,16 @@ typedef struct zx_info_resource {
 
 #define ZX_INFO_CPU_STATS_FLAG_ONLINE       (1u<<0)
 
+typedef struct zx_info_ns_shm {
+    uint32_t base_phys;
+    uint32_t size;
+    bool use_cache;
+} zx_info_ns_shm_t;
+
+typedef struct zx_info_smc {
+    zx_info_ns_shm_t ns_shm;
+} zx_info_smc_t;
+
 // Object properties.
 
 // "2" is unused and can be recycled.
