@@ -154,13 +154,6 @@ typedef uint32_t zx_signals_t;
 #define ZX_SMC_READABLE             __ZX_OBJECT_READABLE
 #define ZX_SMC_SIGNALED             __ZX_OBJECT_SIGNALED
 
-// Smc Test
-#define ZX_SMC_FAKE_REQUEST         ZX_USER_SIGNAL_0
-#define ZX_SMC_WRITE_SHM            ZX_USER_SIGNAL_1
-#define ZX_SMC_VERIFY_SHM           ZX_USER_SIGNAL_2
-#define ZX_SMC_TEST_PASS            ZX_USER_SIGNAL_3
-#define ZX_SMC_TEST_FAIL            ZX_USER_SIGNAL_4
-
 // Timer
 #define ZX_TIMER_SIGNALED           __ZX_OBJECT_SIGNALED
 

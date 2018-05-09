@@ -75,7 +75,7 @@ static long smc_restart_stdcall(smc32_args_t *args)
  */
 static long smc_nop_stdcall(smc32_args_t *args)
 {
-    return 0;
+    return SM_OK;
 }
 
 /*
@@ -83,7 +83,7 @@ static long smc_nop_stdcall(smc32_args_t *args)
  */
 static long smc_nop_secure_monitor(smc32_args_t *args)
 {
-    return (!args->params[0]) ? 0 : SM_ERR_UNDEFINED_SMC;
+    return (!args->params[0]) ? SM_OK : SM_ERR_UNDEFINED_SMC;
 }
 
 static smc32_handler_t sm_stdcall_function_table[] = {
@@ -111,14 +111,14 @@ static long smc_cpu_suspend(smc32_args_t *args)
 {
     lk_init_level_all(LK_INIT_FLAG_CPU_SUSPEND);
 
-    return 0;
+    return SM_OK;
 }
 
 static long smc_cpu_resume(smc32_args_t *args)
 {
     lk_init_level_all(LK_INIT_FLAG_CPU_RESUME);
 
-    return 0;
+    return SM_OK;
 }
 
 #if WITH_LIB_VERSION

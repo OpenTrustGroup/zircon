@@ -13,27 +13,7 @@
 
 #include <fbl/canary.h>
 #include <fbl/mutex.h>
-#include <zircon/syscalls/object.h>
 #include <zircon/syscalls/smc.h>
-
-class SmcObserver : public StateObserver {
-public:
-    SmcObserver() = default;
-
-private:
-    Flags OnInitialize(zx_signals_t initial_state,
-                       const StateObserver::CountInfo* cinfo) override {
-        return 0;
-    }
-    Flags OnStateChange(zx_signals_t new_state) override {
-        return 0;
-    }
-    Flags OnCancel(const Handle* handle) override { return 0; }
-    Flags OnCancelByKey(const Handle* handle, const void* port, uint64_t key)
-        override { return 0; }
-
-    void OnRemoved() override {}
-};
 
 class SmcDispatcher final : public SoloDispatcher {
 public:
@@ -50,7 +30,7 @@ public:
     long WaitForResult();
 
     /* called by smc service via syscalls */
-    zx_status_t WaitForRequest(smc32_args_t* args);
+    zx_status_t ReadArgs(smc32_args_t* args);
     zx_status_t SetResult(long result);
     zx_info_smc_t GetSmcInfo();
 
@@ -62,7 +42,7 @@ private:
     const uint32_t options;
     smc32_args_t* smc_args TA_GUARDED(get_lock());
     long smc_result TA_GUARDED(get_lock());
-    event_t request_event_;
+    bool can_serve_next_smc TA_GUARDED(get_lock());
     event_t result_event_;
     zx_info_smc_t smc_info;
 };
