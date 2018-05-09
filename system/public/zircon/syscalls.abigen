@@ -762,16 +762,20 @@ syscall job_set_relative_importance
 
 # SMC
 syscall smc_create
-    (options: uint32_t, buffer: any[len] OUT, len: uint32_t)
+    (options: uint32_t, smc_info: zx_info_smc_t[1] OUT)
     returns (zx_status_t, smc_out: zx_handle_t handle_acquire,
         vmo_out: zx_handle_t handle_acquire);
 
-syscall smc_wait_for_request
-    (handle: zx_handle_t, buffer: any[len] OUT, len: uint32_t)
+syscall smc_read
+    (handle: zx_handle_t, args: smc32_args_t[1] OUT)
     returns (zx_status_t);
 
 syscall smc_set_result
     (handle: zx_handle_t, smc_result: long)
+    returns (zx_status_t);
+
+syscall smc_call_test
+    (handle: zx_handle_t, args: smc32_args_t[1] INOUT, smc_ret: long[1] OUT)
     returns (zx_status_t);
 
 # Test syscalls (keep at the end)

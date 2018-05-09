@@ -36,16 +36,6 @@ static fbl::Mutex alloc_lock;
 static SmcDispatcher* smc_disp TA_GUARDED(alloc_lock);
 
 #if ENABLE_SMC_TEST
-static bool generate_fake_smc() {
-    smc32_args_t smc_args = {
-        .smc_nr = 0x534d43UL,
-        .params = {0x70617230UL, 0x70617231UL, 0x70617232UL}
-    };
-
-    long result = notify_smc_service(&smc_args);
-    return (result != (long)smc_args.smc_nr) ? true : false;
-}
-
 static void* map_shm(zx_info_smc_t* smc_info) {
     void* shm_vaddr = nullptr;
 
@@ -67,7 +57,7 @@ static void unmap_shm(void* va) {
     }
 }
 
-static bool write_shm() {
+static long write_shm() {
     bool is_fail = false;
     zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
 
@@ -83,10 +73,10 @@ static bool write_shm() {
 
 exit:
     unmap_shm(shm_va);
-    return is_fail;
+    return is_fail ? SM_ERR_INTERNAL_FAILURE : 0;
 }
 
-static bool verify_shm() {
+static long verify_shm() {
     bool is_fail = false;
     zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
 
@@ -107,67 +97,20 @@ static bool verify_shm() {
 
 exit:
     unmap_shm(shm_va);
-    return is_fail;
+    return is_fail ? SM_ERR_INTERNAL_FAILURE : 0;
 }
 
-static int smc_test(void* arg) {
-    unsigned long s = reinterpret_cast<unsigned long>(arg);
-    bool is_fail = false;
-
-    /* clear all user signals including test request and old test result */
-    smc_disp->user_signal(ZX_USER_SIGNAL_ALL, 0, 0);
-
-    LTRACEF("signal (0x%08lx)\n", s);
-    switch (s) {
-    case ZX_SMC_FAKE_REQUEST:
-        is_fail = generate_fake_smc();
-        break;
-    case ZX_SMC_WRITE_SHM:
-        is_fail = write_shm();
-        break;
-    case ZX_SMC_VERIFY_SHM:
-        is_fail = verify_shm();
-        break;
+static long invoke_smc_test(smc32_args_t* args) {
+    switch (args->smc_nr) {
+    case SMC_SC_WRITE_SHM:
+        return write_shm();
+    case SMC_SC_VERIFY_SHM:
+        return verify_shm();
     default:
-        return 0;
+        return SM_ERR_UNDEFINED_SMC;
     }
-
-    if (is_fail) {
-        smc_disp->user_signal(0, ZX_SMC_TEST_FAIL, 0);
-    } else {
-        smc_disp->user_signal(0, ZX_SMC_TEST_PASS, 0);
-    }
-    return 0;
 }
 
-static void run_smc_test(zx_signals_t s) {
-    unsigned long arg = s;
-    thread_t* smc_test_thread = thread_create("smc_test", smc_test,
-            reinterpret_cast<void*>(arg),
-            DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
-    if (!smc_test_thread) {
-        panic("failed to create smc test thread\n");
-    }
-
-    thread_detach_and_resume(smc_test_thread);
-}
-
-class SmcTestObserver final : public SmcObserver {
-public:
-    Flags OnStateChange(zx_signals_t new_state) override {
-        LTRACEF("new_state (0x%08x)\n", new_state);
-
-        zx_signals_t expected_signals =
-                ZX_SMC_FAKE_REQUEST | ZX_SMC_WRITE_SHM | ZX_SMC_VERIFY_SHM;
-
-        if (new_state & expected_signals) {
-            run_smc_test(new_state);
-        }
-        return 0;
-    }
-};
-
-static SmcTestObserver smc_test_obs;
 #endif
 
 zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
@@ -207,10 +150,6 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
             return ZX_ERR_NO_MEMORY;
         }
 
-#if ENABLE_SMC_TEST
-        disp->add_observer(&smc_test_obs);
-#endif
-
         *rights = ZX_DEFAULT_SMC_RIGHTS;
         *dispatcher = fbl::AdoptRef<SmcDispatcher>(disp);
         *shm_vmo = fbl::move(vmo);
@@ -230,17 +169,14 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
 
 SmcDispatcher::SmcDispatcher(uint32_t options, zx_info_smc_t info)
     : options(options), smc_args(nullptr),
-      smc_result(SM_ERR_INTERNAL_FAILURE), smc_info(info) {
-    event_init(&request_event_, false, EVENT_FLAG_AUTOUNSIGNAL);
+      smc_result(SM_ERR_INTERNAL_FAILURE),
+      can_serve_next_smc(true),
+      smc_info(info) {
     event_init(&result_event_, false, EVENT_FLAG_AUTOUNSIGNAL);
 }
 
 SmcDispatcher::~SmcDispatcher() {
     AutoLock lock(&alloc_lock);
-
-#if ENABLE_SMC_TEST
-    RemoveObserver(&smc_test_obs);
-#endif
     LTRACEF("free smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
     smc_disp = nullptr;
 }
@@ -254,11 +190,10 @@ zx_status_t SmcDispatcher::NotifyUser(smc32_args_t* args) {
 
     AutoLock lock(get_lock());
 
-    zx_signals_t signals = GetSignalsStateLocked();
-    if ((signals & ZX_SMC_READABLE) == 0) {
+    if (can_serve_next_smc) {
         smc_args = args;
         UpdateStateLocked(0, ZX_SMC_READABLE);
-        event_signal(&request_event_, false);
+        can_serve_next_smc = false;
         return ZX_OK;
     }
 
@@ -272,37 +207,29 @@ long SmcDispatcher::WaitForResult() {
 
     AutoLock lock(get_lock());
 
-    long result = SM_ERR_INTERNAL_FAILURE;
-    zx_signals_t signals = GetSignalsStateLocked();
-
-    if (signals & ZX_SMC_READABLE) {
-        if (status == ZX_OK) {
-            result = smc_result;
-        }
-        UpdateStateLocked(ZX_SMC_READABLE, 0);
+    if (can_serve_next_smc) {
+        return SM_ERR_INTERNAL_FAILURE;
     }
 
-    return result;
+    can_serve_next_smc = true;
+    return status == ZX_OK ? smc_result : SM_ERR_INTERNAL_FAILURE;
 }
 
-zx_status_t SmcDispatcher::WaitForRequest(smc32_args_t* args) {
+zx_status_t SmcDispatcher::ReadArgs(smc32_args_t* args) {
     canary_.Assert();
 
     if (!args) return ZX_ERR_INVALID_ARGS;
 
-    zx_status_t status = event_wait_deadline(&request_event_, ZX_TIME_INFINITE, true);
-    if (status != ZX_OK) return status;
-
     AutoLock lock(get_lock());
 
     zx_signals_t signals = GetSignalsStateLocked();
-    if ((signals & ZX_SMC_SIGNALED) == 0) {
+    if ((signals & ZX_SMC_READABLE) && !(signals & ZX_SMC_SIGNALED)) {
         memcpy(args, smc_args, sizeof(smc32_args_t));
-        UpdateStateLocked(0, ZX_SMC_SIGNALED);
+        UpdateStateLocked(ZX_SMC_READABLE, ZX_SMC_SIGNALED);
         return ZX_OK;
     }
 
-    return ZX_ERR_BAD_STATE;
+    return ZX_ERR_SHOULD_WAIT;
 }
 
 zx_status_t SmcDispatcher::SetResult(long result) {
@@ -326,6 +253,12 @@ long notify_smc_service(smc32_args_t* args) {
     if (args == nullptr) return SM_ERR_INVALID_PARAMETERS;
 
     if (smc_disp == nullptr) return smc_undefined(args);
+
+#if ENABLE_SMC_TEST
+    if (SMC_ENTITY(args->smc_nr) == SMC_ENTITY_TEST) {
+        return invoke_smc_test(args);
+    }
+#endif
 
     zx_status_t status = smc_disp->NotifyUser(args);
     if (status != ZX_OK) return SM_ERR_BUSY;

@@ -14,5 +14,7 @@ typedef struct zx_pci_init_arg zx_pci_init_arg_t;
 typedef union zx_rrec zx_rrec_t;
 typedef struct zx_system_powerctl_arg zx_system_powerctl_arg_t;
 typedef struct zx_profile_info zx_profile_info_t;
+typedef struct smc32_args smc32_args_t;
+typedef struct zx_info_smc zx_info_smc_t;
 
 __END_CDECLS
