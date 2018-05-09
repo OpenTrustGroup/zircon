@@ -16,13 +16,39 @@
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/smc.h>
 
+static zx_handle_t smc_handle;
+static zx_handle_t shm_vmo_handle;
+static zx_info_smc_t smc_info = {};
+
+static bool setup(void) {
+    BEGIN_HELPER;
+
+    if (smc_handle != ZX_HANDLE_INVALID) {
+        zx_handle_close(smc_handle);
+        smc_handle = ZX_HANDLE_INVALID;
+    }
+    if (shm_vmo_handle != ZX_HANDLE_INVALID) {
+        zx_handle_close(shm_vmo_handle);
+        shm_vmo_handle = ZX_HANDLE_INVALID;
+    }
+
+    ASSERT_EQ(zx_smc_create(0, &smc_info, &smc_handle, &shm_vmo_handle),
+              ZX_OK, "failed to create smc object");
+    END_HELPER;
+}
+
+static bool tear_down(void) {
+    BEGIN_HELPER;
+    ASSERT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
+    smc_handle = ZX_HANDLE_INVALID;
+    ASSERT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
+    shm_vmo_handle = ZX_HANDLE_INVALID;
+    END_HELPER;
+}
+
 static bool smc_create_test(void) {
     BEGIN_TEST;
-
-    zx_handle_t smc_handle;
-    zx_handle_t shm_vmo_handle;
-    zx_info_smc_t smc_info = {};
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    ASSERT_TRUE(setup(), "setup");
 
     EXPECT_GT(smc_info.ns_shm.base_phys, (uint32_t)0, "ns-shm pa should not be zero");
     EXPECT_GT(smc_info.ns_shm.size, (uint32_t)0, "ns-shm size should not be zero");
@@ -42,73 +68,70 @@ static bool smc_create_test(void) {
     EXPECT_EQ(info.props, (uint32_t)ZX_OBJ_PROP_WAITABLE, "should have waitable property");
     EXPECT_EQ(info.related_koid, 0ULL, "smc don't have associated koid");
 
-    EXPECT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
-    EXPECT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
-
+    ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
 }
 
 static bool smc_create_multiple_test(void) {
     BEGIN_TEST;
+    ASSERT_TRUE(setup(), "setup");
 
-    zx_handle_t smc_handle1;
-    zx_handle_t shm_vmo_handle1;
-    zx_handle_t smc_handle2;
-    zx_handle_t shm_vmo_handle2;
-    zx_info_smc_t smc_info = {};
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle1, &shm_vmo_handle1), ZX_OK,
-            "failed to create smc object");
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle2, &shm_vmo_handle2), ZX_ERR_BAD_STATE,
-            "smc object can not create twice");
+    zx_handle_t h1, h2;
+    zx_info_smc_t tmp_smc_info = {};
 
-    EXPECT_EQ(zx_handle_close(smc_handle1), ZX_OK, "failed to close smc handle");
-    EXPECT_EQ(zx_handle_close(shm_vmo_handle1), ZX_OK, "failed to close vmo handle");
+    ASSERT_EQ(zx_smc_create(0, &tmp_smc_info, &h1, &h2),
+              ZX_ERR_BAD_STATE, "smc object can not create twice");
 
+    ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
+}
+
+static void* wait_smc_call(void* args) {
+    zx_status_t status = zx_object_wait_one(smc_handle, ZX_SMC_READABLE,
+                                            ZX_TIME_INFINITE, NULL);
+    if (status != ZX_OK)
+        return NULL;
+
+    smc32_args_t* smc_args = (smc32_args_t*)args;
+    status = zx_smc_read(smc_handle, smc_args);
+    if (status == ZX_OK) {
+        zx_smc_set_result(smc_handle, SM_OK);
+    }
+
+    return NULL;
 }
 
 static bool smc_handle_request_test(void) {
     BEGIN_TEST;
+    ASSERT_TRUE(setup(), "setup");
 
-    zx_handle_t smc_handle;
-    zx_handle_t shm_vmo_handle;
-    zx_info_smc_t smc_info = {};
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    pthread_t th;
+    smc32_args_t actual_smc_args = {};
+    pthread_create(&th, NULL, wait_smc_call, (void*)&actual_smc_args);
 
-    /* trigger fake smc request from smc kernel object */
-    ASSERT_EQ(zx_object_signal(smc_handle, 0, ZX_SMC_FAKE_REQUEST), ZX_OK,
-              "failed to signal smc kernel object");
+    long smc_ret = -1;
+    smc32_args_t expect_smc_args = {
+        .smc_nr = SMC_SC_VIRTIO_START,
+        .params = {0x123U, 0x456U, 0x789U},
+    };
+    ASSERT_EQ(zx_smc_call_test(smc_handle, &expect_smc_args, &smc_ret),
+              ZX_OK, "failed to issue smc call");
 
-    smc32_args_t smc_args = {};
-    ASSERT_EQ(zx_smc_wait_for_request(smc_handle, &smc_args, sizeof(smc32_args_t)), ZX_OK,
-              "failed to wait for smc request");
+    pthread_join(th, NULL);
 
-    EXPECT_EQ(smc_args.smc_nr, 0x534d43UL, "wrong smc_nr");
-    EXPECT_EQ(smc_args.params[0], 0x70617230UL, "wrong param[0]");
-    EXPECT_EQ(smc_args.params[1], 0x70617231UL, "wrong param[1]");
-    EXPECT_EQ(smc_args.params[2], 0x70617232UL, "wrong param[2]");
+    EXPECT_EQ(actual_smc_args.smc_nr, expect_smc_args.smc_nr, "wrong smc_nr");
+    EXPECT_EQ(actual_smc_args.params[0], expect_smc_args.params[0], "wrong param[0]");
+    EXPECT_EQ(actual_smc_args.params[1], expect_smc_args.params[1], "wrong param[1]");
+    EXPECT_EQ(actual_smc_args.params[2], expect_smc_args.params[2], "wrong param[2]");
+    EXPECT_EQ(smc_ret, 0, "smc_ret != 0");
 
-    EXPECT_EQ(zx_smc_set_result(smc_handle, smc_args.smc_nr), ZX_OK, "failed to set result");
-
-    /* wait for test result signal from smc kernel object */
-    zx_signals_t s = ZX_SIGNAL_NONE;
-    EXPECT_EQ(zx_object_wait_one(smc_handle, ZX_USER_SIGNAL_ALL, ZX_TIME_INFINITE, &s), ZX_OK,
-              "failed at object wait syscall");
-    EXPECT_EQ(s & ZX_USER_SIGNAL_ALL, ZX_SMC_TEST_PASS, "got unexpected smc result");
-
-    EXPECT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
-    EXPECT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
-
+    ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
 }
 
 static bool smc_shm_vmo_basic_test(void) {
     BEGIN_TEST;
-
-    zx_handle_t smc_handle;
-    zx_handle_t shm_vmo_handle;
-    zx_info_smc_t smc_info = {};
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    ASSERT_TRUE(setup(), "setup");
 
     zx_info_handle_basic_t basic_info = {};
     zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &basic_info, sizeof(basic_info), NULL, NULL);
@@ -126,20 +149,14 @@ static bool smc_shm_vmo_basic_test(void) {
     ASSERT_EQ(zx_handle_duplicate(shm_vmo_handle, ZX_RIGHT_SAME_RIGHTS, &dup_handle),
             ZX_ERR_ACCESS_DENIED, "shm vmo can't be duplicated");
 
-    EXPECT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
-    EXPECT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
-
+    ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
 }
 
 /* TODO(james): share memory should be mapped as non-secure in page table */
 static bool smc_shm_vmo_write_test(void) {
     BEGIN_TEST;
-
-    zx_handle_t smc_handle;
-    zx_handle_t shm_vmo_handle;
-    zx_info_smc_t smc_info = {};
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    ASSERT_TRUE(setup(), "setup");
 
     size_t vmo_size = smc_info.ns_shm.size;
 
@@ -155,30 +172,24 @@ static bool smc_shm_vmo_write_test(void) {
         ((uint8_t*)virt)[i] = (uint8_t)(i & 0xff);
     }
 
-    /* notify smc kernel object to verify data */
-    ASSERT_EQ(zx_object_signal(smc_handle, 0, ZX_SMC_VERIFY_SHM), ZX_OK,
-              "failed to signal smc kernel object");
-
-    zx_signals_t s = ZX_SIGNAL_NONE;
-    EXPECT_EQ(zx_object_wait_one(smc_handle, ZX_SMC_TEST_PASS | ZX_SMC_TEST_FAIL, ZX_TIME_INFINITE, &s),
-              ZX_OK, "failed at object wait syscall");
-    EXPECT_EQ(s & ZX_USER_SIGNAL_ALL, ZX_SMC_TEST_PASS, "failed to verify shm data");
+    /* verify test data in kernel space */
+    long smc_ret = -1;
+    smc32_args_t smc_args = {
+        .smc_nr = SMC_SC_VERIFY_SHM,
+    };
+    ASSERT_EQ(zx_smc_call_test(smc_handle, &smc_args, &smc_ret),
+              ZX_OK, "failed to issue smc call");
+    EXPECT_EQ(smc_ret, 0, "failed to verify shm data");
 
     EXPECT_EQ(zx_vmar_unmap(zx_vmar_root_self(), virt, vmo_size), ZX_OK, "failed to unmap shm");
 
-    EXPECT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
-    EXPECT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
-
+    ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
 }
 
 static bool smc_shm_vmo_read_test(void) {
     BEGIN_TEST;
-
-    zx_handle_t smc_handle;
-    zx_handle_t shm_vmo_handle;
-    zx_info_smc_t smc_info = {};
-    ASSERT_EQ(zx_smc_create(0, &smc_info, sizeof(zx_info_smc_t), &smc_handle, &shm_vmo_handle), ZX_OK, "failed to create smc object");
+    ASSERT_TRUE(setup(), "setup");
 
     size_t vmo_size = smc_info.ns_shm.size;
 
@@ -189,14 +200,14 @@ static bool smc_shm_vmo_read_test(void) {
               ZX_OK, "failed to map shm vmo");
     ASSERT_NE(virt, 0UL, "shm va should not be zero");
 
-    /* notify smc kernel object to write test data to shm */
-    ASSERT_EQ(zx_object_signal(smc_handle, 0, ZX_SMC_WRITE_SHM), ZX_OK,
-              "failed to signal smc kernel object");
-
-    zx_signals_t s = ZX_SIGNAL_NONE;
-    ASSERT_EQ(zx_object_wait_one(smc_handle, ZX_SMC_TEST_PASS | ZX_SMC_TEST_FAIL, ZX_TIME_INFINITE, &s),
-              ZX_OK, "failed at object wait syscall");
-    ASSERT_EQ(s & ZX_USER_SIGNAL_ALL, ZX_SMC_TEST_PASS, "failed to write shm data");
+    /* notify kernel to write test data */
+    long smc_ret = -1;
+    smc32_args_t smc_args = {
+        .smc_nr = SMC_SC_WRITE_SHM,
+    };
+    ASSERT_EQ(zx_smc_call_test(smc_handle, &smc_args, &smc_ret),
+              ZX_OK, "failed to issue smc call");
+    EXPECT_EQ(smc_ret, 0, "failed to write shm data");
 
     /* verify test data */
     for(size_t i = 0; i < vmo_size; i++) {
@@ -205,9 +216,7 @@ static bool smc_shm_vmo_read_test(void) {
 
     EXPECT_EQ(zx_vmar_unmap(zx_vmar_root_self(), virt, vmo_size), ZX_OK, "failed to unmap shm");
 
-    EXPECT_EQ(zx_handle_close(smc_handle), ZX_OK, "failed to close smc handle");
-    EXPECT_EQ(zx_handle_close(shm_vmo_handle), ZX_OK, "failed to close vmo handle");
-
+    ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
 }
 
