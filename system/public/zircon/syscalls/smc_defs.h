@@ -55,6 +55,10 @@
 #define SMC_ENTITY_TRUSTED_OS       50  /* Trusted OS calls */
 #define SMC_ENTITY_LOGGING      51  /* Used for secure -> nonsecure logging */
 #define SMC_ENTITY_SECURE_MONITOR   60  /* Trusted OS calls internal to secure monitor */
+#define SMC_ENTITY_TEST             61  /* For smc test */
+
+#define SMC_SC_WRITE_SHM    SMC_STDCALL_NR  (SMC_ENTITY_TEST, 0)
+#define SMC_SC_VERIFY_SHM   SMC_STDCALL_NR  (SMC_ENTITY_TEST, 1)
 
 /* FC = Fast call, SC = Standard call */
 #define SMC_SC_RESTART_LAST SMC_STDCALL_NR  (SMC_ENTITY_SECURE_MONITOR, 0)
