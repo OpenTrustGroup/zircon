@@ -774,6 +774,10 @@ syscall smc_set_result
     (handle: zx_handle_t, smc_result: long)
     returns (zx_status_t);
 
+syscall smc_call_test
+    (handle: zx_handle_t, buffer: any[len] INOUT, len: uint32_t, smc_ret: long[1] OUT)
+    returns (zx_status_t);
+
 # Test syscalls (keep at the end)
 
 syscall syscall_test_0() returns (zx_status_t);

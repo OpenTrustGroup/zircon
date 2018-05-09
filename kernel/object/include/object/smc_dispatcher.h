@@ -16,25 +16,6 @@
 #include <zircon/syscalls/object.h>
 #include <zircon/syscalls/smc.h>
 
-class SmcObserver : public StateObserver {
-public:
-    SmcObserver() = default;
-
-private:
-    Flags OnInitialize(zx_signals_t initial_state,
-                       const StateObserver::CountInfo* cinfo) override {
-        return 0;
-    }
-    Flags OnStateChange(zx_signals_t new_state) override {
-        return 0;
-    }
-    Flags OnCancel(const Handle* handle) override { return 0; }
-    Flags OnCancelByKey(const Handle* handle, const void* port, uint64_t key)
-        override { return 0; }
-
-    void OnRemoved() override {}
-};
-
 class SmcDispatcher final : public SoloDispatcher {
 public:
     static zx_status_t Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,

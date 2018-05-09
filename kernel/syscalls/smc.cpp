@@ -20,6 +20,8 @@
 #include <object/smc_dispatcher.h>
 #include <object/vm_object_dispatcher.h>
 
+#include <object/c_user_smc_service.h>
+
 #include <fbl/auto_lock.h>
 #include <fbl/ref_ptr.h>
 #include <zircon/syscalls/object.h>
@@ -32,8 +34,10 @@ using fbl::AutoLock;
 #define LOCAL_TRACE 1
 
 zx_status_t sys_smc_create(uint32_t options,
-                        user_out_ptr<void> user_buffer, uint32_t len,
-                        user_out_handle* smc_out, user_out_handle* vmo_out) {
+                           user_out_ptr<void> user_buffer,
+                           uint32_t len,
+                           user_out_handle* smc_out,
+                           user_out_handle* vmo_out) {
     auto up = ProcessDispatcher::GetCurrent();
     zx_status_t res = up->QueryPolicy(ZX_POL_NEW_SMC);
     if (res != ZX_OK) return res;
@@ -67,7 +71,8 @@ zx_status_t sys_smc_create(uint32_t options,
 }
 
 zx_status_t sys_smc_wait_for_request(zx_handle_t smc_handle,
-                                user_out_ptr<void> user_buffer, uint32_t len) {
+                                     user_out_ptr<void> user_buffer,
+                                     uint32_t len) {
     auto up = ProcessDispatcher::GetCurrent();
 
     fbl::RefPtr<SmcDispatcher> smc;
@@ -97,4 +102,39 @@ zx_status_t sys_smc_set_result(zx_handle_t smc_handle, long smc_result) {
         return status;
 
     return smc->SetResult(smc_result);
+}
+
+zx_status_t sys_smc_call_test(zx_handle_t smc_handle,
+                              user_inout_ptr<void> user_buffer,
+                              uint32_t len,
+                              user_out_ptr<long> smc_ret) {
+    auto up = ProcessDispatcher::GetCurrent();
+
+    fbl::RefPtr<SmcDispatcher> smc;
+    zx_status_t status = up->GetDispatcherWithRights(smc_handle, ZX_RIGHTS_IO, &smc);
+    if (status != ZX_OK)
+        return status;
+
+    if (len != sizeof(smc32_args_t)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    if (smc_ret.get() == nullptr) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    smc32_args_t args = {};
+    status = user_buffer.copy_array_from_user(static_cast<void*>(&args),
+                                              sizeof(smc32_args_t));
+    if (status != ZX_OK)
+        return ZX_ERR_INVALID_ARGS;
+
+    long ret = notify_smc_service(&args);
+
+    status = user_buffer.copy_array_to_user(static_cast<void*>(&args),
+                                            sizeof(smc32_args_t));
+    if (status != ZX_OK)
+        return ZX_ERR_INVALID_ARGS;
+
+    return smc_ret.copy_to_user(ret);
 }
