@@ -42,8 +42,12 @@ zx_status_t split_syscall_flags(uint32_t flags, uint32_t* vmar_flags, uint* arch
         mmu_flags |= ARCH_MMU_FLAG_PERM_EXECUTE;
     }
 
+    if (flags & ZX_VM_FLAG_MAP_NS) {
+        mmu_flags |= ARCH_MMU_FLAG_NS;
+    }
+
     // Mask out arch_mmu_flags options
-    flags &= ~(ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_PERM_EXECUTE);
+    flags &= ~(ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_PERM_EXECUTE | ZX_VM_FLAG_MAP_NS);
 
     // Figure out vmar flags
     uint32_t vmar = 0;

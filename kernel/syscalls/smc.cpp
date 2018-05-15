@@ -58,7 +58,7 @@ zx_status_t sys_smc_create(uint32_t options,
 
     res = smc_out->make(fbl::move(smc_disp), smc_rights);
     if (res == ZX_OK) {
-        vmo_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP;
+        vmo_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
         res = vmo_out->make(fbl::move(vmo_disp), vmo_rights);
     }
 
