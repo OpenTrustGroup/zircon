@@ -212,6 +212,7 @@ typedef uint32_t zx_rights_t;
 #define ZX_RIGHT_MANAGE_PROCESS   ((zx_rights_t)1u << 17)
 #define ZX_RIGHT_MANAGE_THREAD    ((zx_rights_t)1u << 18)
 #define ZX_RIGHT_APPLY_PROFILE    ((zx_rights_t)1u << 19)
+#define ZX_RIGHT_MAP_NS           ((zx_rights_t)1u << 20)
 #define ZX_RIGHT_SAME_RIGHTS      ((zx_rights_t)1u << 31)
 
 // Convenient names for commonly grouped rights
@@ -255,6 +256,7 @@ typedef uint32_t zx_rights_t;
 #define ZX_VM_FLAG_CAN_MAP_WRITE      (1u << 8)
 #define ZX_VM_FLAG_CAN_MAP_EXECUTE    (1u << 9)
 #define ZX_VM_FLAG_MAP_RANGE          (1u << 10)
+#define ZX_VM_FLAG_MAP_NS             (1u << 11)
 
 // clock ids
 #define ZX_CLOCK_MONOTONIC        (0u)
