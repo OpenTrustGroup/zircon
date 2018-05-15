@@ -176,7 +176,7 @@ static bool smc_shm_vmo_basic_test(void) {
     zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &basic_info, sizeof(basic_info), NULL, NULL);
     ASSERT_EQ(status, ZX_OK, "handle should be valid");
 
-    const zx_rights_t expected_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP;
+    const zx_rights_t expected_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
 
     EXPECT_GT(basic_info.koid, 0ULL, "object id should be positive");
     EXPECT_EQ(basic_info.type, (uint32_t)ZX_OBJ_TYPE_VMO, "handle should be an vmo");
@@ -192,7 +192,6 @@ static bool smc_shm_vmo_basic_test(void) {
     END_TEST;
 }
 
-/* TODO(james): share memory should be mapped as non-secure in page table */
 static bool smc_shm_vmo_write_test(void) {
     BEGIN_TEST;
     ASSERT_TRUE(setup(), "setup");
