@@ -125,7 +125,7 @@ zx_status_t sys_vmar_map(zx_handle_t vmar_handle, size_t vmar_offset,
 
     // Usermode is not allowed to specify these flags on mappings, though we may
     // set them below.
-    if (map_flags & (ZX_VM_FLAG_CAN_MAP_READ | ZX_VM_FLAG_CAN_MAP_WRITE | ZX_VM_FLAG_CAN_MAP_EXECUTE)) {
+    if (map_flags & (ZX_VM_FLAG_CAN_MAP_READ | ZX_VM_FLAG_CAN_MAP_WRITE | ZX_VM_FLAG_CAN_MAP_EXECUTE | ZX_VM_FLAG_MAP_NS)) {
         return ZX_ERR_INVALID_ARGS;
     }
 
@@ -151,6 +151,11 @@ zx_status_t sys_vmar_map(zx_handle_t vmar_handle, size_t vmar_offset,
         map_flags |= ZX_VM_FLAG_CAN_MAP_WRITE;
     if (can_exec)
         map_flags |= ZX_VM_FLAG_CAN_MAP_EXECUTE;
+
+    // If the VMO owns the permission ZX_RIGHT_MAP_NS, it means
+    // that the VMO represents a non-secure memory region.
+    if (vmo_rights & ZX_RIGHT_MAP_NS)
+        map_flags |= ZX_VM_FLAG_MAP_NS;
 
     fbl::RefPtr<VmMapping> vm_mapping;
     status = vmar->Map(vmar_offset, vmo->vmo(), vmo_offset, len, map_flags, &vm_mapping);

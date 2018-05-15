@@ -39,11 +39,10 @@ static SmcDispatcher* smc_disp TA_GUARDED(alloc_lock);
 static void* map_shm(zx_info_smc_t* smc_info) {
     void* shm_vaddr = nullptr;
 
-    /* TODO(james): share memory should be mapped as non-secure in page table */
     zx_status_t status = VmAspace::kernel_aspace()->AllocPhysical(
             "smc_ns_shm", smc_info->ns_shm.size, &shm_vaddr, PAGE_SIZE_SHIFT,
             static_cast<paddr_t>(smc_info->ns_shm.base_phys), VmAspace::VMM_FLAG_COMMIT,
-            ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE /*| ARCH_MMU_FLAG_NS*/);
+            ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE | ARCH_MMU_FLAG_NS);
     if (status != ZX_OK) {
         TRACEF("failed to map shm into kernel address space, status %d\n", status);
         return nullptr;
