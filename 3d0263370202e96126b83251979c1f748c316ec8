@@ -1,0 +1,136 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "04df704f_001b93d6",
+        "filename": "kernel/syscalls/smc.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 107,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-05-23T08:52:22Z",
+      "side": 1,
+      "message": "Does this syscall enabled in release version? Or just for debug version?",
+      "range": {
+        "startLine": 107,
+        "startChar": 12,
+        "endLine": 107,
+        "endChar": 29
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "df81513a_982832c5",
+        "filename": "kernel/syscalls/smc.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 108,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-05-23T08:52:22Z",
+      "side": 1,
+      "message": "can we use smc32_args_t here, and we don\u0027t have to specify len",
+      "range": {
+        "startLine": 108,
+        "startChar": 45,
+        "endLine": 108,
+        "endChar": 49
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "4fb88628_055e3882",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 49,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-05-23T08:52:22Z",
+      "side": 1,
+      "message": "does the test case name must suffixed with _test?",
+      "range": {
+        "startLine": 49,
+        "startChar": 12,
+        "endLine": 49,
+        "endChar": 27
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "433c80d2_2d7944db",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-05-23T08:52:22Z",
+      "side": 1,
+      "message": "define a SM_OK here?",
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "2c7851e1_46d05f10",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 172,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-05-23T08:52:22Z",
+      "side": 1,
+      "message": "confused naming?",
+      "range": {
+        "startLine": 172,
+        "startChar": 17,
+        "endLine": 172,
+        "endChar": 32
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "9446a34f_c6cdcbcc",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 200,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-05-23T08:52:22Z",
+      "side": 1,
+      "message": "same as above",
+      "range": {
+        "startLine": 200,
+        "startChar": 17,
+        "endLine": 200,
+        "endChar": 32
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
