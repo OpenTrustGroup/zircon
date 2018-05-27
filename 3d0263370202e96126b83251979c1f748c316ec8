@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "51f0cc21_2dfdf6b6",
+        "filename": "kernel/syscalls/smc.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 107,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T05:56:47Z",
+      "side": 1,
+      "message": "If we do not need to run smc test in release version, the syscall can be disabled. Otherwise, the syscall should be enabled.",
+      "parentUuid": "04df704f_001b93d6",
+      "range": {
+        "startLine": 107,
+        "startChar": 12,
+        "endLine": 107,
+        "endChar": 29
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "df81513a_982832c5",
         "filename": "kernel/syscalls/smc.cpp",
         "patchSetId": 1
@@ -36,6 +60,30 @@
       "writtenOn": "2018-05-23T08:52:22Z",
       "side": 1,
       "message": "can we use smc32_args_t here, and we don\u0027t have to specify len",
+      "range": {
+        "startLine": 108,
+        "startChar": 45,
+        "endLine": 108,
+        "endChar": 49
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "c35140b7_e2c4655a",
+        "filename": "kernel/syscalls/smc.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 108,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T05:56:47Z",
+      "side": 1,
+      "message": "Yes, but the smc32_args_t definition should be moved to system/public/zircon/types.h",
+      "parentUuid": "df81513a_982832c5",
       "range": {
         "startLine": 108,
         "startChar": 45,
@@ -71,6 +119,30 @@
     },
     {
       "key": {
+        "uuid": "76091506_e48e9264",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 49,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T05:56:47Z",
+      "side": 1,
+      "message": "No, it\u0027s not a hard rule. I just follows most of zircon test cases\u0027 naming rule under system/utest/core/",
+      "parentUuid": "4fb88628_055e3882",
+      "range": {
+        "startLine": 49,
+        "startChar": 12,
+        "endLine": 49,
+        "endChar": 27
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "433c80d2_2d7944db",
         "filename": "system/utest/core/smc/smc.c",
         "patchSetId": 1
@@ -82,6 +154,24 @@
       "writtenOn": "2018-05-23T08:52:22Z",
       "side": 1,
       "message": "define a SM_OK here?",
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "5b4526fb_33b89375",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T05:56:47Z",
+      "side": 1,
+      "message": "ok, will add in next patch",
+      "parentUuid": "433c80d2_2d7944db",
       "revId": "3d0263370202e96126b83251979c1f748c316ec8",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
@@ -111,6 +201,30 @@
     },
     {
       "key": {
+        "uuid": "4ea4614b_6b8e7f19",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 172,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T05:56:47Z",
+      "side": 1,
+      "message": "will fix it",
+      "parentUuid": "2c7851e1_46d05f10",
+      "range": {
+        "startLine": 172,
+        "startChar": 17,
+        "endLine": 172,
+        "endChar": 32
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "9446a34f_c6cdcbcc",
         "filename": "system/utest/core/smc/smc.c",
         "patchSetId": 1
@@ -122,6 +236,30 @@
       "writtenOn": "2018-05-23T08:52:22Z",
       "side": 1,
       "message": "same as above",
+      "range": {
+        "startLine": 200,
+        "startChar": 17,
+        "endLine": 200,
+        "endChar": 32
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "ba27aff0_c2555d9e",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 200,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T05:56:47Z",
+      "side": 1,
+      "message": "will fix it",
+      "parentUuid": "9446a34f_c6cdcbcc",
       "range": {
         "startLine": 200,
         "startChar": 17,
