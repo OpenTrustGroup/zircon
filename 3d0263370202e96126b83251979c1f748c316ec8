@@ -96,6 +96,30 @@
     },
     {
       "key": {
+        "uuid": "a930cfba_cc2bb3e9",
+        "filename": "kernel/syscalls/smc.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 108,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T16:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c35140b7_e2c4655a",
+      "range": {
+        "startLine": 108,
+        "startChar": 45,
+        "endLine": 108,
+        "endChar": 49
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "4fb88628_055e3882",
         "filename": "system/utest/core/smc/smc.c",
         "patchSetId": 1
@@ -178,6 +202,24 @@
     },
     {
       "key": {
+        "uuid": "0dc5fc9d_d37612ce",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T16:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "5b4526fb_33b89375",
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "2c7851e1_46d05f10",
         "filename": "system/utest/core/smc/smc.c",
         "patchSetId": 1
@@ -225,6 +267,30 @@
     },
     {
       "key": {
+        "uuid": "90e643ae_99a1e54b",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 172,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T16:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4ea4614b_6b8e7f19",
+      "range": {
+        "startLine": 172,
+        "startChar": 17,
+        "endLine": 172,
+        "endChar": 32
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "9446a34f_c6cdcbcc",
         "filename": "system/utest/core/smc/smc.c",
         "patchSetId": 1
@@ -269,6 +335,30 @@
       "revId": "3d0263370202e96126b83251979c1f748c316ec8",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "686060c9_037eef9e",
+        "filename": "system/utest/core/smc/smc.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 200,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-27T16:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "ba27aff0_c2555d9e",
+      "range": {
+        "startLine": 200,
+        "startChar": 17,
+        "endLine": 200,
+        "endChar": 32
+      },
+      "revId": "3d0263370202e96126b83251979c1f748c316ec8",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     }
   ]
 }
