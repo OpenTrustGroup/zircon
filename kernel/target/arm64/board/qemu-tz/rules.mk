@@ -18,9 +18,9 @@ QEMU_TZ_ZIRCON := $(BUILDDIR)/qemu-tz-zircon.bin
 QEMU_TZ_BOOT_SHIM := $(BUILDDIR)/qemu-tz-boot-shim.bin
 
 # prepend shim to kernel image
-$(QEMU_TZ_ZIRCON): $(MKBOOTFS) $(QEMU_TZ_BOOT_SHIM) $(OUTLKBIN)
+$(QEMU_TZ_ZIRCON): $(QEMU_TZ_BOOT_SHIM) $(OUTLKBIN)
 	$(call BUILDECHO,generating $@)
-	$(NOECHO)$(MKBOOTFS) -o $@ $(OUTLKBIN) --header $(QEMU_TZ_BOOT_SHIM) --header-align $(KERNEL_ALIGN)
+	$(NOECHO)cat $(QEMU_TZ_BOOT_SHIM) $(OUTLKBIN) > $@
 
 GENERATED += $(QEMU_TZ_ZIRCON)
 EXTRA_BUILDDEPS += $(QEMU_TZ_ZIRCON)
