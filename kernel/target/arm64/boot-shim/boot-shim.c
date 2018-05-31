@@ -178,9 +178,9 @@ boot_shim_return_t boot_shim(void* device_tree) {
     // find our bootdata first
     if (!bootdata) {
         if (device_tree) {
-            bootdata = (bootdata_t*)device_tree;
-            if (bootdata->type != BOOTDATA_CONTAINER || bootdata->extra != BOOTDATA_MAGIC ||
-                bootdata->magic != BOOTITEM_MAGIC) {
+            bootdata = (zbi_header_t*)device_tree;
+            if (bootdata->type != ZBI_TYPE_CONTAINER || bootdata->extra != ZBI_CONTAINER_MAGIC ||
+                bootdata->magic != ZBI_ITEM_MAGIC) {
                 fail("bad magic for external bootdata\n");
             }
         } else {

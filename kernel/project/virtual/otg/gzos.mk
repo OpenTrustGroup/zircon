@@ -20,9 +20,10 @@ MODULES += \
     kernel/syscalls \
 
 MODULES += \
-    system/core/crashlogger \
     system/core/devmgr \
     system/core/userboot \
+    system/core/svchost \
+    system/core/crashsvc \
 
 MODULES += \
     system/dev/misc/console \
