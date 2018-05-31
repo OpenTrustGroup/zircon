@@ -17,6 +17,11 @@
 # specific instance IDs for each version listed here.  The two files must
 # be kept in lock-step so that scripts/download-prebuilt gets the same
 # contents whether it uses cipd or direct downloads.
+#
+# When adding new packages that are constructed by hand rather than by
+# automated bot builds (e.g. firmware), the CIPD packages must be copied to
+# Google Storage by running scripts/update-prebuilt-versions --upload with
+# appropriate credentials.
 
 # These lines tell scripts/update-prebuilt-versions what to look for.
 $VerifiedPlatform linux-amd64
@@ -25,11 +30,11 @@ $VerifiedPlatform mac-amd64
 
 # Clang
 @Subdir clang
-fuchsia/clang/${platform} git_revision:6b2da8b3f95f7e20331a1de4d9f93eb5fb4862a9
+fuchsia/clang/${platform} git_revision:4c6142e3bc986b79dc0f7c9deafc82af13eab12f
 
 # GCC
 @Subdir gcc
-fuchsia/gcc/${platform} git_revision:17571017f2555b523dec38ebe1c5c60ca9a18ff8,69bc498952e7e477d6f96f3b6f900a6112e82350
+fuchsia/gcc/${platform} git_revision:4c9ce848d0459c3d872c88f897c40e09f0831122,6ce348a507d0bd3308f8a131023de49576692c37
 
 # sysroot
 @Subdir sysroot
@@ -37,4 +42,8 @@ fuchsia/sysroot/${os=linux}-${arch} git_revision:a96053c799a0f1ad0b7e8ab8199edbf
 
 # Symbolizer tool.  This is a standalone executable, not a subdirectory.
 @Subdir
-fuchsia/tools/symbolize/${platform} git_revision:9262838ffc6f2d58d7844635c86f3fe5f0a7849c
+fuchsia/tools/symbolize/${platform} git_revision:fa12438b6e168011e6bd677036778c2b7cf62a21
+
+# QEMU
+@Subdir qemu
+fuchsia/qemu/${platform} git_revision:0f0027d617976b4cbb7b937d5836f8ef0ac25ba1

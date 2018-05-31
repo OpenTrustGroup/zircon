@@ -13,10 +13,11 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/imx8mevk-gpio.c \
     $(LOCAL_DIR)/imx8mevk-gpu.c \
     $(LOCAL_DIR)/imx8mevk-usb.c \
+    $(LOCAL_DIR)/imx8mevk-sdhci.c \
 
 
 MODULE_STATIC_LIBS := \
-    system/dev/soc/imx8m \
+    system/dev/lib/imx8m \
     system/ulib/ddk \
     system/ulib/sync \
 
@@ -24,8 +25,5 @@ MODULE_LIBS := \
     system/ulib/driver \
     system/ulib/c \
     system/ulib/zircon
-
-MODULE_HEADER_DEPS := \
-    system/dev/soc/imx8m
 
 include make/module.mk

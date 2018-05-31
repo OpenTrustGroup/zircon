@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <library.h>
+#include <test/c/fidl.h>
 
 int main(int argc, char** argv) {
     test_Test test;

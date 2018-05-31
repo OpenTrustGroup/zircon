@@ -174,18 +174,15 @@ int wait_queue_blocked_priority(wait_queue_t* wait) {
     return t->effec_priority;
 }
 
-// Disable thread safety analysis here since Clang has trouble with the analysis
-// around timer_trylock_or_cancel.
 static void wait_queue_timeout_handler(timer_t* timer, zx_time_t now,
-                                       void* arg) TA_NO_THREAD_SAFETY_ANALYSIS {
+                                       void* arg) {
     thread_t* thread = (thread_t*)arg;
 
     DEBUG_ASSERT(thread->magic == THREAD_MAGIC);
 
-    /* spin trylocking on the thread lock since the routine that set up the callback,
-     * wait_queue_block, may be trying to simultaneously cancel this timer while holding the
-     * thread_lock.
-     */
+    // spin trylocking on the thread lock since the routine that set up the callback,
+    // wait_queue_block, may be trying to simultaneously cancel this timer while holding the
+    // thread_lock.
     if (timer_trylock_or_cancel(timer, &thread_lock))
         return;
 
@@ -195,7 +192,7 @@ static void wait_queue_timeout_handler(timer_t* timer, zx_time_t now,
 }
 
 static zx_status_t wait_queue_block_worker(wait_queue_t* wait, zx_time_t deadline,
-                                           uint signal_mask) {
+                                           uint signal_mask) TA_REQ(thread_lock) {
     timer_t timer;
 
     thread_t* current_thread = get_current_thread();
@@ -228,7 +225,7 @@ static zx_status_t wait_queue_block_worker(wait_queue_t* wait, zx_time_t deadlin
     current_thread->blocking_wait_queue = wait;
     current_thread->blocked_status = ZX_OK;
 
-    /* if the deadline is nonzero or noninfinite, set a callback to yank us out of the queue */
+    // if the deadline is nonzero or noninfinite, set a callback to yank us out of the queue
     if (deadline != ZX_TIME_INFINITE) {
         timer_init(&timer);
         timer_set_oneshot(&timer, deadline, wait_queue_timeout_handler, (void*)current_thread);
@@ -240,7 +237,7 @@ static zx_status_t wait_queue_block_worker(wait_queue_t* wait, zx_time_t deadlin
 
     ktrace_ptr(TAG_KWAIT_UNBLOCK, wait, current_thread->blocked_status, 0);
 
-    /* we don't really know if the timer fired or not, so it's better safe to try to cancel it */
+    // we don't really know if the timer fired or not, so it's better safe to try to cancel it
     if (deadline != ZX_TIME_INFINITE) {
         timer_cancel(&timer);
     }
@@ -330,8 +327,8 @@ int wait_queue_wake_one(wait_queue_t* wait, bool reschedule, zx_status_t wait_qu
 
         ktrace_ptr(TAG_KWAIT_WAKE, wait, 0, 0);
 
-        /* wake up the new thread, putting it in a run queue on a cpu. reschedule if the local */
-        /* cpu run queue was modified */
+        // wake up the new thread, putting it in a run queue on a cpu. reschedule if the local
+        // cpu run queue was modified
         bool local_resched = sched_unblock(t);
         if (reschedule && local_resched)
             sched_reschedule();
@@ -395,8 +392,8 @@ int wait_queue_wake_all(wait_queue_t* wait, bool reschedule, zx_status_t wait_qu
 
     struct list_node list = LIST_INITIAL_VALUE(list);
 
-    /* pop all the threads off the wait queue into the run queue */
-    /* TODO: optimize with custom pop all routine */
+    // pop all the threads off the wait queue into the run queue
+    // TODO: optimize with custom pop all routine
     while ((t = wait_queue_pop_head(wait))) {
         wait->count--;
 
@@ -414,8 +411,8 @@ int wait_queue_wake_all(wait_queue_t* wait, bool reschedule, zx_status_t wait_qu
 
     ktrace_ptr(TAG_KWAIT_WAKE, wait, 0, 0);
 
-    /* wake up the new thread(s), putting it in a run queue on a cpu. reschedule if the local */
-    /* cpu run queue was modified */
+    // wake up the new thread(s), putting it in a run queue on a cpu. reschedule if the local
+    // cpu run queue was modified
     bool local_resched = sched_unblock_list(&list);
     if (reschedule && local_resched)
         sched_reschedule();

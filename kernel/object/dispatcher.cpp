@@ -93,14 +93,14 @@ Dispatcher::Dispatcher(zx_signals_t signals)
       handle_count_(0u),
       signals_(signals) {
 
-    kcounter_add(dispatcher_create_count, 1u);
+    kcounter_add(dispatcher_create_count, 1);
 }
 
 Dispatcher::~Dispatcher() {
 #if WITH_LIB_KTRACE
     ktrace(TAG_OBJECT_DELETE, (uint32_t)koid_, 0, 0, 0);
 #endif
-    kcounter_add(dispatcher_destroy_count, 1u);
+    kcounter_add(dispatcher_destroy_count, 1);
 }
 
 // The refcount of this object has reached zero: delete self
@@ -201,10 +201,8 @@ void Dispatcher::AddObserverHelper(StateObserver* observer,
     }
     if (flags & StateObserver::kNeedRemoval)
         observer->OnRemoved();
-    if (flags & StateObserver::kWokeThreads)
-        thread_reschedule();
 
-    kcounter_add(dispatcher_observe_count, 1u);
+    kcounter_add(dispatcher_observe_count, 1);
 }
 
 void Dispatcher::AddObserver(StateObserver* observer, const StateObserver::CountInfo* cinfo) {
@@ -232,11 +230,8 @@ bool Dispatcher::Cancel(Handle* handle) {
         return obs->OnCancel(handle);
     });
 
-    kcounter_add(dispatcher_cancel_bh_count, 1u);
+    kcounter_add(dispatcher_cancel_bh_count, 1);
 
-    // We could request a reschedule if kWokeThreads is asserted,
-    // but cancellation is not likely to benefit from aggressive
-    // rescheduling.
     return flags & StateObserver::kHandled;
 }
 
@@ -248,11 +243,8 @@ bool Dispatcher::CancelByKey(Handle* handle, const void* port, uint64_t key) {
         return obs->OnCancelByKey(handle, port, key);
     });
 
-    kcounter_add(dispatcher_cancel_bk_count, 1u);
+    kcounter_add(dispatcher_cancel_bk_count, 1);
 
-    // We could request a reschedule if kWokeThreads is asserted,
-    // but cancellation is not likely to benefit from aggressive
-    // rescheduling.
     return flags & StateObserver::kHandled;
 }
 
@@ -264,7 +256,6 @@ template <typename Mutex>
 void Dispatcher::UpdateStateHelper(zx_signals_t clear_mask,
                                    zx_signals_t set_mask,
                                    Mutex* mutex) TA_NO_THREAD_SAFETY_ANALYSIS {
-    StateObserver::Flags flags;
     Dispatcher::ObserverList obs_to_remove;
 
     {
@@ -276,15 +267,12 @@ void Dispatcher::UpdateStateHelper(zx_signals_t clear_mask,
         if (previous_signals == signals_)
             return;
 
-        flags = UpdateInternalLocked(&obs_to_remove, signals_);
+        UpdateInternalLocked(&obs_to_remove, signals_);
     }
 
     while (!obs_to_remove.is_empty()) {
         obs_to_remove.pop_front()->OnRemoved();
     }
-
-    if (flags & StateObserver::kWokeThreads)
-        thread_reschedule();
 }
 
 void Dispatcher::UpdateState(zx_signals_t clear_mask,
@@ -314,14 +302,14 @@ zx_status_t Dispatcher::SetCookie(CookieJar* cookiejar, zx_koid_t scope, uint64_
         cookiejar->scope_ = scope;
         cookiejar->cookie_ = cookie;
 
-        kcounter_add(dispatcher_cookie_set_count, 1u);
+        kcounter_add(dispatcher_cookie_set_count, 1);
         return ZX_OK;
     }
 
     if (cookiejar->scope_ == scope) {
         cookiejar->cookie_ = cookie;
 
-        kcounter_add(dispatcher_cookie_reset_count, 1u);
+        kcounter_add(dispatcher_cookie_reset_count, 1);
         return ZX_OK;
     }
 
@@ -359,14 +347,11 @@ zx_status_t Dispatcher::InvalidateCookie(CookieJar* cookiejar) {
     return InvalidateCookieLocked(cookiejar);
 }
 
-StateObserver::Flags Dispatcher::UpdateInternalLocked(ObserverList* obs_to_remove, zx_signals_t signals) {
+void Dispatcher::UpdateInternalLocked(ObserverList* obs_to_remove, zx_signals_t signals) {
     ZX_DEBUG_ASSERT(has_state_tracker());
-
-    StateObserver::Flags flags = 0;
 
     for (auto it = observers_.begin(); it != observers_.end();) {
         StateObserver::Flags it_flags = it->OnStateChange(signals);
-        flags |= it_flags;
         if (it_flags & StateObserver::kNeedRemoval) {
             auto to_remove = it;
             ++it;
@@ -375,7 +360,4 @@ StateObserver::Flags Dispatcher::UpdateInternalLocked(ObserverList* obs_to_remov
             ++it;
         }
     }
-
-    // Filter out NeedRemoval flag because we processed that here
-    return flags & (~StateObserver::kNeedRemoval);
 }

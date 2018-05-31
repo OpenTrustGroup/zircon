@@ -396,6 +396,10 @@ int IntelHDAController::IRQThread() {
         if (intsts & HDA_REG_INTCTL_CIE)
             ProcessControllerIRQ();
 
+        if (dsp_ != nullptr) {
+            dsp_->ProcessIRQ();
+        }
+
         ProcessRIRB();
         ProcessCORB();
     }

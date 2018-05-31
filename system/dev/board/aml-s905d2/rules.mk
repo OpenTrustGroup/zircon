@@ -15,6 +15,7 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/aml-usb.c \
 
 MODULE_STATIC_LIBS := \
+    system/dev/lib/amlogic \
     system/ulib/ddk \
     system/ulib/sync
 
@@ -22,8 +23,5 @@ MODULE_LIBS := \
     system/ulib/driver \
     system/ulib/c \
     system/ulib/zircon
-
-MODULE_HEADER_DEPS := \
-    system/dev/soc/amlogic
 
 include make/module.mk

@@ -19,11 +19,14 @@
 #if WITH_DEV_IOMMU_DUMMY
 #include <dev/iommu/dummy.h>
 #endif
+#if WITH_DEV_IOMMU_INTEL
+#include <dev/iommu/intel.h>
+#endif
 
 #define LOCAL_TRACE 0
 
 zx_status_t IommuDispatcher::Create(uint32_t type, fbl::unique_ptr<const uint8_t[]> desc,
-                                    uint32_t desc_len, fbl::RefPtr<Dispatcher>* dispatcher,
+                                    size_t desc_len, fbl::RefPtr<Dispatcher>* dispatcher,
                                     zx_rights_t* rights) {
 
     fbl::RefPtr<Iommu> iommu;
@@ -32,6 +35,11 @@ zx_status_t IommuDispatcher::Create(uint32_t type, fbl::unique_ptr<const uint8_t
 #if WITH_DEV_IOMMU_DUMMY
         case ZX_IOMMU_TYPE_DUMMY:
             status = DummyIommu::Create(fbl::move(desc), desc_len, &iommu);
+            break;
+#endif
+#if WITH_DEV_IOMMU_INTEL
+        case ZX_IOMMU_TYPE_INTEL:
+            status = IntelIommu::Create(fbl::move(desc), desc_len, &iommu);
             break;
 #endif
         default:

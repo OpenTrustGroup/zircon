@@ -23,10 +23,13 @@ lines starting with # are ignored.  Whitespace is not allowed in names.
 If this option is set, the system will not use Address Space Layout
 Randomization.
 
-## crashlogger.disable
+## crashsvc.analyzer=\<path\>
 
-If this option is set, the crashlogger is not started. You should leave this
-option off unless you suspect the crashlogger is causing problems.
+If this option is set, the given analyzer will be used when crashsvc encounters
+an exception. If it is empty, the default (`/boot/bin/crashanalyzer`) will be
+used which logs exception information and a backtrace to the system log. The
+analyzer process is passed two startup handles: the process and thread that
+sustained the exception.
 
 ## crashlogger.pt=true
 
@@ -56,6 +59,24 @@ otherwise remain at 0.
 Instructs the devmgr that a /system volume is required.  Without this,
 devmgr assumes this is a standalone Zircon build and not a full Fuchsia
 system.
+
+## devmgr\.suspend-timeout-debug
+
+If this option is set, the system prints out debugging when mexec, suspend,
+reboot, or power off did not finish in 10 seconds.
+
+## devmgr\.suspend-timeout-fallback
+
+If this option is set, the system invokes kernel fallback to reboot or poweroff
+the device when the operation did not finish in 10 seconds.
+
+## devmgr\.devhost\.asan
+
+This option must be set if any drivers not included directly in /boot are built
+with `-fsanitize=address`.  If there are `-fsanitize=address` drivers in /boot,
+then all `-fsanitize=address` drivers will be supported regardless of this
+option.  If this option is not set and there are no such drivers in /boot, then
+drivers built with `-fsanitize=address` cannot be loaded and will be rejected.
 
 ## driver.\<name>.disable
 
@@ -301,7 +322,7 @@ you to pass arguments to an executable.
 
 This option requests that *command* be run once the blob partition is
 mounted. The given command is expected to mount /system, and then signal its
-process handle with `ZX_SIGNAL_USER0`.
+process handle with `ZX_USER_SIGNAL_0`.
 
 *command* may not assume that any other filesystem has been mounted. If
 `zircon.system.blob-init-arg` is set, it will be provided as the first

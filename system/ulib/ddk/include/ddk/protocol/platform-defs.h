@@ -38,11 +38,15 @@ __BEGIN_CDECLS;
 #define PDEV_VID_GOOGLE             3
 #define PDEV_PID_GAUSS              1
 #define PDEV_PID_MACHINA            2
+#define PDEV_PID_ASTRO              3
 
 #define PDEV_DID_GAUSS_AUDIO_IN     1
 #define PDEV_DID_GAUSS_AUDIO_OUT    2
 #define PDEV_DID_GAUSS_I2C_TEST     3
 #define PDEV_DID_GAUSS_LED          4
+#define PDEV_DID_ASTRO_FOCALTOUCH   5
+#define PDEV_DID_ASTRO_GOODIXTOUCH  6
+
 
 // Khadas
 #define PDEV_VID_KHADAS             4
@@ -65,6 +69,11 @@ __BEGIN_CDECLS;
 #define PDEV_DID_AMLOGIC_GXL_CLK    5
 #define PDEV_DID_AMLOGIC_SD_EMMC    6
 #define PDEV_DID_AMLOGIC_ETH        7
+#define PDEV_DID_AMLOGIC_THERMAL    8
+#define PDEV_DID_AMLOGIC_MAILBOX    9
+#define PDEV_DID_AMLOGIC_SCPI       10
+#define PDEV_DID_AMLOGIC_DISPLAY    11
+#define PDEV_DID_AMLOGIC_VIDEO      12
 
 // Broadcom
 #define PDEV_VID_BROADCOM           6
@@ -84,5 +93,6 @@ __BEGIN_CDECLS;
 
 #define PDEV_DID_IMX_GPIO           1
 #define PDEV_DID_IMX_DISPLAY        2
+#define PDEV_DID_IMX_SDHCI          3
 
 __END_CDECLS;

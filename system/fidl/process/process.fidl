@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-library process;
+library fuchsia.process;
 
-using io;
-using ldsvc;
+// TODO: Add when Zircon's build supports library dependencies.
+// using io;
 
 struct HandleInfo {
     // The handle to use for this argument.
@@ -22,7 +22,8 @@ struct NameInfo {
     string path;
 
     // The associated directory.
-    io.Directory directory;
+    // TODO: Use io.Directory when Zircon's build supports library dependencies.
+    handle<channel> directory;
 };
 
 struct LaunchInfo {
@@ -32,8 +33,8 @@ struct LaunchInfo {
     // The job in which to create the process.
     handle<job> job;
 
-    // The shared library loader to use for the process.
-    ldsvc.Loader loader;
+    // The name to assign to the created process.
+    string name;
 };
 
 struct LaunchResult {
@@ -58,8 +59,12 @@ struct LaunchResult {
     handle<vmar>? root_vmar;
 };
 
+[Discoverable]
 interface Launcher {
     // Creates and starts the process described by |info|.
+    //
+    // After processing this message, the |Launcher| is reset to its initial
+    // state and is ready to launch another process.
     1: Launch(LaunchInfo info) -> (LaunchResult result);
 
     // The arguments to pass to the process.

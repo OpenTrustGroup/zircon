@@ -22,15 +22,18 @@ public:
     InterruptEventDispatcher& operator=(const InterruptDispatcher &) = delete;
 
 protected:
-    void MaskInterrupt(uint32_t vector) final;
-    void UnmaskInterrupt(uint32_t vector) final;
-    zx_status_t RegisterInterruptHandler(uint32_t vector, void* data) final;
-    void UnregisterInterruptHandler(uint32_t vector) final;
+    void MaskInterrupt() final;
+    void UnmaskInterrupt() final;
+    void UnregisterInterruptHandler() final;
 
 private:
-    explicit InterruptEventDispatcher() {}
+    explicit InterruptEventDispatcher(uint32_t vector)
+        : vector_(vector) {}
+    zx_status_t RegisterInterruptHandler();
 
     static void IrqHandler(void* ctx);
+
+    const uint32_t vector_;
 
     fbl::Canary<fbl::magic("INED")> canary_;
 };

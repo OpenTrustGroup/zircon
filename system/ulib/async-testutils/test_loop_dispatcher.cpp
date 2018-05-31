@@ -1,5 +1,5 @@
-// Copyright 2018 The Fuchsia Authors.All rights reserved.
-// Use of this source code is governed by a BSD - style license that can be
+// Copyright 2018 The Fuchsia Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <lib/async-testutils/test_loop_dispatcher.h>
@@ -71,9 +71,14 @@ zx_status_t TestLoopDispatcher::BeginWait(async_wait_t* wait) {
 
 zx_status_t TestLoopDispatcher::CancelWait(async_wait_t* wait) {
     ZX_DEBUG_ASSERT(wait);
+
+    list_node_t* node = WaitToNode(wait);
+    if (!list_in_list(node)) {
+        return ZX_ERR_NOT_FOUND;
+    }
     zx_status_t status = port_.cancel(wait->object, reinterpret_cast<uintptr_t>(wait));
     if (status == ZX_OK) {
-        list_delete(WaitToNode(wait));
+        list_delete(node);
     }
     return status;
 }
@@ -149,7 +154,7 @@ bool TestLoopDispatcher::DispatchPendingWaits() {
     zx_port_packet_t user_packet{};
     user_packet.key = wait_id_;
     user_packet.type = ZX_PKT_TYPE_USER;
-    ZX_ASSERT(ZX_OK == port_.queue(&user_packet, 1u));
+    ZX_ASSERT(ZX_OK == port_.queue(&user_packet));
 
     bool did_work = false;
     for (;;) {
@@ -157,7 +162,7 @@ bool TestLoopDispatcher::DispatchPendingWaits() {
 
         zx_port_packet_t packet;
         // Grace of the user packet, |port_| should always have a queued wait.
-        ZX_ASSERT(ZX_OK == port_.wait(zx::time(0), &packet, 1));
+        ZX_ASSERT(ZX_OK == port_.wait(zx::time(0), &packet));
         if (packet.type == ZX_PKT_TYPE_USER) {
           if (packet.key == wait_id_) {
               // The packet is one we queued at the beginning of this call:

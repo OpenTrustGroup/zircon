@@ -87,22 +87,22 @@ ChannelDispatcher::~ChannelDispatcher() {
 
     switch (max_message_count_) {
     case 0 ... 1:
-        kcounter_add(channel_packet_depth_1, 1u);
+        kcounter_add(channel_packet_depth_1, 1);
         break;
     case 2 ... 4:
-        kcounter_add(channel_packet_depth_4, 1u);
+        kcounter_add(channel_packet_depth_4, 1);
         break;
     case 5 ... 16:
-        kcounter_add(channel_packet_depth_16, 1u);
+        kcounter_add(channel_packet_depth_16, 1);
         break;
     case 17 ... 64:
-        kcounter_add(channel_packet_depth_64, 1u);
+        kcounter_add(channel_packet_depth_64, 1);
         break;
     case 65 ... 256:
-        kcounter_add(channel_packet_depth_256, 1u);
+        kcounter_add(channel_packet_depth_256, 1);
         break;
     default:
-        kcounter_add(channel_packet_depth_unbounded, 1u);
+        kcounter_add(channel_packet_depth_unbounded, 1);
         break;
     }
 }
@@ -201,6 +201,8 @@ zx_status_t ChannelDispatcher::Read(uint32_t* msg_size,
 zx_status_t ChannelDispatcher::Write(fbl::unique_ptr<MessagePacket> msg) {
     canary_.Assert();
 
+    AutoReschedDisable resched_disable; // Must come before the AutoLock.
+    resched_disable.Disable();
     AutoLock lock(get_lock());
     if (!peer_) {
         // |msg| will be destroyed but we want to keep the handles alive since
@@ -209,8 +211,7 @@ zx_status_t ChannelDispatcher::Write(fbl::unique_ptr<MessagePacket> msg) {
         return ZX_ERR_PEER_CLOSED;
     }
 
-    if (peer_->WriteSelf(fbl::move(msg)) > 0)
-        thread_reschedule();
+    peer_->WriteSelf(fbl::move(msg));
 
     return ZX_OK;
 }
@@ -230,6 +231,8 @@ zx_status_t ChannelDispatcher::Call(fbl::unique_ptr<MessagePacket> msg,
     }
 
     {
+        AutoReschedDisable resched_disable; // Must come before the AutoLock.
+        resched_disable.Disable();
         AutoLock lock(get_lock());
 
         if (!peer_) {
@@ -312,7 +315,7 @@ size_t ChannelDispatcher::TxMessageMax() const {
     return SIZE_MAX;
 }
 
-int ChannelDispatcher::WriteSelf(fbl::unique_ptr<MessagePacket> msg) {
+void ChannelDispatcher::WriteSelf(fbl::unique_ptr<MessagePacket> msg) {
     canary_.Assert();
 
     if (!waiters_.is_empty()) {
@@ -325,8 +328,8 @@ int ChannelDispatcher::WriteSelf(fbl::unique_ptr<MessagePacket> msg) {
             // Remove waiter from list.
             if (waiter.get_txid() == txid) {
                 waiters_.erase(waiter);
-                // we return how many threads have been woken up, or zero.
-                return waiter.Deliver(fbl::move(msg));
+                waiter.Deliver(fbl::move(msg));
+                return;
             }
         }
     }
@@ -337,7 +340,6 @@ int ChannelDispatcher::WriteSelf(fbl::unique_ptr<MessagePacket> msg) {
     }
 
     UpdateStateLocked(0u, ZX_CHANNEL_READABLE);
-    return 0;
 }
 
 zx_status_t ChannelDispatcher::UserSignalSelf(uint32_t clear_mask, uint32_t set_mask) {
@@ -365,19 +367,19 @@ zx_status_t ChannelDispatcher::MessageWaiter::BeginWait(fbl::RefPtr<ChannelDispa
     return ZX_OK;
 }
 
-int ChannelDispatcher::MessageWaiter::Deliver(fbl::unique_ptr<MessagePacket> msg) {
+void ChannelDispatcher::MessageWaiter::Deliver(fbl::unique_ptr<MessagePacket> msg) {
     DEBUG_ASSERT(channel_);
 
     msg_ = fbl::move(msg);
     status_ = ZX_OK;
-    return event_.Signal(ZX_OK);
+    event_.Signal(ZX_OK);
 }
 
-int ChannelDispatcher::MessageWaiter::Cancel(zx_status_t status) {
+void ChannelDispatcher::MessageWaiter::Cancel(zx_status_t status) {
     DEBUG_ASSERT(!InContainer());
     DEBUG_ASSERT(channel_);
     status_ = status;
-    return event_.Signal(status);
+    event_.Signal(status);
 }
 
 zx_status_t ChannelDispatcher::MessageWaiter::Wait(zx_time_t deadline) {

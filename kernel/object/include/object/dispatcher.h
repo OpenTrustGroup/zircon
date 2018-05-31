@@ -9,6 +9,7 @@
 #include <err.h>
 #include <stdint.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <fbl/auto_lock.h>
 #include <fbl/canary.h>
@@ -23,6 +24,7 @@
 #include <kernel/spinlock.h>
 #include <object/state_observer.h>
 
+#include <zircon/compiler.h>
 #include <zircon/syscalls/object.h>
 #include <zircon/types.h>
 
@@ -164,7 +166,9 @@ public:
 
     // get_name() will return a null-terminated name of ZX_MAX_NAME_LEN - 1 or fewer
     // characters.  For objects that don't have names it will be "".
-    virtual void get_name(char out_name[ZX_MAX_NAME_LEN]) const { out_name[0] = 0; }
+    virtual void get_name(char out_name[ZX_MAX_NAME_LEN]) const __NONNULL((2)) {
+        memset(out_name, 0, ZX_MAX_NAME_LEN);
+    }
 
     // set_name() will truncate to ZX_MAX_NAME_LEN - 1 and ensure there is a
     // terminating null
@@ -210,9 +214,8 @@ private:
     void AddObserverHelper(StateObserver* observer,
                            const StateObserver::CountInfo* cinfo, Mutex* mutex);
 
-    // Returns flag kHandled if one of the observers have been signaled.
-    StateObserver::Flags UpdateInternalLocked(ObserverList* obs_to_remove,
-                                              zx_signals_t signals) TA_REQ(get_lock());
+    void UpdateInternalLocked(ObserverList* obs_to_remove,
+                              zx_signals_t signals) TA_REQ(get_lock());
 
     const zx_koid_t koid_;
     uint32_t handle_count_;
@@ -228,7 +231,7 @@ private:
 
 // PeeredDispatchers have opposing endpoints to coordinate state
 // with. For example, writing into one endpoint of a Channel needs to
-// modify zx_signal_t state (for the readability bit) on the opposite
+// modify zx_signals_t state (for the readability bit) on the opposite
 // side. To coordinate their state, they share a mutex, which is held
 // by the PeerHolder. Both endpoints have a RefPtr back to the
 // PeerHolder; no one else ever does.

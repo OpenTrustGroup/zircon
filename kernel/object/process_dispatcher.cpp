@@ -62,11 +62,12 @@ zx_status_t ProcessDispatcher::Create(
     fbl::RefPtr<VmAddressRegionDispatcher>* root_vmar_disp,
     zx_rights_t* root_vmar_rights) {
     fbl::AllocChecker ac;
-    fbl::unique_ptr<ProcessDispatcher> process(new (&ac) ProcessDispatcher(job, name, flags));
+    fbl::RefPtr<ProcessDispatcher> process =
+        fbl::AdoptRef(new (&ac) ProcessDispatcher(job, name, flags));
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
-    if (!job->AddChildProcess(process.get()))
+    if (!job->AddChildProcess(process))
         return ZX_ERR_BAD_STATE;
 
     zx_status_t result = process->Initialize();
@@ -84,7 +85,7 @@ zx_status_t ProcessDispatcher::Create(
     }
 
     *rights = ZX_DEFAULT_PROCESS_RIGHTS;
-    *dispatcher = fbl::AdoptRef<Dispatcher>(process.release());
+    *dispatcher = fbl::move(process);
     *root_vmar_disp = DownCastDispatcher<VmAddressRegionDispatcher>(
             &new_vmar_dispatcher);
 
@@ -167,7 +168,7 @@ zx_status_t ProcessDispatcher::Initialize() {
     return ZX_OK;
 }
 
-void ProcessDispatcher::Exit(int retcode) {
+void ProcessDispatcher::Exit(int64_t retcode) {
     LTRACE_ENTRY_OBJ;
 
     DEBUG_ASSERT(ProcessDispatcher::GetCurrent() == this);
@@ -480,21 +481,21 @@ zx_status_t ProcessDispatcher::GetDispatcherWithRightsInternal(zx_handle_t handl
 zx_status_t ProcessDispatcher::GetInfo(zx_info_process_t* info) {
     memset(info, 0, sizeof(*info));
 
+    State state;
     // retcode_ depends on the state: make sure they're consistent.
-    state_lock_.Acquire();
-    int retcode = retcode_;
-    State state = state_;
-    if (debugger_exception_port_) {  // TODO: Protect with rights if necessary.
-        info->debugger_attached = true;
+    {
+        AutoLock lock(&state_lock_);
+        state = state_;
+        info->return_code = retcode_;
+        // TODO: Protect with rights if necessary.
+        info->debugger_attached = debugger_exception_port_ != nullptr;
     }
-    state_lock_.Release();
 
     switch (state) {
     case State::DEAD:
     case State::DYING:
-        info->return_code = retcode;
         info->exited = true;
-        /* fallthrough */
+        __FALLTHROUGH;
     case State::RUNNING:
         info->started = true;
         break;

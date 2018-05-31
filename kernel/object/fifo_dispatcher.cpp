@@ -16,7 +16,7 @@
 using fbl::AutoLock;
 
 // static
-zx_status_t FifoDispatcher::Create(uint32_t count, uint32_t elemsize, uint32_t options,
+zx_status_t FifoDispatcher::Create(size_t count, size_t elemsize, uint32_t options,
                                    fbl::RefPtr<Dispatcher>* dispatcher0,
                                    fbl::RefPtr<Dispatcher>* dispatcher1,
                                    zx_rights_t* rights) {
@@ -39,8 +39,8 @@ zx_status_t FifoDispatcher::Create(uint32_t count, uint32_t elemsize, uint32_t o
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
-    auto fifo0 = fbl::AdoptRef(new (&ac) FifoDispatcher(fbl::move(holder0), options, count,
-                                                        elemsize, fbl::move(data0)));
+    auto fifo0 = fbl::AdoptRef(new (&ac) FifoDispatcher(fbl::move(holder0), options, static_cast<uint32_t>(count),
+                                                        static_cast<uint32_t>(elemsize), fbl::move(data0)));
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
@@ -48,8 +48,8 @@ zx_status_t FifoDispatcher::Create(uint32_t count, uint32_t elemsize, uint32_t o
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
-    auto fifo1 = fbl::AdoptRef(new (&ac) FifoDispatcher(fbl::move(holder1), options, count,
-                                                        elemsize, fbl::move(data1)));
+    auto fifo1 = fbl::AdoptRef(new (&ac) FifoDispatcher(fbl::move(holder1), options, static_cast<uint32_t>(count),
+                                                        static_cast<uint32_t>(elemsize), fbl::move(data1)));
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
@@ -103,21 +103,23 @@ void FifoDispatcher::OnPeerZeroHandlesLocked() TA_NO_THREAD_SAFETY_ANALYSIS {
     UpdateStateLocked(ZX_FIFO_WRITABLE, ZX_FIFO_PEER_CLOSED);
 }
 
-zx_status_t FifoDispatcher::WriteFromUser(user_in_ptr<const uint8_t> ptr, size_t len, uint32_t* actual) {
+zx_status_t FifoDispatcher::WriteFromUser(size_t elem_size, user_in_ptr<const uint8_t> ptr,
+                                          size_t count, size_t* actual) {
     canary_.Assert();
 
     AutoLock lock(get_lock());
     if (!peer_)
         return ZX_ERR_PEER_CLOSED;
-
-    return peer_->WriteSelfLocked(ptr, len, actual);
+    return peer_->WriteSelfLocked(elem_size, ptr, count, actual);
 }
 
-zx_status_t FifoDispatcher::WriteSelfLocked(user_in_ptr<const uint8_t> ptr, size_t bytelen, uint32_t* actual)
+zx_status_t FifoDispatcher::WriteSelfLocked(size_t elem_size, user_in_ptr<const uint8_t> ptr,
+                                            size_t count, size_t* actual)
     TA_NO_THREAD_SAFETY_ANALYSIS {
     canary_.Assert();
 
-    size_t count = bytelen / elem_size_;
+    if (elem_size != elem_size_)
+        return ZX_ERR_OUT_OF_RANGE;
     if (count == 0)
         return ZX_ERR_OUT_OF_RANGE;
 
@@ -170,11 +172,13 @@ zx_status_t FifoDispatcher::WriteSelfLocked(user_in_ptr<const uint8_t> ptr, size
     return ZX_OK;
 }
 
-zx_status_t FifoDispatcher::ReadToUser(user_out_ptr<uint8_t> ptr, size_t bytelen, uint32_t* actual)
+zx_status_t FifoDispatcher::ReadToUser(size_t elem_size, user_out_ptr<uint8_t> ptr, size_t count,
+                                       size_t* actual)
     TA_NO_THREAD_SAFETY_ANALYSIS {
     canary_.Assert();
 
-    size_t count = bytelen / elem_size_;
+    if (elem_size != elem_size_)
+        return ZX_ERR_OUT_OF_RANGE;
     if (count == 0)
         return ZX_ERR_OUT_OF_RANGE;
 

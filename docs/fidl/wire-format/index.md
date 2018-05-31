@@ -471,9 +471,12 @@ to the selected option.
     client and implementation of an interface over a Zircon channel.
 *   Each message is prefixed with a simple 16 byte header, body immediately
     follows header.
-    *   zx_txid_t transaction id (currently 32 bits, padded to 64 bits)
-    *   uint32 flags, all unused bits must be set to zero
-    *   uint32 ordinal
+    *   `zx_txid_t txid`, transaction id (currently 32 bits, padded to 64 bits)
+        * txids with the high bit set are reserved for use by zx_channel_call
+        * txids with the high bit unset are reserved for use by userspace
+        * See the [channel call] manpage for more details on txid allocation
+    *   `uint32 flags`, all unused bits must be set to zero
+    *   `uint32 ordinal`
         *   The zero ordinal is invalid.
         *   Ordinals with the most significant bit set are reserved.
             *   Ordinals 0x80001xxx are "control" messages
@@ -553,12 +556,11 @@ A method result message provides the result associated with a prior method call.
 The body of the message contains the method results as if they were packed in a
 **struct**.
 
-The message result header consists of `uint32 txn_id, uint32_t reserved, uint32
-flags, zx_status_t status`, which represents protocol-level status. The `txn_id`
-must be equal to the `txn_id` of the method call that this is a response to. The
-flags must be zero. A status of `ZX_OK` indicates normal response. A status of
-`ZX_ERR_NOT_SUPPORTED` indicates that the ordinal of the method call is not
-supported by the server.
+The message result header consists of `uint32 txid, uint32_t reserved, uint32
+flags, uint32_t ordinal`.  The `txid` must be equal to the `txid` of the method
+call to which this message is a response. The flags must be zero. The `ordinal`
+must be equal to the `ordinal` of the method call to which this message is a
+response.
 
 ![drawing](method-result-messages.png)
 
@@ -620,7 +622,7 @@ The body of an epitaph is described by the following structure:
 
 ```
 struct Epitaph {
-    // Generic protocol status, represented as an zx_status_t.
+    // Generic protocol status, represented as a zx_status_t.
     uint32 status;
 
     // Protocol-specific data, interpretation depends on the interface
@@ -912,6 +914,8 @@ safety checks:
 <!-- Footnotes themselves at the bottom. -->
 
 ## Notes
+
+[channel call]: ../../syscalls/channel_call.md
 
 [^1]: Justification for unterminated strings. Since strings can contain embedded
     null characters, it is safer to encode the size explicitly and to make no

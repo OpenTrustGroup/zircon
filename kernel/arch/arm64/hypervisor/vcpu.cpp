@@ -26,6 +26,8 @@
 #include "vmexit_priv.h"
 
 static constexpr uint32_t kGichHcrEn = 1u << 0;
+static constexpr uint32_t kGichHcrUie = 1u << 1;
+static constexpr uint32_t kGichMisrU = 1u << 1;
 static constexpr uint32_t kSpsrDaif = 0b1111 << 6;
 static constexpr uint32_t kSpsrEl1h = 0b0101;
 static constexpr uint32_t kSpsrNzcv = 0b1111 << 28;
@@ -34,9 +36,9 @@ static uint64_t vmpidr_of(uint8_t vpid, uint64_t mpidr) {
     return (vpid - 1) | (mpidr & 0xffffff00fe000000);
 }
 
-static bool gich_maybe_interrupt(GuestState* guest_state, GichState* gich_state) {
-    uint64_t elrs = gich_state->elrs;
-    if (elrs == 0) {
+static bool gich_maybe_interrupt(GichState* gich_state) {
+    uint64_t elrsr = gich_state->elrsr;
+    if (elrsr == 0) {
         // All list registers are in use, therefore return and indicate that we
         // should raise an IRQ.
         return true;
@@ -49,7 +51,7 @@ static bool gich_maybe_interrupt(GuestState* guest_state, GichState* gich_state)
         // timer interrupt is pending, process it first.
         goto has_timer;
     }
-    while (elrs != 0) {
+    while (elrsr != 0) {
         status = gich_state->interrupt_tracker.Pop(&vector);
         if (status != ZX_OK) {
             // There are no more pending interrupts.
@@ -61,10 +63,10 @@ static bool gich_maybe_interrupt(GuestState* guest_state, GichState* gich_state)
             // Skip an interrupt if it was already active.
             continue;
         }
-        uint32_t lr_index = __builtin_ctzl(elrs);
+        uint32_t lr_index = __builtin_ctzl(elrsr);
         uint64_t lr = gic_get_lr_from_vector(vector);
-        gic_write_gich_lr(lr_index, lr);
-        elrs &= ~(1u << lr_index);
+        gich_state->lr[lr_index] = lr;
+        elrsr &= ~(1u << lr_index);
     }
     // If there are pending interrupts, indicate that we should raise an IRQ.
     return pending > 0;
@@ -72,12 +74,19 @@ static bool gich_maybe_interrupt(GuestState* guest_state, GichState* gich_state)
 
 static bool gich_active_interrupts(GichState* gich_state) {
     gich_state->active_interrupts.ClearAll();
-    const uint32_t lr_limit = __builtin_ctzl(gich_state->elrs);
+    const uint32_t lr_limit = __builtin_ctzl(gich_state->elrsr);
     for (uint32_t i = 0; i < lr_limit; i++) {
         uint32_t vector = gic_get_vector_from_lr(gich_state->lr[i]);
         gich_state->active_interrupts.SetOne(vector);
     }
     return lr_limit > 0;
+}
+
+static VcpuMeta vmexit_interrupt_ktrace_meta(uint32_t misr) {
+    if ((misr & kGichMisrU) != 0) {
+        return VCPU_UNDERFLOW_MAINTENANCE_INTERRUPT;
+    }
+    return VCPU_PHYSICAL_INTERRUPT;
 }
 
 AutoGich::AutoGich(GichState* gich_state)
@@ -87,7 +96,6 @@ AutoGich::AutoGich(GichState* gich_state)
 
     // Load
     gic_write_gich_vmcr(gich_state_->vmcr);
-    gic_write_gich_elrs(gich_state_->elrs);
     for (uint32_t i = 0; i < gich_state_->num_lrs; i++) {
         gic_write_gich_lr(i, gich_state->lr[i]);
     }
@@ -98,7 +106,7 @@ AutoGich::~AutoGich() {
 
     // Save
     gich_state_->vmcr = gic_read_gich_vmcr();
-    gich_state_->elrs = gic_read_gich_elrs();
+    gich_state_->elrsr = gic_read_gich_elrsr();
     for (uint32_t i = 0; i < gich_state_->num_lrs; i++) {
         gich_state_->lr[i] = gic_read_gich_lr(i);
     }
@@ -153,7 +161,7 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
     vcpu->gich_state_.active_interrupts.Reset(kNumInterrupts);
     vcpu->gich_state_.num_lrs = gic_get_num_lrs();
     vcpu->gich_state_.vmcr = gic_default_gich_vmcr();
-    vcpu->gich_state_.elrs = gic_read_gich_elrs();
+    vcpu->gich_state_.elrsr = gic_read_gich_elrsr();
     vcpu->el2_state_->guest_state.system_state.elr_el2 = entry;
     vcpu->el2_state_->guest_state.system_state.spsr_el2 = kSpsrDaif | kSpsrEl1h;
     uint64_t mpidr = ARM64_READ_SYSREG(mpidr_el1);
@@ -185,13 +193,24 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
     bool force_virtual_interrupt = false;
     zx_status_t status;
     do {
-        bool has_active_interrupt;
+        uint64_t curr_hcr = hcr_;
+        uint32_t misr = 0;
+        if (gich_maybe_interrupt(&gich_state_) || force_virtual_interrupt) {
+            curr_hcr |= HCR_EL2_VI;
+            force_virtual_interrupt = false;
+        }
         {
             AutoGich auto_gich(&gich_state_);
-            uint64_t curr_hcr = hcr_;
-            if (gich_maybe_interrupt(guest_state, &gich_state_) || force_virtual_interrupt) {
-                curr_hcr |= HCR_EL2_VI;
-                force_virtual_interrupt = false;
+
+            // Underflow maintenance interrupt is signalled if there is one or no free LRs.
+            // We use it in case when there is not enough free LRs to inject all pending
+            // interrupts, so when guest finishes processing most of them, a maintenance
+            // interrupt will cause VM exit and will give us a chance to inject the remaining
+            // interrupts. The point of this is to reduce latency when processing interrupts.
+            uint32_t gich_hcr = 0;
+            if (gich_state_.interrupt_tracker.Pending() && gich_state_.num_lrs > 1) {
+                gich_hcr = gic_read_gich_hcr() | kGichHcrUie;
+                gic_write_gich_hcr(gich_hcr);
             }
 
             ktrace(TAG_VCPU_ENTER, 0, 0, 0, 0);
@@ -199,13 +218,21 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
             status = arm64_el2_resume(vttbr, el2_state_.PhysicalAddress(), curr_hcr);
             running_.store(false);
 
-            has_active_interrupt = gich_active_interrupts(&gich_state_);
+            // If we enabled underflow interrupt before we entered the guest we disable it
+            // to deassert it in case it is signalled. For details please refer to ARM Generic
+            // Interrupt Controller, Architecture Specification, 5.3.4 Maintenance Interrupt
+            // Status Register, GICH_MISR. Description of U bit in GICH_MISR.
+            if ((gich_hcr & kGichHcrUie) != 0) {
+                misr = gic_read_gich_misr();
+                gic_write_gich_hcr(gich_hcr & ~kGichHcrUie);
+            }
         }
+        bool has_active_interrupt = gich_active_interrupts(&gich_state_);
         if (status == ZX_ERR_NEXT) {
             // We received a physical interrupt. If it was due to the thread
             // being killed, then we should exit with an error, otherwise return
             // to the guest.
-            ktrace_vcpu(TAG_VCPU_EXIT, VCPU_PHYSICAL_INTERRUPT);
+            ktrace_vcpu(TAG_VCPU_EXIT, vmexit_interrupt_ktrace_meta(misr));
             status = thread_->signals & THREAD_SIGNAL_KILL ? ZX_ERR_CANCELED : ZX_OK;
             // If there were active interrupts when the physical interrupt
             // occurred, raise a virtual interrupt when we re-enter the guest.
@@ -227,12 +254,12 @@ zx_status_t Vcpu::Interrupt(uint32_t vector) {
     if (status != ZX_OK) {
         return status;
     } else if (!signaled && running_.load()) {
-        mp_reschedule(cpu_num_to_mask(hypervisor::cpu_of(vpid_)), MP_RESCHEDULE_FLAG_USE_IPI);
+        mp_interrupt(MP_IPI_TARGET_MASK, cpu_num_to_mask(hypervisor::cpu_of(vpid_)));
     }
     return ZX_OK;
 }
 
-zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
+zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, size_t len) const {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_)) {
         return ZX_ERR_BAD_STATE;
     } else if (kind != ZX_VCPU_STATE || len != sizeof(zx_vcpu_state_t)) {
@@ -246,7 +273,7 @@ zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
     return ZX_OK;
 }
 
-zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
+zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, size_t len) {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_)) {
         return ZX_ERR_BAD_STATE;
     } else if (kind != ZX_VCPU_STATE || len != sizeof(zx_vcpu_state_t)) {

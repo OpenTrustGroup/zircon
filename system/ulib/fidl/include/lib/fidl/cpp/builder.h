@@ -14,8 +14,8 @@
 
 // Declare placement allocation functions.
 // Note: This library does not provide an implementation of these functions.
-void* operator new(size_t size, void* ptr);
-void* operator new[](size_t size, void* ptr);
+void* operator new(size_t size, void* ptr) noexcept;
+void* operator new[](size_t size, void* ptr) noexcept;
 
 namespace fidl {
 
@@ -38,6 +38,9 @@ public:
 
     Builder(const Builder& other) = delete;
     Builder& operator=(const Builder& other) = delete;
+
+    Builder(Builder&& other);
+    Builder& operator=(Builder&& other);
 
     // Allocates storage in the buffer of sufficient size to store an object of
     // type |T|. The object must have alignment constraints that are compatible

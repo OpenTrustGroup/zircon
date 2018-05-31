@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -22,13 +23,15 @@
 #include <fbl/unique_fd.h>
 #include <fbl/unique_ptr.h>
 #include <fdio/debug.h>
+#include <fs-management/mount.h>
+#include <fs-management/ramdisk.h>
+#include <lib/zx/vmo.h>
 #include <sync/completion.h>
 #include <zircon/compiler.h>
 #include <zircon/device/block.h>
 #include <zircon/errors.h>
 #include <zircon/status.h>
 #include <zircon/types.h>
-#include <lib/zx/vmo.h>
 #include <zxcrypt/volume.h>
 
 #define ZXDEBUG 0
@@ -45,15 +48,6 @@ namespace zxcrypt {
 // Determines what algorithms are in use when creating new zxcrypt devices.
 const Volume::Version Volume::kDefaultVersion = Volume::kAES128_CTR_SHA256;
 
-// Maximum number of key slots.  If a device's block size can not hold |kNumSlots| for a particular
-// version, then attempting to |Create| or |Open| a zxcrypt volume will fail with
-// |ZX_ERR_NOT_SUPPORTED|.
-const slot_num_t Volume::kNumSlots = 16;
-
-// The number of FVM-like slices reserved at the start of the device, each holding |kMetadataBlocks|
-// copies of the superblock.
-const size_t Volume::kReservedSlices = 2;
-
 // The amount of data that can "in-flight" to the underlying block device before the zxcrypt
 // driver begins queuing transactions
 //
@@ -65,6 +59,9 @@ static_assert(Volume::kBufferSize % PAGE_SIZE == 0, "kBufferSize must be page al
 
 namespace {
 
+// The zxcrypt driver
+const char* kDriverLib = "/boot/driver/zxcrypt.so";
+
 // The number of metadata blocks in a reserved metadata slice, each holding a copy of the
 // superblock.
 const size_t kMetadataBlocks = 2;
@@ -75,7 +72,7 @@ const char* kWrapKeyLabel = "wrap key %" PRIu64;
 const char* kWrapIvLabel = "wrap iv %" PRIu64;
 
 // Header is type GUID | instance GUID | version.
-const size_t kHeaderLen = GUID_LEN + GUID_LEN + sizeof(uint32_t);
+const size_t kHeaderLen = sizeof(zxcrypt_magic) + GUID_LEN + sizeof(uint32_t);
 
 void SyncComplete(block_op_t* block, zx_status_t status) {
     // Use the 32bit command field to shuttle the response back to the callsite that's waiting on
@@ -156,29 +153,12 @@ Volume::~Volume() {}
 
 // Library methods
 
-zx_status_t Volume::Create(fbl::unique_fd fd, const crypto::Bytes& key) {
+zx_status_t Volume::Create(fbl::unique_fd fd, const crypto::Bytes& key,
+                           fbl::unique_ptr<Volume>* out) {
     zx_status_t rc;
 
     if (!fd) {
         xprintf("bad parameter(s): fd=%d\n", fd.get());
-        return ZX_ERR_INVALID_ARGS;
-    }
-
-    Volume volume(fbl::move(fd));
-    if ((rc = volume.Init()) != ZX_OK || (rc = volume.CreateBlock()) != ZX_OK ||
-        (rc = volume.SealBlock(key, 0)) != ZX_OK || (rc = volume.CommitBlock()) != ZX_OK) {
-        return rc;
-    }
-
-    return ZX_OK;
-}
-
-zx_status_t Volume::Open(fbl::unique_fd fd, const crypto::Bytes& key, slot_num_t slot,
-                         fbl::unique_ptr<Volume>* out) {
-    zx_status_t rc;
-
-    if (!fd || slot >= kNumSlots || !out) {
-        xprintf("bad parameter(s): fd=%d, slot=%" PRIu64 ", out=%p\n", fd.get(), slot, out);
         return ZX_ERR_INVALID_ARGS;
     }
 
@@ -188,7 +168,34 @@ zx_status_t Volume::Open(fbl::unique_fd fd, const crypto::Bytes& key, slot_num_t
         xprintf("allocation failed: %zu bytes\n", sizeof(Volume));
         return ZX_ERR_NO_MEMORY;
     }
-    if ((rc = volume->Init()) != ZX_OK || (rc = volume->Open(key, slot)) != ZX_OK) {
+
+    if ((rc = volume->Init()) != ZX_OK || (rc = volume->CreateBlock()) != ZX_OK ||
+        (rc = volume->SealBlock(key, 0)) != ZX_OK || (rc = volume->CommitBlock()) != ZX_OK) {
+        return rc;
+    }
+
+    if (out) {
+        *out = fbl::move(volume);
+    }
+    return ZX_OK;
+}
+
+zx_status_t Volume::Unlock(fbl::unique_fd fd, const crypto::Bytes& key, key_slot_t slot,
+                           fbl::unique_ptr<Volume>* out) {
+    zx_status_t rc;
+
+    if (!fd || !out) {
+        xprintf("bad parameter(s): fd=%d, out=%p\n", fd.get(), out);
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    fbl::AllocChecker ac;
+    fbl::unique_ptr<Volume> volume(new (&ac) Volume(fbl::move(fd)));
+    if (!ac.check()) {
+        xprintf("allocation failed: %zu bytes\n", sizeof(Volume));
+        return ZX_ERR_NO_MEMORY;
+    }
+    if ((rc = volume->Init()) != ZX_OK || (rc = volume->Unseal(key, slot)) != ZX_OK) {
         return rc;
     }
 
@@ -196,18 +203,59 @@ zx_status_t Volume::Open(fbl::unique_fd fd, const crypto::Bytes& key, slot_num_t
     return ZX_OK;
 }
 
-zx_status_t Volume::Enroll(const crypto::Bytes& key, slot_num_t slot) {
+zx_status_t Volume::Open(const zx::duration& timeout, fbl::unique_fd* out) {
+    zx_status_t rc;
+    ssize_t res;
+
+    // Get the full device path
+    const char* kZxcryptSuffix = "/zxcrypt/block";
+    char path[PATH_MAX];
+    size_t max = sizeof(path) - (strlen(kZxcryptSuffix) + 1);
+    if ((res = ioctl_device_get_topo_path(fd_.get(), path, max)) < 0) {
+        rc = static_cast<zx_status_t>(res);
+        xprintf("could not find parent device: %s\n", zx_status_get_string(rc));
+        return rc;
+    }
+    strncat(path, kZxcryptSuffix, strlen(kZxcryptSuffix));
+
+    // Early return if already bound
+    fbl::unique_fd fd(open(path, O_RDWR));
+    if (fd) {
+        out->reset(fd.release());
+        return ZX_OK;
+    }
+
+    // Bind the device
+    if ((res = ioctl_device_bind(fd_.get(), kDriverLib, strlen(kDriverLib))) < 0) {
+        rc = static_cast<zx_status_t>(res);
+        xprintf("could not bind zxcrypt driver: %s\n", zx_status_get_string(rc));
+        return rc;
+    }
+    if ((rc = wait_for_device(path, timeout.get())) != ZX_OK) {
+        xprintf("zxcrypt driver failed to bind: %s\n", zx_status_get_string(rc));
+        return rc;
+    }
+    fd.reset(open(path, O_RDWR));
+    if (!fd) {
+        xprintf("failed to open zxcrypt volume\n");
+        return ZX_ERR_NOT_FOUND;
+    }
+
+    out->reset(fd.release());
+    return ZX_OK;
+}
+
+zx_status_t Volume::Enroll(const crypto::Bytes& key, key_slot_t slot) {
     zx_status_t rc;
     ZX_DEBUG_ASSERT(!dev_); // Cannot enroll from driver
 
-    if (slot >= kNumSlots) {
-        xprintf("bad parameter(s): slot=%" PRIu64 "\n", slot);
-        return ZX_ERR_INVALID_ARGS;
-    }
     if (!block_.get()) {
         xprintf("not initialized\n");
-        ;
         return ZX_ERR_BAD_STATE;
+    }
+    if (slot >= num_key_slots_) {
+        xprintf("bad parameter(s): slot=%" PRIu64 "\n", slot);
+        return ZX_ERR_INVALID_ARGS;
     }
     if ((rc = SealBlock(key, slot)) != ZX_OK || (rc = CommitBlock()) != ZX_OK) {
         return rc;
@@ -216,18 +264,17 @@ zx_status_t Volume::Enroll(const crypto::Bytes& key, slot_num_t slot) {
     return ZX_OK;
 }
 
-zx_status_t Volume::Revoke(slot_num_t slot) {
+zx_status_t Volume::Revoke(key_slot_t slot) {
     zx_status_t rc;
     ZX_DEBUG_ASSERT(!dev_); // Cannot revoke from driver
 
-    if (slot >= kNumSlots) {
-        xprintf("bad parameter(s): slot=%" PRIu64 "\n", slot);
-        return ZX_ERR_INVALID_ARGS;
-    }
     if (!block_.get()) {
         xprintf("not initialized\n");
-        ;
         return ZX_ERR_BAD_STATE;
+    }
+    if (slot >= num_key_slots_) {
+        xprintf("bad parameter(s): slot=%" PRIu64 "\n", slot);
+        return ZX_ERR_INVALID_ARGS;
     }
     zx_off_t off = kHeaderLen + (slot_len_ * slot);
     crypto::Bytes invalid;
@@ -245,7 +292,6 @@ zx_status_t Volume::Shred() {
 
     if (!block_.get()) {
         xprintf("not initialized\n");
-        ;
         return ZX_ERR_BAD_STATE;
     }
     if ((rc = block_.Randomize()) != ZX_OK) {
@@ -263,12 +309,12 @@ zx_status_t Volume::Shred() {
 
 // Driver methods
 
-zx_status_t Volume::Open(zx_device_t* dev, const crypto::Bytes& key, slot_num_t slot,
-                         fbl::unique_ptr<Volume>* out) {
+zx_status_t Volume::Unlock(zx_device_t* dev, const crypto::Bytes& key, key_slot_t slot,
+                           fbl::unique_ptr<Volume>* out) {
     zx_status_t rc;
 
-    if (!dev || slot >= kNumSlots || !out) {
-        xprintf("bad parameter(s): dev=%p, slot=%" PRIu64 ", out=%p\n", dev, slot, out);
+    if (!dev || !out) {
+        xprintf("bad parameter(s): dev=%p, out=%p\n", dev, out);
         return ZX_ERR_INVALID_ARGS;
     }
     fbl::AllocChecker ac;
@@ -277,37 +323,11 @@ zx_status_t Volume::Open(zx_device_t* dev, const crypto::Bytes& key, slot_num_t 
         xprintf("allocation failed: %zu bytes\n", sizeof(Volume));
         return ZX_ERR_NO_MEMORY;
     }
-    if ((rc = volume->Init()) != ZX_OK || (rc = volume->Open(key, slot)) != ZX_OK) {
+    if ((rc = volume->Init()) != ZX_OK || (rc = volume->Unseal(key, slot)) != ZX_OK) {
         return rc;
     }
 
     *out = fbl::move(volume);
-    return ZX_OK;
-}
-
-zx_status_t Volume::GetBlockInfo(block_info_t* out_blk) const {
-    if (!block_.get()) {
-        xprintf("not initialized\n");
-        ;
-        return ZX_ERR_BAD_STATE;
-    }
-    if (out_blk) {
-        memcpy(out_blk, &blk_, sizeof(blk_));
-    }
-    return ZX_OK;
-}
-
-zx_status_t Volume::GetFvmInfo(fvm_info_t* out_fvm, bool* out_has_fvm) const {
-    if (!block_.get()) {
-        xprintf("not initialized\n");
-        return ZX_ERR_BAD_STATE;
-    }
-    if (out_fvm) {
-        memcpy(out_fvm, &fvm_, sizeof(fvm_));
-    }
-    if (out_has_fvm) {
-        *out_has_fvm = has_fvm_;
-    }
     return ZX_OK;
 }
 
@@ -321,10 +341,9 @@ zx_status_t Volume::Bind(crypto::Cipher::Direction direction, crypto::Cipher* ci
     }
     if (!block_.get()) {
         xprintf("not initialized\n");
-        ;
         return ZX_ERR_BAD_STATE;
     }
-    if ((rc = cipher->Init(cipher_, direction, data_key_, data_iv_, blk_.block_size)) != ZX_OK) {
+    if ((rc = cipher->Init(cipher_, direction, data_key_, data_iv_, block_.len())) != ZX_OK) {
         return rc;
     }
 
@@ -345,59 +364,36 @@ Volume::Volume(zx_device_t* dev) : dev_(dev), fd_() {
 
 zx_status_t Volume::Init() {
     zx_status_t rc;
-
     Reset();
     auto cleanup = fbl::MakeAutoCall([&] { Reset(); });
 
     // Get block info; align our blocks to pages
-    if ((rc = Ioctl(IOCTL_BLOCK_GET_INFO, nullptr, 0, &blk_, sizeof(blk_))) < 0) {
+    block_info_t blk;
+    if ((rc = Ioctl(IOCTL_BLOCK_GET_INFO, nullptr, 0, &blk, sizeof(blk))) < 0) {
         xprintf("failed to get block info: %s\n", zx_status_get_string(rc));
         return rc;
     }
-    // Sanity check
-    uint64_t size;
-    if (mul_overflow(blk_.block_size, blk_.block_count, &size)) {
-        xprintf("invalid block device: size=%" PRIu32 ", count=%" PRIu64 "\n", blk_.block_size,
-                blk_.block_count);
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-    // Adjust block size and count to be page-aligned
-    if (blk_.block_size < PAGE_SIZE) {
-        if (PAGE_SIZE % blk_.block_size != 0) {
-            xprintf("unsupported block size: %u\n", blk_.block_size);
-            return ZX_ERR_NOT_SUPPORTED;
-        }
-        blk_.block_count /= (PAGE_SIZE / blk_.block_size);
-        blk_.block_size = PAGE_SIZE;
-    } else {
-        if (blk_.block_size % PAGE_SIZE != 0) {
-            xprintf("unsupported block size: %u\n", blk_.block_size);
-            return ZX_ERR_NOT_SUPPORTED;
-        }
-    }
-    // Allocate block buffer
-    if ((rc = block_.Resize(blk_.block_size)) != ZX_OK) {
-        return rc;
-    }
-    size_t reserved_size;
-    if (mul_overflow(blk_.block_size, kMetadataBlocks, &reserved_size)) {
-        xprintf("reserved_size overflow size=%" PRIu32 ", kMetadataBlocks=%zu\n", blk_.block_size,
+    // Check that we meet the minimum size.
+    if (blk.block_count < kMetadataBlocks) {
+        xprintf("device is too small; have %" PRIu64 " blocks, need %" PRIu64 "\n", blk.block_count,
                 kMetadataBlocks);
         return ZX_ERR_NOT_SUPPORTED;
     }
-
+    reserved_blocks_ = kMetadataBlocks;
+    // Allocate block buffer
+    if ((rc = block_.Resize(blk.block_size)) != ZX_OK) {
+        return rc;
+    }
     // Get FVM info
-    switch ((rc = Ioctl(IOCTL_BLOCK_FVM_QUERY, nullptr, 0, &fvm_, sizeof(fvm_)))) {
+    fvm_info_t fvm;
+    switch ((rc = Ioctl(IOCTL_BLOCK_FVM_QUERY, nullptr, 0, &fvm, sizeof(fvm)))) {
     case ZX_OK: {
         // This *IS* an FVM partition.
-        if (fvm_.slice_size < reserved_size || fvm_.vslice_count <= kReservedSlices) {
-            xprintf("bad device: slice_size=%zu, vslice_count=%zu\n", fvm_.slice_size,
-                    fvm_.vslice_count);
-            return ZX_ERR_NO_SPACE;
-        }
-
         // Ensure first kReservedSlices + 1 slices are allocated
-        size_t required = kReservedSlices + 1;
+        size_t blocks_per_slice = fvm.slice_size / blk.block_size;
+        reserved_blocks_ = fbl::round_up(reserved_blocks_, blocks_per_slice);
+        reserved_slices_ = reserved_blocks_ / blocks_per_slice;
+        size_t required = reserved_slices_ + 1;
         size_t range = 1;
         query_request_t request;
         query_response_t response;
@@ -424,34 +420,16 @@ zx_status_t Volume::Init() {
                 return rc;
             }
         }
-
-        has_fvm_ = true;
         break;
     }
-
     case ZX_ERR_NOT_SUPPORTED:
         // This is *NOT* an FVM partition.
-        if ((blk_.block_count / kReservedSlices) < kMetadataBlocks) {
-            xprintf("bad device: block_size=%u, block_count=%" PRIu64 "\n", blk_.block_size,
-                    blk_.block_count);
-            return ZX_ERR_NO_SPACE;
-        }
-
-        // Set "slice" parameters to allow us to pretend it is FVM and use one set
-        // of logic.
-        fvm_.vslice_count = blk_.block_count / kMetadataBlocks;
-        fvm_.slice_size = reserved_size;
-        has_fvm_ = false;
         break;
-
     default:
         // An error occurred
         return rc;
     }
 
-    // Adjust counts to reflect the reserved slices
-    fvm_.vslice_count -= kReservedSlices;
-    blk_.block_count -= (fvm_.slice_size / blk_.block_size) * kReservedSlices;
     cleanup.cancel();
     return ZX_OK;
 }
@@ -490,25 +468,17 @@ zx_status_t Volume::Configure(Volume::Version version) {
         return rc;
     }
     slot_len_ = data_key_len + data_iv_len + tag_len;
-
-    size_t total;
-    if (mul_overflow(slot_len_, kNumSlots, &total) ||
-        add_overflow(total, kHeaderLen, &total)) {
-        xprintf("overflow slot_len_=%zu kNumSlots=%zu kHeaderLen=%zu\n",
-                slot_len_, kNumSlots, kHeaderLen);
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-
-    if (blk_.block_size < total) {
-        xprintf("block size is too small; have %u, need %zu\n", blk_.block_size,
-                total);
+    num_key_slots_ = (block_.len() - kHeaderLen) / slot_len_;
+    if (num_key_slots_ == 0) {
+        xprintf("block size is too small; have %zu, need %zu\n", block_.len(),
+                kHeaderLen + slot_len_);
         return ZX_ERR_NOT_SUPPORTED;
     }
 
     return ZX_OK;
 }
 
-zx_status_t Volume::DeriveSlotKeys(const crypto::Bytes& key, slot_num_t slot) {
+zx_status_t Volume::DeriveSlotKeys(const crypto::Bytes& key, key_slot_t slot) {
     zx_status_t rc;
 
     crypto::HKDF hkdf;
@@ -529,9 +499,6 @@ zx_status_t Volume::DeriveSlotKeys(const crypto::Bytes& key, slot_num_t slot) {
 }
 
 void Volume::Reset() {
-    memset(&blk_, 0, sizeof(blk_));
-    memset(&fvm_, 0, sizeof(fvm_));
-    has_fvm_ = false;
     block_.Reset();
     offset_ = UINT64_MAX;
     guid_.Reset();
@@ -542,32 +509,20 @@ void Volume::Reset() {
     data_key_.Reset();
     data_iv_.Reset();
     slot_len_ = 0;
+    num_key_slots_ = 0;
     digest_ = crypto::digest::kUninitialized;
 }
 
 // Block methods
 
 zx_status_t Volume::Begin() {
-    if (fvm_.slice_size == 0) {
-        xprintf("not initialized\n");
-        ;
-        return ZX_ERR_STOP;
-    }
     offset_ = 0;
     return ZX_ERR_NEXT;
 }
 
 zx_status_t Volume::Next() {
     offset_ += block_.len();
-    size_t slice_offset = offset_ % fvm_.slice_size;
-    // If slice isn't complete, move to next block in slice
-    if (slice_offset != 0 && slice_offset < fvm_.slice_size) {
-        return ZX_ERR_NEXT;
-    }
-    // Move to next slice
-    offset_ -= slice_offset;
-    offset_ += fvm_.slice_size;
-    return offset_ / fvm_.slice_size < kReservedSlices ? ZX_ERR_NEXT : ZX_ERR_STOP;
+    return (offset_ / block_.len()) < kMetadataBlocks ? ZX_ERR_NEXT : ZX_ERR_STOP;
 }
 
 zx_status_t Volume::CreateBlock() {
@@ -579,9 +534,11 @@ zx_status_t Volume::CreateBlock() {
     }
 
     // Write the variant 1/version 1 type GUID according to RFC 4122.
+    // TODO(aarongreen): ZX-2106.  This and other magic numbers should be moved to a public/zircon
+    // header, and the dependency removed.
     uint8_t* out = block_.get();
-    memcpy(out, kTypeGuid, GUID_LEN);
-    out += GUID_LEN;
+    memcpy(out, zxcrypt_magic, sizeof(zxcrypt_magic));
+    out += sizeof(zxcrypt_magic);
 
     // Create a variant 1/version 4 instance GUID according to RFC 4122.
     if ((rc = guid_.InitRandom(GUID_LEN)) != ZX_OK) {
@@ -629,8 +586,13 @@ zx_status_t Volume::CommitBlock() {
     return ZX_OK;
 }
 
-zx_status_t Volume::SealBlock(const crypto::Bytes& key, slot_num_t slot) {
+zx_status_t Volume::SealBlock(const crypto::Bytes& key, key_slot_t slot) {
     zx_status_t rc;
+
+    if (slot >= num_key_slots_) {
+        xprintf("bad key slot: %" PRIu64 "\n", slot);
+        return ZX_ERR_OUT_OF_RANGE;
+    }
 
     // Encrypt the data key
     crypto::AEAD aead;
@@ -648,13 +610,13 @@ zx_status_t Volume::SealBlock(const crypto::Bytes& key, slot_num_t slot) {
     return ZX_OK;
 }
 
-zx_status_t Volume::Open(const crypto::Bytes& key, slot_num_t slot) {
+zx_status_t Volume::Unseal(const crypto::Bytes& key, key_slot_t slot) {
     zx_status_t rc;
 
     for (rc = Begin(); rc == ZX_ERR_NEXT; rc = Next()) {
         if ((rc = Read()) != ZX_OK) {
             xprintf("failed to read block at %" PRIu64 ": %s\n", offset_, zx_status_get_string(rc));
-        } else if ((rc = OpenBlock(key, slot)) != ZX_OK) {
+        } else if ((rc = UnsealBlock(key, slot)) != ZX_OK) {
             xprintf("failed to open block at %" PRIu64 ": %s\n", offset_, zx_status_get_string(rc));
         } else {
             return CommitBlock();
@@ -664,17 +626,16 @@ zx_status_t Volume::Open(const crypto::Bytes& key, slot_num_t slot) {
     return ZX_ERR_ACCESS_DENIED;
 }
 
-zx_status_t Volume::OpenBlock(const crypto::Bytes& key, slot_num_t slot) {
+zx_status_t Volume::UnsealBlock(const crypto::Bytes& key, key_slot_t slot) {
     zx_status_t rc;
 
     // Check the type GUID matches |kTypeGuid|.
     uint8_t* in = block_.get();
-    if (memcmp(in, kTypeGuid, GUID_LEN) != 0) {
+    if (memcmp(in, zxcrypt_magic, sizeof(zxcrypt_magic)) != 0) {
         xprintf("not a zxcrypt device\n");
-        ;
         return ZX_ERR_NOT_SUPPORTED;
     }
-    in += GUID_LEN;
+    in += sizeof(zxcrypt_magic);
 
     // Save the instance GUID
     if ((rc = guid_.Copy(in, GUID_LEN)) != ZX_OK) {
@@ -686,8 +647,14 @@ zx_status_t Volume::OpenBlock(const crypto::Bytes& key, slot_num_t slot) {
     uint32_t version;
     memcpy(&version, in, sizeof(version));
     in += sizeof(version);
-    if ((rc != Configure(Version(ntohl(version)))) != ZX_OK ||
-        (rc != DeriveSlotKeys(key, slot)) != ZX_OK) {
+    if ((rc != Configure(Version(ntohl(version)))) != ZX_OK) {
+        return rc;
+    }
+    if (slot >= num_key_slots_) {
+        xprintf("bad key slot: %" PRIu64 "\n", slot);
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+    if ((rc != DeriveSlotKeys(key, slot)) != ZX_OK) {
         return rc;
     }
 
@@ -732,8 +699,12 @@ zx_status_t Volume::Ioctl(int op, const void* in, size_t in_len, void* out, size
 }
 
 zx_status_t Volume::Read() {
+    zx_status_t rc;
+
     if (dev_) {
-        return SyncIO(dev_, BLOCK_OP_READ, block_.get(), offset_, block_.len());
+        if ((rc = SyncIO(dev_, BLOCK_OP_READ, block_.get(), offset_, block_.len())) != ZX_OK) {
+            return rc;
+        }
     } else {
         if (lseek(fd_.get(), offset_, SEEK_SET) < 0) {
             xprintf("lseek(%d, %" PRIu64 ", SEEK_SET) failed: %s\n", fd_.get(), offset_,
@@ -750,13 +721,18 @@ zx_status_t Volume::Read() {
             xprintf("short read: have %zd, need %zu\n", res, block_.len());
             return ZX_ERR_IO;
         }
-        return ZX_OK;
     }
+
+    return ZX_OK;
 }
 
 zx_status_t Volume::Write() {
+    zx_status_t rc;
+
     if (dev_) {
-        return SyncIO(dev_, BLOCK_OP_WRITE, block_.get(), offset_, block_.len());
+        if ((rc = SyncIO(dev_, BLOCK_OP_WRITE, block_.get(), offset_, block_.len())) != ZX_OK) {
+            return rc;
+        }
     } else {
         if (lseek(fd_.get(), offset_, SEEK_SET) < 0) {
             xprintf("lseek(%d, %" PRIu64 ", SEEK_SET) failed: %s\n", fd_.get(), offset_,
@@ -773,8 +749,8 @@ zx_status_t Volume::Write() {
             xprintf("short read: have %zd, need %zu\n", res, block_.len());
             return ZX_ERR_IO;
         }
-        return ZX_OK;
     }
+    return ZX_OK;
 }
 
 } // namespace zxcrypt

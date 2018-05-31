@@ -40,9 +40,9 @@ FUNCTION(_start)
     mrs     cpuid, mpidr_el1
     ubfx    cpuid, cpuid, #0, #15 /* mask Aff0 and Aff1 fields */
     cbnz    cpuid, .Lno_save_bootinfo
-    /* save x0 in bootdata_paddr */
-    adrp    tmp, bootdata_paddr
-    str     x0, [tmp, #:lo12:bootdata_paddr]
+    /* save x0 in zbi_paddr */
+    adrp    tmp, zbi_paddr
+    str     x0, [tmp, #:lo12:zbi_paddr]
     /* save entry point physical address in kernel_entry_paddr */
     adrp    tmp, kernel_entry_paddr
     adr     tmp2, _start
@@ -65,12 +65,17 @@ FUNCTION(_start)
     // TODO(SEC-31): Choose it randomly.
     movlit  kernel_vaddr, KERNEL_BASE
 
+    // This function is executed by all CPUs. It's cruicial that only
+    // the first CPU relocate the kernel. Skip over it unless we're CPU 0.
+    cbnz     cpuid, .Lskip_fixup
+
     // The fixup code appears right after the kernel image (at __data_end
     // in our view).  It expects x0 to contain the actual runtime address
     // of __code_start.
     mov     x0, kernel_vaddr
     bl      __data_end
 
+.Lskip_fixup:
     /* load the base of the translation tables */
     adr_global page_table0, tt_trampoline
     adr_global page_table1, arm64_kernel_translation_table
@@ -276,9 +281,9 @@ END_FUNCTION(_start)
 DATA(arch_boot_el)
     .quad 0xdeadbeef00ff00ff
 END_DATA(arch_boot_el)
-DATA(bootdata_paddr)
+DATA(zbi_paddr)
     .quad -1
-END_DATA(bootdata_paddr)
+END_DATA(zbi_paddr)
 DATA(kernel_entry_paddr)
     .quad -1
 END_DATA(kernel_entry_paddr)

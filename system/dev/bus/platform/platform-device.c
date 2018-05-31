@@ -6,6 +6,7 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/binding.h>
+#include <ddk/metadata.h>
 #include <ddk/protocol/platform-defs.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -15,7 +16,8 @@
 #include "platform-proxy.h"
 
 static zx_status_t platform_dev_map_mmio(void* ctx, uint32_t index, uint32_t cache_policy,
-                                         void** vaddr, size_t* size, zx_handle_t* out_handle) {
+                                         void** vaddr, size_t* size, zx_paddr_t* out_paddr,
+                                         zx_handle_t* out_handle) {
     platform_dev_t* dev = ctx;
 
     if (index >= dev->mmio_count) {
@@ -50,6 +52,9 @@ static zx_status_t platform_dev_map_mmio(void* ctx, uint32_t index, uint32_t cac
 
     *size = mmio->length;
     *out_handle = vmo_handle;
+    if (out_paddr) {
+        *out_paddr = vmo_base;
+    }
     *vaddr = (void *)(virt + (mmio->base - vmo_base));
     return ZX_OK;
 
@@ -121,7 +126,7 @@ static platform_device_protocol_ops_t platform_dev_proto_ops = {
 };
 
 static zx_status_t pdev_rpc_get_mmio(platform_dev_t* dev, uint32_t index, zx_off_t* out_offset,
-                                     size_t *out_length, zx_handle_t* out_handle,
+                                     size_t *out_length, zx_paddr_t* out_paddr, zx_handle_t* out_handle,
                                      uint32_t* out_handle_count) {
     if (index >= dev->mmio_count) {
         return ZX_ERR_INVALID_ARGS;
@@ -138,6 +143,7 @@ static zx_status_t pdev_rpc_get_mmio(platform_dev_t* dev, uint32_t index, zx_off
     }
     *out_offset = mmio->base - vmo_base;
     *out_length = mmio->length;
+    *out_paddr = vmo_base;
     *out_handle_count = 1;
     return ZX_OK;
 }
@@ -277,6 +283,66 @@ static zx_status_t pdev_rpc_set_gpio_polarity(platform_dev_t* dev,
     index = dev->gpios[index].gpio;
     return gpio_set_polarity(&bus->gpio, index, flags);
 }
+
+static zx_status_t pdev_rpc_mailbox_send_cmd(platform_dev_t* dev,
+                                             pdev_mailbox_ctx_t mailbox) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->mailbox.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return mailbox_send_cmd(&bus->mailbox, &mailbox.channel, &mailbox.mdata);
+}
+
+static zx_status_t pdev_rpc_scpi_get_sensor(platform_dev_t* dev,
+                                            char* name,
+                                            uint32_t *sensor_id) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->scpi.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return scpi_get_sensor(&bus->scpi, name, sensor_id);
+}
+
+static zx_status_t pdev_rpc_scpi_get_sensor_value(platform_dev_t* dev,
+                                            uint32_t sensor_id,
+                                            uint32_t* sensor_value) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->scpi.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return scpi_get_sensor_value(&bus->scpi, sensor_id, sensor_value);
+}
+
+static zx_status_t pdev_rpc_scpi_get_dvfs_info(platform_dev_t* dev,
+                                               uint8_t power_domain,
+                                               scpi_opp_t* opps) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->scpi.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return scpi_get_dvfs_info(&bus->scpi, power_domain, opps);
+}
+
+static zx_status_t pdev_rpc_scpi_get_dvfs_idx(platform_dev_t* dev,
+                                              uint8_t power_domain,
+                                              uint16_t* idx) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->scpi.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return scpi_get_dvfs_idx(&bus->scpi, power_domain, idx);
+}
+
+static zx_status_t pdev_rpc_scpi_set_dvfs_idx(platform_dev_t* dev,
+                                              uint8_t power_domain,
+                                              uint16_t idx) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->scpi.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return scpi_set_dvfs_idx(&bus->scpi, power_domain, idx);
+}
+
 static zx_status_t pdev_rpc_i2c_transact(platform_dev_t* dev, pdev_req_t* req, uint8_t* data,
                                         zx_handle_t channel) {
     platform_bus_t* bus = dev->bus;
@@ -348,7 +414,7 @@ static zx_status_t platform_dev_rxrpc(void* ctx, zx_handle_t channel) {
     switch (req->op) {
     case PDEV_GET_MMIO:
         resp.status = pdev_rpc_get_mmio(dev, req->index, &resp.mmio.offset, &resp.mmio.length,
-                                            &handle, &handle_count);
+                                        &resp.mmio.paddr, &handle, &handle_count);
         break;
     case PDEV_GET_INTERRUPT:
         resp.status = pdev_rpc_get_interrupt(dev, req->index, req->flags, &handle, &handle_count);
@@ -386,6 +452,28 @@ static zx_status_t platform_dev_rxrpc(void* ctx, zx_handle_t channel) {
         break;
     case PDEV_GPIO_SET_POLARITY:
         resp.status = pdev_rpc_set_gpio_polarity(dev, req->index, req->flags);
+        break;
+    case PDEV_MAILBOX_SEND_CMD:
+        resp.status = pdev_rpc_mailbox_send_cmd(dev, req->mailbox);
+        break;
+    case PDEV_SCPI_GET_SENSOR:
+        resp.status = pdev_rpc_scpi_get_sensor(dev, req->scpi.name, &resp.scpi.sensor_id);
+        break;
+    case PDEV_SCPI_GET_SENSOR_VALUE:
+        resp.status = pdev_rpc_scpi_get_sensor_value(dev, req->scpi.sensor_id,
+                                                     &resp.scpi.sensor_value);
+        break;
+    case PDEV_SCPI_GET_DVFS_INFO:
+        resp.status = pdev_rpc_scpi_get_dvfs_info(dev, req->scpi.power_domain,
+                                                  &resp.scpi.opps);
+        break;
+    case PDEV_SCPI_GET_DVFS_IDX:
+        resp.status = pdev_rpc_scpi_get_dvfs_idx(dev, req->scpi.power_domain,
+                                                 &resp.scpi.idx);
+        break;
+    case PDEV_SCPI_SET_DVFS_IDX:
+        resp.status = pdev_rpc_scpi_set_dvfs_idx(dev, req->scpi.power_domain,
+                                                 req->scpi.idx);
         break;
     case PDEV_I2C_GET_MAX_TRANSFER:
         resp.status = i2c_impl_get_max_transfer_size(&dev->bus->i2c, req->index,
@@ -605,7 +693,8 @@ zx_status_t platform_device_enable(platform_dev_t* dev, bool enable) {
             .props = props,
             .prop_count = countof(props),
             .proxy_args = (new_devhost ? argstr : NULL),
-            .flags = (new_devhost ? DEVICE_ADD_MUST_ISOLATE : 0),
+            .flags = (new_devhost ? DEVICE_ADD_MUST_ISOLATE : 0) |
+                     (dev->boot_metadata_count ? DEVICE_ADD_INVISIBLE : 0),
         };
         // add PCI root at top level
         zx_device_t* parent = dev->bus->zxdev;
@@ -624,7 +713,12 @@ zx_status_t platform_device_enable(platform_dev_t* dev, bool enable) {
 
         if (dev->boot_metadata_count) {
             for (uint32_t i = 0; i < dev->boot_metadata_count; i++) {
-                platform_device_add_metadata(dev, i);
+                pbus_boot_metadata_t* pbm = &dev->boot_metadata[i];
+                if (pbm->data && pbm->len && is_driver_meta(pbm->type)) {
+                    device_add_metadata(dev->zxdev, pbm->type, pbm->data, pbm->len);
+                } else {
+                    platform_device_add_metadata(dev, i);
+                }
             }
             device_make_visible(dev->zxdev);
         }

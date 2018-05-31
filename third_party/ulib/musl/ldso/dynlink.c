@@ -787,7 +787,14 @@ __NO_SAFESTACK static void log_mmap_element(struct dso* dso, const Phdr* ph) {
     _dl_log_write(buffer, p - buffer);
 }
 
+// No newline because it's immediately followed by a {{{module:...}}}.
+#define RESET_ELEMENT "{{{reset}}}"
+
 __NO_SAFESTACK static void log_dso(struct dso* dso) {
+    if (dso == head) {
+        // Write the reset element before the first thing listed.
+        _dl_log_write(RESET_ELEMENT, sizeof(RESET_ELEMENT) - 1);
+    }
     log_module_element(dso);
     if (dso->phdr) {
         for (unsigned int i = 0; i < dso->phnum; ++i) {
@@ -1323,10 +1330,10 @@ __NO_SAFESTACK static zx_status_t load_library_vmo(zx_handle_t vmo,
         } else {
             if (vmo_name[0] == '\0') {
                 snprintf(synthetic_name, sizeof(synthetic_name),
-                         "<VMO:%" PRIu64 ">", info.koid);
+                         "<VMO#%" PRIu64 ">", info.koid);
             } else {
                 snprintf(synthetic_name, sizeof(synthetic_name),
-                         "<VMO:%" PRIu64 ":%s>", info.koid, vmo_name);
+                         "<VMO#%" PRIu64 "=%s>", info.koid, vmo_name);
             }
             name = synthetic_name;
         }
@@ -2494,6 +2501,11 @@ __NO_SAFESTACK __attribute__((__visibility__("hidden"))) void _dl_log_write(
             (ZX_LOG_RECORD_MAX - offsetof(zx_log_record_t, data));
         while (len > 0) {
             size_t chunk = len < kLogWriteMax ? len : kLogWriteMax;
+            // Write only a single line at a time so each line gets tagged.
+            const char* nl = memchr(buffer, '\n', chunk);
+            if (nl != NULL) {
+                chunk = nl + 1 - buffer;
+            }
             zx_status_t status = _zx_log_write(logger, chunk, buffer, 0);
             if (status != ZX_OK) {
                 __builtin_trap();

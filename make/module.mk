@@ -21,16 +21,23 @@
 # MODULE_ASMFLAGS : ASMFLAGS local to this module
 # MODULE_SRCDEPS : extra dependencies that all of this module's files depend on
 # MODULE_EXTRA_OBJS : extra .o files that should be linked with the module
-# MODULE_TYPE : "userapp" for userspace executables, "userlib" for userspace library,
-#               "driver" for Zircon driver, "" for standard LK module
+# MODULE_TYPE : "userapp" for userspace executables
+#               "userlib" for userspace library,
+#               "driver" for Zircon driver
+#               "hostapp" for a host tool,
+#               "hosttest" for a host test,
+#               "hostlib" for a host library,
+#               "" for kernel,
 # MODULE_LIBS : shared libraries for a userapp or userlib to depend on
 # MODULE_STATIC_LIBS : static libraries for a userapp or userlib to depend on
 # MODULE_FIDL_LIBS : fidl libraries for a userapp or userlib to depend on the C bindings of
+# MODULE_FIDL_LIBRARY : the name of the FIDL library being built (for fidl modules)
+# MODULE_FIRMWARE : files under prebuilt/downloads/firmware/ to be installed under /boot/driver/firmware/
 # MODULE_SO_NAME : linkage name for the shared library
 # MODULE_HOST_LIBS: static libraries for a hostapp or hostlib to depend on
 # MODULE_HOST_SYSLIBS: system libraries for a hostapp or hostlib to depend on
 # MODULE_GROUP: tag for manifest file entry
-# MODULE_PACKAGE: package type (src, so, a) for module to export to SDK
+# MODULE_PACKAGE: package type (src, fidl, so, a) for module to export to SDK
 # MODULE_PACKAGE_SRCS: override automated package source file selection, or the special
 #                      value "none" for header-only libraries
 # MODULE_PACKAGE_INCS: override automated package include file selection
@@ -104,7 +111,7 @@ endif
 
 # Introduce local, libc and dependency include paths
 ifneq ($(MODULE_TYPE),)
-ifeq ($(MODULE_TYPE),$(filter $(MODULE_TYPE),hostapp hostlib))
+ifeq ($(MODULE_TYPE),$(filter $(MODULE_TYPE),hostapp hosttest hostlib))
 # host module
 MODULE_SRCDEPS += $(HOST_CONFIG_HEADER)
 MODULE_COMPILEFLAGS += -I$(LOCAL_DIR)/include
@@ -115,7 +122,7 @@ MODULE_COMPILEFLAGS += -Iglobal/include
 MODULE_COMPILEFLAGS += -I$(LOCAL_DIR)/include
 MODULE_COMPILEFLAGS += -Ithird_party/ulib/musl/include
 MODULE_DEFINES += MODULE_LIBS=\"$(subst $(SPACE),_,$(MODULE_LIBS))\"
-MODULE_DEFINES += MODULE_STATIC_LIBS=\"$(subst $(SPACE),_,$(MODULE_STATIC_LIBS))\"
+MODULE_DEFINES += MODULE_STATIC_LIBS=\"$(subst $(SPACE),_,$(MODULE_STATIC_LIBS) $(MODULE_FIDL_LIBS))\"
 
 # depend on the generated-headers of the modules we depend on
 # to insure they are generated before we are built
@@ -176,7 +183,7 @@ ifeq ($(call TOBOOL,$(ENABLE_ULIB_ONLY)),true)
 # sort of like an inside-out userlib (drivers need their devhost like
 # executables need their shared libraries).  Elide everything else.
 MODULE_ELIDED := \
-    $(call TOBOOL,$(filter-out userlib:% userapp:system/core/devmgr.host,\
+	$(call TOBOOL,$(filter-out userlib:% fidl:% userapp:system/core/devmgr.host,\
 			       $(MODULE_TYPE):$(MODULE)))
 else
 MODULE_ELIDED := false
@@ -199,7 +206,7 @@ MODULE_GEN_HDR :=
 ifeq ($(MODULE_TYPE),)
 include make/compile.mk
 else
-ifeq ($(MODULE_TYPE),$(filter $(MODULE_TYPE),hostapp hostlib))
+ifeq ($(MODULE_TYPE),$(filter $(MODULE_TYPE),hostapp hosttest hostlib))
 include make/hcompile.mk
 else
 ifeq ($(MODULE_TYPE),efilib)
@@ -227,12 +234,17 @@ ALLSRCS += $(MODULE_SRCS)
 # track all the objects built
 ALLOBJS += $(MODULE_OBJS)
 
-ifeq (,$(filter $(MODULE_TYPE),hostapp hostlib))
+ifeq (,$(filter $(MODULE_TYPE),hostapp hosttest hostlib))
 ALL_TARGET_OBJS += $(MODULE_OBJS)
 endif
 
+USER_MANIFEST_LINES += \
+    $(addprefix $(MODULE_GROUP)$(FIRMWARE_INSTALL_DIR)/,\
+                $(foreach file,$(MODULE_FIRMWARE),\
+                          $(notdir $(file))=$(FIRMWARE_SRC_DIR)/$(file)))
+
 # generate an input linker script for all kernel and user modules
-ifeq (,$(filter $(MODULE_TYPE),hostapp hostlib))
+ifeq (,$(filter $(MODULE_TYPE),hostapp hosttest hostlib))
 MODULE_OBJECT := $(MODULE_OUTNAME).mod.o
 $(MODULE_OBJECT): $(MODULE_OBJS) $(MODULE_EXTRA_OBJS)
 	@$(MKDIR)
@@ -245,8 +257,8 @@ endif
 
 ifeq ($(MODULE_TYPE),)
 # modules with no type are kernel modules
-ifneq ($(MODULE_LIBS)$(MODULE_STATIC_LIBS),)
-$(error $(MODULE) kernel modules may not use MODULE_LIBS or MODULE_STATIC_LIBS)
+ifneq ($(MODULE_LIBS)$(MODULE_STATIC_LIBS)$(MODULE_FIDL_LIBS),)
+$(error $(MODULE) kernel modules may not use MODULE_LIBS, MODULE_STATIC_LIBS, or MODULE_FIDL_LIBS)
 endif
 # make the rest of the build depend on our output
 ALLMODULE_OBJS := $(ALLMODULE_OBJS) $(MODULE_OBJECT)
@@ -284,7 +296,9 @@ MODULE_NAME :=
 MODULE_EXPORT :=
 MODULE_LIBS :=
 MODULE_STATIC_LIBS :=
+MODULE_FIDL_DEPS :=
 MODULE_FIDL_LIBS :=
+MODULE_FIDL_LIBRARY :=
 MODULE_SO_NAME :=
 MODULE_INSTALL_PATH :=
 MODULE_SO_INSTALL_NAME :=
@@ -294,6 +308,7 @@ MODULE_GROUP :=
 MODULE_PACKAGE :=
 MODULE_PACKAGE_SRCS :=
 MODULE_PACKAGE_INCS :=
+MODULE_FIRMWARE :=
 
 # Save these before the next module.
 SAVED_EXTRA_BUILDDEPS := $(EXTRA_BUILDDEPS)

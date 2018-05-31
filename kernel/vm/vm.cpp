@@ -50,12 +50,14 @@ void MarkPagesInUsePhys(paddr_t pa, size_t len) {
 
     auto allocated = pmm_alloc_range(pa, len / PAGE_SIZE, &list);
     ASSERT_MSG(allocated == len / PAGE_SIZE,
-            "failed to reserve memory range [%#" PRIxPTR ", %#" PRIxPTR "]\n",
-            pa, pa + len - 1);
+               "failed to reserve memory range [%#" PRIxPTR ", %#" PRIxPTR "]\n",
+               pa, pa + len - 1);
 
     // mark all of the pages we allocated as WIRED
     vm_page_t* p;
-    list_for_every_entry (&list, p, vm_page_t, free.node) { p->state = VM_PAGE_STATE_WIRED; }
+    list_for_every_entry (&list, p, vm_page_t, queue_node) {
+        p->state = VM_PAGE_STATE_WIRED;
+    }
 }
 
 zx_status_t ProtectRegion(VmAspace* aspace, vaddr_t va, uint arch_mmu_flags) {

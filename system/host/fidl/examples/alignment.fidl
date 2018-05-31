@@ -1,4 +1,8 @@
-library alignment;
+// Copyright 2018 The Fuchsia Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+library fidl.examples.alignment;
 
 struct packing_0 {
     int16 i16_0;

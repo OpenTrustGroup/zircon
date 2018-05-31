@@ -200,6 +200,160 @@ static gpio_protocol_ops_t gpio_ops = {
     .set_polarity = pdev_gpio_set_polarity,
 };
 
+static zx_status_t pdev_scpi_get_sensor_value(void* ctx, uint32_t sensor_id,
+                                         uint32_t* sensor_value) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SCPI_GET_SENSOR_VALUE,
+        .scpi.sensor_id = sensor_id,
+    };
+
+    pdev_resp_t resp;
+
+    zx_status_t status =  platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp),
+                                           NULL, 0, NULL);
+    if (status == ZX_OK) {
+        *sensor_value = resp.scpi.sensor_value;
+    }
+    return status;
+}
+
+static zx_status_t pdev_scpi_get_sensor(void* ctx, const char* name,
+                                         uint32_t* sensor_id) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SCPI_GET_SENSOR,
+    };
+    uint32_t max_len = sizeof(req.scpi.name);
+    uint32_t len = strnlen(name, max_len);
+    if (len == max_len) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    memcpy(&req.scpi.name, name, len + 1);
+    pdev_resp_t resp;
+
+    zx_status_t status =  platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp),
+                                           NULL, 0, NULL);
+    if (status == ZX_OK) {
+        *sensor_id = resp.scpi.sensor_id;
+    }
+    return status;
+}
+
+static zx_status_t pdev_scpi_get_dvfs_info(void* ctx, uint8_t power_domain,
+                                           scpi_opp_t* opps) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SCPI_GET_DVFS_INFO,
+        .scpi.power_domain = power_domain,
+    };
+
+    pdev_resp_t resp;
+
+    zx_status_t status =  platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp),
+                                           NULL, 0, NULL);
+    if (status == ZX_OK) {
+        memcpy(opps, &resp.scpi.opps, sizeof(scpi_opp_t));
+    }
+    return status;
+}
+
+static zx_status_t pdev_scpi_get_dvfs_idx(void* ctx, uint8_t power_domain,
+                                           uint16_t* idx) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SCPI_GET_DVFS_IDX,
+        .scpi.power_domain = power_domain,
+    };
+
+    pdev_resp_t resp;
+
+    zx_status_t status =  platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp),
+                                           NULL, 0, NULL);
+    if (status == ZX_OK) {
+        *idx = resp.scpi.idx;
+    }
+    return status;
+}
+
+static zx_status_t pdev_scpi_set_dvfs_idx(void* ctx, uint8_t power_domain,
+                                           uint16_t idx) {
+    platform_proxy_t* proxy = ctx;
+    pdev_req_t req = {
+        .op = PDEV_SCPI_SET_DVFS_IDX,
+        .scpi.power_domain = power_domain,
+        .scpi.idx = idx,
+    };
+
+    pdev_resp_t resp;
+    return platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp),
+                                           NULL, 0, NULL);
+}
+
+static scpi_protocol_ops_t scpi_ops = {
+    .get_sensor         = pdev_scpi_get_sensor,
+    .get_sensor_value   = pdev_scpi_get_sensor_value,
+    .get_dvfs_info      = pdev_scpi_get_dvfs_info,
+    .get_dvfs_idx       = pdev_scpi_get_dvfs_idx,
+    .set_dvfs_idx       = pdev_scpi_set_dvfs_idx,
+};
+
+static zx_status_t pdev_mailbox_send_cmd(void* ctx, mailbox_channel_t* channel,
+                                         mailbox_data_buf_t* mdata) {
+    platform_proxy_t* proxy = ctx;
+    zx_status_t status = ZX_OK;
+    pdev_req_t req = {
+        .op = PDEV_MAILBOX_SEND_CMD,
+    };
+
+    if (!channel || !mdata) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    req.mailbox.channel.mailbox         = channel->mailbox;
+    req.mailbox.channel.rx_size         = channel->rx_size;
+    if (channel->rx_size) {
+        req.mailbox.channel.rx_buf = calloc(1, sizeof(channel->rx_size));
+        if (!req.mailbox.channel.rx_buf) {
+            status = ZX_ERR_NO_MEMORY;
+            goto fail;
+        }
+    }
+
+    req.mailbox.mdata.cmd           = mdata->cmd;
+    req.mailbox.mdata.tx_size       = mdata->tx_size;
+    if (mdata->tx_size) {
+        if (!mdata->tx_buf) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+        req.mailbox.mdata.tx_buf = calloc(1, sizeof(mdata->tx_size));
+        if (!req.mailbox.mdata.tx_buf) {
+            status = ZX_ERR_NO_MEMORY;
+            goto fail;
+        }
+        memcpy(&req.mailbox.mdata.tx_buf, mdata->tx_buf, mdata->tx_size);
+    }
+
+    pdev_resp_t resp;
+
+    status =  platform_dev_rpc(proxy, &req, sizeof(req), &resp, sizeof(resp),
+                                           NULL, 0, NULL);
+    memcpy(channel->rx_buf, &resp.mailbox.channel.rx_buf, channel->rx_size);
+
+fail:
+    if (req.mailbox.channel.rx_buf) {
+        free(req.mailbox.channel.rx_buf);
+    }
+    if (req.mailbox.mdata.tx_buf) {
+        free(req.mailbox.mdata.tx_buf);
+    }
+    return status;
+}
+
+static mailbox_protocol_ops_t mailbox_ops = {
+    .send_cmd = pdev_mailbox_send_cmd,
+};
+
 static zx_status_t pdev_i2c_get_max_transfer_size(void* ctx, uint32_t index, size_t* out_size) {
     platform_proxy_t* proxy = ctx;
 
@@ -314,7 +468,8 @@ static clk_protocol_ops_t clk_ops = {
 };
 
 static zx_status_t platform_dev_map_mmio(void* ctx, uint32_t index, uint32_t cache_policy,
-                                         void** vaddr, size_t* size, zx_handle_t* out_handle) {
+                                         void** vaddr, size_t* size, zx_paddr_t* out_paddr,
+                                         zx_handle_t* out_handle) {
     platform_proxy_t* proxy = ctx;
     pdev_req_t req = {
         .op = PDEV_GET_MMIO,
@@ -353,6 +508,9 @@ static zx_status_t platform_dev_map_mmio(void* ctx, uint32_t index, uint32_t cac
 
     *size = resp.mmio.length;
     *out_handle = vmo_handle;
+    if (out_paddr) {
+        *out_paddr = resp.mmio.paddr;
+    }
     *vaddr = (void *)(virt + resp.mmio.offset);
     return ZX_OK;
 
@@ -438,6 +596,18 @@ static zx_status_t platform_dev_get_protocol(void* ctx, uint32_t proto_id, void*
         clk_protocol_t* proto = out;
         proto->ctx = ctx;
         proto->ops = &clk_ops;
+        return ZX_OK;
+    }
+    case ZX_PROTOCOL_MAILBOX: {
+        mailbox_protocol_t* proto = out;
+        proto->ctx = ctx;
+        proto->ops = &mailbox_ops;
+        return ZX_OK;
+    }
+    case ZX_PROTOCOL_SCPI: {
+        scpi_protocol_t* proto = out;
+        proto->ctx = ctx;
+        proto->ops = &scpi_ops;
         return ZX_OK;
     }
     default:

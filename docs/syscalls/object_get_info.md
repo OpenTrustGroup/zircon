@@ -65,8 +65,11 @@ typedef struct zx_info_handle_basic {
     // The object type: channel, event, socket, etc.
     uint32_t type;                // zx_obj_type_t;
 
-    // The koid of the logical counterpart or parent object of the
-    // object referenced by the handle. Otherwise this value is zero.
+    // If the object referenced by the handle is related to another (such
+    // as the the other end of a channel, or the parent of a job) then
+    // |related_koid| is the koid of that object, otherwise it is zero.
+    // This relationship is immutable: an object's |related_koid| does
+    // not change even if the related object no longer exists.
     zx_koid_t related_koid;
 
     // Set to ZX_OBJ_PROP_WAITABLE if the object referenced by the
@@ -117,7 +120,7 @@ typedef struct zx_info_process_handle_stats {
 typedef struct zx_info_process {
     // The process's return code; only valid if |exited| is true.
     // Guaranteed to be non-zero if the process was killed by |zx_task_kill|.
-    int return_code;
+    int64_t return_code;
 
     // True if the process has ever left the initial creation state,
     // even if it has exited as well.
@@ -526,7 +529,7 @@ The resource kind is one of
 *   *ZX_RSRC_KIND_MMIO*
 *   *ZX_RSRC_KIND_IOPORT*
 *   *ZX_RSRC_KIND_IRQ*
-
+*   *ZX_RSRC_KIND_HYPERVISOR*
 ### ZX_INFO_BTI
 
 *handle* type: **Bus Transaction Initiator**

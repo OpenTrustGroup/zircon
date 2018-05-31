@@ -38,17 +38,13 @@
 #include <minfs/format.h>
 #include <minfs/writeback.h>
 
+#include "allocator.h"
+
 #ifdef __Fuchsia__
 #include "metrics.h"
 #endif
 
 #define EXTENT_COUNT 5
-
-#define panic(fmt...)         \
-    do {                      \
-        fprintf(stderr, fmt); \
-        __builtin_trap();     \
-    } while (0)
 
 // A compile-time debug check, which, if enabled, causes
 // inline functions to be expanded to error checking code.
@@ -113,23 +109,23 @@ public:
     // instantiate a vnode with a new inode
     zx_status_t VnodeNew(WritebackWork* wb, fbl::RefPtr<VnodeMinfs>* out, uint32_t type);
 
-    // Insert, lookup, and remove vnode from hash map
+    // Insert, lookup, and remove vnode from hash map.
     void VnodeInsert(VnodeMinfs* vn) __TA_EXCLUDES(hash_lock_);
     fbl::RefPtr<VnodeMinfs> VnodeLookup(uint32_t ino) __TA_EXCLUDES(hash_lock_);
-    void VnodeReleaseLocked(VnodeMinfs* vn) __TA_REQUIRES(hash_lock_);
+    void VnodeRelease(VnodeMinfs* vn) __TA_EXCLUDES(hash_lock_);
 
     // Allocate a new data block.
-    zx_status_t BlockNew(WritebackWork* wb, blk_t hint, blk_t* out_bno);
+    zx_status_t BlockNew(WriteTxn* txn, blk_t hint, blk_t* out_bno);
 
-    // free block in block bitmap
-    zx_status_t BlockFree(WritebackWork* wb, blk_t bno);
+    // Free a data block.
+    void BlockFree(WriteTxn* txn, blk_t bno);
 
-    // free ino in inode bitmap, release all blocks held by inode
+    // Free ino in inode bitmap, release all blocks held by inode.
     zx_status_t InoFree(VnodeMinfs* vn, WritebackWork* wb);
 
     // Writes back an inode into the inode table on persistent storage.
     // Does not modify inode bitmap.
-    zx_status_t InodeSync(WritebackWork* wb, ino_t ino, const minfs_inode_t* inode);
+    void InodeSync(WriteTxn* txn, ino_t ino, const minfs_inode_t* inode);
 
     void ValidateBno(blk_t bno) const {
         ZX_DEBUG_ASSERT(bno != 0);
@@ -164,8 +160,6 @@ public:
     // |data| is an out parameter that must be a block in size, provided by the caller
     // These functions are single-block and synchronous. On Fuchsia, using the batched read
     // functions is preferred.
-    zx_status_t ReadIbm(blk_t bno, void* data);
-    zx_status_t ReadAbm(blk_t bno, void* data);
     zx_status_t ReadIno(blk_t bno, void* data);
     zx_status_t ReadDat(blk_t bno, void* data);
 
@@ -195,12 +189,13 @@ public:
     // Print information about filesystem metrics.
     void DumpMetrics() const;
 
+    // Return an immutable reference to a copy of the internal info.
+    const minfs_info_t& Info() const {
+        return info_;
+    }
+
     // TODO(rvargas): Make private.
     fbl::unique_ptr<Bcache> bc_;
-    minfs_info_t info_{};
-#ifdef __Fuchsia__
-    fbl::Mutex hash_lock_;
-#endif
 
 private:
     // Fsck can introspect Minfs
@@ -210,19 +205,16 @@ private:
     Minfs(fbl::unique_ptr<Bcache> bc_, const minfs_info_t* info_);
 
     // Find a free inode, allocate it in the inode bitmap, and write it back to disk
-    zx_status_t InoNew(WritebackWork* wb, const minfs_inode_t* inode,
-                       ino_t* ino_out);
+    zx_status_t InoNew(WriteTxn* txn, const minfs_inode_t* inode, ino_t* out_ino);
 
     // Enqueues an update to the super block.
-    void WriteInfo(WritebackWork* wb);
-    // Enqueues an update to the block bitmap.
-    void WriteBlockBitmap(WritebackWork* wb, blk_t bno, blk_t count);
-    // Enqueues an update to the inode bitmap.
-    void WriteInodeBitmap(WritebackWork* wb, ino_t ino, ino_t count);
+    void WriteInfo(WriteTxn* txn);
 
-    // If possible, attempt to resize the MinFS partition.
-    zx_status_t AddInodes(WritebackWork* wb);
-    zx_status_t AddBlocks(WritebackWork* wb);
+    // Increase the number of inodes. Returns the new number in |inodes|.
+    zx_status_t AddInodes(WriteTxn* txn, size_t* inodes);
+
+    // Increase the number of blocks. Returns the new number in |blocks|.
+    zx_status_t AddBlocks(WriteTxn* txn, size_t* blocks);
 
     // Creates an unique identifier for this instance. This is to be called only during
     // "construction".
@@ -232,26 +224,30 @@ private:
     zx_status_t ReadBlk(blk_t bno, blk_t start, blk_t soft_max, blk_t hard_max, void* data);
 #endif
 
-    uint32_t abmblks_{};
-    uint32_t ibmblks_{};
+    Allocator block_allocator_;
+    Allocator inode_allocator_;
+
+    // Inode Map
     uint32_t inoblks_{};
-    RawBitmap inode_map_{};
-    RawBitmap block_map_{};
+    fbl::unique_ptr<MappedVmo> inode_table_{};
+    vmoid_t inode_table_vmoid_{};
+
+    // Global information about the filesystem.
+    minfs_info_t info_{};
+    fbl::unique_ptr<MappedVmo> info_vmo_{};
+    vmoid_t info_vmoid_{};
 
     // Vnodes exist in the hash table as long as one or more reference exists;
     // when the Vnode is deleted, it is immediately removed from the map.
+#ifdef __Fuchsia__
+    fbl::Mutex hash_lock_;
+#endif
     HashTable vnode_hash_ __TA_GUARDED(hash_lock_){};
 
     bool collecting_metrics_ = false;
 #ifdef __Fuchsia__
     fbl::Closure on_unmount_{};
     MinfsMetrics metrics_ = {};
-    fbl::unique_ptr<MappedVmo> inode_table_{};
-    fbl::unique_ptr<MappedVmo> info_vmo_{};
-    vmoid_t inode_map_vmoid_{};
-    vmoid_t block_map_vmoid_{};
-    vmoid_t inode_table_vmoid_{};
-    vmoid_t info_vmoid_{};
     fbl::unique_ptr<WritebackBuffer> writeback_;
     uint64_t fs_id_{};
 #else

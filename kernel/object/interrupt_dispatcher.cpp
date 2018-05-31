@@ -12,31 +12,17 @@
 #include <platform.h>
 
 InterruptDispatcher::InterruptDispatcher()
-    : timestamp_(0), state_(InterruptState::IDLE), is_bound_(false) {
+    : timestamp_(0), state_(InterruptState::IDLE) {
     event_init(&event_, false, EVENT_FLAG_AUTOUNSIGNAL);
 }
-
-zx_status_t InterruptDispatcher::RegisterInterruptHandler_HelperLocked(uint32_t vector,
-                                                                       uint32_t flags) {
-    bool is_virtual = !!(flags & INTERRUPT_VIRTUAL);
-
-    flags_ = flags;
-    vector_ = static_cast<uint16_t>(vector);
-
-    if (!is_virtual) {
-        zx_status_t status = RegisterInterruptHandler(vector, this);
-        if (status != ZX_OK) {
-            return status;
-        }
-    }
-    return ZX_OK;
-}
-
 
 zx_status_t InterruptDispatcher::WaitForInterrupt(zx_time_t* out_timestamp) {
     while (true) {
         {
             AutoSpinLock guard(&spinlock_);
+            if (port_dispatcher_) {
+                return ZX_ERR_BAD_STATE;
+            }
             switch (state_) {
             case InterruptState::DESTROYED:
                 return ZX_ERR_CANCELED;
@@ -47,7 +33,7 @@ zx_status_t InterruptDispatcher::WaitForInterrupt(zx_time_t* out_timestamp) {
                 return event_unsignal(&event_);
             case InterruptState::NEEDACK:
                 if (flags_ & INTERRUPT_UNMASK_PREWAIT) {
-                    UnmaskInterrupt(vector_);
+                    UnmaskInterrupt();
                 }
                 break;
             case InterruptState::IDLE:
@@ -65,11 +51,16 @@ zx_status_t InterruptDispatcher::WaitForInterrupt(zx_time_t* out_timestamp) {
     }
 }
 
-zx_status_t InterruptDispatcher::SendPacket(zx_time_t timestamp) {
-    return ZX_ERR_NOT_SUPPORTED;
+bool InterruptDispatcher::SendPacketLocked(zx_time_t timestamp) {
+    bool status = port_dispatcher_->QueueInterruptPacket(&port_packet_, timestamp);
+    if (flags_ & INTERRUPT_MASK_POSTWAIT) {
+        MaskInterrupt();
+    }
+    timestamp_ = 0;
+    return status;
 }
 
-zx_status_t InterruptDispatcher::UserSignal(zx_time_t timestamp) {
+zx_status_t InterruptDispatcher::Trigger(zx_time_t timestamp) {
 
     // TODO(braval): Currently @johngro's driver uses zx_interrupt_trigger
     // to wake up a thread waiting on a physical interrupt
@@ -80,7 +71,6 @@ zx_status_t InterruptDispatcher::UserSignal(zx_time_t timestamp) {
         return ZX_ERR_BAD_STATE;
     */
 
-    zx_status_t status;
     AutoSpinLock guard(&spinlock_);
     // only record timestamp if this is the first signal since we started waiting
     if (!timestamp_) {
@@ -89,48 +79,109 @@ zx_status_t InterruptDispatcher::UserSignal(zx_time_t timestamp) {
     if (state_ == InterruptState::DESTROYED) {
         return ZX_ERR_CANCELED;
     }
+    if (state_ == InterruptState::NEEDACK && port_dispatcher_) {
+        // Cannot trigger a interrupt without ACK
+        // only record timestamp if this is the first signal since we started waiting
+        return ZX_OK;
+    }
 
-    state_ = InterruptState::TRIGGERED;
-
-    if (is_bound_) {
-        status = SendPacket(timestamp);
+    if (port_dispatcher_) {
+        SendPacketLocked(timestamp);
+        state_ = InterruptState::NEEDACK;
     } else {
         Signal();
-        status = ZX_OK;
+        state_ = InterruptState::TRIGGERED;
     }
-    return status;
+    return ZX_OK;
 }
 
-void InterruptDispatcher::InterruptHandler(bool pci) {
+void InterruptDispatcher::InterruptHandler() {
     AutoSpinLock guard(&spinlock_);
+
     // only record timestamp if this is the first IRQ since we started waiting
     if (!timestamp_) {
         timestamp_ = current_time();
     }
-    state_ = InterruptState::TRIGGERED;
-
-    if (!pci && (flags_ & INTERRUPT_MASK_POSTWAIT))
-        mask_interrupt(vector_);
-
-    if (is_bound_) {
-        SendPacket(timestamp_);
+    if (state_ == InterruptState::NEEDACK && port_dispatcher_) {
+        return;
+    }
+    if (port_dispatcher_) {
+        SendPacketLocked(timestamp_);
+        state_ = InterruptState::NEEDACK;
     } else {
         Signal();
+        state_ = InterruptState::TRIGGERED;
     }
 }
 
 zx_status_t InterruptDispatcher::Destroy() {
     AutoSpinLock guard(&spinlock_);
-    state_ = InterruptState::DESTROYED;
-    if (!(flags_ & INTERRUPT_VIRTUAL)) {
-        MaskInterrupt(vector_);
-        UnregisterInterruptHandler(vector_);
-    }
-    if (is_bound_) {
-        // TODO(braval): Do whatever is needed with the port dispatcher here
-        // upon teardown
+
+    MaskInterrupt();
+    UnregisterInterruptHandler();
+
+    if (port_dispatcher_) {
+        bool packet_was_in_queue = port_dispatcher_->RemoveInterruptPacket(&port_packet_);
+        if ((state_ == InterruptState::NEEDACK) &&
+            !packet_was_in_queue) {
+            state_ = InterruptState::DESTROYED;
+            return ZX_ERR_NOT_FOUND;
+        }
+        if ((state_ == InterruptState::IDLE) ||
+            ((state_ == InterruptState::NEEDACK) &&
+             packet_was_in_queue)) {
+            state_ = InterruptState::DESTROYED;
+            return ZX_OK;
+        }
     } else {
+        state_ = InterruptState::DESTROYED;
         Signal();
+    }
+    return ZX_OK;
+}
+
+zx_status_t InterruptDispatcher::Bind(fbl::RefPtr<PortDispatcher> port_dispatcher,
+                                      fbl::RefPtr<InterruptDispatcher> interrupt, uint64_t key) {
+    AutoSpinLock guard(&spinlock_);
+    if (state_ == InterruptState::DESTROYED) {
+        return ZX_ERR_CANCELED;
+    }
+    if (port_dispatcher_) {
+        return ZX_ERR_ALREADY_BOUND;
+    }
+    if (state_ == InterruptState::WAITING) {
+        return ZX_ERR_BAD_STATE;
+    }
+
+    port_dispatcher_ = fbl::move(port_dispatcher);
+    port_packet_.key = key;
+    return ZX_OK;
+}
+
+zx_status_t InterruptDispatcher::Ack() {
+    AutoSpinLock guard(&spinlock_);
+    if (port_dispatcher_ == nullptr) {
+        return ZX_ERR_BAD_STATE;
+    }
+    if (state_ == InterruptState::DESTROYED) {
+        return ZX_ERR_CANCELED;
+    }
+    if (state_ == InterruptState::NEEDACK) {
+        if (flags_ & INTERRUPT_UNMASK_PREWAIT) {
+            UnmaskInterrupt();
+        }
+        if (timestamp_) {
+            if (!SendPacketLocked(timestamp_)) {
+                // We cannot queue another packet here.
+                // If we reach here it means that the
+                // interrupt packet has not been processed,
+                // another interrupt has occurred & then the
+                // interrupt was ACK'd
+                return ZX_ERR_BAD_STATE;
+            }
+        } else {
+            state_ = InterruptState::IDLE;
+        }
     }
     return ZX_OK;
 }

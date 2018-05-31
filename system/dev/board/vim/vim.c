@@ -16,6 +16,7 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/protocol/platform-defs.h>
+#include <ddk/protocol/scpi.h>
 #include <hw/reg.h>
 
 #include <soc/aml-s912/s912-hw.h>
@@ -27,7 +28,6 @@
 #include <zircon/threads.h>
 
 #include "vim.h"
-#include "vim2-hw.h"
 
 // DMC MMIO for display driver
 static pbus_mmio_t vim_display_mmios[] = {
@@ -68,6 +68,13 @@ const pbus_gpio_t vim_display_gpios[] = {
     },
 };
 
+static const pbus_irq_t vim_display_irqs[] = {
+    {
+        .irq = S912_VIU1_VSYNC_IRQ,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
+    },
+};
+
 static const pbus_bti_t vim_display_btis[] = {
     {
         .iommu_index = 0,
@@ -84,6 +91,8 @@ static const pbus_dev_t display_dev = {
     .mmio_count = countof(vim_display_mmios),
     .gpios = vim_display_gpios,
     .gpio_count = countof(vim_display_gpios),
+    .irqs = vim_display_irqs,
+    .irq_count = countof(vim_display_irqs),
     .btis = vim_display_btis,
     .bti_count = countof(vim_display_btis),
 };
@@ -114,6 +123,72 @@ static const pbus_dev_t led2472g_dev = {
   .i2c_channel_count = countof(led2472g_channels),
 };
 
+static pbus_mmio_t vim_video_mmios[] = {
+    {
+        .base =     S912_FULL_CBUS_BASE,
+        .length =   S912_FULL_CBUS_LENGTH,
+    },
+    {
+        .base =     S912_DOS_BASE,
+        .length =   S912_DOS_LENGTH,
+    },
+    {
+        .base =     S912_HIU_BASE,
+        .length =   S912_HIU_LENGTH,
+    },
+    {
+        .base =     S912_AOBUS_BASE,
+        .length =   S912_AOBUS_LENGTH,
+    },
+    {
+        .base =     S912_DMC_REG_BASE,
+        .length =   S912_DMC_REG_LENGTH,
+    },
+};
+
+static const pbus_bti_t vim_video_btis[] = {
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_VIDEO,
+    },
+};
+
+static const pbus_irq_t vim_video_irqs[] = {
+    {
+        .irq = S912_DEMUX_IRQ,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
+    },
+    {
+        .irq = S912_PARSER_IRQ,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
+    },
+    {
+        .irq = S912_DOS_MBOX_0_IRQ,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
+    },
+    {
+        .irq = S912_DOS_MBOX_1_IRQ,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
+    },
+    {
+        .irq = S912_DOS_MBOX_2_IRQ,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
+    },
+};
+
+static const pbus_dev_t video_dev = {
+    .name = "video",
+    .vid = PDEV_VID_AMLOGIC,
+    .pid = PDEV_PID_AMLOGIC_S912,
+    .did = PDEV_DID_AMLOGIC_VIDEO,
+    .mmios = vim_video_mmios,
+    .mmio_count = countof(vim_video_mmios),
+    .btis = vim_video_btis,
+    .bti_count = countof(vim_video_btis),
+    .irqs = vim_video_irqs,
+    .irq_count = countof(vim_video_irqs),
+};
+
 static int vim_start_thread(void* arg) {
     vim_bus_t* bus = arg;
     zx_status_t status;
@@ -140,35 +215,40 @@ static int vim_start_thread(void* arg) {
         goto fail;
     }
 
-    // set fan to level 3 (fastest speed)
-    // TODO(voydanoff) replace this with a thermal driver
-    gpio_config(&bus->gpio, VIM2_FAN_CTL0, GPIO_DIR_OUT);
-    gpio_config(&bus->gpio, VIM2_FAN_CTL1, GPIO_DIR_OUT);
-    gpio_write(&bus->gpio, VIM2_FAN_CTL0, 1);
-    gpio_write(&bus->gpio, VIM2_FAN_CTL1, 1);
-
     if ((status = vim_sd_emmc_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_sd_emmc_init failed: %d\n", status);
         goto fail;
     }
 
+    if ((status = vim2_mailbox_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim2_mailbox_init failed: %d\n", status);
+        goto fail;
+    }
+    if ((status = vim2_thermal_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim2_thermal_init failed: %d\n", status);
+        goto fail;
+    }
 
     if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
         zxlogf(ERROR, "vim_start_thread could not add display_dev: %d\n", status);
         goto fail;
     }
 
+    if ((status = pbus_device_add(&bus->pbus, &video_dev, 0)) != ZX_OK) {
+      zxlogf(ERROR, "vim_start_thread could not add video_dev: %d\n", status);
+      goto fail;
+    }
+
     if ((status = pbus_device_add(&bus->pbus, &led2472g_dev, 0)) != ZX_OK) {
       zxlogf(ERROR, "vim_start_thread could not add led2472g_dev: %d\n", status);
       goto fail;
     }
-    /* Disabled pending debug of issue preventing zedboot from working.
-    TODO:(hollande)
+
     if ((status = vim_eth_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_eth_init failed: %d\n", status);
         goto fail;
     }
-    */
+
     return ZX_OK;
 fail:
     zxlogf(ERROR, "vim_start_thread failed, not all devices have been initialized\n");

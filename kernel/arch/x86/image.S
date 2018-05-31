@@ -7,7 +7,7 @@
 
 #include <asm.h>
 #include <arch/x86/asm.h>
-#include <zircon/boot/bootdata.h>
+#include <zircon/boot/image.h>
 #include <zircon/boot/multiboot.h>
 
 
@@ -37,57 +37,47 @@
 // .bss, which the kernel needs to zero before it's ready to run the fixup
 // code.  So move_fixups_and_zero_bss (in start.S) copies the fixup code to
 // scratch memory starting at IMAGE_MEMORY_END (i.e., right after the
-// kernel's .bss).  The "end of .bss" address in the multiboot header is
+// kernel's .bss).  The "end of .bss" address the multiboot header is
 // the only way to reserve some space that the boot loader won't use for
 // something like the kernel command like or the initial RAM disk.  So add
 // the fixup code size.
 //
-// The bootdata header doesn't record this.  But the bootdata protocol from
-// the bootloader ensures that the bootdata image is nowhere near the end of
-// the kernel load image, so it doesn't need to know how much .bss space the
-// kernel actually needs there.
-#define boot_bss_end (IMAGE_MEMORY_END + (apply_fixups_end - apply_fixups))
+// The zbi_kernel_t header records this as a number of bytes after the
+// image, rather than as an address.
+#define boot_bss_end (IMAGE_MEMORY_END + IMAGE_RESERVE_SIZE)
 
+.globl IMAGE_RESERVE_SIZE
+IMAGE_RESERVE_SIZE = apply_fixups_end - apply_fixups
 
 .text
 
-.balign 8
-// BOOTDATA file header (bootdata_t)
-DATA(_bootdata_file_header)
-    .int BOOTDATA_CONTAINER
-    .int boot_load_end - _bootdata_kernel_header
-    .int BOOTDATA_MAGIC
-    .int BOOTDATA_FLAG_V2
-    .int 0
-    .int 0
-    .int BOOTITEM_MAGIC
-    .int BOOTITEM_NO_CRC32
-END_DATA(_bootdata_file_header)
+// ZBI file header (zbi_header_t)
+ZBI_CONTAINER_HEADER(_zbi_file_header, boot_load_end - _zbi_kernel_header)
 
-// BOOTDATA kernel header (bootdata_t)
-DATA(_bootdata_kernel_header)
-    .int BOOTDATA_KERNEL
-    .int boot_load_end - _bootdata_kernel_payload
+// ZBI kernel header (zbi_header_t)
+DATA(_zbi_kernel_header)
+    .int ZBI_TYPE_KERNEL_X64
+    .int boot_load_end - _zbi_kernel_payload
     .int 0
-    .int BOOTDATA_FLAG_V2
+    .int ZBI_FLAG_VERSION
     .int 0
     .int 0
-    .int BOOTITEM_MAGIC
-    .int BOOTITEM_NO_CRC32
-END_DATA(_bootdata_kernel_header)
+    .int ZBI_ITEM_MAGIC
+    .int ZBI_ITEM_NO_CRC32
+END_DATA(_zbi_kernel_header)
 
-// BOOTDATA_KERNEL payload (bootdata_kernel_t)
-DATA(_bootdata_kernel_payload)
+// ZBI_TYPE_KERNEL payload (zbi_kernel_t)
+DATA(_zbi_kernel_payload)
     .quad PHYS(IMAGE_ELF_ENTRY)
-    .quad 0
-END_DATA(_bootdata_kernel_payload)
+    .quad boot_bss_end - boot_load_end
+END_DATA(_zbi_kernel_payload)
 
 .balign 8
 DATA(_multiboot_header)
     .int MULTIBOOT_HEADER_MAGIC
     .int MULTIBOOT_HEADER_FLAGS
     .int -(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS)
-    .int PHYS_LOAD_ADDRESS + (_multiboot_header - _bootdata_file_header)
+    .int PHYS_LOAD_ADDRESS + (_multiboot_header - _zbi_file_header)
     .int PHYS_LOAD_ADDRESS
     .int PHYS(boot_load_end)
     .int PHYS(boot_bss_end)

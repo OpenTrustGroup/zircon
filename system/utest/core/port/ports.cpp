@@ -28,13 +28,13 @@ static bool basic_test(void) {
 
     zx_port_packet_t out = {};
 
-    status = zx_port_queue(port, nullptr, 1u);
+    status = zx_port_queue(port, nullptr);
     EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
 
-    status = zx_port_queue(port, &in, 1u);
+    status = zx_port_queue(port, &in);
     EXPECT_EQ(status, ZX_OK);
 
-    status = zx_port_wait(port, ZX_TIME_INFINITE, &out, 1u);
+    status = zx_port_wait(port, ZX_TIME_INFINITE, &out);
     EXPECT_EQ(status, ZX_OK);
 
     EXPECT_EQ(out.key, 12u);
@@ -49,96 +49,6 @@ static bool basic_test(void) {
     END_TEST;
 }
 
-template <size_t Count>
-static bool queue_count_valid_test() {
-    BEGIN_TEST;
-
-    zx_handle_t port;
-    zx_status_t status = zx_port_create(0u, &port);
-    EXPECT_EQ(status, ZX_OK);
-
-    // This test relies on only 0 or 1 being a valid count. This might
-    // eventually change. For now, we can stack allocate 1 packet and
-    // know it is sufficient for all instantiations of this test.
-    static_assert(Count <= 1, "");
-    const zx_port_packet_t in = {
-    };
-    status = zx_port_queue(port, &in, Count);
-    EXPECT_EQ(status, ZX_OK);
-
-    EXPECT_EQ(zx_handle_close(port), ZX_OK);
-
-    END_TEST;
-}
-
-template <size_t Count>
-static bool queue_count_invalid_test() {
-    BEGIN_TEST;
-
-    zx_handle_t port;
-    zx_status_t status = zx_port_create(0u, &port);
-    EXPECT_EQ(status, ZX_OK);
-
-    const zx_port_packet_t in[Count] = {
-    };
-    status = zx_port_queue(port, in, Count);
-    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
-
-    EXPECT_EQ(zx_handle_close(port), ZX_OK);
-
-    END_TEST;
-}
-
-template <size_t Count>
-static bool wait_count_valid_test() {
-    BEGIN_TEST;
-
-    zx_handle_t port;
-    zx_status_t status = zx_port_create(0u, &port);
-    EXPECT_EQ(status, ZX_OK);
-
-    const zx_port_packet_t in = {
-    };
-    status = zx_port_queue(port, &in, 1u);
-    EXPECT_EQ(status, ZX_OK);
-
-    // This test relies on only 0 or 1 being a valid count. This might
-    // eventually change. For now, we can stack allocate 1 packet and
-    // know it is sufficient for all instantiations of this test.
-    static_assert(Count <= 1, "");
-    zx_port_packet_t out = {
-    };
-    status = zx_port_wait(port, ZX_TIME_INFINITE, &out, Count);
-    EXPECT_EQ(status, ZX_OK);
-
-    EXPECT_EQ(zx_handle_close(port), ZX_OK);
-
-    END_TEST;
-}
-
-template <size_t Count>
-static bool wait_count_invalid_test() {
-    BEGIN_TEST;
-
-    zx_handle_t port;
-    zx_status_t status = zx_port_create(0u, &port);
-    EXPECT_EQ(status, ZX_OK);
-
-    const zx_port_packet_t in = {
-    };
-    status = zx_port_queue(port, &in, 1u);
-    EXPECT_EQ(status, ZX_OK);
-
-    zx_port_packet_t out[Count] = {
-    };
-    status = zx_port_wait(port, ZX_TIME_INFINITE, out, Count);
-    EXPECT_EQ(status, ZX_ERR_INVALID_ARGS);
-
-    EXPECT_EQ(zx_handle_close(port), ZX_OK);
-
-    END_TEST;
-}
-
 static bool queue_and_close_test(void) {
     BEGIN_TEST;
     zx_status_t status;
@@ -148,7 +58,7 @@ static bool queue_and_close_test(void) {
     EXPECT_EQ(status, ZX_OK, "could not create port");
 
     zx_port_packet_t out0 = {};
-    status = zx_port_wait(port, zx_deadline_after(ZX_USEC(1)), &out0, 1u);
+    status = zx_port_wait(port, zx_deadline_after(ZX_USEC(1)), &out0);
     EXPECT_EQ(status, ZX_ERR_TIMED_OUT);
 
     const zx_port_packet_t in = {
@@ -158,8 +68,39 @@ static bool queue_and_close_test(void) {
         { {} }
     };
 
-    status = zx_port_queue(port, &in, 1u);
+    status = zx_port_queue(port, &in);
     EXPECT_EQ(status, ZX_OK);
+
+    status = zx_handle_close(port);
+    EXPECT_EQ(status, ZX_OK);
+
+    END_TEST;
+}
+
+static bool queue_too_many(void) {
+    BEGIN_TEST;
+    zx_status_t status;
+
+    zx_handle_t port;
+    status = zx_port_create(0, &port);
+    EXPECT_EQ(status, ZX_OK, "could not create port");
+
+    const zx_port_packet_t in = {
+        2ull,
+        ZX_PKT_TYPE_USER,
+        0,
+        { {} }
+    };
+
+    size_t count;
+    for (count = 0; count < 5000u; ++count) {
+        status = zx_port_queue(port, &in);
+        if (status != ZX_OK)
+            break;
+    }
+
+    EXPECT_EQ(status, ZX_ERR_SHOULD_WAIT);
+    EXPECT_EQ(count, 2049u);
 
     status = zx_handle_close(port);
     EXPECT_EQ(status, ZX_OK);
@@ -186,13 +127,13 @@ static bool async_wait_channel_test(void) {
         status = zx_object_wait_async(ch[1], port, key0, ZX_CHANNEL_READABLE, ZX_WAIT_ASYNC_ONCE);
         EXPECT_EQ(status, ZX_OK);
 
-        status = zx_port_wait(port, zx_deadline_after(ZX_USEC(200)), &out, 1u);
+        status = zx_port_wait(port, zx_deadline_after(ZX_USEC(200)), &out);
         EXPECT_EQ(status, ZX_ERR_TIMED_OUT);
 
         status = zx_channel_write(ch[0], 0u, "here", 4, nullptr, 0u);
         EXPECT_EQ(status, ZX_OK);
 
-        status = zx_port_wait(port, ZX_TIME_INFINITE, &out, 1u);
+        status = zx_port_wait(port, ZX_TIME_INFINITE, &out);
         EXPECT_EQ(status, ZX_OK);
 
         EXPECT_EQ(out.key, key0);
@@ -209,7 +150,7 @@ static bool async_wait_channel_test(void) {
 
     zx_port_packet_t out1 = {};
 
-    status = zx_port_wait(port, zx_deadline_after(ZX_USEC(200)), &out1, 1u);
+    status = zx_port_wait(port, zx_deadline_after(ZX_USEC(200)), &out1);
     EXPECT_EQ(status, ZX_ERR_TIMED_OUT);
 
     status = zx_object_wait_async(ch[1], port, key0, ZX_CHANNEL_READABLE, ZX_WAIT_ASYNC_ONCE);
@@ -320,7 +261,7 @@ static bool async_wait_event_test_single(void) {
 
     for (uint32_t ix = 0; ix != (kNumAwaits - 2); ++ix) {
         EXPECT_EQ(status, ZX_OK);
-        status = zx_port_wait(port, ZX_TIME_INFINITE, &out, 1u);
+        status = zx_port_wait(port, ZX_TIME_INFINITE, &out);
         EXPECT_EQ(status, ZX_OK);
         key_sum += out.key;
         EXPECT_EQ(out.type, ZX_PKT_TYPE_SIGNAL_ONE);
@@ -365,7 +306,7 @@ static bool async_wait_event_test_repeat(void) {
         EXPECT_EQ(zx_object_signal(ev, 0u, ZX_EVENT_SIGNALED | ub), ZX_OK);
         EXPECT_EQ(zx_object_signal(ev, ZX_EVENT_SIGNALED | ub, 0u), ZX_OK);
 
-        ASSERT_EQ(zx_port_wait(port, 0ull, &out, 1u), ZX_OK);
+        ASSERT_EQ(zx_port_wait(port, 0ull, &out), ZX_OK);
         ASSERT_EQ(out.type, ZX_PKT_TYPE_SIGNAL_REP);
         ASSERT_EQ(out.signal.count, 1u);
         count[0] += (out.signal.observed & ZX_EVENT_SIGNALED) ? 1 : 0;
@@ -437,7 +378,7 @@ static bool pre_writes_channel_test(uint32_t mode) {
     uint64_t read_count = 0u;
 
     while (true) {
-        status = zx_port_wait(port, 0ull, &out, 1u);
+        status = zx_port_wait(port, 0ull, &out);
         if (status != ZX_OK)
             break;
         wait_count++;
@@ -498,7 +439,7 @@ static bool cancel_event(uint32_t wait_mode) {
     uint64_t key_sum = 0;
 
     while (true) {
-        status = zx_port_wait(port, 0ull, &out, 1u);
+        status = zx_port_wait(port, 0ull, &out);
         if (status != ZX_OK)
             break;
         wait_count++;
@@ -561,7 +502,7 @@ static bool cancel_event_after(uint32_t wait_mode) {
     uint64_t key_sum = 0;
 
     while (true) {
-        status = zx_port_wait(port, 0ull, &out, 1u);
+        status = zx_port_wait(port, 0ull, &out);
         if (status != ZX_OK)
             break;
         wait_count++;
@@ -597,7 +538,7 @@ static int port_reader_thread(void* arg) {
     zx_port_packet_t out = {};
     uint64_t received = 0;
     do {
-        auto st = zx_port_wait(ctx->port, ZX_TIME_INFINITE, &out, 1u);
+        auto st = zx_port_wait(ctx->port, ZX_TIME_INFINITE, &out);
         if (st < 0)
             return st;
         ++received;
@@ -738,13 +679,8 @@ static bool cancel_stress() {
 
 BEGIN_TEST_CASE(port_tests)
 RUN_TEST(basic_test)
-RUN_TEST(queue_count_valid_test<1u>)
-RUN_TEST(queue_count_invalid_test<2u>)
-RUN_TEST(queue_count_invalid_test<23u>)
-RUN_TEST(wait_count_valid_test<1u>)
-RUN_TEST(wait_count_invalid_test<2u>)
-RUN_TEST(wait_count_invalid_test<23u>)
 RUN_TEST(queue_and_close_test)
+RUN_TEST(queue_too_many)
 RUN_TEST(async_wait_channel_test)
 RUN_TEST(async_wait_event_test_single)
 RUN_TEST(async_wait_event_test_repeat)

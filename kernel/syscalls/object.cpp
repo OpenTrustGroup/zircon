@@ -11,6 +11,7 @@
 #include <kernel/mp.h>
 #include <kernel/stats.h>
 #include <vm/pmm.h>
+#include <vm/vm.h>
 #include <lib/heap.h>
 #include <platform.h>
 #include <zircon/types.h>
@@ -474,11 +475,11 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
             // TODO: figure out a better handle to hang this off to and push this copy code into
             // that dispatcher.
 
-            size_t state_count[_VM_PAGE_STATE_COUNT] = {};
+            size_t state_count[VM_PAGE_STATE_COUNT_] = {};
             pmm_count_total_states(state_count);
 
             size_t total = 0;
-            for (int i = 0; i < _VM_PAGE_STATE_COUNT; i++) {
+            for (int i = 0; i < VM_PAGE_STATE_COUNT_; i++) {
                 total += state_count[i];
             }
 
@@ -597,7 +598,7 @@ zx_status_t sys_object_get_property(zx_handle_t handle_value, uint32_t property,
         case ZX_PROP_NAME: {
             if (size < ZX_MAX_NAME_LEN)
                 return ZX_ERR_BUFFER_TOO_SMALL;
-            char name[ZX_MAX_NAME_LEN];
+            char name[ZX_MAX_NAME_LEN] = {};
             dispatcher->get_name(name);
             if (_value.copy_array_to_user(name, ZX_MAX_NAME_LEN) != ZX_OK)
                 return ZX_ERR_INVALID_ARGS;
@@ -755,7 +756,26 @@ zx_status_t sys_object_set_property(zx_handle_t handle_value, uint32_t property,
                 return status;
             if (!x86_is_vaddr_canonical(addr))
                 return ZX_ERR_INVALID_ARGS;
+            if (!is_user_address(addr))
+                return ZX_ERR_INVALID_ARGS;
             write_msr(X86_MSR_IA32_FS_BASE, addr);
+            return ZX_OK;
+        }
+        case ZX_PROP_REGISTER_GS: {
+            if (size < sizeof(uintptr_t))
+                return ZX_ERR_BUFFER_TOO_SMALL;
+            zx_status_t status = is_current_thread(&dispatcher);
+            if (status != ZX_OK)
+                return status;
+            uintptr_t addr;
+            status = _value.reinterpret<const uintptr_t>().copy_from_user(&addr);
+            if (status != ZX_OK)
+                return status;
+            if (!x86_is_vaddr_canonical(addr))
+                return ZX_ERR_INVALID_ARGS;
+            if (!is_user_address(addr))
+                return ZX_ERR_INVALID_ARGS;
+            write_msr(X86_MSR_IA32_KERNEL_GS_BASE, addr);
             return ZX_OK;
         }
 #endif
@@ -818,32 +838,9 @@ zx_status_t sys_object_signal_peer(zx_handle_t handle_value, uint32_t clear_mask
 
 // Given a kernel object with children objects, obtain a handle to the
 // child specified by the provided kernel object id.
-//
-// ZX_HANDLE_INVALID is currently treated as a "magic" handle used to
-// obtain a process from "the system".
 zx_status_t sys_object_get_child(zx_handle_t handle, uint64_t koid,
                                  zx_rights_t rights, user_out_handle* out) {
     auto up = ProcessDispatcher::GetCurrent();
-
-    if (handle == ZX_HANDLE_INVALID) {
-        //TODO: lookup process from job instead of treating INVALID as magic
-        // TODO(ZX-923): Rights handling for debug purposes.
-        const auto kDebugRights =
-            ZX_RIGHTS_BASIC | ZX_RIGHTS_IO |
-            ZX_RIGHTS_PROPERTY | ZX_RIGHT_ENUMERATE;
-
-        if (rights == ZX_RIGHT_SAME_RIGHTS) {
-            rights = kDebugRights;
-        } else if ((kDebugRights & rights) != rights) {
-            return ZX_ERR_ACCESS_DENIED;
-        }
-
-        auto process = ProcessDispatcher::LookupProcessById(koid);
-        if (!process)
-            return ZX_ERR_NOT_FOUND;
-
-        return out->make(fbl::move(process), rights);
-    }
 
     fbl::RefPtr<Dispatcher> dispatcher;
     uint32_t parent_rights;

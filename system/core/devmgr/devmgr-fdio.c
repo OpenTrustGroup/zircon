@@ -58,7 +58,6 @@ static struct {
 };
 
 void devmgr_disable_appmgr_services(void) {
-    FSTAB[0].flags = 0;
     FSTAB[1].flags = 0;
 }
 
@@ -130,6 +129,7 @@ zx_status_t devmgr_launch(zx_handle_t job, const char* name,
     } else {
         printf("devmgr: launch %s (%s) OK\n", argv[0], name);
     }
+    zx_handle_close(job_copy);
     return status;
 }
 

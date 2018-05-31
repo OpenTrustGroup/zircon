@@ -37,6 +37,21 @@ static bool test_name_property(zx_handle_t object) {
     char set_name[ZX_MAX_NAME_LEN];
     char get_name[ZX_MAX_NAME_LEN];
 
+    // name with extra garbage at the end
+    memset(set_name, 'A', sizeof(set_name));
+    set_name[1] = '\0';
+
+    EXPECT_EQ(zx_object_set_property(object, ZX_PROP_NAME,
+                                     set_name, sizeof(set_name)),
+              ZX_OK, "");
+    EXPECT_EQ(zx_object_get_property(object, ZX_PROP_NAME,
+                                     get_name, sizeof(get_name)),
+              ZX_OK, "");
+    EXPECT_EQ(get_name[0], 'A', "");
+    for (size_t i = 1; i < sizeof(get_name); i++) {
+        EXPECT_EQ(get_name[i], '\0', "");
+    }
+
     // empty name
     strcpy(set_name, "");
     EXPECT_EQ(zx_object_set_property(object, ZX_PROP_NAME,
@@ -77,6 +92,52 @@ static bool test_name_property(zx_handle_t object) {
     return true;
 }
 
+static bool job_name_test(void) {
+    BEGIN_TEST;
+
+    zx_handle_t testjob;
+    zx_status_t s = zx_job_create(zx_job_default(), 0, &testjob);
+    EXPECT_EQ(s, ZX_OK, "");
+
+    bool success = test_name_property(testjob);
+    if (!success)
+        return false;
+
+    zx_handle_close(testjob);
+    END_TEST;
+}
+
+static bool channel_name_test(void) {
+    BEGIN_TEST;
+
+    zx_handle_t channel1;
+    zx_handle_t channel2;
+    zx_status_t s = zx_channel_create(0, &channel1, &channel2);
+    EXPECT_EQ(s, ZX_OK, "");
+
+    char name[ZX_MAX_NAME_LEN];
+
+    memset(name, 'A', sizeof(name));
+    EXPECT_EQ(zx_object_get_property(channel1, ZX_PROP_NAME,
+                                     name, sizeof(name)),
+              ZX_OK, "");
+    for (size_t i = 0; i < sizeof(name); i++) {
+        EXPECT_EQ(name[i], '\0', "");
+    }
+
+    memset(name, 'A', sizeof(name));
+    EXPECT_EQ(zx_object_get_property(channel2, ZX_PROP_NAME,
+                                     name, sizeof(name)),
+              ZX_OK, "");
+    for (size_t i = 0; i < sizeof(name); i++) {
+        EXPECT_EQ(name[i], '\0', "");
+    }
+
+    zx_handle_close(channel1);
+    zx_handle_close(channel2);
+    END_TEST;
+}
+
 static bool process_name_test(void) {
     BEGIN_TEST;
 
@@ -107,11 +168,15 @@ static bool vmo_name_test(void) {
     ASSERT_EQ(zx_vmo_create(16, 0u, &vmo), ZX_OK, "");
     unittest_printf("VMO handle %d\n", vmo);
 
+    char name[ZX_MAX_NAME_LEN];
+    memset(name, 'A', sizeof(name));
+
     // Name should start out empty.
-    char name[ZX_MAX_NAME_LEN] = {'x', '\0'};
     EXPECT_EQ(zx_object_get_property(vmo, ZX_PROP_NAME, name, sizeof(name)),
               ZX_OK, "");
-    EXPECT_EQ(strcmp("", name), 0, "");
+    for (size_t i = 0; i < sizeof(name); i++) {
+        EXPECT_EQ(name[i], '\0', "");
+    }
 
     // Check the rest.
     bool success = test_name_property(vmo);
@@ -322,6 +387,15 @@ static bool socket_buffer_test(void) {
               ZX_OK, "");
     EXPECT_EQ(value, sizeof(buf), "");
 
+    // Check TX buf goes to zero on peer closed.
+    zx_handle_close(sockets[0]);
+    ASSERT_EQ(zx_object_get_property(sockets[1], ZX_PROP_SOCKET_TX_BUF_SIZE, &value, sizeof(value)),
+              ZX_OK, "");
+    EXPECT_EQ(value, 0u, "");
+    ASSERT_EQ(zx_object_get_property(sockets[1], ZX_PROP_SOCKET_TX_BUF_MAX, &value, sizeof(value)),
+              ZX_OK, "");
+    EXPECT_EQ(value, 0u, "");
+
     END_TEST;
 }
 
@@ -343,14 +417,138 @@ static bool channel_depth_test(void) {
     END_TEST;
 }
 
+#if defined(__x86_64__)
+
+static uintptr_t read_gs(void) {
+    uintptr_t gs;
+    __asm__ __volatile__("mov %%gs:0,%0"
+                         : "=r"(gs));
+    return gs;
+}
+
+static int do_nothing(void* unused) {
+    for (;;) {
+    }
+    return 0;
+}
+
+static bool fs_invalid_test(void) {
+    BEGIN_TEST;
+
+    // The success case of fs is hard to explicitly test, but is
+    // exercised all the time (ie userspace would explode instantly if
+    // it was broken). Since we will be soon adding a corresponding
+    // mechanism for gs, don't worry about testing success.
+
+    uintptr_t fs_storage;
+    uintptr_t fs_location = (uintptr_t)&fs_storage;
+
+    // All the failures:
+
+    // Try a thread other than the current one.
+    thrd_t t;
+    int success = thrd_create(&t, &do_nothing, NULL);
+    ASSERT_EQ(success, thrd_success, "");
+    zx_handle_t other_thread = thrd_get_zx_handle(t);
+    zx_status_t status = zx_object_set_property(other_thread, ZX_PROP_REGISTER_FS,
+                                                &fs_location, sizeof(fs_location));
+    ASSERT_EQ(status, ZX_ERR_ACCESS_DENIED, "");
+
+    // Try a non-thread object type.
+    status = zx_object_set_property(zx_process_self(), ZX_PROP_REGISTER_FS,
+                                    &fs_location, sizeof(fs_location));
+    ASSERT_EQ(status, ZX_ERR_WRONG_TYPE, "");
+
+    // Not enough buffer to hold the property value.
+    status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_FS,
+                                    &fs_location, sizeof(fs_location) - 1);
+    ASSERT_EQ(status, ZX_ERR_BUFFER_TOO_SMALL, "");
+
+    // A non-canonical vaddr.
+    uintptr_t noncanonical_fs_location = fs_location | (1ull << 47);
+    status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_FS,
+                                    &noncanonical_fs_location,
+                                    sizeof(noncanonical_fs_location));
+    ASSERT_EQ(status, ZX_ERR_INVALID_ARGS, "");
+
+    // A non-userspace vaddr.
+    uintptr_t nonuserspace_fs_location = 0xffffffff40000000;
+    status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_FS,
+                                    &nonuserspace_fs_location,
+                                    sizeof(nonuserspace_fs_location));
+    ASSERT_EQ(status, ZX_ERR_INVALID_ARGS, "");
+
+    END_TEST;
+}
+
+static bool gs_test(void) {
+    BEGIN_TEST;
+
+    // First test the success case.
+    const uintptr_t expected = 0xfeedfacefeedface;
+
+    uintptr_t gs_storage = expected;
+    uintptr_t gs_location = (uintptr_t)&gs_storage;
+
+    zx_status_t status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_GS,
+                                                &gs_location, sizeof(gs_location));
+    ASSERT_EQ(status, ZX_OK, "");
+    ASSERT_EQ(read_gs(), expected, "");
+
+    // All the failures:
+
+    // Try a thread other than the current one.
+    thrd_t t;
+    int success = thrd_create(&t, &do_nothing, NULL);
+    ASSERT_EQ(success, thrd_success, "");
+    zx_handle_t other_thread = thrd_get_zx_handle(t);
+    status = zx_object_set_property(other_thread, ZX_PROP_REGISTER_GS,
+                                    &gs_location, sizeof(gs_location));
+    ASSERT_EQ(status, ZX_ERR_ACCESS_DENIED, "");
+
+    // Try a non-thread object type.
+    status = zx_object_set_property(zx_process_self(), ZX_PROP_REGISTER_GS,
+                                    &gs_location, sizeof(gs_location));
+    ASSERT_EQ(status, ZX_ERR_WRONG_TYPE, "");
+
+    // Not enough buffer to hold the property value.
+    status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_GS,
+                                    &gs_location, sizeof(gs_location) - 1);
+    ASSERT_EQ(status, ZX_ERR_BUFFER_TOO_SMALL, "");
+
+    // A non-canonical vaddr.
+    uintptr_t noncanonical_gs_location = gs_location | (1ull << 47);
+    status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_GS,
+                                    &noncanonical_gs_location,
+                                    sizeof(noncanonical_gs_location));
+    ASSERT_EQ(status, ZX_ERR_INVALID_ARGS, "");
+
+    // A non-userspace vaddr.
+    uintptr_t nonuserspace_gs_location = 0xffffffff40000000;
+    status = zx_object_set_property(zx_thread_self(), ZX_PROP_REGISTER_GS,
+                                    &nonuserspace_gs_location,
+                                    sizeof(nonuserspace_gs_location));
+    ASSERT_EQ(status, ZX_ERR_INVALID_ARGS, "");
+
+    END_TEST;
+}
+
+#endif // defined(__x86_64__)
+
 BEGIN_TEST_CASE(property_tests)
 RUN_TEST(process_name_test);
 RUN_TEST(thread_name_test);
+RUN_TEST(job_name_test);
 RUN_TEST(vmo_name_test);
+RUN_TEST(channel_name_test);
 RUN_TEST(importance_smoke_test);
 RUN_TEST(bad_importance_value_fails);
 RUN_TEST(socket_buffer_test);
 RUN_TEST(channel_depth_test);
+#if defined(__x86_64__)
+RUN_TEST(fs_invalid_test)
+RUN_TEST(gs_test)
+#endif
 END_TEST_CASE(property_tests)
 
 int main(int argc, char** argv) {

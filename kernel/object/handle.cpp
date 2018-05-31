@@ -116,7 +116,7 @@ HandleOwner Handle::Make(fbl::RefPtr<Dispatcher> dispatcher,
     void* addr = Alloc(dispatcher, "new", &base_value);
     if (unlikely(!addr))
         return nullptr;
-    kcounter_add(handle_count_new, 1u);
+    kcounter_add(handle_count_new, 1);
     return HandleOwner(new (addr) Handle(fbl::move(dispatcher),
                                          rights, base_value));
 }
@@ -135,7 +135,7 @@ HandleOwner Handle::Dup(Handle* source, zx_rights_t rights) {
     void* addr = Alloc(source->dispatcher(), "duplicate", &base_value);
     if (unlikely(!addr))
         return nullptr;
-    kcounter_add(handle_count_duped, 1u);
+    kcounter_add(handle_count_duped, 1);
     return HandleOwner(new (addr) Handle(source, rights, base_value));
 }
 
@@ -193,16 +193,17 @@ void Handle::Delete() {
 
     // If |disp| is the last reference then the dispatcher object
     // gets destroyed here.
-    kcounter_add(handle_count_freed, 1u);
+    kcounter_add(handle_count_freed, 1);
 }
 
 Handle* Handle::FromU32(uint32_t value) TA_NO_THREAD_SAFETY_ANALYSIS {
-    Handle* handle = IndexToHandle(value & kHandleIndexMask);
+    uintptr_t handle_addr = IndexToHandle(value & kHandleIndexMask);
     {
         AutoLock lock(&mutex_);
-        if (unlikely(!arena_.in_range(handle)))
+        if (unlikely(!arena_.in_range(handle_addr)))
             return nullptr;
     }
+    auto handle = reinterpret_cast<Handle*>(handle_addr);
     return likely(handle->base_value() == value) ? handle : nullptr;
 }
 

@@ -157,6 +157,7 @@ zx_status_t sys_log_create(uint32_t options, user_out_handle* out) {
 
 zx_status_t sys_debuglog_create(zx_handle_t rsrc, uint32_t options,
                                 user_out_handle* out) {
+    // TODO(ZX-971): finer grained validation
     zx_status_t status = validate_resource(rsrc, ZX_RSRC_KIND_ROOT);
     if (status != ZX_OK)
         return status;
@@ -232,15 +233,11 @@ zx_status_t sys_cprng_draw(user_out_ptr<void> buffer, size_t len, user_out_ptr<s
 
     auto prng = crypto::GlobalPRNG::GetInstance();
     ASSERT(prng->is_thread_safe());
-    prng->Draw(kernel_buf, static_cast<int>(len));
+    prng->Draw(kernel_buf, len);
 
     if (buffer.copy_array_to_user(kernel_buf, len) != ZX_OK)
         return ZX_ERR_INVALID_ARGS;
-    zx_status_t status = actual.copy_to_user(len);
-    if (status != ZX_OK)
-        return status;
-
-    return ZX_OK;
+    return actual.copy_to_user(len);
 }
 
 zx_status_t sys_cprng_add_entropy(user_in_ptr<const void> buffer, size_t len) {
@@ -257,7 +254,7 @@ zx_status_t sys_cprng_add_entropy(user_in_ptr<const void> buffer, size_t len) {
 
     auto prng = crypto::GlobalPRNG::GetInstance();
     ASSERT(prng->is_thread_safe());
-    prng->AddEntropy(kernel_buf, static_cast<int>(len));
+    prng->AddEntropy(kernel_buf, len);
 
     return ZX_OK;
 }

@@ -54,8 +54,11 @@ typedef struct zx_info_handle_basic {
     // The object type: channel, event, socket, etc.
     uint32_t type;                // zx_obj_type_t;
 
-    // The koid of the logical counterpart or parent object of the
-    // object referenced by the handle. Otherwise this value is zero.
+    // If the object referenced by the handle is related to another (such
+    // as the the other end of a channel, or the parent of a job) then
+    // |related_koid| is the koid of that object, otherwise it is zero.
+    // This relationship is immutable: an object's |related_koid| does
+    // not change even if the related object no longer exists.
     zx_koid_t related_koid;
 
     // Set to ZX_OBJ_PROP_WAITABLE if the object referenced by the
@@ -76,7 +79,7 @@ typedef struct zx_info_process_handle_stats {
 typedef struct zx_info_process {
     // The process's return code; only valid if |exited| is true.
     // Guaranteed to be non-zero if the process was killed by |zx_task_kill|.
-    int return_code;
+    int64_t return_code;
 
     // True if the process has ever left the initial creation state,
     // even if it has exited as well.
@@ -340,7 +343,8 @@ typedef struct zx_info_kmem_stats {
 
 typedef struct zx_info_resource {
     // The resource kind, one of:
-    // {ZX_RSRC_KIND_ROOT, ZX_RSRC_KIND_MMIO, ZX_RSRC_KIND_IOPORT, ZX_RSRC_KIND_IRQ}
+    // {ZX_RSRC_KIND_ROOT, ZX_RSRC_KIND_MMIO, ZX_RSRC_KIND_IOPORT, ZX_RSRC_KIND_IRQ,
+    // ZX_RSRC_KIND_HYPERVISOR }
     uint32_t kind;
     // Resource's low value (inclusive)
     uint64_t low;
@@ -352,13 +356,12 @@ typedef struct zx_info_resource {
 
 // Object properties.
 
-// "2" is unused and can be recycled.
-
 // Argument is a char[ZX_MAX_NAME_LEN].
 #define ZX_PROP_NAME                        3u
 
 #if __x86_64__
 // Argument is a uintptr_t.
+#define ZX_PROP_REGISTER_GS                 2u
 #define ZX_PROP_REGISTER_FS                 4u
 #endif
 
@@ -368,7 +371,7 @@ typedef struct zx_info_resource {
 // Argument is the base address of the vDSO mapping (or zero), a uintptr_t.
 #define ZX_PROP_PROCESS_VDSO_BASE_ADDRESS   6u
 
-// Argument is an zx_job_importance_t value.
+// Argument is a zx_job_importance_t value.
 #define ZX_PROP_JOB_IMPORTANCE              7u
 
 // Argument is a size_t.

@@ -19,8 +19,11 @@ enum class ProbeOperation {
     kWrite
 };
 
-void except_thread_func(uintptr_t op, void* address) {
-    volatile char* ch_address = static_cast<char*>(address);
+#if __has_feature(address_sanitizer)
+[[clang::no_sanitize("address")]]
+#endif
+void except_thread_func(uintptr_t op, uintptr_t address) {
+    volatile char* ch_address = reinterpret_cast<char*>(address);
 
     char ch = *ch_address;
     if (static_cast<ProbeOperation>(op) == ProbeOperation::kWrite)
@@ -38,8 +41,7 @@ bool do_probe(ProbeOperation op, const void* addr) {
         return false;
 
     alignas(16) static uint8_t thread_stack[128];
-    uintptr_t entry = reinterpret_cast<uintptr_t>(&except_thread_func);
-    uintptr_t stack = reinterpret_cast<uintptr_t>(thread_stack + sizeof(thread_stack));
+    void* stack = thread_stack + sizeof(thread_stack);
 
     zx::port port;
     status = zx::port::create(0, &port);
@@ -55,11 +57,11 @@ bool do_probe(ProbeOperation op, const void* addr) {
         return false;
     }
 
-    thread.start(entry, stack, static_cast<uintptr_t>(op), reinterpret_cast<uintptr_t>(addr));
+    thread.start(&except_thread_func, stack, static_cast<uintptr_t>(op), reinterpret_cast<uintptr_t>(addr));
 
     // Wait for crash or thread completion.
     zx_port_packet_t packet;
-    if (port.wait(zx::time::infinite(), &packet, 1) == ZX_OK) {
+    if (port.wait(zx::time::infinite(), &packet) == ZX_OK) {
         if (ZX_PKT_IS_EXCEPTION(packet.type)) {
             // Thread crashed so the operation failed. The thread is now in a suspended state and
             // needs to be explicitly terminated.

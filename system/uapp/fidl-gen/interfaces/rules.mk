@@ -8,6 +8,8 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := fidl
 
+MODULE_FIDL_LIBRARY := test
+
 MODULE_SRCS += $(LOCAL_DIR)/test.fidl
 
 include make/module.mk

@@ -6,9 +6,12 @@
 
 #pragma once
 
+#include <fbl/auto_lock.h>
 #include <fbl/canary.h>
 #include <fbl/mutex.h>
 #include <hwreg/bitfields.h>
+// Needed for ARCH_MMU_FLAG_*
+#include <vm/arch_vm_aspace.h>
 
 typedef uint64_t pt_entry_t;
 #define PRIxPTE PRIx64
@@ -73,9 +76,10 @@ public:
     paddr_t phys() const { return phys_; }
     void* virt() const { return virt_; }
 
-    // Reading this value is primarily used for calculating memory usage.  It is
-    // fine on x86 for this to be read while the lock is not held.
-    size_t pages() const TA_NO_THREAD_SAFETY_ANALYSIS { return pages_; }
+    size_t pages() {
+        fbl::AutoLock al(&lock_);
+        return pages_;
+    }
     void* ctx() const { return ctx_; }
 
     zx_status_t MapPages(vaddr_t vaddr, paddr_t* phys, size_t count,

@@ -7,7 +7,6 @@
 #pragma once
 
 #include <arch/arm64.h>
-#include <arch/spinlock.h>
 #include <kernel/align.h>
 #include <kernel/cpu.h>
 #include <reg.h>
@@ -66,12 +65,13 @@ static inline uint32_t arm64_read_percpu_u32(size_t offset) {
     // a copy between
     __asm__ volatile("ldr %w[val], [x18, %[offset]]"
                      : [val] "=r"(val)
-                     : [offset] "I"(offset));
+                     : [offset] "Ir"(offset));
     return val;
 }
 
 static inline void arm64_write_percpu_u32(size_t offset, uint32_t val) {
-    __asm__("str %w[val], [x18, %[offset]]" ::[val] "r"(val), [offset] "I"(offset)
+    __asm__("str %w[val], [x18, %[offset]]"
+            ::[val] "r"(val), [offset] "Ir"(offset)
             : "memory");
 }
 

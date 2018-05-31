@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <ddk/protocol/display-controller.h>
 #include <ddktl/device.h>
-#include <ddktl/protocol/display.h>
 #include <hwreg/mmio.h>
 #include <lib/edid/edid.h>
 #include <region-alloc/region-alloc.h>
@@ -21,21 +21,13 @@ namespace i915 {
 
 class Controller;
 
-class DisplayDevice;
-using DisplayDeviceType = ddk::Device<DisplayDevice>;
-
-class DisplayDevice : public DisplayDeviceType, public ddk::DisplayProtocol<DisplayDevice> {
+class DisplayDevice {
 public:
-    DisplayDevice(Controller* device, registers::Ddi ddi,
-                  registers::Trans trans, registers::Pipe pipe);
+    DisplayDevice(Controller* device, uint64_t id,
+                  registers::Ddi ddi, registers::Trans trans, registers::Pipe pipe);
     virtual ~DisplayDevice();
 
-    void DdkRelease();
-
-    zx_status_t SetMode(zx_display_info_t* info);
-    zx_status_t GetMode(zx_display_info_t* info);
-    zx_status_t GetFramebuffer(void** framebuffer);
-    void Flush();
+    void ApplyConfiguration(display_config_t* config);
 
     bool Init();
     bool Resume();
@@ -44,31 +36,36 @@ public:
     // the device will be removed.
     virtual bool HandleHotplug(bool long_pulse) { return false; }
 
-    const zx::vmo& framebuffer_vmo() const { return framebuffer_vmo_; }
-    uint32_t framebuffer_size() const { return framebuffer_size_; }
-    const zx_display_info_t& info() const { return info_; }
+    uint64_t id() const { return id_; }
     registers::Ddi ddi() const { return ddi_; }
     registers::Pipe pipe() const { return pipe_; }
     registers::Trans trans() const { return trans_; }
     Controller* controller() { return controller_; }
     const edid::Edid& edid() { return edid_; }
 
+    uint32_t width() const { return info_.v_addressable; }
+    uint32_t height() const { return info_.h_addressable; }
+    uint32_t format() const { return ZX_PIXEL_FORMAT_ARGB_8888; }
+
 protected:
     // Queries the DisplayDevice to see if there is a supported display attached. If
     // there is, then returns true and populates |edid| and |info|.
-    virtual bool QueryDevice(edid::Edid* edid, zx_display_info_t* info) = 0;
+    virtual bool QueryDevice(edid::Edid* edid) = 0;
     // Configures the hardware to display a framebuffer at the preferred resolution.
-    virtual bool DefaultModeset() = 0;
+    virtual bool DoModeset() = 0;
 
     hwreg::RegisterIo* mmio_space() const;
+    const display_mode_t& mode() const { return info_; }
+
+private:
     void ResetPipe();
     bool ResetTrans();
     bool ResetDdi();
 
-private:
     // Borrowed reference to Controller instance
     Controller* controller_;
 
+    uint64_t id_;
     registers::Ddi ddi_;
     registers::Trans trans_;
     registers::Pipe pipe_;
@@ -76,14 +73,12 @@ private:
     PowerWellRef ddi_power_;
     PowerWellRef pipe_power_;
 
-    uintptr_t framebuffer_;
-    uint32_t framebuffer_size_;
-    zx::vmo framebuffer_vmo_;
-    fbl::unique_ptr<const GttRegion> fb_gfx_addr_;
+    bool inited_ = false;
+    display_mode_t info_;
 
-    bool inited_;
-    zx_display_info_t info_;
+    uint32_t image_type_;
     edid::Edid edid_;
+    bool is_enabled_;
 };
 
 } // namespace i915

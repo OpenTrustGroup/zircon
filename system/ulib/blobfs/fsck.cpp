@@ -21,8 +21,23 @@ void BlobfsChecker::TraverseInodeBitmap() {
             alloc_inodes_++;
             inode_blocks_ += static_cast<uint32_t>(inode->num_blocks);
 
+            size_t start_block = inode->start_block;
+            size_t end_block = inode->start_block + inode->num_blocks;
+            bool valid = true;
+
+            size_t first_unset = 0;
+            if (!blobfs_->block_map_.Get(start_block, end_block, &first_unset)) {
+                FS_TRACE_ERROR("check: ino %u using blocks [%zu, %zu). "
+                               "Not fully allocated in block bitmap; first unset @%zu\n",
+                               n, start_block, end_block, first_unset);
+                valid = false;
+            }
+
             if (blobfs_->VerifyBlob(n) != ZX_OK) {
                 FS_TRACE_ERROR("check: detected inode %u with bad state\n", n);
+                valid = false;
+            }
+            if (!valid) {
                 error_blobs_++;
             }
         }
@@ -54,7 +69,7 @@ zx_status_t BlobfsChecker::CheckAllocatedCounts() const {
 
     if (inode_blocks_ + kStartBlockMinimum != alloc_blocks_) {
         FS_TRACE_ERROR("check: bitmap allocated blocks (%u) do not match inode allocated blocks "
-                       "(%u)\n", alloc_blocks_, inode_blocks_);
+                       "(%" PRIu64 ")\n", alloc_blocks_, inode_blocks_ + kStartBlockMinimum);
         status = ZX_ERR_BAD_STATE;
     }
 

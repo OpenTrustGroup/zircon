@@ -7,6 +7,8 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/protocol/pci.h>
+#include <ddk/protocol/intel-hda-dsp.h>
+#include <zircon/thread_annotations.h>
 #include <zircon/types.h>
 #include <fbl/atomic.h>
 #include <fbl/intrusive_single_list.h>
@@ -25,7 +27,7 @@
 #include "codec-cmd-job.h"
 #include "debug-logging.h"
 #include "intel-hda-codec.h"
-#include "thread-annotations.h"
+#include "intel-hda-dsp.h"
 #include "utils.h"
 
 namespace audio {
@@ -39,11 +41,12 @@ public:
     zx_status_t Init(zx_device_t* pci_dev);
 
     // one-liner accessors.
-    const char*                  dev_name() const   { return device_get_name(dev_node_); }
-    zx_device_t*                 dev_node()         { return dev_node_; }
-    const zx_pcie_device_info_t& dev_info() const   { return pci_dev_info_; }
-    unsigned int                 id() const         { return id_; }
-    const char*                  log_prefix() const { return log_prefix_; }
+    const char*                  dev_name() const     { return device_get_name(dev_node_); }
+    zx_device_t*                 dev_node()           { return dev_node_; }
+    const zx_pcie_device_info_t& dev_info() const     { return pci_dev_info_; }
+    unsigned int                 id() const           { return id_; }
+    const char*                  log_prefix() const   { return log_prefix_; }
+    const pci_protocol_t*        pci() const          { return &pci_; }
 
     // CORB/RIRB
     zx_status_t QueueCodecCmd(fbl::unique_ptr<CodecCmdJob>&& job) TA_EXCL(corb_lock_);
@@ -107,6 +110,7 @@ private:
     zx_status_t SetupStreamDescriptors() TA_EXCL(stream_pool_lock_);
     zx_status_t SetupCommandBufferSize(uint8_t* size_reg, unsigned int* entry_count);
     zx_status_t SetupCommandBuffer() TA_EXCL(corb_lock_, rirb_lock_);
+    void        ProbeAudioDSP();
 
     void WaitForIrqOrWakeup();
 
@@ -150,8 +154,8 @@ private:
     zx_device_t* dev_node_ = nullptr;
 
     // PCI Registers and IRQ
-    zx::interrupt    irq_;
-    fbl::VmoMapper   mapped_regs_;
+    zx::interrupt       irq_;
+    fbl::VmoMapper      mapped_regs_;
 
     // A handle to the Bus Transaction Initiator for this PCI device.  Used to
     // grant access to specific regions of physical mememory to the controller
@@ -197,6 +201,8 @@ private:
 
     fbl::Mutex codec_lock_;
     fbl::RefPtr<IntelHDACodec> codecs_[HDA_MAX_CODECS];
+
+    fbl::RefPtr<IntelHDADSP> dsp_;
 
     static fbl::atomic_uint32_t device_id_gen_;
     static zx_protocol_device_t  CONTROLLER_DEVICE_THUNKS;

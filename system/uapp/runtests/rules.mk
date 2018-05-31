@@ -14,14 +14,29 @@ MODULE_SRCS += \
 
 MODULE_NAME := runtests
 
-MODULE_STATIC_LIBS := \
-    system/ulib/zx
+MODULE_FIDL_LIBS := \
+    system/fidl/logger
 
+# zxcpp required for fbl to work.
+MODULE_STATIC_LIBS := \
+    system/ulib/async \
+    system/ulib/async-loop \
+    system/ulib/async.cpp \
+    system/ulib/async-loop.cpp \
+    system/ulib/fidl \
+    system/ulib/fbl \
+    system/ulib/runtests-utils \
+    system/ulib/zx \
+    system/ulib/zxcpp \
+
+# We have to include all MODULE_LIBS from runtests-utils because transitive dependencies don't
+# get linked in automatically :-(.
 MODULE_LIBS := \
+    system/ulib/async.default \
+    system/ulib/c \
     system/ulib/fdio \
     system/ulib/launchpad \
-    system/ulib/zircon \
-    system/ulib/c \
     system/ulib/unittest \
+    system/ulib/zircon \
 
 include make/module.mk

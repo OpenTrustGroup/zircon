@@ -26,6 +26,7 @@
 #include <object/handle.h>
 #include <object/interrupt_dispatcher.h>
 #include <object/interrupt_event_dispatcher.h>
+#include <object/virtual_interrupt_dispatcher.h>
 #include <object/iommu_dispatcher.h>
 #include <object/process_dispatcher.h>
 #include <object/resources.h>
@@ -144,29 +145,7 @@ zx_status_t sys_bootloader_fb_get_info(user_out_ptr<uint32_t> format, user_out_p
 #endif
 }
 
-zx_status_t sys_set_framebuffer(zx_handle_t hrsrc, user_inout_ptr<void> vaddr, uint32_t len, uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {
-    // TODO(ZX-971): finer grained validation
-    zx_status_t status;
-    if ((status = validate_resource(hrsrc, ZX_RSRC_KIND_ROOT)) < 0) {
-        return status;
-    }
-
-    intptr_t paddr = vaddr_to_paddr(vaddr.get());
-    udisplay_set_framebuffer(paddr, len);
-
-    struct display_info di;
-    memset(&di, 0, sizeof(struct display_info));
-    di.format = format;
-    di.width = width;
-    di.height = height;
-    di.stride = stride;
-    di.flags = DISPLAY_FLAG_HW_FRAMEBUFFER;
-    udisplay_set_display_info(&di);
-
-    return ZX_OK;
-}
-
-zx_status_t sys_set_framebuffer_vmo(zx_handle_t hrsrc, zx_handle_t vmo_handle, uint32_t len, uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {
+zx_status_t sys_set_framebuffer(zx_handle_t hrsrc, zx_handle_t vmo_handle, uint32_t len, uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {
     zx_status_t status;
     if ((status = validate_resource(hrsrc, ZX_RSRC_KIND_ROOT)) < 0)
         return status;
@@ -184,7 +163,7 @@ zx_status_t sys_set_framebuffer_vmo(zx_handle_t hrsrc, zx_handle_t vmo_handle, u
     if (status != ZX_OK)
         return status;
 
-    status = udisplay_set_framebuffer_vmo(vmo->vmo());
+    status = udisplay_set_framebuffer(vmo->vmo());
     if (status != ZX_OK)
         return status;
 
@@ -201,7 +180,7 @@ zx_status_t sys_set_framebuffer_vmo(zx_handle_t hrsrc, zx_handle_t vmo_handle, u
 }
 
 zx_status_t sys_iommu_create(zx_handle_t rsrc_handle, uint32_t type,
-                             user_in_ptr<const void> desc, uint32_t desc_len,
+                             user_in_ptr<const void> desc, size_t desc_len,
                              user_out_handle* out) {
     // TODO: finer grained validation
     zx_status_t status;
@@ -445,7 +424,12 @@ zx_status_t sys_interrupt_create(zx_handle_t src_obj, uint32_t src_num,
 
     fbl::RefPtr<Dispatcher> dispatcher;
     zx_rights_t rights;
-    zx_status_t result = InterruptEventDispatcher::Create(&dispatcher, &rights, src_num, options);
+    zx_status_t result;
+    if (options & ZX_INTERRUPT_VIRTUAL) {
+        result = VirtualInterruptDispatcher::Create(&dispatcher, &rights, options);
+    } else {
+        result = InterruptEventDispatcher::Create(&dispatcher, &rights, src_num, options);
+    }
     if (result != ZX_OK)
         return result;
 
@@ -454,11 +438,40 @@ zx_status_t sys_interrupt_create(zx_handle_t src_obj, uint32_t src_num,
 
 zx_status_t sys_interrupt_bind(zx_handle_t inth, zx_handle_t porth,
                          uint64_t key, uint32_t options) {
-    return ZX_ERR_NOT_SUPPORTED;
+    LTRACEF("handle %x\n", inth);
+    if (options) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    zx_status_t status;
+    auto up = ProcessDispatcher::GetCurrent();
+    fbl::RefPtr<InterruptDispatcher> interrupt;
+    status = up->GetDispatcherWithRights(inth, ZX_RIGHT_READ, &interrupt);
+    if (status != ZX_OK)
+        return status;
+
+    fbl::RefPtr<PortDispatcher> port;
+    status = up->GetDispatcherWithRights(porth, ZX_RIGHT_WRITE, &port);
+    if (status != ZX_OK)
+        return status;
+
+    if (!port->can_bind_to_interrupt()) {
+        return ZX_ERR_WRONG_TYPE;
+    }
+
+    return interrupt->Bind(port, interrupt, key);
 }
 
-zx_status_t sys_interrupt_ack(zx_handle_t handle) {
-    return ZX_ERR_NOT_SUPPORTED;
+zx_status_t sys_interrupt_ack(zx_handle_t inth) {
+    LTRACEF("handle %x\n", inth);
+
+    zx_status_t status;
+    auto up = ProcessDispatcher::GetCurrent();
+    fbl::RefPtr<InterruptDispatcher> interrupt;
+    status = up->GetDispatcherWithRights(inth, ZX_RIGHT_WRITE, &interrupt);
+    if (status != ZX_OK)
+        return status;
+    return interrupt->Ack();
 }
 
 zx_status_t sys_interrupt_wait(zx_handle_t handle, user_out_ptr<zx_time_t> out_timestamp) {
@@ -470,9 +483,6 @@ zx_status_t sys_interrupt_wait(zx_handle_t handle, user_out_ptr<zx_time_t> out_t
     status = up->GetDispatcherWithRights(handle, ZX_RIGHT_WAIT, &interrupt);
     if (status != ZX_OK)
         return status;
-
-    //TODO(braval): Check for this error
-    // **ZX_ERR_BAD_STATE** the interrupt object is bound to a port
 
     zx_time_t timestamp;
     status = interrupt->WaitForInterrupt(&timestamp);
@@ -509,7 +519,7 @@ zx_status_t sys_interrupt_trigger(zx_handle_t handle,
     if (status != ZX_OK)
         return status;
 
-    return interrupt->UserSignal(timestamp);
+    return interrupt->Trigger(timestamp);
 }
 
 zx_status_t sys_smc_call(zx_handle_t rsrc_handle,

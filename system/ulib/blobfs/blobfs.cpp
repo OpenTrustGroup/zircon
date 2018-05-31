@@ -71,16 +71,33 @@ zx_status_t CheckFvmConsistency(const blobfs_info_t* info, int block_fd) {
     }
 
     if (response.count != request.count) {
-        FS_TRACE_ERROR("blobfs: Missing slize\n");
+        FS_TRACE_ERROR("blobfs: Missing slice\n");
         return ZX_ERR_BAD_STATE;
     }
 
     for (size_t i = 0; i < request.count; i++) {
-        size_t actual_count = response.vslice_range[i].count;
-        if (!response.vslice_range[i].allocated || expected_count[i] != actual_count) {
-            // TODO(rvargas): Consider modifying the size automatically.
-            FS_TRACE_ERROR("blobfs: Wrong slice size\n");
+        size_t blobfs_count = expected_count[i];
+        size_t fvm_count = response.vslice_range[i].count;
+
+        if (!response.vslice_range[i].allocated || fvm_count < blobfs_count) {
+            // Currently, since Blobfs can only grow new slices, it should not be possible for
+            // the FVM to report a slice size smaller than what is reported by Blobfs. In this
+            // case, automatically fail without trying to resolve the situation, as it is
+            // possible that Blobfs structures are allocated in the slices that have been lost.
+            FS_TRACE_ERROR("blobfs: Mismatched slice count\n");
             return ZX_ERR_IO_DATA_INTEGRITY;
+        }
+
+        if (fvm_count > blobfs_count) {
+            // If FVM reports more slices than we expect, try to free remainder.
+            extend_request_t shrink;
+            shrink.length = fvm_count - blobfs_count;
+            shrink.offset = request.vslice_start[i] + blobfs_count;
+            ssize_t r;
+            if ((r = ioctl_block_fvm_shrink(block_fd, &shrink)) != ZX_OK) {
+                FS_TRACE_ERROR("blobfs: Unable to shrink to expected size, status: %zd\n", r);
+                return ZX_ERR_IO_DATA_INTEGRITY;
+            }
         }
     }
 
@@ -679,8 +696,26 @@ void Blobfs::FreeNode(WriteTxn* txn, size_t node_index) {
     ZX_DEBUG_ASSERT(status == ZX_OK);
 }
 
+zx_status_t Blobfs::InitializeWriteback() {
+    zx_status_t status;
+    fbl::unique_ptr<MappedVmo> buffer;
+    constexpr size_t kWriteBufferSize = 64 * (1LU << 20);
+    static_assert(kWriteBufferSize % kBlobfsBlockSize == 0,
+                  "Buffer Size must be a multiple of the Blobfs Block Size");
+    if ((status = MappedVmo::Create(kWriteBufferSize, "blobfs-writeback",
+                                    &buffer)) != ZX_OK) {
+        return status;
+    }
+    if ((status = WritebackBuffer::Create(this, fbl::move(buffer), &writeback_)) != ZX_OK) {
+        return status;
+    }
+
+    return ZX_OK;
+}
+
 void Blobfs::Shutdown(fs::Vfs::ShutdownCallback cb) {
     TRACE_DURATION("blobfs", "Blobfs::Unmount");
+    ZX_DEBUG_ASSERT_MSG(writeback_ != nullptr, "Shutdown requires writeback thread to sync");
 
     // 1) Shutdown all external connections to blobfs.
     ManagedVfs::Shutdown([this, cb = fbl::move(cb)] (zx_status_t status) mutable {
@@ -765,7 +800,7 @@ zx_status_t Blobfs::PurgeBlob(VnodeBlob* vn) {
     case kBlobStateReadable: {
         // A readable blob should only be purged if it has been unlinked
         ZX_ASSERT(vn->DeletionQueued());
-        // Fall-through
+        __FALLTHROUGH;
     }
     case kBlobStateDataWrite:
     case kBlobStateError: {
@@ -1010,9 +1045,13 @@ zx_status_t Blobfs::AddBlocks(size_t nblocks) {
         return status;
     }
 
+    // Since we are extending the bitmap, we need to fill the expanded
+    // portion of the allocation block bitmap with zeroes.
     if (abmblks > abmblks_old) {
-        wb->txn()->Enqueue(block_map_.StorageUnsafe()->GetVmo(), abmblks_old,
-                     DataStartBlock(info_) + abmblks_old, abmblks - abmblks_old);
+        uint64_t vmo_offset = abmblks_old;
+        uint64_t dev_offset = BlockMapStartBlock(info_) + abmblks_old;
+        uint64_t length = abmblks - abmblks_old;
+        wb->txn()->Enqueue(block_map_.StorageUnsafe()->GetVmo(), vmo_offset, dev_offset, length);
     }
 
     info_.vslice_count += request.length;
@@ -1170,21 +1209,7 @@ zx_status_t Blobfs::Create(fbl::unique_fd fd, const blobfs_info_t* info,
     } else if ((status = fs->CreateFsId()) != ZX_OK) {
         fprintf(stderr, "blobfs: Failed to create fs_id: %d\n", status);
         return status;
-    }
-
-    fbl::unique_ptr<MappedVmo> buffer;
-    constexpr size_t kWriteBufferSize = 64 * (1LU << 20);
-    static_assert(kWriteBufferSize % kBlobfsBlockSize == 0,
-                  "Buffer Size must be a multiple of the Blobfs Block Size");
-    if ((status = MappedVmo::Create(kWriteBufferSize, "blobfs-writeback",
-                                    &buffer)) != ZX_OK) {
-        return status;
-    }
-    if ((status = WritebackBuffer::Create(fs.get(), fbl::move(buffer),
-                                          &fs->writeback_)) != ZX_OK) {
-        return status;
-    }
-    if ((status = fs->InitializeVnodes() != ZX_OK)) {
+    } else if ((status = fs->InitializeVnodes() != ZX_OK)) {
         fprintf(stderr, "blobfs: Failed to initialize Vnodes\n");
         return status;
     }
@@ -1329,6 +1354,10 @@ zx_status_t blobfs_mount(async_t* async, fbl::unique_fd blockfd,
     fbl::unique_ptr<Blobfs> fs;
 
     if ((status = blobfs_create(&fs, fbl::move(blockfd))) != ZX_OK) {
+        return status;
+    }
+
+    if ((status = fs->InitializeWriteback()) != ZX_OK) {
         return status;
     }
 

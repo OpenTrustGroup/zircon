@@ -34,7 +34,7 @@ static constexpr uint16_t kBaseProcessorVpid = 1;
 
 static zx_status_t invept(InvEpt invalidation, uint64_t eptp) {
     uint8_t err;
-    uint64_t descriptor[] = { eptp, 0 };
+    uint64_t descriptor[] = {eptp, 0};
 
     __asm__ volatile(
         "invept %[descriptor], %[invalidation];" VMX_ERR_CHECK(err)
@@ -272,7 +272,7 @@ static void edit_msr_list(VmxPage* msr_list_page, size_t index, uint32_t msr, ui
     entry->value = value;
 }
 
-zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
+static zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
                       paddr_t msr_bitmaps_address, paddr_t pml4_address, VmxState* vmx_state,
                       VmxPage* host_msr_page, VmxPage* guest_msr_page) {
     zx_status_t status = vmclear(vmcs_address);
@@ -451,9 +451,12 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     edit_msr_list(host_msr_page, 3, X86_MSR_IA32_FMASK, read_msr(X86_MSR_IA32_FMASK));
     edit_msr_list(host_msr_page, 4, X86_MSR_IA32_TSC_ADJUST, read_msr(X86_MSR_IA32_TSC_ADJUST));
     edit_msr_list(host_msr_page, 5, X86_MSR_IA32_TSC_AUX, read_msr(X86_MSR_IA32_TSC_AUX));
+    edit_msr_list(host_msr_page, 6, X86_MSR_IA32_SYSENTER_CS, read_msr(X86_MSR_IA32_SYSENTER_CS));
+    edit_msr_list(host_msr_page, 7, X86_MSR_IA32_SYSENTER_ESP, read_msr(X86_MSR_IA32_SYSENTER_ESP));
+    edit_msr_list(host_msr_page, 8, X86_MSR_IA32_SYSENTER_EIP, read_msr(X86_MSR_IA32_SYSENTER_EIP));
 
     vmcs.Write(VmcsField64::EXIT_MSR_LOAD_ADDRESS, host_msr_page->PhysicalAddress());
-    vmcs.Write(VmcsField32::EXIT_MSR_LOAD_COUNT, 6);
+    vmcs.Write(VmcsField32::EXIT_MSR_LOAD_COUNT, 9);
 
     edit_msr_list(guest_msr_page, 0, X86_MSR_IA32_KERNEL_GS_BASE, 0);
     edit_msr_list(guest_msr_page, 1, X86_MSR_IA32_STAR, 0);
@@ -461,10 +464,13 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
     edit_msr_list(guest_msr_page, 3, X86_MSR_IA32_FMASK, 0);
     edit_msr_list(guest_msr_page, 4, X86_MSR_IA32_TSC_ADJUST, 0);
     edit_msr_list(guest_msr_page, 5, X86_MSR_IA32_TSC_AUX, 0);
+    edit_msr_list(guest_msr_page, 6, X86_MSR_IA32_SYSENTER_CS, 0);
+    edit_msr_list(guest_msr_page, 7, X86_MSR_IA32_SYSENTER_ESP, 0);
+    edit_msr_list(guest_msr_page, 8, X86_MSR_IA32_SYSENTER_EIP, 0);
     vmcs.Write(VmcsField64::EXIT_MSR_STORE_ADDRESS, guest_msr_page->PhysicalAddress());
-    vmcs.Write(VmcsField32::EXIT_MSR_STORE_COUNT, 6);
+    vmcs.Write(VmcsField32::EXIT_MSR_STORE_COUNT, 9);
     vmcs.Write(VmcsField64::ENTRY_MSR_LOAD_ADDRESS, guest_msr_page->PhysicalAddress());
-    vmcs.Write(VmcsField32::ENTRY_MSR_LOAD_COUNT, 6);
+    vmcs.Write(VmcsField32::ENTRY_MSR_LOAD_COUNT, 9);
 
     // Setup VMCS host state.
     //
@@ -612,7 +618,7 @@ zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entry,
 
     if (x86_feature_test(X86_FEATURE_XSAVE)) {
         // Enable x87 state in guest XCR0.
-        vmx_state->guest_state.xcr0 = X86_XSAVE_STATE_X87;
+        vmx_state->guest_state.xcr0 = X86_XSAVE_STATE_BIT_X87;
     }
 
     return ZX_OK;
@@ -782,7 +788,7 @@ zx_status_t Vcpu::Interrupt(uint32_t vector) {
     if (status != ZX_OK) {
         return status;
     } else if (!signaled && running_.load()) {
-        mp_reschedule(cpu_num_to_mask(hypervisor::cpu_of(vpid_)), MP_RESCHEDULE_FLAG_USE_IPI);
+        mp_interrupt(MP_IPI_TARGET_MASK, cpu_num_to_mask(hypervisor::cpu_of(vpid_)));
     }
     return ZX_OK;
 }
@@ -806,7 +812,7 @@ static void register_copy(Out* out, const In& in) {
     out->r15 = in.r15;
 }
 
-zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
+zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, size_t len) const {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
@@ -824,7 +830,7 @@ zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, uint32_t len) const {
     return ZX_ERR_INVALID_ARGS;
 }
 
-zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, uint32_t len) {
+zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, size_t len) {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {

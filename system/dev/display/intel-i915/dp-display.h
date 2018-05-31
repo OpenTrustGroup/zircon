@@ -13,11 +13,11 @@ class DpAuxMessage;
 
 class DpDisplay : public DisplayDevice, private edid::EdidDdcSource {
 public:
-    DpDisplay(Controller* controller, registers::Ddi ddi, registers::Pipe pipe);
+    DpDisplay(Controller* controller, uint64_t id, registers::Ddi ddi, registers::Pipe pipe);
 
 private:
-    bool QueryDevice(edid::Edid* edid, zx_display_info_t* info) final;
-    bool DefaultModeset() final;
+    bool QueryDevice(edid::Edid* edid) final;
+    bool DoModeset() final;
     bool DdcRead(uint8_t segment, uint8_t offset, uint8_t* buf, uint8_t len) final;
 
     bool DpAuxRead(uint32_t dp_cmd, uint32_t addr, uint8_t* buf, size_t size);

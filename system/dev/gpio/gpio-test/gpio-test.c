@@ -46,6 +46,7 @@ static void gpio_test_release(void* ctx) {
     zx_handle_close(gpio_test->inth);
     gpio_release_interrupt(gpio, GPIO_BUTTON);
     thrd_join(gpio_test->thread, NULL);
+    thrd_join(gpio_test->wait, NULL);
     free(gpio_test);
 }
 
@@ -68,7 +69,9 @@ static int gpio_test_thread(void *arg) {
     }
 
     while (!gpio_test->done) {
-         for (unsigned i = 0; i < gpio_count; i++) {
+        // Assuming here that the last GPIO is the input button
+        // so we don't toggle that one
+        for (unsigned i = 0; i < gpio_count-1; i++) {
             gpio_write(gpio, i, 1);
             sleep(1);
             gpio_write(gpio, i, 0);
@@ -83,11 +86,13 @@ static int gpio_waiting_thread(void *arg) {
     gpio_test_t* gpio_test = arg;
     gpio_protocol_t* gpio = &gpio_test->gpio;
     while(1) {
+        zxlogf(INFO, "Waiting for GPIO Test Input Interrupt\n");
         zx_status_t status = zx_interrupt_wait(gpio_test->inth, NULL);
         if (status != ZX_OK) {
             zxlogf(ERROR, "gpio_waiting_thread: zx_interrupt_wait failed %d\n", status);
             return -1;
         }
+        zxlogf(INFO, "Received GPIO Test Input Interrupt\n");
         uint8_t out;
         gpio_read(gpio, GPIO_LED, &out);
         gpio_write(gpio, GPIO_LED, !out);
@@ -99,15 +104,9 @@ static int gpio_waiting_thread(void *arg) {
 static int gpio_interrupt_test(void *arg) {
     gpio_test_t* gpio_test = arg;
     gpio_protocol_t* gpio = &gpio_test->gpio;
-    zx_status_t status;
 
     if (gpio_config(gpio, GPIO_BUTTON, GPIO_DIR_IN | GPIO_PULL_DOWN) != ZX_OK) {
         zxlogf(ERROR, "gpio_interrupt_test: gpio_config failed for gpio %u \n", GPIO_BUTTON);
-        return -1;
-    }
-
-    if (ZX_OK != (status = gpio_config(gpio, GPIO_LED, GPIO_DIR_OUT))) {
-        zxlogf(ERROR, "gpio_interrupt_test: gpio_config failed for gpio %u\n", GPIO_LED);
         return -1;
     }
 
@@ -118,6 +117,27 @@ static int gpio_interrupt_test(void *arg) {
     }
 
     thrd_create_with_name(&gpio_test->wait, gpio_waiting_thread, gpio_test, "gpio_waiting_thread");
+    return 0;
+}
+
+// test thread that checks for gpio inputs
+static int gpio_test_in(void *arg) {
+    gpio_test_t* gpio_test = arg;
+    gpio_protocol_t* gpio = &gpio_test->gpio;
+
+    if (gpio_config(gpio, GPIO_BUTTON, GPIO_DIR_IN) != ZX_OK) {
+        zxlogf(ERROR, "gpio_interrupt_test: gpio_config failed for gpio %u \n", GPIO_BUTTON);
+        return -1;
+    }
+
+    uint8_t out;
+    while (!gpio_test->done) {
+        gpio_read(gpio, GPIO_BUTTON, &out);
+        if (out) {
+            zxlogf(INFO, "READ GPIO_BUTTON %u\n",out);
+            sleep(2);
+        }
+    }
     return 0;
 }
 

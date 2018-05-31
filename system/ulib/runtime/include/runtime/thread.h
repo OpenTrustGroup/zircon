@@ -6,8 +6,6 @@
 
 #include <zircon/compiler.h>
 #include <zircon/types.h>
-#include <runtime/mutex.h>
-#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -15,10 +13,9 @@ __BEGIN_CDECLS
 
 typedef void (*zxr_thread_entry_t)(void*);
 
+// size = 16 on all platforms
 typedef struct {
-    zxr_thread_entry_t entry;
-    zx_handle_t handle;
-    atomic_int state;
+    char internal[16];
 } zxr_thread_t;
 
 #pragma GCC visibility push(hidden)
@@ -74,7 +71,7 @@ bool zxr_thread_detached(zxr_thread_t* thread);
 // thread has been detached.  If it has been detached, then this does
 // zx_vmar_unmap(vmar, addr, len) first, but in a way that permits
 // unmapping the caller's own stack.
-_Noreturn void zxr_thread_exit_unmap_if_detached(
+__NO_RETURN void zxr_thread_exit_unmap_if_detached(
     zxr_thread_t* thread, zx_handle_t vmar, uintptr_t addr, size_t len);
 
 // Destroy a thread structure that is either created but unstarted or is

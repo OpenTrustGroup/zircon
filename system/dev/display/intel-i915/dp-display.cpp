@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <ddk/debug.h>
 #include <ddk/driver.h>
 #include <endian.h>
 #include <lib/edid/edid.h>
@@ -224,19 +223,19 @@ public:
     // operations, |body_size| is the size of our receive buffer.
     bool SetDpAuxHeader(uint32_t addr, uint32_t dp_cmd, uint32_t body_size) {
         if (body_size > DpAuxMessage::kMaxBodySize) {
-            zxlogf(ERROR, "DP aux: Message too large\n");
+            LOG_WARN("DP aux: Message too large\n");
             return false;
         }
         // Addresses should fit into 20 bits.
         if (addr >= (1 << 20)) {
-            zxlogf(ERROR, "DP aux: Address is too large: 0x%x\n", addr);
+            LOG_WARN("DP aux: Address is too large: 0x%x\n", addr);
             return false;
         }
         // For now, we don't handle messages with empty bodies.  (However, they
         // can be used for checking whether there is an I2C device at a given
         // address.)
         if (body_size == 0) {
-            zxlogf(ERROR, "DP aux: Empty message not supported\n");
+            LOG_WARN("DP aux: Empty message not supported\n");
             return false;
         }
         data[0] = static_cast<uint8_t>((dp_cmd << 4) | ((addr >> 16) & 0xf));
@@ -292,7 +291,7 @@ bool DpDisplay::SendDpAuxMsg(const DpAuxMessage& request, DpAuxMessage* reply, b
                 return false;
             }
             if (status.rcv_error()) {
-                zxlogf(ERROR, "DP aux: rcv error\n");
+                LOG_TRACE("DP aux: rcv error\n");
                 return false;
             }
             if (!status.done()) {
@@ -301,7 +300,7 @@ bool DpDisplay::SendDpAuxMsg(const DpAuxMessage& request, DpAuxMessage* reply, b
 
             reply->size = status.message_size();
             if (!reply->size || reply->size > DpAuxMessage::kMaxTotalSize) {
-                zxlogf(ERROR, "DP aux: Invalid reply size %d\n", reply->size);
+                LOG_TRACE("DP aux: Invalid reply size %d\n", reply->size);
                 return false;
             }
             // Read the reply message from the hardware.
@@ -314,7 +313,7 @@ bool DpDisplay::SendDpAuxMsg(const DpAuxMessage& request, DpAuxMessage* reply, b
         }
         zx_nanosleep(zx_deadline_after(ZX_USEC(1)));
     }
-    zxlogf(ERROR, "DP aux: No reply after %d tries\n", kNumTries);
+    LOG_TRACE("DP aux: No reply after %d tries\n", kNumTries);
     return false;
 }
 
@@ -340,7 +339,7 @@ bool DpDisplay::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage*
         if (!SendDpAuxMsg(request, reply, &timeout_result)) {
             if (timeout_result) {
                 if (++timeouts_seen == kMaxTimeouts) {
-                    zxlogf(ERROR, "DP aux: Got too many timeouts (%d)\n", kMaxTimeouts);
+                    LOG_TRACE("DP aux: Got too many timeouts (%d)\n", kMaxTimeouts);
                     return false;
                 }
                 // Retry on timeout.
@@ -359,8 +358,7 @@ bool DpDisplay::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage*
         // later extension to the protocol.  But report it, in case this
         // indicates some problem.
         if (padding) {
-            zxlogf(INFO,
-                   "DP aux: Reply header padding is non-zero (header byte: 0x%x)\n", header_byte);
+            LOG_INFO("DP aux: Reply header padding is non-zero (header byte: 0x%x)\n", header_byte);
         }
 
         switch (status) {
@@ -369,24 +367,24 @@ bool DpDisplay::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage*
                 return true;
             case DP_REPLY_AUX_DEFER:
                 if (++defers_seen == kMaxDefers) {
-                    zxlogf(ERROR , "DP aux: Received too many AUX DEFERs (%d)\n", kMaxDefers);
+                    LOG_TRACE("DP aux: Received too many AUX DEFERs (%d)\n", kMaxDefers);
                     return false;
                 }
                 // Go around the loop again to retry.
                 continue;
             case DP_REPLY_AUX_NACK:
-                zxlogf(ERROR, "DP aux: Reply was not an ack (got AUX_NACK)\n");
+                LOG_TRACE("DP aux: Reply was not an ack (got AUX_NACK)\n");
                 return false;
             case DP_REPLY_I2C_NACK:
-                zxlogf(ERROR, "DP aux: Reply was not an ack (got I2C_NACK)\n");
+                LOG_TRACE("DP aux: Reply was not an ack (got I2C_NACK)\n");
                 return false;
             case DP_REPLY_I2C_DEFER:
                 // TODO(ZX-1416): Implement handling of I2C_DEFER.
-                zxlogf(ERROR, "DP aux: Received I2C_DEFER (not implemented)\n");
+                LOG_TRACE("DP aux: Received I2C_DEFER (not implemented)\n");
                 return false;
             default:
                 // We got a reply that is not defined by the DisplayPort spec.
-                zxlogf(ERROR, "DP aux: Unrecognized reply (header byte: 0x%x)\n", header_byte);
+                LOG_TRACE("DP aux: Unrecognized reply (header byte: 0x%x)\n", header_byte);
                 return false;
         }
     }
@@ -420,7 +418,7 @@ bool DpDisplay::DpAuxReadChunk(uint32_t dp_cmd, uint32_t addr, uint8_t* buf, uin
     }
     size_t bytes_read = reply.size - 1;
     if (bytes_read > size_in) {
-        zxlogf(ERROR, "DP aux read: Reply was larger than requested\n");
+        LOG_WARN("DP aux read: Reply was larger than requested\n");
         return false;
     }
     memcpy(buf, &reply.data[1], bytes_read);
@@ -445,7 +443,7 @@ bool DpDisplay::DpAuxWrite(uint32_t dp_cmd, uint32_t addr, const uint8_t* buf, s
     // TODO(ZX-1416): Handle the case where the hardware did a short write,
     // for which we could send the remaining bytes.
     if (reply.size != 1) {
-        zxlogf(ERROR, "DP aux write: Unexpected reply size\n");
+        LOG_WARN("DP aux write: Unexpected reply size\n");
         return false;
     }
     return true;
@@ -488,7 +486,7 @@ bool DpDisplay::DpcdRequestLinkTraining(const dpcd::TrainingPatternSet& tp_set,
     static_assert(kAddr + 4 == dpcd::DPCD_TRAINING_LANE3_SET, "");
 
     if (!DpcdWrite(kAddr, reg_bytes, 1 + dp_lane_count_)) {
-        zxlogf(ERROR, "Failure setting TRAINING_PATTERN_SET\n");
+        LOG_ERROR("Failure setting TRAINING_PATTERN_SET\n");
         return false;
     }
 
@@ -502,7 +500,7 @@ bool DpDisplay::DpcdReadPairedRegs(hwreg::RegisterBase<T, typename T::ValueType>
     uint32_t num_bytes = dp_lane_count_ == 4 ? 2 : 1;
     uint8_t reg_byte[num_bytes];
     if (!DpcdRead(addr, reg_byte, num_bytes)) {
-        zxlogf(ERROR, "Failure reading addr %d\n", addr);
+        LOG_ERROR("Failure reading addr %d\n", addr);
         return false;
     }
 
@@ -651,7 +649,7 @@ bool DpDisplay::LinkTrainingSetup() {
     lc_setting.set_enhanced_frame_enabled(dp_enhanced_framing_enabled_);
     if (!DpcdWrite(link_rate_reg, &link_rate_val, 1)
             || !DpcdWrite(dpcd::DPCD_COUNT_SET, lc_setting.reg_value_ptr(), 1)) {
-        zxlogf(ERROR, "DP: Link training: failed to configure settings\n");
+        LOG_ERROR("DP: Link training: failed to configure settings\n");
         return false;
     }
 
@@ -694,7 +692,7 @@ bool DpDisplay::LinkTrainingStage1(dpcd::TrainingPatternSet* tp_set, dpcd::Train
 
         for (unsigned i = 0; i < dp_lane_count_; i++) {
             if (lanes[i].max_swing_reached()) {
-                zxlogf(ERROR, "DP: Link training: max voltage swing reached\n");
+                LOG_ERROR("DP: Link training: max voltage swing reached\n");
                 return false;
             }
         }
@@ -707,7 +705,7 @@ bool DpDisplay::LinkTrainingStage1(dpcd::TrainingPatternSet* tp_set, dpcd::Train
         if (DpcdHandleAdjustRequest(lanes, adjust_req)) {
             poll_count = 0;
         } else if (++poll_count == kPollsPerVoltageLevel) {
-            zxlogf(ERROR, "DP: Link training: clock recovery step failed\n");
+            LOG_ERROR("DP: Link training: clock recovery step failed\n");
             return false;
         }
     }
@@ -743,7 +741,7 @@ bool DpDisplay::LinkTrainingStage2(dpcd::TrainingPatternSet* tp_set, dpcd::Train
         }
         for (unsigned i = 0; i < dp_lane_count_; i++) {
             if (!lane_status[i].lane_cr_done(i).get()) {
-                zxlogf(ERROR, "DP: Link training: clock recovery regressed\n");
+                LOG_ERROR("DP: Link training: clock recovery regressed\n");
                 return false;
             }
         }
@@ -761,10 +759,10 @@ bool DpDisplay::LinkTrainingStage2(dpcd::TrainingPatternSet* tp_set, dpcd::Train
         // The training attempt has not succeeded yet.
         if (++poll_count == kPollsPerVoltageLevel) {
             if (symbol_lock_done) {
-                zxlogf(ERROR, "DP: Link training: symbol lock failed\n");
+                LOG_ERROR("DP: Link training: symbol lock failed\n");
                 return false;
             } else {
-                zxlogf(ERROR, "DP: Link training: channel equalization failed\n");
+                LOG_ERROR("DP: Link training: channel equalization failed\n");
                 return false;
             }
         }
@@ -808,7 +806,7 @@ bool DpDisplay::DoLinkTraining()
     uint32_t addr = dpcd::DPCD_TRAINING_PATTERN_SET;
     uint8_t reg_byte = 0;
     if (!DpcdWrite(addr, &reg_byte, sizeof(reg_byte))) {
-        zxlogf(ERROR, "Failure setting TRAINING_PATTERN_SET\n");
+        LOG_ERROR("Failure setting TRAINING_PATTERN_SET\n");
         return false;
     }
 
@@ -843,24 +841,23 @@ static registers::Trans select_trans(registers::Ddi ddi, registers::Pipe pipe) {
 
 namespace i915 {
 
-DpDisplay::DpDisplay(Controller* controller, registers::Ddi ddi, registers::Pipe pipe)
-        : DisplayDevice(controller, ddi, select_trans(ddi, pipe), pipe) { }
+DpDisplay::DpDisplay(Controller* controller, uint64_t id, registers::Ddi ddi, registers::Pipe pipe)
+        : DisplayDevice(controller, id, ddi, select_trans(ddi, pipe), pipe) { }
 
-bool DpDisplay::QueryDevice(edid::Edid* edid, zx_display_info* info) {
+bool DpDisplay::QueryDevice(edid::Edid* edid) {
     // For eDP displays, assume that the BIOS has enabled panel power, given
     // that we need to rely on it properly configuring panel power anyway. For
     // general DP displays, the default power state is D0, so we don't have to
     // worry about AUX failures because of power saving mode.
-    edid::timing_params_t timing;
     const char* edid_err = "Failed to find timing";
-    if (!edid->Init(this, &edid_err) || !edid->GetPreferredTiming(&timing)) {
-        zxlogf(TRACE, "i915: dp edid init failed \"%s\"\n", edid_err);
+    if (!edid->Init(this, &edid_err)) {
+        LOG_TRACE("dp edid init failed \"%s\"\n", edid_err);
         return false;
     }
-    zxlogf(TRACE, "Found %s monitor\n", controller()->igd_opregion().IsEdp(ddi()) ? "eDP" : "DP");
+    LOG_INFO("Found %s monitor\n", controller()->igd_opregion().IsEdp(ddi()) ? "eDP" : "DP");
 
     if (!DpcdRead(dpcd::DPCD_CAP_START, dpcd_capabilities_, fbl::count_of(dpcd_capabilities_))) {
-        zxlogf(ERROR, "Failed to read dpcd capabilities\n");
+        LOG_ERROR("Failed to read dpcd capabilities\n");
         return false;
     }
 
@@ -871,15 +868,16 @@ bool DpDisplay::QueryDevice(edid::Edid* edid, zx_display_info* info) {
         dpcd::DownStreamPortCount count;
         count.set_reg_value(dpcd_capabilities_[
                 dpcd::DPCD_DOWN_STREAM_PORT_COUNT - dpcd::DPCD_CAP_START]);
-        zxlogf(SPEW, "Found branch with %d ports\n", count.count());
+        LOG_SPEW("Found branch with %d ports\n", count.count());
 
         dpcd::SinkCount sink_count;
         if (!DpcdRead(dpcd::DPCD_SINK_COUNT, sink_count.reg_value_ptr(), 1)) {
+            LOG_ERROR("Failed to read DP sink count\n");
             return false;
         }
         // TODO(ZX-1416): Add support for MST
         if (sink_count.count() != 1) {
-            zxlogf(ERROR, "MST not supported\n");
+            LOG_ERROR("MST not supported\n");
             return false;
         }
     }
@@ -891,7 +889,7 @@ bool DpDisplay::QueryDevice(edid::Edid* edid, zx_display_info* info) {
         if (edp_caps.dpcd_display_ctrl_capable() &&
                 !DpcdRead(dpcd::DPCD_EDP_CAP_START, dpcd_edp_capabilities_,
                           fbl::count_of(dpcd_edp_capabilities_))) {
-            zxlogf(ERROR, "Failed to read edp capabilities\n");
+            LOG_ERROR("Failed to read edp capabilities\n");
             return false;
         }
     }
@@ -944,27 +942,14 @@ bool DpDisplay::QueryDevice(edid::Edid* edid, zx_display_info* info) {
             break;
     }
     if (!dp_link_rate_mhz_) {
-        zxlogf(ERROR, "Unsupported max link bandwidth %d\n", max_link_bw.link_bw());
+        LOG_ERROR("Unsupported max link bandwidth %d\n", max_link_bw.link_bw());
         return false;
     }
-
-    // TODO(ZX-1416): Parameterized this
-    static constexpr uint32_t kPixelFormat = ZX_PIXEL_FORMAT_RGB_x888;
-    info->width = timing.horizontal_addressable;
-    info->height = timing.vertical_addressable;
-    info->format = kPixelFormat;
-    info->stride = registers::PlaneSurfaceStride::compute_linear_stride(info->width, info->format);
-    info->pixelsize = ZX_PIXEL_FORMAT_BYTES(info->format);
 
     return true;
 }
 
-bool DpDisplay::DefaultModeset() {
-    ResetPipe();
-    if (!ResetTrans() || !ResetDdi()) {
-        return false;
-    }
-
+bool DpDisplay::DoModeset() {
     bool is_edp = controller()->igd_opregion().IsEdp(ddi());
     if (is_edp) {
         auto panel_ctrl = registers::PanelPowerCtrl::Get().ReadFrom(mmio_space());
@@ -982,7 +967,7 @@ bool DpDisplay::DefaultModeset() {
 
         if (!panel_status.ReadFrom(mmio_space()).on_status()
                 || panel_status.pwr_seq_progress() != panel_status.kPrwSeqNone) {
-            zxlogf(ERROR, "Failed to enable panel!\n");
+            LOG_ERROR("Failed to enable panel!\n");
             return false;
         }
     }
@@ -997,7 +982,7 @@ bool DpDisplay::DefaultModeset() {
             zx_nanosleep(zx_deadline_after(ZX_MSEC(1)));
         }
         if (count >= 5) {
-            zxlogf(ERROR, "Failed to set dp power state\n");
+            LOG_ERROR("Failed to set dp power state\n");
             return ZX_ERR_INTERNAL;
         }
     }
@@ -1037,7 +1022,7 @@ bool DpDisplay::DefaultModeset() {
         dpll_enable.WriteTo(mmio_space());
         if (!WAIT_ON_MS(registers::DpllStatus
                 ::Get().ReadFrom(mmio_space()).dpll_lock(dpll).get(), 5)) {
-            zxlogf(ERROR, "DPLL failed to lock\n");
+            LOG_ERROR("DPLL failed to lock\n");
             return false;
         }
     }
@@ -1055,13 +1040,13 @@ bool DpDisplay::DefaultModeset() {
     power_well.WriteTo(mmio_space());
     if (!WAIT_ON_US(registers::PowerWellControl2
             ::Get().ReadFrom(mmio_space()).ddi_io_power_state(ddi()).get(), 20)) {
-        zxlogf(ERROR, "Failed to enable IO power for ddi\n");
+        LOG_ERROR("Failed to enable IO power for ddi\n");
         return false;
     }
 
     // Do link training
     if (!DoLinkTraining()) {
-        zxlogf(ERROR, "DDI %d: DisplayPort link training failed\n", ddi());
+        LOG_ERROR("DDI %d: DisplayPort link training failed\n", ddi());
         return false;
     }
 
@@ -1098,7 +1083,7 @@ bool DpDisplay::DefaultModeset() {
     CalculateRatio(pixel_bit_rate, total_link_bit_rate, &data_m, &data_n);
 
     if (pixel_clock_rate > link_symbol_rate || pixel_bit_rate > total_link_bit_rate) {
-        zxlogf(ERROR, "i915: Insufficient link rate for resolution\n");
+        LOG_ERROR("Insufficient link rate for resolution\n");
         return false;
     }
 
@@ -1120,15 +1105,15 @@ bool DpDisplay::DefaultModeset() {
     link_n_reg.WriteTo(mmio_space());
 
     // Configure the rest of the transcoder
-    uint32_t h_active = timing.horizontal_addressable - 1;
-    uint32_t h_sync_start = h_active + timing.horizontal_front_porch;
-    uint32_t h_sync_end = h_sync_start + timing.horizontal_sync_pulse;
-    uint32_t h_total = h_sync_end + timing.horizontal_back_porch;
+    uint32_t h_active = mode().h_addressable - 1;
+    uint32_t h_sync_start = h_active + mode().h_front_porch;
+    uint32_t h_sync_end = h_sync_start + mode().h_sync_pulse;
+    uint32_t h_total = h_active + mode().h_blanking;
 
-    uint32_t v_active = timing.vertical_addressable - 1;
-    uint32_t v_sync_start = v_active + timing.vertical_front_porch;
-    uint32_t v_sync_end = v_sync_start + timing.vertical_sync_pulse;
-    uint32_t v_total = v_sync_end + timing.vertical_back_porch;
+    uint32_t v_active = mode().v_addressable - 1;
+    uint32_t v_sync_start = v_active + mode().v_front_porch;
+    uint32_t v_sync_end = v_sync_start + mode().v_sync_pulse;
+    uint32_t v_total = v_active + mode().v_blanking;
 
     auto h_total_reg = trans_regs.HTotal().FromValue(0);
     h_total_reg.set_count_total(h_total);
@@ -1221,7 +1206,7 @@ bool DpDisplay::DefaultModeset() {
             dpcd::EdpBacklightModeSet mode;
             mode.set_brightness_ctrl_mode(mode.kAux);
             if (!DpcdWrite(dpcd::DPCD_EDP_BACKLIGHT_MODE_SET, mode.reg_value_ptr(), 1)) {
-                zxlogf(ERROR, "Failed to init backlight\n");
+                LOG_ERROR("Failed to init backlight\n");
                 return false;
             }
         }
@@ -1240,7 +1225,7 @@ bool DpDisplay::SetBacklightOn(bool on) {
         dpcd::EdpDisplayCtrl ctrl;
         ctrl.set_backlight_enable(true);
         if (!DpcdWrite(dpcd::DPCD_EDP_DISPLAY_CTRL, ctrl.reg_value_ptr(), 1)) {
-            zxlogf(ERROR, "Failed to enable backlight\n");
+            LOG_ERROR("Failed to enable backlight\n");
             return false;
         }
     } else {
@@ -1268,7 +1253,7 @@ bool DpDisplay::SetBacklightBrightness(double val) {
         uint8_t msb = static_cast<uint8_t>(percent >> 8);
         if (!DpcdWrite(dpcd::DPCD_EDP_BACKLIGHT_BRIGHTNESS_MSB, &msb, 1)
                 || !DpcdWrite(dpcd::DPCD_EDP_BACKLIGHT_BRIGHTNESS_LSB, &lsb, 1)) {
-            zxlogf(ERROR, "Failed to set backlight brightness\n");
+            LOG_ERROR("Failed to set backlight brightness\n");
             return false;
         }
     } else {
@@ -1285,6 +1270,7 @@ bool DpDisplay::HandleHotplug(bool long_pulse) {
     if (!long_pulse) {
         dpcd::SinkCount sink_count;
         if (!DpcdRead(dpcd::DPCD_SINK_COUNT, sink_count.reg_value_ptr(), 1)) {
+            LOG_WARN("Failed to read sink count on hotplug\n");
             return false;
         }
 
@@ -1301,11 +1287,12 @@ bool DpDisplay::HandleHotplug(bool long_pulse) {
 
         dpcd::LaneAlignStatusUpdate status;
         if (!DpcdRead(dpcd::DPCD_LANE_ALIGN_STATUS_UPDATED, status.reg_value_ptr(), 1)) {
+            LOG_WARN("Failed to read align status on hotplug\n");
             return false;
         }
 
         if (status.interlane_align_done()) {
-            zxlogf(SPEW, "HPD event for trained link\n");
+            LOG_SPEW("HPD event for trained link\n");
             return true;
         }
 

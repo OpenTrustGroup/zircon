@@ -94,7 +94,7 @@ static bool x86_mmu_check_vaddr(vaddr_t vaddr) {
 /**
  * @brief  check if the physical address is valid and aligned
  */
-static bool x86_mmu_check_paddr(paddr_t paddr) {
+bool x86_mmu_check_paddr(paddr_t paddr) {
     uint64_t max_paddr;
 
     /* Check to see if the address is PAGE aligned */
@@ -469,7 +469,7 @@ X86PageTableBase::~X86PageTableBase() {
 zx_status_t X86PageTableBase::Init(void* ctx) TA_NO_THREAD_SAFETY_ANALYSIS {
     /* allocate a top level page table for the new address space */
     paddr_t pa;
-    vm_page_t* p = pmm_alloc_page(PMM_ALLOC_FLAG_KMAP, &pa);
+    vm_page_t* p = pmm_alloc_page(0, &pa);
     if (!p) {
         TRACEF("error allocating top level page directory\n");
         return ZX_ERR_NO_MEMORY;

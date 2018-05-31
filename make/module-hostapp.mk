@@ -5,11 +5,14 @@
 # https://opensource.org/licenses/MIT
 
 # check for disallowed options
-ifneq ($(MODULE_DEPS)$(MODULE_LIBS)$(MODULE_STATIC_LIBS),)
-$(error $(MODULE) $(MODULE_TYPE) modules must not use MODULE_{DEPS,LIBS,STATIC_LIBS})
+ifneq ($(MODULE_DEPS)$(MODULE_LIBS)$(MODULE_STATIC_LIBS)$(MODULE_FIDL_LIBS),)
+$(error $(MODULE) $(MODULE_TYPE) modules must not use MODULE_{DEPS,LIBS,STATIC_LIBS,FIDL_LIBS})
 endif
 
+# default install location
+ifeq ($(MODULE_HOSTAPP_BIN),)
 MODULE_HOSTAPP_BIN := $(BUILDDIR)/tools/$(MODULE_NAME)
+endif
 
 MODULE_ALIBS := $(foreach lib,$(MODULE_HOST_LIBS), \
                           $(call TOBUILDDIR,tools/lib/lib$(notdir $(lib)).a))
@@ -62,3 +65,5 @@ endif
 ALLHOST_APPS += $(MODULE_HOSTAPP_BIN)
 
 GENERATED += $(MODULE_HOSTAPP_BIN)
+
+MODULE_HOSTAPP_BIN :=

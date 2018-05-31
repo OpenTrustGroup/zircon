@@ -33,14 +33,29 @@ static zx_status_t fdio_getsockopt(fdio_t* io, int level, int optname,
                                    socklen_t* restrict optlen);
 
 static mtx_t netstack_lock = MTX_INIT;
-static int netstack = INT_MIN;
+static mtx_t dns_lock = MTX_INIT;
+// Use -2 as sentinal to mean "uninitialized" so it's distinct from errors
+// returned from open, which return -1. In get_netstack and get_dns, we
+// explicitly check for -2 (not just any negative number) so that, if open fails
+// the first time we try (setting the value to -1), we won't ever retry.
+static int netstack = -2;
+static int dns = -2;
 
 int get_netstack(void) {
     mtx_lock(&netstack_lock);
-    if (netstack == INT_MIN)
+    if (netstack == -2)
         netstack = open("/svc/net.Netstack", O_PIPELINE | O_RDWR);
     int result = netstack;
     mtx_unlock(&netstack_lock);
+    return result;
+}
+
+int get_dns(void) {
+    mtx_lock(&dns_lock);
+    if (dns == -2)
+        dns = open("/svc/dns.DNS", O_PIPELINE | O_RDWR);
+    int result = dns;
+    mtx_unlock(&dns_lock);
     return result;
 }
 
@@ -242,8 +257,8 @@ int getaddrinfo(const char* __restrict node,
         errno = EINVAL;
         return EAI_SYSTEM;
     }
-    // Wait for the the network stack to publish the socket device
-    // if necessary.
+    // Wait for Netstack to publish the socket device if necessary.
+    // TODO(joshlf): Use DNS (get_dns()) instead of Netstack
     // TODO: move to a better mechanism when available.
     unsigned retry = 0;
     while ((r = __fdio_open_at(&io, get_netstack(), ZXRIO_SOCKET_DIR_NONE,

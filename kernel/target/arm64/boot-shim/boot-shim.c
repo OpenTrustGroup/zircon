@@ -10,18 +10,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <ddk/protocol/platform-defs.h>
-#include <zircon/boot/bootdata.h>
 #include <zircon/boot/driver-config.h>
 
 // uncomment to dump device tree at boot
 // #define PRINT_DEVICE_TREE
 
 // used in boot-shim-config.h and in this file below
-static void append_bootdata(bootdata_t* container, uint32_t type, uint32_t extra,
+static void append_boot_item(zbi_header_t* container, uint32_t type, uint32_t extra,
                             const void* payload, uint32_t length);
 
 // defined in boot-shim-config.h
-static void append_board_bootdata(bootdata_t* container);
+static void append_board_boot_item(zbi_header_t* container);
 
 #if USE_DEVICE_TREE_CPU_COUNT
 static void set_cpu_count(uint32_t cpu_count);
@@ -42,7 +41,8 @@ typedef enum {
 typedef struct {
     node_t  node;
     uintptr_t initrd_start;
-    size_t memory;
+    size_t memory_base;
+    size_t memory_size;
     char* cmdline;
     size_t cmdline_length;
     uint32_t cpu_count;
@@ -99,10 +99,14 @@ static int prop_callback(const char *name, uint8_t *data, uint32_t size, void *c
         }
     } else if (ctx->node == NODE_MEMORY) {
         if (!strcmp(name, "reg") && size == 16) {
+            // memory size is big endian uint64_t at offset 0
+            uint64_t most = dt_rd32(data + 0);
+            uint64_t least = dt_rd32(data + 4);
+            ctx->memory_base = (most << 32) | least;
             // memory size is big endian uint64_t at offset 8
-            uint64_t most = dt_rd32(data + 8);
-            uint64_t least = dt_rd32(data + 12);
-            ctx->memory = (most << 32) | least;
+            most = dt_rd32(data + 8);
+            least = dt_rd32(data + 12);
+            ctx->memory_size = (most << 32) | least;
         }
     }
 
@@ -121,23 +125,24 @@ static void read_device_tree(void* device_tree, device_tree_context_t* ctx) {
 }
 #endif // HAS_DEVICE_TREE
 
-static void append_bootdata(bootdata_t* container, uint32_t type, uint32_t extra,
-                            const void* payload, uint32_t length) {
-    bootdata_t* dest = (bootdata_t*)((uintptr_t)container + container->length + sizeof(bootdata_t));
+static void append_boot_item(zbi_header_t* container, uint32_t type, uint32_t extra,
+                             const void* payload, uint32_t length) {
+    zbi_header_t* dest = (zbi_header_t*)((uintptr_t)container + container->length +
+                                         sizeof(zbi_header_t));
 
     dest->type = type;
     dest->length = length;
     dest->extra = extra;
-    dest->flags = 0;
+    dest->flags = ZBI_FLAG_VERSION;
     dest->reserved0 = 0;
     dest->reserved1 = 0;
-    dest->magic = BOOTITEM_MAGIC;
-    dest->crc32 = BOOTITEM_NO_CRC32;
+    dest->magic = ZBI_ITEM_MAGIC;
+    dest->crc32 = ZBI_ITEM_NO_CRC32;
 
     if (length) {
         memcpy(dest + 1, payload, length);
     }
-    length = BOOTDATA_ALIGN(length + sizeof(bootdata_t));
+    length = ZBI_ALIGN(length + sizeof(zbi_header_t));
     container->length += length;
 }
 
@@ -148,20 +153,21 @@ boot_shim_return_t boot_shim(void* device_tree) {
 
     // sanity check the bootdata headers
     // it must start with a container record followed by a kernel record
-    if (kernel->hdr_file.type != BOOTDATA_CONTAINER ||
-        kernel->hdr_file.extra != BOOTDATA_MAGIC ||
-        kernel->hdr_file.magic != BOOTITEM_MAGIC ||
-        kernel->hdr_kernel.type != BOOTDATA_KERNEL ||
-        kernel->hdr_kernel.magic != BOOTITEM_MAGIC) {
+    if (kernel->hdr_file.type != ZBI_TYPE_CONTAINER ||
+        kernel->hdr_file.extra != ZBI_CONTAINER_MAGIC ||
+        kernel->hdr_file.magic != ZBI_ITEM_MAGIC ||
+        // TODO(ZX-2153,gkalsi): Validate that this is specifically an ARM64 kernel
+        !ZBI_IS_KERNEL_BOOTITEM(kernel->hdr_kernel.type) ||
+        kernel->hdr_kernel.magic != ZBI_ITEM_MAGIC) {
         fail("zircon_kernel_t sanity check failed\n");
     }
 
-    uint32_t bootdata_size = kernel->hdr_file.length + sizeof(bootdata_t);
-    uint32_t kernel_size = kernel->hdr_kernel.length + 2 * sizeof(bootdata_t);
+    uint32_t bootdata_size = kernel->hdr_file.length + sizeof(zbi_header_t);
+    uint32_t kernel_size = kernel->hdr_kernel.length + 2 * sizeof(zbi_header_t);
 
     // If we have bootdata following the kernel, then the kernel is the beginning of our bootdata.
     // Otherwise we will need to look for the bootdata in the device tree
-    bootdata_t* bootdata = (bootdata_size > kernel_size ? &kernel->hdr_file : NULL);
+    zbi_header_t* bootdata = (bootdata_size > kernel_size ? &kernel->hdr_file : NULL);
 
     // If we have more bootdata following the kernel we must relocate the kernel
     // past the end of the bootdata so the kernel bss does not collide with it.
@@ -186,7 +192,8 @@ boot_shim_return_t boot_shim(void* device_tree) {
     device_tree_context_t ctx;
     ctx.node = NODE_NONE;
     ctx.initrd_start = 0;
-    ctx.memory = 0;
+    ctx.memory_base = 0;
+    ctx.memory_size = 0;
     ctx.cmdline = NULL;
     ctx.cpu_count = 0;
     read_device_tree(device_tree, &ctx);
@@ -198,9 +205,9 @@ boot_shim_return_t boot_shim(void* device_tree) {
     // find our bootdata first
     if (!bootdata) {
         if (ctx.initrd_start) {
-            bootdata = (bootdata_t*)ctx.initrd_start;
-            if (bootdata->type != BOOTDATA_CONTAINER || bootdata->extra != BOOTDATA_MAGIC ||
-                bootdata->magic != BOOTITEM_MAGIC) {
+            bootdata = (zbi_header_t*)ctx.initrd_start;
+            if (bootdata->type != ZBI_TYPE_CONTAINER || bootdata->extra != ZBI_CONTAINER_MAGIC ||
+                bootdata->magic != ZBI_ITEM_MAGIC) {
                 fail("bad magic for bootdata in device tree\n");
             }
         } else {
@@ -210,28 +217,30 @@ boot_shim_return_t boot_shim(void* device_tree) {
 #endif // HAS_DEVICE_TREE
 
     // add board specific bootdata
-    append_board_bootdata(bootdata);
+    append_board_boot_item(bootdata);
 
 #if HAS_DEVICE_TREE
     // look for optional RAM size in device tree
     // do this last so device tree can override value in boot-shim-config.h
-    if (ctx.memory) {
-        bootdata_mem_range_t mem_range;
-        mem_range.paddr = 0;
-        mem_range.length = ctx.memory;
-        mem_range.type = BOOTDATA_MEM_RANGE_RAM;
+    if (ctx.memory_size) {
+        zbi_mem_range_t mem_range;
+        mem_range.paddr = ctx.memory_base;
+        mem_range.length = ctx.memory_size;
+        mem_range.type = ZBI_MEM_RANGE_RAM;
 
-        uart_puts("Setting RAM size device tree value: ");
-        uart_print_hex(ctx.memory);
+        uart_puts("Setting RAM base and size device tree value: ");
+        uart_print_hex(ctx.memory_base);
+        uart_puts(" ");
+        uart_print_hex(ctx.memory_size);
         uart_puts("\n");
-        append_bootdata(bootdata, BOOTDATA_MEM_CONFIG, 0, &mem_range, sizeof(mem_range));
+        append_boot_item(bootdata, ZBI_TYPE_MEM_CONFIG, 0, &mem_range, sizeof(mem_range));
     } else {
         uart_puts("RAM size not found in device tree\n");
     }
 
     // append kernel command line
     if (ctx.cmdline && ctx.cmdline_length) {
-        append_bootdata(bootdata, BOOTDATA_CMDLINE, 0, ctx.cmdline, ctx.cmdline_length);
+        append_boot_item(bootdata, ZBI_TYPE_CMDLINE, 0, ctx.cmdline, ctx.cmdline_length);
     }
 #endif // HAS_DEVICE_TREE
 
@@ -239,20 +248,20 @@ boot_shim_return_t boot_shim(void* device_tree) {
 
     if (relocate_kernel) {
         // recalculate bootdata_size after appending more bootdata records
-        bootdata_size = kernel->hdr_file.length + sizeof(bootdata_t);
+        bootdata_size = kernel->hdr_file.length + sizeof(zbi_header_t);
 
         // round up to align new kernel location
         bootdata_size = ROUNDUP(bootdata_size, KERNEL_ALIGN);
         kernel_base = (uintptr_t)kernel + bootdata_size;
 
-        memcpy((void *)kernel_base, kernel, BOOTDATA_ALIGN(kernel_size));
+        memcpy((void *)kernel_base, kernel, ZBI_ALIGN(kernel_size));
     } else {
         kernel_base = (uintptr_t)kernel;
     }
 
     boot_shim_return_t result = {
         .bootdata = bootdata,
-        .entry = kernel_base + kernel->data_kernel.entry64,
+        .entry = kernel_base + kernel->data_kernel.entry,
     };
     return result;
 }

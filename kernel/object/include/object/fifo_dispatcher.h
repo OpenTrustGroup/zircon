@@ -18,7 +18,7 @@
 
 class FifoDispatcher final : public PeeredDispatcher<FifoDispatcher> {
 public:
-    static zx_status_t Create(uint32_t elem_count, uint32_t elem_size, uint32_t options,
+    static zx_status_t Create(size_t elem_count, size_t elem_size, uint32_t options,
                               fbl::RefPtr<Dispatcher>* dispatcher0,
                               fbl::RefPtr<Dispatcher>* dispatcher1,
                               zx_rights_t* rights);
@@ -29,15 +29,18 @@ public:
     bool has_state_tracker() const final { return true; }
     void on_zero_handles() final;
 
-    zx_status_t WriteFromUser(user_in_ptr<const uint8_t> src, size_t len, uint32_t* actual);
-    zx_status_t ReadToUser(user_out_ptr<uint8_t> dst, size_t len, uint32_t* actual);
+    zx_status_t WriteFromUser(size_t elem_size, user_in_ptr<const uint8_t> src, size_t count,
+                              size_t* actual);
+    zx_status_t ReadToUser(size_t elem_size, user_out_ptr<uint8_t> dst, size_t count,
+                           size_t* actual);
 
 private:
     FifoDispatcher(fbl::RefPtr<PeerHolder<FifoDispatcher>> holder,
                    uint32_t options, uint32_t elem_count, uint32_t elem_size,
                    fbl::unique_ptr<uint8_t[]> data);
     void Init(fbl::RefPtr<FifoDispatcher> other);
-    zx_status_t WriteSelfLocked(user_in_ptr<const uint8_t> ptr, size_t len, uint32_t* actual);
+    zx_status_t WriteSelfLocked(size_t elem_size, user_in_ptr<const uint8_t> ptr, size_t count,
+                                size_t* actual);
     zx_status_t UserSignalSelfLocked(uint32_t clear_mask, uint32_t set_mask);
 
     void OnPeerZeroHandlesLocked();

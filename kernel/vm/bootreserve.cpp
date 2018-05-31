@@ -21,7 +21,7 @@ static reserve_range_t res[NUM_RESERVES];
 static size_t res_idx;
 
 void boot_reserve_init() {
-    /* add the kernel to the boot reserve list */
+    // add the kernel to the boot reserve list
     boot_reserve_add_range(get_kernel_base_phys(), get_kernel_size());
 }
 
@@ -78,7 +78,7 @@ void boot_reserve_wire() {
 
     // mark all of the pages we allocated as WIRED
     vm_page_t* p;
-    list_for_every_entry (&reserved_page_list, p, vm_page_t, free.node) {
+    list_for_every_entry (&reserved_page_list, p, vm_page_t, queue_node) {
         p->state = VM_PAGE_STATE_WIRED;
     }
 }

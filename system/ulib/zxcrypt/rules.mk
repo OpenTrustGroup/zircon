@@ -16,12 +16,14 @@ MODULE_LIBS := \
     system/ulib/crypto \
     system/ulib/driver \
     system/ulib/fdio \
+    system/ulib/fs-management \
     system/ulib/zircon \
 
 MODULE_STATIC_LIBS := \
     third_party/ulib/uboringssl \
     system/ulib/ddk \
     system/ulib/fbl \
+    system/ulib/fs-management \
     system/ulib/pretty \
     system/ulib/sync \
     system/ulib/zx \

@@ -150,6 +150,7 @@ GLOBAL_COMPILEFLAGS += -nostdlibinc
 GLOBAL_COMPILEFLAGS += -no-canonical-prefixes
 GLOBAL_COMPILEFLAGS += -Wno-address-of-packed-member
 GLOBAL_COMPILEFLAGS += -Wthread-safety
+GLOBAL_COMPILEFLAGS += -Wimplicit-fallthrough
 else
 GLOBAL_COMPILEFLAGS += -Wno-nonnull-compare
 endif
@@ -391,13 +392,21 @@ USER_MANIFEST_LINES :=
 # The contents of this are derived from BOOTFS_DEBUG_MODULES.
 USER_MANIFEST_DEBUG_INPUTS :=
 
+# Directory in the bootfs where MODULE_FIRMWARE files go.
+FIRMWARE_INSTALL_DIR := lib/firmware
+# Directory in the source tree where MODULE_FIRMWARE files are found.
+FIRMWARE_SRC_DIR := prebuilt/downloads/firmware
+# TODO(mcgrathr): Force an absolute path for this so that every rhs in the
+# manifest either starts with $(BUILDDIR) or is absolute.
+# //scripts/build-zircon.sh needs this.
+FIRMWARE_SRC_DIR := $(shell cd $(FIRMWARE_SRC_DIR) && pwd)
+
 # if someone defines this, the build id will be pulled into lib/version
 BUILDID ?=
 
 # Tool locations.
 TOOLS := $(BUILDDIR)/tools
 FIDL := $(TOOLS)/fidlc
-MKBOOTFS := $(TOOLS)/mkbootfs
 ABIGEN := $(TOOLS)/abigen
 ZBI := $(TOOLS)/zbi
 
@@ -675,7 +684,6 @@ endif
 
 EFI_OPTFLAGS := -O2
 EFI_COMPILEFLAGS += -fno-stack-protector
-EFI_COMPILEFLAGS += -nostdinc
 EFI_COMPILEFLAGS += -Wall
 EFI_CFLAGS := -fshort-wchar -std=c99 -ffreestanding
 ifeq ($(EFI_ARCH),x86_64)

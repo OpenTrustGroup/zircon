@@ -12,12 +12,18 @@
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/serial.h>
 
+#define BIG_CLUSTER_POWER_DOMAIN     0
+#define LITTLE_CLUSTER_POWER_DOMAIN  1
+#define BIG_CLUSTER_CPU_FREQ_MAX     1200000000
+#define LITTLE_CLUSTER_CPU_FREQ_MAX  1000000000
+
 // BTI IDs for our devices
 enum {
     BTI_BOARD,
     BTI_USB_XHCI,
     BTI_MALI,
     BTI_DISPLAY,
+    BTI_VIDEO,
     BTI_EMMC,
 };
 
@@ -50,3 +56,9 @@ zx_status_t vim_sd_emmc_init(vim_bus_t* bus);
 
 // vim-eth.c
 zx_status_t vim_eth_init(vim_bus_t* bus);
+
+// vim-fanctl.c
+zx_status_t vim2_thermal_init(vim_bus_t* bus);
+
+// vim-mailbox.c
+zx_status_t vim2_mailbox_init(vim_bus_t* bus);
