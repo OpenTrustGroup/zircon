@@ -24,6 +24,7 @@ MODULES += \
     system/core/userboot \
     system/core/svchost \
     system/core/crashsvc \
+    system/core/crashanalyzer \
 
 MODULES += \
     system/dev/misc/console \
