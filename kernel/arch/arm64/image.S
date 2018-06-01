@@ -116,12 +116,7 @@ FUNCTION(apply_fixups)
 .macro fixup_single stride
     ldr x10, [x9]
     add x10, x10, x0
- .if \stride > 255
-    str x10, [x9]
-    add x9, x9, #\stride
- .else
     str x10, [x9], #\stride
- .endif
 .endm
 
 #include "zircon-fixups.inc"
