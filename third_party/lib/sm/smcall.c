@@ -192,7 +192,7 @@ smc32_handler_t sm_fastcall_table[SMC_NUM_ENTITIES] = {
 
 smc32_handler_t sm_nopcall_table[SMC_NUM_ENTITIES] = {
     [0] = smc_nop_secure_monitor,
-    [1 ... SMC_NUM_ENTITIES - 1] = smc_undefined
+    [1 ... SMC_NUM_ENTITIES - 1] = notify_smc_service
 };
 
 smc32_handler_t sm_stdcall_table[SMC_NUM_ENTITIES] = {
