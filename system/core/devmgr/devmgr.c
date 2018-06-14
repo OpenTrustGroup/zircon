@@ -20,6 +20,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/exception.h>
 #include <zircon/syscalls/object.h>
+#include <zircon/syscalls/policy.h>
 
 #include <fdio/namespace.h>
 #include <fdio/util.h>
@@ -58,6 +59,7 @@ bool getenv_bool(const char* key, bool _default) {
 static zx_handle_t root_resource_handle;
 static zx_handle_t root_job_handle;
 static zx_handle_t svcs_job_handle;
+static zx_handle_t gzos_svcs_job_handle;
 static zx_handle_t fuchsia_job_handle;
 static zx_handle_t exception_channel;
 static zx_handle_t svchost_outgoing;
@@ -540,10 +542,27 @@ int main(int argc, char** argv) {
     }
     zx_object_set_property(svcs_job_handle, ZX_PROP_NAME, "zircon-services", 16);
 
+    status = zx_job_create(root_job_handle, 0u, &gzos_svcs_job_handle);
+    if (status < 0) {
+        printf("unable to create gzos service job\n");
+    }
+    zx_object_set_property(gzos_svcs_job_handle, ZX_PROP_NAME, "gzos-services", 13);
+
     status = zx_job_create(root_job_handle, 0u, &fuchsia_job_handle);
     if (status < 0) {
         printf("unable to create service job\n");
     }
+
+    zx_policy_basic_t policy[] = {
+        { ZX_POL_NEW_SMC, ZX_POL_ACTION_DENY },
+    };
+    status = zx_job_set_policy(fuchsia_job_handle, ZX_JOB_POL_RELATIVE,
+                               ZX_JOB_POL_BASIC, &policy, countof(policy));
+    if (status < 0) {
+        printf("failed to remove create smc object permission from fuchsia job\n");
+        devmgr_disable_appmgr_services();
+    }
+
     zx_object_set_property(fuchsia_job_handle, ZX_PROP_NAME, "fuchsia", 7);
     zx_channel_create(0, &appmgr_req_cli, &appmgr_req_srv);
     zx_event_create(0, &fshost_event);
@@ -551,6 +570,7 @@ int main(int argc, char** argv) {
     bootfs_create_from_startup_handle();
     devmgr_svc_init();
     devmgr_vfs_init();
+    devmgr_gzos_svc_init();
 
     load_cmdline_from_bootfs();
 
@@ -873,4 +893,33 @@ void devmgr_svc_init(void) {
     printf("devmgr: svc init\n");
 
     svchost_start();
+}
+
+void devmgr_gzos_svc_init(void) {
+    printf("devmgr: gzos svc init\n");
+
+    zx_handle_t h1 = ZX_HANDLE_INVALID;
+    zx_handle_t h2 = ZX_HANDLE_INVALID;
+    zx_channel_create(0, &h1, &h2);
+
+    zx_handle_t job_copy1 = ZX_HANDLE_INVALID;
+    zx_handle_t job_copy2 = ZX_HANDLE_INVALID;
+    zx_handle_duplicate(gzos_svcs_job_handle, ZX_RIGHTS_BASIC | ZX_RIGHT_READ, &job_copy1);
+    zx_handle_duplicate(gzos_svcs_job_handle, ZX_RIGHTS_BASIC | ZX_RIGHT_READ, &job_copy2);
+
+    unsigned int handle_count = 2;
+    zx_handle_t handles[] = {ZX_HANDLE_INVALID, ZX_HANDLE_INVALID};
+    uint32_t handle_types[] = {PA_JOB_DEFAULT, PA_HND(PA_USER0, 0)};
+
+    const char* argv_smc_service[] = { "/system/bin/smc_service" };
+    handles[0] = job_copy1;
+    handles[1] = h1;
+    devmgr_launch(gzos_svcs_job_handle, "smc_service", 1, argv_smc_service,
+                  NULL, -1, handles, handle_types, handle_count, NULL, 0);
+
+    const char* argv_ree_agent[] = { "/system/bin/ree_agent" };
+    handles[0] = job_copy2;
+    handles[1] = h2;
+    devmgr_launch(gzos_svcs_job_handle, "ree_agent", 1, argv_ree_agent,
+                  NULL, -1, handles, handle_types, handle_count, NULL, 0);
 }
