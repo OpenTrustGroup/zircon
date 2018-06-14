@@ -18,6 +18,7 @@ void devfs_init(zx_handle_t root_job);
 
 void devmgr_io_init(void);
 void devmgr_svc_init(void);
+void devmgr_gzos_svc_init(void);
 void devmgr_vfs_init(void);
 void devmgr_set_bootdata(zx_handle_t vmo);
 
