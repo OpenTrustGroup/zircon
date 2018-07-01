@@ -1921,7 +1921,7 @@ __NO_SAFESTACK NO_ASAN static dl_start_return_t __dls3(void* start_arg) {
     zx_handle_t exec_vmo = ZX_HANDLE_INVALID;
     for (int i = 0; i < nhandles; ++i) {
         switch (PA_HND_TYPE(handle_info[i])) {
-        case PA_SVC_LOADER:
+        case PA_LDSVC_LOADER:
             if (loader_svc != ZX_HANDLE_INVALID ||
                 handles[i] == ZX_HANDLE_INVALID) {
                 error("bootstrap message bad LOADER_SVC %#x vs %#x",
@@ -2366,19 +2366,11 @@ __NO_SAFESTACK static zx_status_t loader_svc_rpc(uint32_t ordinal,
 
     uint32_t reply_size;
     uint32_t handle_count;
-    zx_status_t read_status = ZX_OK;
     status = _zx_channel_call(loader_svc, 0, ZX_TIME_INFINITE,
-                              &call, &reply_size, &handle_count,
-                              &read_status);
+                              &call, &reply_size, &handle_count);
     if (status != ZX_OK) {
-        error("_zx_channel_call of %u bytes to loader service: "
-              "%d (%s), read %d (%s)",
-              call.wr_num_bytes, status, _zx_status_get_string(status),
-              read_status, _zx_status_get_string(read_status));
-        if (status != ZX_ERR_CALL_FAILED)
-            _zx_handle_close(request_handle);
-        else if (read_status != ZX_OK)
-            status = read_status;
+        error("_zx_channel_call of %u bytes to loader service: %d (%s)",
+              call.wr_num_bytes, status, _zx_status_get_string(status));
         return status;
     }
 
@@ -2471,14 +2463,9 @@ __NO_SAFESTACK zx_status_t dl_clone_loader_service(zx_handle_t* out) {
     };
     uint32_t reply_size;
     uint32_t handle_count;
-    zx_status_t read_status = ZX_OK;
     if ((status = _zx_channel_call(loader_svc, 0, ZX_TIME_INFINITE,
-                                   &call, &reply_size, &handle_count,
-                                   &read_status)) != ZX_OK) {
-        if (status != ZX_ERR_CALL_FAILED)
-            _zx_handle_close(h1);
-        else if (read_status != ZX_OK)
-            status = read_status;
+                                   &call, &reply_size, &handle_count)) != ZX_OK) {
+        // Do nothing.
     } else if ((reply_size != ldmsg_rsp_get_size(&rsp)) ||
                (rsp.header.ordinal != LDMSG_OP_CLONE)) {
         status = ZX_ERR_INVALID_ARGS;
@@ -2506,7 +2493,7 @@ __NO_SAFESTACK __attribute__((__visibility__("hidden"))) void _dl_log_write(
             if (nl != NULL) {
                 chunk = nl + 1 - buffer;
             }
-            zx_status_t status = _zx_log_write(logger, chunk, buffer, 0);
+            zx_status_t status = _zx_debuglog_write(logger, 0, buffer, chunk);
             if (status != ZX_OK) {
                 __builtin_trap();
             }

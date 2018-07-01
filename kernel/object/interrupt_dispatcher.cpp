@@ -44,9 +44,19 @@ zx_status_t InterruptDispatcher::WaitForInterrupt(zx_time_t* out_timestamp) {
             state_ = InterruptState::WAITING;
         }
 
-        zx_status_t status = event_wait_deadline(&event_, ZX_TIME_INFINITE, true);
-        if (status != ZX_OK) {
-            return status;
+        {
+            ThreadDispatcher::AutoBlocked by(ThreadDispatcher::Blocked::INTERRUPT);
+            zx_status_t status = event_wait_deadline(&event_, ZX_TIME_INFINITE, true);
+            if (status != ZX_OK) {
+                // The event_wait call was interrupted and we need to retry
+                // but before we retry we will set the interrupt state
+                // back to IDLE if we are still in the WAITING state
+                AutoSpinLock guard(&spinlock_);
+                if (state_ == InterruptState::WAITING) {
+                    state_ = InterruptState::IDLE;
+                }
+                return status;
+            }
         }
     }
 }
@@ -109,6 +119,9 @@ void InterruptDispatcher::InterruptHandler() {
         SendPacketLocked(timestamp_);
         state_ = InterruptState::NEEDACK;
     } else {
+        if (flags_ & INTERRUPT_MASK_POSTWAIT) {
+            MaskInterrupt();
+        }
         Signal();
         state_ = InterruptState::TRIGGERED;
     }

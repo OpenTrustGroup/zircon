@@ -125,13 +125,8 @@ void ChannelDispatcher::RemoveWaiter(MessageWaiter* waiter) {
     waiters_.erase(*waiter);
 }
 
-void ChannelDispatcher::on_zero_handles() {
+void ChannelDispatcher::on_zero_handles_locked() {
     canary_.Assert();
-
-    AutoLock lock(get_lock());
-    // Detach other endpoint
-
-    fbl::RefPtr<ChannelDispatcher> other = fbl::move(peer_);
 
     // (3A) Abort any waiting Call operations
     // because we've been canceled by reason
@@ -141,20 +136,15 @@ void ChannelDispatcher::on_zero_handles() {
         auto waiter = waiters_.pop_front();
         waiter->Cancel(ZX_ERR_CANCELED);
     }
-
-    // Ensure other endpoint detaches us
-    if (other)
-        other->OnPeerZeroHandlesLocked();
 }
 
 // This requires holding the shared channel lock. The thread analysis
 // can reason about repeated calls to get_lock() on the shared object,
 // but cannot reason about the aliasing between left->get_lock() and
 // right->get_lock(), which occurs above in on_zero_handles.
-void ChannelDispatcher::OnPeerZeroHandlesLocked() TA_NO_THREAD_SAFETY_ANALYSIS {
+void ChannelDispatcher::OnPeerZeroHandlesLocked() {
     canary_.Assert();
 
-    peer_.reset();
     UpdateStateLocked(ZX_CHANNEL_WRITABLE, ZX_CHANNEL_PEER_CLOSED);
     // (3B) Abort any waiting Call operations
     // because we've been canceled by reason
@@ -204,21 +194,16 @@ zx_status_t ChannelDispatcher::Write(fbl::unique_ptr<MessagePacket> msg) {
     AutoReschedDisable resched_disable; // Must come before the AutoLock.
     resched_disable.Disable();
     AutoLock lock(get_lock());
-    if (!peer_) {
-        // |msg| will be destroyed but we want to keep the handles alive since
-        // the caller should put them back into the process table.
-        msg->set_owns_handles(false);
-        return ZX_ERR_PEER_CLOSED;
-    }
 
+    if (!peer_)
+        return ZX_ERR_PEER_CLOSED;
     peer_->WriteSelf(fbl::move(msg));
 
     return ZX_OK;
 }
 
 zx_status_t ChannelDispatcher::Call(fbl::unique_ptr<MessagePacket> msg,
-                                    zx_time_t deadline, bool* return_handles,
-                                    fbl::unique_ptr<MessagePacket>* reply) {
+                                    zx_time_t deadline, fbl::unique_ptr<MessagePacket>* reply) {
 
     canary_.Assert();
 
@@ -236,10 +221,6 @@ zx_status_t ChannelDispatcher::Call(fbl::unique_ptr<MessagePacket> msg,
         AutoLock lock(get_lock());
 
         if (!peer_) {
-            // |msg| will be destroyed but we want to keep the handles alive since
-            // the caller should put them back into the process table.
-            msg->set_owns_handles(false);
-            *return_handles = true;
             waiter->EndWait(reply);
             return ZX_ERR_PEER_CLOSED;
         }
@@ -283,11 +264,15 @@ zx_status_t ChannelDispatcher::ResumeInterruptedCall(MessageWaiter* waiter,
 
     // (2) Wait for notification via waiter's event or for the
     // deadline to hit.
-    zx_status_t status = waiter->Wait(deadline);
-    if (status == ZX_ERR_INTERNAL_INTR_RETRY) {
-        // If we got interrupted, return out to usermode, but
-        // do not clear the waiter.
-        return status;
+    {
+        ThreadDispatcher::AutoBlocked by(ThreadDispatcher::Blocked::CHANNEL);
+
+        zx_status_t status = waiter->Wait(deadline);
+        if (status == ZX_ERR_INTERNAL_INTR_RETRY) {
+            // If we got interrupted, return out to usermode, but
+            // do not clear the waiter.
+            return status;
+        }
     }
 
     // (3) see (3A), (3B) above or (3C) below for paths where
@@ -304,11 +289,11 @@ zx_status_t ChannelDispatcher::ResumeInterruptedCall(MessageWaiter* waiter,
         // and EndWait() returns a non-ZX_ERR_TIMED_OUT status.
         // Otherwise, the status is ZX_ERR_TIMED_OUT and it
         // is our job to remove the waiter from the list.
-        if ((status = waiter->EndWait(reply)) == ZX_ERR_TIMED_OUT)
+        zx_status_t status = waiter->EndWait(reply);
+        if (status == ZX_ERR_TIMED_OUT)
             waiters_.erase(*waiter);
+        return status;
     }
-
-    return status;
 }
 
 size_t ChannelDispatcher::TxMessageMax() const {

@@ -6,26 +6,30 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-MODULE_TYPE := userapp
-MODULE_GROUP := core
+MODULE_TYPE := userlib
 
 MODULE_SRCS += \
-    $(LOCAL_DIR)/crashanalyzer.cpp \
-    $(LOCAL_DIR)/dump-pt.cpp \
+    $(LOCAL_DIR)/crashanalyzer.cpp
 
-MODULE_NAME := crashanalyzer
+MODULE_FIDL_LIBS := \
+    system/fidl/crash
+
+MODULE_HEADER_DEPS := \
+    system/ulib/svc \
 
 MODULE_STATIC_LIBS := \
     system/ulib/inspector \
-    system/ulib/zxcpp \
+    system/ulib/async \
+    system/ulib/async.cpp \
     system/ulib/fbl \
+    system/ulib/fidl \
     system/ulib/pretty \
-    system/ulib/runtime
+    system/ulib/runtime \
+    system/ulib/zxcpp
 
 MODULE_LIBS := \
     third_party/ulib/backtrace \
     third_party/ulib/ngunwind \
-    system/ulib/launchpad \
     system/ulib/fdio \
     system/ulib/zircon \
     system/ulib/c

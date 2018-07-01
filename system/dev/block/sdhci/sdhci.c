@@ -29,7 +29,6 @@
 #include <hw/sdmmc.h>
 
 // Zircon Includes
-#include <fdio/watcher.h>
 #include <zircon/threads.h>
 #include <zircon/assert.h>
 #include <sync/completion.h>
@@ -75,6 +74,8 @@ typedef struct sdhci_device {
     zx_device_t* zxdev;
 
     zx_handle_t irq_handle;
+    thrd_t irq_thread;
+
     volatile sdhci_regs_t* regs;
 
     sdhci_protocol_t sdhci;
@@ -191,12 +192,12 @@ static uint32_t sdhci_prepare_cmd(sdmmc_req_t* req) {
 }
 
 static zx_status_t sdhci_wait_for_reset(sdhci_device_t* dev, const uint32_t mask, zx_time_t timeout) {
-    zx_time_t deadline = zx_clock_get(ZX_CLOCK_MONOTONIC) + timeout;
+    zx_time_t deadline = zx_clock_get_monotonic() + timeout;
     while (true) {
         if (((dev->regs->ctrl1) & mask) == 0) {
             break;
         }
-        if (zx_clock_get(ZX_CLOCK_MONOTONIC) > deadline) {
+        if (zx_clock_get_monotonic() > deadline) {
             printf("sdhci: timed out while waiting for reset\n");
             return ZX_ERR_TIMED_OUT;
         }
@@ -361,7 +362,9 @@ static int sdhci_irq_thread(void *arg) {
     while (true) {
         wait_res = zx_interrupt_wait(irq_handle, NULL);
         if (wait_res != ZX_OK) {
-            printf("sdhci: interrupt wait failed with retcode = %d\n", wait_res);
+            if (wait_res != ZX_ERR_CANCELED) {
+                zxlogf(ERROR, "sdhci: interrupt wait failed with retcode = %d\n", wait_res);
+            }
             break;
         }
 
@@ -400,9 +403,11 @@ static int sdhci_irq_thread(void *arg) {
 }
 
 static zx_status_t sdhci_build_dma_desc(sdhci_device_t* dev, sdmmc_req_t* req) {
-    block_op_t* bop = &req->txn->bop;
-    uint64_t pagecount = ((bop->rw.offset_vmo & PAGE_MASK) + bop->rw.length + PAGE_MASK) /
-                         PAGE_SIZE;
+    uint64_t req_len = req->blockcount * req->blocksize;
+    bool is_read = req->cmd_flags & SDMMC_CMD_READ;
+
+    uint64_t pagecount = ((req->buf_offset & PAGE_MASK) + req_len + PAGE_MASK) /
+                           PAGE_SIZE;
     if (pagecount > SDMMC_PAGES_COUNT) {
         zxlogf(ERROR, "sdhci: too many pages %lu vs %lu\n", pagecount, SDMMC_PAGES_COUNT);
         return ZX_ERR_INVALID_ARGS;
@@ -412,12 +417,23 @@ static zx_status_t sdhci_build_dma_desc(sdhci_device_t* dev, sdmmc_req_t* req) {
     zx_paddr_t phys[SDMMC_PAGES_COUNT];
     zx_handle_t pmt;
     // offset_vmo is converted to bytes by the sdmmc layer
-    uint32_t options = bop->command == BLOCK_OP_READ ? ZX_BTI_PERM_WRITE : ZX_BTI_PERM_READ;
-    zx_status_t st = zx_bti_pin(dev->bti_handle, options, bop->rw.vmo,
-                                bop->rw.offset_vmo & ~PAGE_MASK,
+    uint32_t options = is_read ? ZX_BTI_PERM_WRITE : ZX_BTI_PERM_READ;
+    zx_status_t st = zx_bti_pin(dev->bti_handle, options, req->dma_vmo,
+                                req->buf_offset & ~PAGE_MASK,
                                 pagecount * PAGE_SIZE, phys, pagecount, &pmt);
     if (st != ZX_OK) {
         zxlogf(ERROR, "sdhci: error %d bti_pin\n", st);
+        return st;
+    }
+    if (req->cmd_flags & SDMMC_CMD_READ) {
+        st = zx_vmo_op_range(req->dma_vmo, ZX_VMO_OP_CACHE_CLEAN_INVALIDATE,
+                             req->buf_offset, req_len, NULL, 0);
+    } else {
+        st = zx_vmo_op_range(req->dma_vmo, ZX_VMO_OP_CACHE_CLEAN,
+                             req->buf_offset, req_len, NULL, 0);
+    }
+    if (st != ZX_OK) {
+        zxlogf(ERROR, "sdhci: cache clean failed with error  %d\n", st);
         return st;
     }
     // cache this for zx_pmt_unpin() later
@@ -426,8 +442,8 @@ static zx_status_t sdhci_build_dma_desc(sdhci_device_t* dev, sdmmc_req_t* req) {
     phys_iter_buffer_t buf = {
         .phys = phys,
         .phys_count = pagecount,
-        .length = bop->rw.length,
-        .vmo_offset = bop->rw.offset_vmo,
+        .length = req_len,
+        .vmo_offset = req->buf_offset,
     };
     phys_iter_t iter;
     phys_iter_init(&iter, &buf, ADMA2_DESC_MAX_LENGTH);
@@ -558,6 +574,19 @@ err:
 static zx_status_t sdhci_finish_req(sdhci_device_t* dev, sdmmc_req_t* req) {
     zx_status_t st = ZX_OK;
     if (req->use_dma && req->pmt != ZX_HANDLE_INVALID) {
+        /*
+         * Clean the cache one more time after the DMA operation because there
+         * might be a possibility of cpu prefetching while the DMA operation is
+         * going on.
+         */
+        uint64_t req_len = req->blockcount * req->blocksize;
+        if ((req->cmd_flags & SDMMC_CMD_READ) && req->use_dma) {
+            st = zx_vmo_op_range(req->dma_vmo, ZX_VMO_OP_CACHE_CLEAN_INVALIDATE,
+                                 req->buf_offset, req_len, NULL, 0);
+            if (st != ZX_OK) {
+                zxlogf(ERROR, "sdhci: cache clean failed with error  %d\n", st);
+            }
+        }
         st = zx_pmt_unpin(req->pmt);
         if (st != ZX_OK) {
             zxlogf(ERROR, "sdhci: error %d in pmt_unpin\n", st);
@@ -867,6 +896,11 @@ static zx_status_t sdhci_perform_tuning(void* ctx) {
     }
 }
 
+static zx_status_t sdhci_get_sdio_oob_irq(void* ctx, zx_handle_t *oob_irq_handle) {
+    //Currently we do not support SDIO
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
 static sdmmc_protocol_ops_t sdmmc_proto = {
     .host_info = sdhci_host_info,
     .set_signal_voltage = sdhci_set_signal_voltage,
@@ -876,10 +910,16 @@ static sdmmc_protocol_ops_t sdmmc_proto = {
     .hw_reset = sdhci_hw_reset,
     .perform_tuning = sdhci_perform_tuning,
     .request = sdhci_request,
+    .get_sdio_oob_irq = sdhci_get_sdio_oob_irq,
 };
 
 static void sdhci_unbind(void* ctx) {
     sdhci_device_t* dev = ctx;
+
+    // stop irq thread
+    zx_interrupt_destroy(dev->irq_handle);
+    thrd_join(dev->irq_thread, NULL);
+
     device_remove(dev->zxdev);
 }
 
@@ -887,6 +927,7 @@ static void sdhci_release(void* ctx) {
     sdhci_device_t* dev = ctx;
     zx_handle_close(dev->irq_handle);
     zx_handle_close(dev->bti_handle);
+    zx_handle_close(dev->iobuf.vmo_handle);
     free(dev);
 }
 
@@ -935,7 +976,7 @@ static zx_status_t sdhci_controller_init(sdhci_device_t* dev) {
         dev->regs->ctrl0 |= SDHCI_HOSTCTRL_DMA_SELECT_ADMA2;
     } else {
         // no maximum if only PIO supported
-        dev->info.max_transfer_size = 0;
+        dev->info.max_transfer_size = BLOCK_MAX_TRANSFER_UNBOUNDED;
     }
 
     // Configure the clock.
@@ -960,12 +1001,12 @@ static zx_status_t sdhci_controller_init(sdhci_device_t* dev) {
     dev->regs->ctrl1 = ctrl1;
 
     // Wait for the clock to stabilize.
-    zx_time_t deadline = zx_clock_get(ZX_CLOCK_MONOTONIC) + ZX_SEC(1);
+    zx_time_t deadline = zx_clock_get_monotonic() + ZX_SEC(1);
     while (true) {
         if (((dev->regs->ctrl1) & SDHCI_INTERNAL_CLOCK_STABLE) != 0)
             break;
 
-        if (zx_clock_get(ZX_CLOCK_MONOTONIC) > deadline) {
+        if (zx_clock_get_monotonic() > deadline) {
             zxlogf(ERROR, "sdhci: Clock did not stabilize in time\n");
             status = ZX_ERR_TIMED_OUT;
             goto fail;
@@ -1035,13 +1076,11 @@ static zx_status_t sdhci_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    thrd_t irq_thread;
-    if (thrd_create_with_name(&irq_thread, sdhci_irq_thread, dev, "sdhci_irq_thread") != thrd_success) {
+    if (thrd_create_with_name(&dev->irq_thread, sdhci_irq_thread, dev, "sdhci_irq_thread") !=
+        thrd_success) {
         zxlogf(ERROR, "sdhci: failed to create irq thread\n");
         goto fail;
     }
-    thrd_detach(irq_thread);
-
 
     // Ensure that we're SDv3.
     const uint16_t vrsn = (dev->regs->slotirqversion >> 16) & 0xff;
@@ -1104,16 +1143,7 @@ static zx_status_t sdhci_bind(void* ctx, zx_device_t* parent) {
     return ZX_OK;
 fail:
     if (dev) {
-        if (dev->irq_handle != ZX_HANDLE_INVALID) {
-            zx_handle_close(dev->irq_handle);
-        }
-        if (dev->bti_handle != ZX_HANDLE_INVALID) {
-            zx_handle_close(dev->bti_handle);
-        }
-        if (dev->iobuf.vmo_handle != ZX_HANDLE_INVALID) {
-            zx_handle_close(dev->iobuf.vmo_handle);
-        }
-        free(dev);
+        sdhci_release(dev);
     }
     return status;
 }

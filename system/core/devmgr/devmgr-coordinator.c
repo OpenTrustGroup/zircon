@@ -19,9 +19,10 @@
 #include <zircon/processargs.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/policy.h>
+#include <zircon/syscalls/system.h>
 #include <zircon/device/dmctl.h>
 #include <zircon/boot/bootdata.h>
-#include <fdio/io.h>
+#include <lib/fdio/io.h>
 
 #include "devcoordinator.h"
 #include "devmgr.h"
@@ -160,16 +161,18 @@ static zx_status_t handle_dmctl_write(size_t len, const char* cmd) {
             return ZX_OK;
         }
         if (!memcmp(cmd, "help", 4)) {
-            dmprintf("dump        - dump device tree\n"
-                     "poweroff    - power off the system\n"
-                     "shutdown    - power off the system\n"
-                     "suspend     - suspend the system to RAM\n"
-                     "reboot      - reboot the system\n"
-                     "kerneldebug - send a command to the kernel\n"
-                     "ktraceoff   - stop kernel tracing\n"
-                     "ktraceon    - start kernel tracing\n"
-                     "devprops    - dump published devices and their binding properties\n"
-                     "drivers     - list discovered drivers and their properties\n"
+            dmprintf("dump              - dump device tree\n"
+                     "poweroff          - power off the system\n"
+                     "shutdown          - power off the system\n"
+                     "suspend           - suspend the system to RAM\n"
+                     "reboot            - reboot the system\n"
+                     "reboot-bootloader - reboot the system into boatloader\n"
+                     "reboot-recovery   - reboot the system into recovery\n"
+                     "kerneldebug       - send a command to the kernel\n"
+                     "ktraceoff         - stop kernel tracing\n"
+                     "ktraceon          - start kernel tracing\n"
+                     "devprops          - dump published devices and their binding properties\n"
+                     "drivers           - list discovered drivers and their properties\n"
                      );
             return ZX_OK;
         }
@@ -1222,9 +1225,7 @@ static zx_status_t dc_handle_device_read(device_t* dev) {
         if (hcount != 1) {
             goto fail_wrong_hcount;
         }
-        if (zx_channel_write(virtcon_open, 0, NULL, 0, hin, 1) < 0) {
-            zx_handle_close(hin[0]);
-        }
+        zx_channel_write(virtcon_open, 0, NULL, 0, hin, 1);
         r = ZX_OK;
         break;
 
@@ -1278,7 +1279,6 @@ static zx_status_t dc_handle_device_read(device_t* dev) {
         reply.rsp.status = ZX_OK;
         reply.rsp.txid = msg.txid;
         if ((r = zx_channel_write(dev->hrpc, 0, &reply, sizeof(reply), &vmo, 1)) < 0) {
-            zx_handle_close(vmo);
             return r;
         }
         return ZX_OK;
@@ -1436,7 +1436,7 @@ static zx_status_t dh_create_device(device_t* dev, devhost_t* dh,
     msg.protocol_id = dev->protocol_id;
 
     if ((r = zx_channel_write(dh->hrpc, 0, &msg, mlen, handle, hcount)) < 0) {
-        goto fail;
+        goto fail_after_write;
     }
 
     dev->hrpc = hrpc;
@@ -1444,7 +1444,7 @@ static zx_status_t dh_create_device(device_t* dev, devhost_t* dh,
     dev->ph.waitfor = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
     dev->ph.func = dc_handle_device;
     if ((r = port_wait(&dc_port, &dev->ph)) < 0) {
-        goto fail_watch;
+        goto fail_after_write;
     }
     dev->host = dh;
     dh->refcount++;
@@ -1452,10 +1452,8 @@ static zx_status_t dh_create_device(device_t* dev, devhost_t* dh,
     return ZX_OK;
 
 fail:
-    while (hcount > 0) {
-        zx_handle_close(handle[--hcount]);
-    }
-fail_watch:
+    zx_handle_close_many(handle, hcount);
+fail_after_write:
     zx_handle_close(hrpc);
     return r;
 }
@@ -1556,10 +1554,7 @@ static zx_status_t dh_connect_proxy(device_t* dev, zx_handle_t h) {
     }
     msg.txid = 0;
     msg.op = DC_OP_CONNECT_PROXY;
-    if ((r = zx_channel_write(dev->hrpc, 0, &msg, mlen, &h, 1)) < 0) {
-        zx_handle_close(h);
-    }
-    return r;
+    return zx_channel_write(dev->hrpc, 0, &msg, mlen, &h, 1);
 }
 
 static zx_status_t dc_prepare_proxy(device_t* dev) {
@@ -1687,13 +1682,13 @@ static void dc_handle_new_device(device_t* dev) {
 static void dc_suspend_fallback(uint32_t flags) {
     log(INFO, "devcoord: suspend fallback with flags 0x%08x\n", flags);
     if (flags == DEVICE_SUSPEND_FLAG_REBOOT) {
-        zx_debug_send_command(get_root_resource(), "reboot", sizeof("reboot"));
+        zx_system_powerctl(get_root_resource(), ZX_SYSTEM_POWERCTL_REBOOT, NULL);
     } else if (flags == DEVICE_SUSPEND_FLAG_REBOOT_BOOTLOADER) {
-        zx_debug_send_command(get_root_resource(), "reboot-bootloader", sizeof("reboot-bootloader"));
+        zx_system_powerctl(get_root_resource(), ZX_SYSTEM_POWERCTL_REBOOT_BOOTLOADER, NULL);
     } else if (flags == DEVICE_SUSPEND_FLAG_REBOOT_RECOVERY) {
-        zx_debug_send_command(get_root_resource(), "reboot-recovery", sizeof("reboot-recovery"));
+        zx_system_powerctl(get_root_resource(), ZX_SYSTEM_POWERCTL_REBOOT_RECOVERY, NULL);
     } else if (flags == DEVICE_SUSPEND_FLAG_POWEROFF) {
-        zx_debug_send_command(get_root_resource(), "poweroff", sizeof("poweroff"));
+        zx_system_powerctl(get_root_resource(), ZX_SYSTEM_POWERCTL_SHUTDOWN, NULL);
     }
 }
 
@@ -1914,7 +1909,7 @@ static void dc_continue_suspend(suspend_context_t* ctx) {
         if (ctx->dh != NULL) {
             process_suspend_list(ctx);
         } else if (ctx->sflags == DEVICE_SUSPEND_FLAG_MEXEC) {
-            zx_system_mexec(ctx->kernel, ctx->bootdata);
+            zx_system_mexec(get_root_resource(), ctx->kernel, ctx->bootdata);
         } else {
             // should never get here on x86
             // on arm, if the platform driver does not implement

@@ -75,7 +75,7 @@ static const char* ObjectTypeToString(zx_obj_type_t type) {
         case ZX_OBJ_TYPE_SMC: return "smc";
         case ZX_OBJ_TYPE_SOCKET: return "socket";
         case ZX_OBJ_TYPE_RESOURCE: return "resource";
-        case ZX_OBJ_TYPE_EVENT_PAIR: return "event-pair";
+        case ZX_OBJ_TYPE_EVENTPAIR: return "event-pair";
         case ZX_OBJ_TYPE_JOB: return "job";
         case ZX_OBJ_TYPE_VMAR: return "vmar";
         case ZX_OBJ_TYPE_FIFO: return "fifo";
@@ -128,7 +128,7 @@ static void FormatHandleTypeCount(const ProcessDispatcher& pd,
              types[ZX_OBJ_TYPE_VMO],
              types[ZX_OBJ_TYPE_VMAR],
              types[ZX_OBJ_TYPE_CHANNEL],
-             types[ZX_OBJ_TYPE_EVENT] + types[ZX_OBJ_TYPE_EVENT_PAIR],
+             types[ZX_OBJ_TYPE_EVENT] + types[ZX_OBJ_TYPE_EVENTPAIR],
              types[ZX_OBJ_TYPE_PORT],
              types[ZX_OBJ_TYPE_SOCKET],
              types[ZX_OBJ_TYPE_TIMER],
@@ -160,9 +160,9 @@ void DumpProcessList() {
 }
 
 void DumpJobList() {
-    printf("All jobs from least to most important:\n");
+    printf("All jobs:\n");
     printf("%7s %s\n", "koid", "name");
-    JobDispatcher::ForEachJobByImportance([&](JobDispatcher* job) {
+    JobDispatcher::ForEachJob([&](JobDispatcher* job) {
         char name[ZX_MAX_NAME_LEN];
         job->get_name(name);
         printf("%7" PRIu64 " '%s'\n", job->get_koid(), name);

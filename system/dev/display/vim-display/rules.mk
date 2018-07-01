@@ -12,7 +12,6 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/vim-display.c \
     $(LOCAL_DIR)/hdmitx.c \
     $(LOCAL_DIR)/hdmitx_clk.c \
-    $(LOCAL_DIR)/canvas.c \
     $(LOCAL_DIR)/osd2.c \
     $(LOCAL_DIR)/edid.c \
 

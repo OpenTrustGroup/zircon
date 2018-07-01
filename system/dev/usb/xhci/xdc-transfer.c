@@ -62,8 +62,7 @@ static zx_status_t xdc_schedule_transfer_locked(xdc_t* xdc, xdc_endpoint_t* ep,
 
 // Schedules any queued requests on the endpoint's transfer ring, until we fill our
 // transfer ring or have no more requests.
-static void xdc_process_transactions_locked(xdc_t* xdc, xdc_endpoint_t* ep)
-                                            __TA_REQUIRES(xdc->lock) {
+void xdc_process_transactions_locked(xdc_t* xdc, xdc_endpoint_t* ep) __TA_REQUIRES(xdc->lock) {
     while (1) {
         if (xhci_transfer_ring_free_trbs(&ep->transfer_ring) == 0) {
             // No available TRBs - need to wait for some to complete.
@@ -94,16 +93,13 @@ static void xdc_process_transactions_locked(xdc_t* xdc, xdc_endpoint_t* ep)
     }
 }
 
-zx_status_t xdc_queue_transfer(xdc_t* xdc, usb_request_t* req, bool in) {
+zx_status_t xdc_queue_transfer(xdc_t* xdc, usb_request_t* req, bool in, bool is_ctrl_msg) {
     xdc_endpoint_t* ep = in ? &xdc->eps[IN_EP_IDX] : &xdc->eps[OUT_EP_IDX];
 
     mtx_lock(&xdc->lock);
 
-    // Make sure we're recently checked the device state registers.
-    xdc_update_state_locked(xdc);
-    xdc_update_endpoint_state_locked(xdc, ep);
-
-    if (!xdc->configured || ep->state == XDC_EP_STATE_DEAD) {
+    // We should always queue control messages unless there is an unrecoverable error.
+    if (!is_ctrl_msg && (!xdc->configured || ep->state == XDC_EP_STATE_DEAD)) {
         mtx_unlock(&xdc->lock);
         return ZX_ERR_IO_NOT_PRESENT;
     }
@@ -112,19 +108,18 @@ zx_status_t xdc_queue_transfer(xdc_t* xdc, usb_request_t* req, bool in) {
         zx_status_t status = usb_request_physmap(req);
         if (status != ZX_OK) {
             zxlogf(ERROR, "%s: usb_request_physmap failed: %d\n", __FUNCTION__, status);
-            // Call the complete callback outside of the lock.
             mtx_unlock(&xdc->lock);
-            usb_request_complete(req, status, 0);
-            return ZX_OK;
+            return status;
         }
     }
 
     list_add_tail(&ep->queued_reqs, &req->node);
 
-    // We can still queue requests for later while the endpoint is halted,
-    // but before scheduling the TRBs we should wait until the halt is
-    // cleared by DbC and we've cleaned up the transfer ring.
-    if (ep->state == XDC_EP_STATE_RUNNING) {
+    // We can still queue requests for later while waiting for the xdc device to be configured,
+    // or while the endpoint is halted. Before scheduling the TRBs however, we should wait
+    // for the device to be configured, and/or the halt is cleared by DbC and we've cleaned
+    // up the transfer ring.
+    if (xdc->configured && ep->state == XDC_EP_STATE_RUNNING) {
         xdc_process_transactions_locked(xdc, ep);
     }
 
@@ -193,7 +188,7 @@ zx_status_t xdc_restart_transfer_ring_locked(xdc_t* xdc, xdc_endpoint_t* ep) {
     return ZX_OK;
 }
 
-void xdc_handle_transfer_event_locked(xdc_t* xdc, xhci_trb_t* trb) {
+void xdc_handle_transfer_event_locked(xdc_t* xdc, xdc_poll_state_t* poll_state, xhci_trb_t* trb) {
     uint32_t control = XHCI_READ32(&trb->control);
     uint32_t status = XHCI_READ32(&trb->status);
     uint32_t ep_dev_ctx_idx = READ_FIELD(control, TRB_ENDPOINT_ID_START, TRB_ENDPOINT_ID_BITS);
@@ -227,7 +222,7 @@ void xdc_handle_transfer_event_locked(xdc_t* xdc, xhci_trb_t* trb) {
     // it's possible we missed the halt register being set if the halt was cleared fast enough.
     if (error) {
         if (ep->state == XDC_EP_STATE_RUNNING) {
-             xdc_endpoint_set_halt_locked(xdc, ep);
+             xdc_endpoint_set_halt_locked(xdc, poll_state, ep);
         }
         ep->got_err_event = true;
         // We're going to requeue the transfer when we restart the transfer ring,
@@ -289,5 +284,5 @@ void xdc_handle_transfer_event_locked(xdc_t* xdc, xhci_trb_t* trb) {
     // Save the request to be completed later out of the lock.
     req->response.status = ZX_OK;
     req->response.actual = length;
-    list_add_tail(&ep->completed_reqs, &req->node);
+    list_add_tail(&poll_state->completed_reqs, &req->node);
 }

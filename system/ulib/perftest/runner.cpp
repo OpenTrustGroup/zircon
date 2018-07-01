@@ -102,10 +102,11 @@ public:
     }
 
     // Returns nullptr on success, or an error string on failure.
-    const char* RunTestFunc(const internal::NamedTest* test) {
-        TRACE_DURATION("perftest", "test_group", "test_name", test->name);
+    const char* RunTestFunc(const char* test_name,
+                            const fbl::Function<TestFunc>& test_func) {
+        TRACE_DURATION("perftest", "test_group", "test_name", test_name);
         overall_start_time_ = zx_ticks_get();
-        bool result = test->test_func(this);
+        bool result = test_func(this);
         overall_end_time_ = zx_ticks_get();
         if (error_) {
             return error_;
@@ -119,7 +120,8 @@ public:
         return nullptr;
     }
 
-    void CopyTimeResults(const char* test_name, ResultsSet* dest) const {
+    void CopyTimeResults(const char* test_suite, const char* test_name,
+                         ResultsSet* dest) const {
         // Copy the timing results, converting timestamps to elapsed times.
         double nanoseconds_per_tick =
             1e9 / static_cast<double>(zx_ticks_per_second());
@@ -132,8 +134,9 @@ public:
                 name = test_name;
             }
 
-            TestCaseResults* results = dest->AddTestCase(name, "nanoseconds");
-            results->values()->reserve(run_count_);
+            TestCaseResults* results = dest->AddTestCase(
+                test_suite, name, "nanoseconds");
+            results->values.reserve(run_count_);
             for (uint32_t run = 0; run < run_count_; ++run) {
                 uint64_t time_taken = (GetTimestamp(run, step + 1) -
                                        GetTimestamp(run, step));
@@ -253,10 +256,29 @@ void RegisterTest(const char* name, fbl::Function<TestFunc> test_func) {
     g_tests->push_back(fbl::move(new_test));
 }
 
+bool RunTest(const char* test_suite, const char* test_name,
+             const fbl::Function<TestFunc>& test_func,
+             uint32_t run_count, ResultsSet* results_set,
+             fbl::String* error_out) {
+    RepeatStateImpl state(run_count);
+    const char* error = state.RunTestFunc(test_name, test_func);
+    if (error) {
+        if (error_out) {
+            *error_out = error;
+        }
+        return false;
+    }
+
+    state.CopyTimeResults(test_suite, test_name, results_set);
+    state.WriteTraceEvents();
+    return true;
+}
+
 namespace internal {
 
-bool RunTests(TestList* test_list, uint32_t run_count, const char* regex_string,
-              FILE* log_stream, ResultsSet* results_set) {
+bool RunTests(const char* test_suite, TestList* test_list, uint32_t run_count,
+              const char* regex_string, FILE* log_stream,
+              ResultsSet* results_set) {
     // Compile the regular expression.
     regex_t regex;
     int err = regcomp(&regex, regex_string, REG_EXTENDED);
@@ -285,18 +307,15 @@ bool RunTests(TestList* test_list, uint32_t run_count, const char* regex_string,
         // parse gtest's output.
         fprintf(log_stream, "[ RUN      ] %s\n", test_name);
 
-        RepeatStateImpl state(run_count);
-        const char* error = state.RunTestFunc(&test_case);
-        if (error) {
-            fprintf(log_stream, "Error: %s\n", error);
+        fbl::String error_string;
+        if (!RunTest(test_suite, test_name, test_case.test_func, run_count,
+                     results_set, &error_string)) {
+            fprintf(log_stream, "Error: %s\n", error_string.c_str());
             fprintf(log_stream, "[  FAILED  ] %s\n", test_name);
             ok = false;
             continue;
         }
         fprintf(log_stream, "[       OK ] %s\n", test_name);
-
-        state.CopyTimeResults(test_name, results_set);
-        state.WriteTraceEvents();
     }
 
     regfree(&regex);
@@ -392,7 +411,7 @@ static void StartTraceProvider() {
     ZX_ASSERT(err == 0);
 }
 
-static bool PerfTestMode(int argc, char** argv) {
+static bool PerfTestMode(const char* test_suite, int argc, char** argv) {
     internal::CommandArgs args;
     internal::ParseCommandArgs(argc, argv, &args);
 
@@ -404,8 +423,8 @@ static bool PerfTestMode(int argc, char** argv) {
     zx_nanosleep(zx_deadline_after(duration));
 
     ResultsSet results;
-    bool success = RunTests(g_tests, args.run_count, args.filter_regex, stdout,
-                            &results);
+    bool success = RunTests(test_suite, g_tests, args.run_count,
+                            args.filter_regex, stdout, &results);
 
     printf("\n");
     results.PrintSummaryStatistics(stdout);
@@ -425,7 +444,7 @@ static bool PerfTestMode(int argc, char** argv) {
     return success;
 }
 
-int PerfTestMain(int argc, char** argv) {
+int PerfTestMain(int argc, char** argv, const char* test_suite) {
     if (argc == 2 && (strcmp(argv[1], "-h") == 0 ||
                       strcmp(argv[1], "--help") == 0)) {
         printf("Usage:\n"
@@ -470,13 +489,14 @@ int PerfTestMain(int argc, char** argv) {
 
     bool success = true;
 
+    // Check whether to run in perf test mode.
     if (argc >= 2 && strcmp(argv[1], "-p") == 0) {
         // Drop the "-p" argument.  Keep argv[0] because getopt_long()
         // prints it in error messages.
         argv[1] = argv[0];
         argc--;
         argv++;
-        if (!PerfTestMode(argc, argv)) {
+        if (!PerfTestMode(test_suite, argc, argv)) {
             success = false;
         }
     } else {
@@ -486,7 +506,7 @@ int PerfTestMain(int argc, char** argv) {
             // multiple runs works OK.
             const int kRunCount = 3;
             ResultsSet unused_results;
-            if (!RunTests(g_tests, kRunCount, "", stdout, &unused_results)) {
+            if (!RunTests(test_suite, g_tests, kRunCount, "", stdout, &unused_results)) {
                 success = false;
             }
         }

@@ -23,6 +23,7 @@ __BEGIN_CDECLS;
 #define PDEV_DID_DW_PCIE            10  // Designware PCIe
 #define PDEV_DID_LED2472G           11  // RPi Sense Hat LED2472G
 #define PDEV_DID_GPU_VSL_GC         12  // Verisilicon GC series GPU
+#define PDEV_DID_ARM_MALI_INIT      13  // ARM MALI GPU (Zircon)
 
 // QEMU emulator
 #define PDEV_VID_QEMU               1
@@ -39,6 +40,7 @@ __BEGIN_CDECLS;
 #define PDEV_PID_GAUSS              1
 #define PDEV_PID_MACHINA            2
 #define PDEV_PID_ASTRO              3
+#define PDEV_PID_MADRONE            4
 
 #define PDEV_DID_GAUSS_AUDIO_IN     1
 #define PDEV_DID_GAUSS_AUDIO_OUT    2
@@ -74,10 +76,13 @@ __BEGIN_CDECLS;
 #define PDEV_DID_AMLOGIC_SCPI       10
 #define PDEV_DID_AMLOGIC_DISPLAY    11
 #define PDEV_DID_AMLOGIC_VIDEO      12
+#define PDEV_DID_AMLOGIC_RAW_NAND   13
+#define PDEV_DID_AMLOGIC_CANVAS     14
 
 // Broadcom
 #define PDEV_VID_BROADCOM           6
 #define PDEV_PID_BCM4356            1
+#define PDEV_PID_BCM43458           2
 
 //Hardkernel
 #define PDEV_VID_HARDKERNEL         7
@@ -90,9 +95,12 @@ __BEGIN_CDECLS;
 // NXP
 #define PDEV_VID_NXP                9
 #define PDEV_PID_IMX8MEVK           1
+#define PDEV_PID_PCF8563            2
 
 #define PDEV_DID_IMX_GPIO           1
 #define PDEV_DID_IMX_DISPLAY        2
 #define PDEV_DID_IMX_SDHCI          3
+
+#define PDEV_DID_PCF8563_RTC        1
 
 __END_CDECLS;

@@ -14,10 +14,10 @@
 #include <zircon/processargs.h>
 #include <zircon/device/vfs.h>
 
-#include <fdio/namespace.h>
-#include <fdio/remoteio.h>
-#include <fdio/util.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/namespace.h>
+#include <lib/fdio/remoteio.h>
+#include <lib/fdio/util.h>
+#include <lib/fdio/vfs.h>
 
 #include "private.h"
 #include "private-remoteio.h"
@@ -550,9 +550,7 @@ zx_status_t fdio_ns_bind_fd(fdio_ns_t* ns, const char* path, int fd) {
 
     if (type[0] != PA_FDIO_REMOTE) {
         // wrong type, discard handles
-        for (int n = 0; n < r; n++) {
-            zx_handle_close(handle[n]);
-        }
+        zx_handle_close_many(handle, r);
         return ZX_ERR_WRONG_TYPE;
     }
 

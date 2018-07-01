@@ -9,9 +9,8 @@
 #include <ddk/protocol/intel-hda-codec.h>
 #include <ddk/protocol/intel-hda-dsp.h>
 #include <fbl/mutex.h>
-#include <fbl/vmo_mapper.h>
+#include <lib/vmo-utils/vmo_mapper.h>
 
-#include <sync/completion.h>
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
@@ -78,6 +77,7 @@ private:
     int InitThread();
 
     zx_status_t Boot();
+    zx_status_t StripFirmware(const zx::vmo& fw, void* out, size_t* size_inout);
     zx_status_t LoadFirmware();
 
     zx_status_t GetI2SBlob(uint8_t bus_id, uint8_t direction, const AudioDataFormat& format,
@@ -112,6 +112,7 @@ private:
     zx_status_t CreateAndStartStreams();
 
     // Debug
+    void DumpRegs();
     void DumpNhlt(const nhlt_table_t* nhlt, size_t length);
     void DumpFirmwareConfig(const TLVHeader* config, size_t length);
     void DumpHardwareConfig(const TLVHeader* config, size_t length);
@@ -196,7 +197,7 @@ private:
     ihda_dsp_protocol_t ihda_dsp_;
 
     // PCI registers
-    fbl::VmoMapper mapped_regs_;
+    vmo_utils::VmoMapper mapped_regs_;
 
     // A reference to our controller's BTI. This is needed to load firmware to the DSP.
     fbl::RefPtr<RefCountedBti> hda_bti_;

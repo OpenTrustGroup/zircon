@@ -33,6 +33,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/dev-thermal.c \
     $(LOCAL_DIR)/debug.c \
     $(LOCAL_DIR)/init.c \
+    $(LOCAL_DIR)/iommu.c \
     $(LOCAL_DIR)/nhlt.c \
     $(LOCAL_DIR)/pci.c \
     $(LOCAL_DIR)/power.c \
@@ -53,7 +54,6 @@ MODULE_LIBS := \
     system/ulib/driver \
     system/ulib/zircon \
     system/ulib/c \
-    system/ulib/fdio \
 
 else # !ARCH=x86
 
@@ -67,7 +67,6 @@ MODULE_SRCS += $(LOCAL_DIR)/dummy.c
 MODULE_LIBS := \
     system/ulib/zircon \
     system/ulib/c \
-    system/ulib/fdio \
 
 endif # ARCH=x86
 

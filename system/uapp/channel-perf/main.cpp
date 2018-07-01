@@ -71,8 +71,8 @@ void do_test(uint32_t duration, const TestArgs& test_args) {
 
     static constexpr uint32_t big_it_size = 10000;
     uint64_t big_its = 0;
-    uint64_t start_ns = zx_clock_get(ZX_CLOCK_MONOTONIC);
-    uint64_t end_ns;
+    zx_time_t start_ns = zx_clock_get_monotonic();
+    zx_time_t end_ns;
     for (;;) {
         big_its++;
         for (uint32_t i = 0; i < big_it_size; i++) {
@@ -89,7 +89,7 @@ void do_test(uint32_t duration, const TestArgs& test_args) {
             assert(r_handles == test_args.handles);
         }
 
-        end_ns = zx_clock_get(ZX_CLOCK_MONOTONIC);
+        end_ns = zx_clock_get_monotonic();
         if ((end_ns - start_ns) >= duration_ns)
             break;
     }

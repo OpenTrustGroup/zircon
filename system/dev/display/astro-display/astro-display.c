@@ -66,20 +66,18 @@ static void astro_set_display_controller_cb(void* ctx, void* cb_ctx, display_con
     display->dc_cb = cb;
     display->dc_cb_ctx = cb_ctx;
 
-    uint64_t display_id = display->display_id;
     mtx_unlock(&display->display_lock);
 
+    uint64_t display_id = PANEL_DISPLAY_ID;
     display->dc_cb->on_displays_changed(display->dc_cb_ctx, &display_id, 1, NULL, 0);
     mtx_unlock(&display->cb_lock);
 }
 
 static zx_status_t astro_get_display_info(void* ctx, uint64_t display_id, display_info_t* info) {
+    ZX_DEBUG_ASSERT(display_id == PANEL_DISPLAY_ID);
+
     astro_display_t* display = ctx;
     mtx_lock(&display->display_lock);
-    if (display_id != display->display_id) {
-        mtx_unlock(&display->display_lock);
-        return ZX_ERR_NOT_FOUND;
-    }
 
     info->edid_present = false;
     info->panel.params.height = display->height;
@@ -161,24 +159,48 @@ static void astro_release_image(void* ctx, image_t* image) {
     }
 }
 
-static bool astro_check_configuration(void* ctx,
-                                    display_config_t** display_configs, uint32_t display_count) {
+static void astro_check_configuration(void* ctx,
+                                      const display_config_t** display_configs,
+                                      uint32_t** layer_cfg_results,
+                                      uint32_t display_count) {
     if (display_count != 1) {
-        return display_count == 0;
+        ZX_DEBUG_ASSERT(display_count == 0);
+        return;
     }
+    ZX_DEBUG_ASSERT(display_configs[0]->display_id == PANEL_DISPLAY_ID);
+
     astro_display_t* display = ctx;
     mtx_lock(&display->display_lock);
-    bool res = (display_configs[0]->display_id == display->display_id
-               && display_configs[0]->mode.h_addressable == display->width
-               && display_configs[0]->image.width == display->width
-               && display_configs[0]->mode.v_addressable == display->height
-               && display_configs[0]->image.height == display->height);
+
+    bool success;
+    if (display_configs[0]->layer_count != 1) {
+        success = display_configs[0]->layer_count == 0;
+    } else {
+        primary_layer_t* layer = &display_configs[0]->layers[0]->cfg.primary;
+        frame_t frame = {
+            .x_pos = 0, .y_pos = 0, .width = display->width, .height = display->height,
+        };
+        success = display_configs[0]->layers[0]->type == LAYER_PRIMARY
+                && layer->transform_mode == FRAME_TRANSFORM_IDENTITY
+                && layer->image.width == display->width
+                && layer->image.height == display->height
+                && memcmp(&layer->dest_frame, &frame, sizeof(frame_t)) == 0
+                && memcmp(&layer->src_frame, &frame, sizeof(frame_t)) == 0
+                && display_configs[0]->cc_flags == 0
+                && layer->alpha_mode == ALPHA_DISABLE;
+    }
+    if (!success) {
+        layer_cfg_results[0][0] = CLIENT_MERGE_BASE;
+        for (unsigned i = 1; i < display_configs[0]->layer_count; i++) {
+            layer_cfg_results[0][i] = CLIENT_MERGE_SRC;
+        }
+    }
     mtx_unlock(&display->display_lock);
-    return res;
 }
 
 static void astro_apply_configuration(void* ctx,
-                                    display_config_t** display_configs, uint32_t display_count) {
+                                      const display_config_t** display_configs,
+                                      uint32_t display_count) {
     // TODO: Nothing to do for now
 }
 
@@ -208,8 +230,13 @@ static void display_release(void* ctx) {
     astro_display_t* display = ctx;
 
     if (display) {
+        zx_interrupt_destroy(display->vsync_interrupt);
+        int res;
+        thrd_join(display->vsync_thread, &res);
+        io_buffer_release(&display->mmio_dmc);
         io_buffer_release(&display->fbuffer);
         zx_handle_close(display->bti);
+        zx_handle_close(display->vsync_interrupt);
     }
     free(display);
 }
@@ -254,9 +281,6 @@ static zx_status_t setup_display_if(astro_display_t* display) {
     mtx_lock(&display->cb_lock);
     mtx_lock(&display->display_lock);
 
-    uint64_t display_added = INVALID_DISPLAY_ID;
-    uint64_t display_removed = INVALID_DISPLAY_ID;
-
     // allocate frame buffer
     display->format = ZX_PIXEL_FORMAT_RGB_565;
     display->width  = 608;
@@ -275,21 +299,17 @@ static zx_status_t setup_display_if(astro_display_t* display) {
     config_canvas(display, io_buffer_phys(&display->fbuffer), &display->fb_canvas_idx);
     init_backlight(display);
 
-    zx_set_framebuffer(get_root_resource(), display->fbuffer.vmo_handle,
-                       display->fbuffer.size, display->disp_info.format,
-                       display->disp_info.width, display->disp_info.height,
-                       display->disp_info.stride);
+    zx_framebuffer_set_range(get_root_resource(), display->fbuffer.vmo_handle,
+                             display->fbuffer.size, display->disp_info.format,
+                             display->disp_info.width, display->disp_info.height,
+                             display->disp_info.stride);
 
-    display_added = display->display_id;
 
     mtx_unlock(&display->display_lock);
 
     if (display->dc_cb) {
-        display->dc_cb->on_displays_changed(display->dc_cb_ctx,
-                                                &display_added,
-                                                display_added != INVALID_DISPLAY_ID,
-                                                &display_removed,
-                                                display_removed != INVALID_DISPLAY_ID);
+        uint64_t display_added = PANEL_DISPLAY_ID;
+        display->dc_cb->on_displays_changed(display->dc_cb_ctx, &display_added, 1, NULL, 0);
     }
     mtx_unlock(&display->cb_lock);
 
@@ -305,6 +325,34 @@ static int main_astro_display_thread(void *arg) {
     astro_display_t* display = arg;
     setup_display_if(display);
     return ZX_OK;
+}
+
+static zx_status_t vsync_thread(void *arg) {
+    zx_status_t status = ZX_OK;
+    astro_display_t* display = arg;
+
+    while(1) {
+        status = zx_interrupt_wait(display->vsync_interrupt, NULL);
+        if (status != ZX_OK) {
+            DISP_ERROR("VSync Interrupt Wait failed\n");
+            break;
+        }
+
+        mtx_lock(&display->cb_lock);
+        mtx_lock(&display->display_lock);
+
+        void* live = (void*)(uint64_t) display->current_image;
+        uint8_t is_client_handle = display->current_image != display->fb_canvas_idx;
+        mtx_unlock(&display->display_lock);
+
+        if (display->dc_cb) {
+            display->dc_cb->on_display_vsync(display->dc_cb_ctx, PANEL_DISPLAY_ID, &live,
+                                                is_client_handle);
+        }
+        mtx_unlock(&display->cb_lock);
+    }
+
+    return status;
 }
 
 zx_status_t astro_display_bind(void* ctx, zx_device_t* parent) {
@@ -351,6 +399,13 @@ zx_status_t astro_display_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
+    // Map VSync Interrupt
+    status = pdev_map_interrupt(&display->pdev, 0, &display->vsync_interrupt);
+    if (status  != ZX_OK) {
+        DISP_ERROR("Could not map vsync interrupt\n");
+        goto fail;
+    }
+
     device_add_args_t add_args = {
         .version = DEVICE_ADD_ARGS_VERSION,
         .name = "astro-display",
@@ -366,7 +421,6 @@ zx_status_t astro_display_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    display->display_id = 1;
     list_initialize(&display->imported_images);
     mtx_init(&display->display_lock, mtx_plain);
     mtx_init(&display->image_lock, mtx_plain);
@@ -374,6 +428,7 @@ zx_status_t astro_display_bind(void* ctx, zx_device_t* parent) {
 
     thrd_create_with_name(&display->main_thread, main_astro_display_thread, display,
                                                     "main_astro_display_thread");
+    thrd_create_with_name(&display->vsync_thread, vsync_thread, display, "vsync_thread");
     return ZX_OK;
 
 fail:

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <fdio/io.fidl.h>
+#include <lib/fdio/io.fidl.h>
 #include <fs/managed-vfs.h>
 #include <fs/synchronous-vfs.h>
 #include <fs/vnode.h>
@@ -17,7 +17,7 @@
 
 // Used to minimize boilerplate for invoking FIDL requests
 // under highly controlled situations.
-#include <fdio/../../private-fidl.h>
+#include <lib/fdio/../../../private-fidl.h>
 
 namespace {
 
@@ -87,7 +87,7 @@ private:
 
 bool send_sync(const zx::channel& client) {
     BEGIN_HELPER;
-    ioNodeSyncRequest request;
+    fuchsia_io_NodeSyncRequest request;
     request.hdr.txid = 5;
     request.hdr.ordinal = ZXFIDL_SYNC;
     ASSERT_EQ(client.write(0, &request, sizeof(request), nullptr, 0), ZX_OK);

@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <debug.h>
 #include <err.h>
+#include <fbl/algorithm.h>
 #include <inttypes.h>
 #include <kernel/align.h>
 #include <kernel/dpc.h>
@@ -31,7 +32,7 @@
 #define LOCAL_TRACE 0
 
 // a global state structure, aligned on cpu cache line to minimize aliasing
-struct mp_state mp __CPU_ALIGN;
+struct mp_state mp __CPU_ALIGN_EXCLUSIVE;
 
 // Helpers used for implementing mp_sync
 struct mp_sync_context;
@@ -40,7 +41,7 @@ static void mp_sync_task(void* context);
 void mp_init(void) {
     mutex_init(&mp.hotplug_lock);
     mp.ipi_task_lock = SPIN_LOCK_INITIAL_VALUE;
-    for (uint i = 0; i < countof(mp.ipi_task_list); ++i) {
+    for (uint i = 0; i < fbl::count_of(mp.ipi_task_list); ++i) {
         list_initialize(&mp.ipi_task_list[i]);
     }
 }
@@ -278,6 +279,14 @@ cleanup_mutex:
 
 // Unplug a single CPU.  Must be called while hodling the hotplug lock
 static zx_status_t mp_unplug_cpu_mask_single_locked(cpu_num_t cpu_id) {
+    // Wait for |cpu_id| to complete any in-progress DPCs and terminate its DPC thread.  Later, once
+    // nothing is running on it, we'll migrate its queued DPCs to another CPU.
+    dpc_shutdown(cpu_id);
+
+    // TODO(maniscalco): |cpu_id| is about to shutdown.  We should ensure it has no pinned threads
+    // (except maybe the idle thread).  Once we're confident we've terminated/migrated them all,
+    // this would be a good place to DEBUG_ASSERT.
+
     // Create a thread for the unplug.  We will cause the target CPU to
     // context switch to this thread.  After this happens, it should no
     // longer be accessing system state and can be safely shut down.
@@ -322,8 +331,8 @@ static zx_status_t mp_unplug_cpu_mask_single_locked(cpu_num_t cpu_id) {
 
     // Now that the CPU is no longer processing tasks, move all of its timers
     timer_transition_off_cpu(cpu_id);
-    // Move the CPU's DPCs to the current CPU.
-    dpc_transition_off_cpu(cpu_id);
+    // Move the CPU's queued DPCs to the current CPU.
+    dpc_shutdown_transition_off_cpu(cpu_id);
 
     status = platform_mp_cpu_unplug(cpu_id);
     if (status != ZX_OK) {

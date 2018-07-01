@@ -483,8 +483,11 @@ static void migrate_current_thread(thread_t* current_thread) TA_REQ(thread_lock)
 }
 
 // migrate all non-pinned threads assigned to |old_cpu| to other queues
+//
+// must be called on |old_cpu|
 void sched_transition_off_cpu(cpu_num_t old_cpu) {
     DEBUG_ASSERT(spin_lock_held(&thread_lock));
+    DEBUG_ASSERT(old_cpu == arch_curr_cpu_num());
 
     // Ensure we do not get scheduled on anymore.
     mp_set_curr_cpu_active(false);
@@ -703,13 +706,14 @@ void sched_change_priority(thread_t* t, int pri) {
 }
 
 // preemption timer that is set whenever a thread is scheduled
-static void sched_timer_tick(timer_t* t, zx_time_t now, void* arg) {
+void sched_preempt_timer_tick(zx_time_t now) {
     // if the preemption timer went off on the idle or a real time thread, ignore it
     thread_t* current_thread = get_current_thread();
     if (unlikely(thread_is_real_time_or_idle(current_thread)))
         return;
 
-    LOCAL_KTRACE2("timer_tick", (uint32_t)current_thread->user_tid, current_thread->remaining_time_slice);
+    LOCAL_KTRACE2("sched_preempt_timer_tick", (uint32_t)current_thread->user_tid,
+                  current_thread->remaining_time_slice);
 
     // did this tick complete the time slice?
     DEBUG_ASSERT(now > current_thread->last_started_running);
@@ -719,15 +723,14 @@ static void sched_timer_tick(timer_t* t, zx_time_t now, void* arg) {
         current_thread->remaining_time_slice = 0;
 
         // set a timer to go off on the time slice interval from now
-        timer_set_oneshot(t, now + THREAD_INITIAL_TIME_SLICE, sched_timer_tick, NULL);
+        timer_preempt_reset(now + THREAD_INITIAL_TIME_SLICE);
 
         // Mark a reschedule as pending.  The irq handler will call back
         // into us with sched_preempt().
         thread_preempt_set_pending();
     } else {
         // the timer tick must have fired early, reschedule and continue
-        timer_set_oneshot(t, current_thread->last_started_running + current_thread->remaining_time_slice,
-                          sched_timer_tick, NULL);
+        timer_preempt_reset(current_thread->last_started_running + current_thread->remaining_time_slice);
     }
 }
 
@@ -829,7 +832,7 @@ void sched_resched_internal(void) {
             // the preemption timer.
             TRACE_CONTEXT_SWITCH("stop preempt, cpu %u, old %p (%s), new %p (%s)\n",
                                  cpu, oldthread, oldthread->name, newthread, newthread->name);
-            timer_cancel(&percpu[cpu].preempt_timer);
+            timer_preempt_cancel();
         }
     } else {
         // set up a one shot timer to handle the remaining time slice on this thread
@@ -839,9 +842,7 @@ void sched_resched_internal(void) {
         // make sure the time slice is reasonable
         DEBUG_ASSERT(newthread->remaining_time_slice > 0 && newthread->remaining_time_slice < ZX_SEC(1));
 
-        // use a special version of the timer set api that lets it reset an existing timer efficiently, given
-        // that we cannot possibly race with our own timer because interrupts are disabled.
-        timer_reset_oneshot_local(&percpu[cpu].preempt_timer, now + newthread->remaining_time_slice, sched_timer_tick, NULL);
+        timer_preempt_reset(now + newthread->remaining_time_slice);
     }
 
     // set some optional target debug leds

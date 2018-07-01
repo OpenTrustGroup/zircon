@@ -12,10 +12,10 @@
 #include <zircon/processargs.h>
 #include <zircon/syscalls.h>
 
-#include <fdio/io.h>
-#include <fdio/remoteio.h>
-#include <fdio/socket.h>
-#include <fdio/util.h>
+#include <lib/fdio/io.h>
+#include <lib/fdio/remoteio.h>
+#include <lib/fdio/socket.h>
+#include <lib/fdio/util.h>
 
 #include "private-socket.h"
 
@@ -547,6 +547,11 @@ static zx_status_t zxsio_write_control(zxsio_t* sio, zxsio_msg_t* msg) {
         size_t len = ZXSIO_HDR_SZ + msg->datalen;
         if ((r = zx_socket_write(sio->s, ZX_SOCKET_CONTROL, msg, len, &len)) == ZX_OK) {
             return (ssize_t) len;
+        }
+        // If the socket has no control plane then control messages are not
+        // supported.
+        if (r == ZX_ERR_BAD_STATE) {
+            return ZX_ERR_NOT_SUPPORTED;
         }
         if (r == ZX_ERR_SHOULD_WAIT) {
             zx_signals_t pending;

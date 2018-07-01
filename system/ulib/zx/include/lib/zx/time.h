@@ -35,6 +35,10 @@ public:
         return duration(value_ / divisor);
     }
 
+    constexpr duration operator%(duration divisor) const {
+        return duration(value_ % divisor.value_);
+    }
+
     constexpr uint64_t operator/(duration other) const {
         return value_ / other.value_;
     }
@@ -195,7 +199,7 @@ private:
 
 namespace clock {
 
-static inline time get(uint32_t clock_id) {
+static inline time get(zx_clock_t clock_id) {
     return time(zx_clock_get(clock_id));
 }
 

@@ -113,7 +113,7 @@ static zx_status_t platform_dev_get_device_info(void* ctx, pdev_device_info_t* o
     out_info->i2c_channel_count = dev->i2c_channel_count;
     out_info->clk_count = dev->clk_count;
     out_info->bti_count = dev->bti_count;
-    out_info->boot_metadata_count = dev->boot_metadata_count;
+    out_info->metadata_count = dev->metadata_count;
 
     return ZX_OK;
 }
@@ -167,14 +167,6 @@ static zx_status_t pdev_rpc_get_bti(platform_dev_t* dev, uint32_t index, zx_hand
         *out_handle_count = 1;
     }
     return status;
-}
-
-static zx_status_t pdev_rpc_ums_get_initial_mode(platform_dev_t* dev, usb_mode_t* out_mode) {
-    platform_bus_t* bus = dev->bus;
-    if (!bus->ums.ops) {
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-    return usb_mode_switch_get_initial_mode(&bus->ums, out_mode);
 }
 
 static zx_status_t pdev_rpc_ums_set_mode(platform_dev_t* dev, usb_mode_t mode) {
@@ -282,6 +274,23 @@ static zx_status_t pdev_rpc_set_gpio_polarity(platform_dev_t* dev,
     }
     index = dev->gpios[index].gpio;
     return gpio_set_polarity(&bus->gpio, index, flags);
+}
+
+static zx_status_t pdev_rpc_canvas_config(platform_dev_t* dev, zx_handle_t vmo, size_t offset,
+                                          canvas_info_t* info, uint8_t* canvas_idx) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->canvas.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return canvas_config(&bus->canvas, vmo, offset, info, canvas_idx);
+}
+
+static zx_status_t pdev_rpc_canvas_free(platform_dev_t* dev, uint8_t canvas_idx) {
+    platform_bus_t* bus = dev->bus;
+    if (!bus->canvas.ops) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return canvas_free(&bus->canvas, canvas_idx);
 }
 
 static zx_status_t pdev_rpc_mailbox_send_cmd(platform_dev_t* dev,
@@ -400,8 +409,11 @@ static zx_status_t platform_dev_rxrpc(void* ctx, zx_handle_t channel) {
     pdev_req_t* req = &req_data.req;
     pdev_resp_t resp;
     uint32_t len = sizeof(req_data);
+    zx_handle_t in_handle;
+    uint32_t in_handle_count = 1;
 
-    zx_status_t status = zx_channel_read(channel, 0, &req_data, NULL, len, 0, &len, NULL);
+    zx_status_t status = zx_channel_read(channel, 0, &req_data, &in_handle, len, in_handle_count,
+                                        &len, &in_handle_count);
     if (status != ZX_OK) {
         zxlogf(ERROR, "platform_dev_rxrpc: zx_channel_read failed %d\n", status);
         return status;
@@ -424,9 +436,6 @@ static zx_status_t platform_dev_rxrpc(void* ctx, zx_handle_t channel) {
         break;
     case PDEV_GET_DEVICE_INFO:
          resp.status = platform_dev_get_device_info(dev, &resp.info);
-        break;
-    case PDEV_UMS_GET_INITIAL_MODE:
-        resp.status = pdev_rpc_ums_get_initial_mode(dev, &resp.usb_mode);
         break;
     case PDEV_UMS_SET_MODE:
         resp.status = pdev_rpc_ums_set_mode(dev, req->usb_mode);
@@ -493,6 +502,14 @@ static zx_status_t platform_dev_rxrpc(void* ctx, zx_handle_t channel) {
     case PDEV_CLK_DISABLE:
         resp.status = pdev_rpc_clk_disable(dev, req->index);
         break;
+    case PDEV_CANVAS_CONFIG:
+        resp.status = pdev_rpc_canvas_config(dev, in_handle,
+                                             req->canvas.offset, &req->canvas.info,
+                                             &resp.canvas_idx);
+        break;
+    case PDEV_CANCAS_FREE:
+        resp.status = pdev_rpc_canvas_free(dev, req->canvas_idx);
+        break;
     default:
         zxlogf(ERROR, "platform_dev_rxrpc: unknown op %u\n", req->op);
         return ZX_ERR_INTERNAL;
@@ -527,7 +544,7 @@ void platform_dev_free(platform_dev_t* dev) {
     free(dev->i2c_channels);
     free(dev->clks);
     free(dev->btis);
-    free(dev->boot_metadata);
+    free(dev->metadata);
     free(dev);
 }
 
@@ -610,15 +627,15 @@ zx_status_t platform_device_add(platform_bus_t* bus, const pbus_dev_t* pdev, uin
         memcpy(dev->btis, pdev->btis, sz);
         dev->bti_count = pdev->bti_count;
     }
-    if (pdev->boot_metadata_count) {
-        const size_t sz = pdev->boot_metadata_count * sizeof(*pdev->boot_metadata);
-        dev->boot_metadata = malloc(sz);
-        if (!dev->boot_metadata) {
+    if (pdev->metadata_count) {
+        const size_t sz = pdev->metadata_count * sizeof(*pdev->metadata);
+        dev->metadata = malloc(sz);
+        if (!dev->metadata) {
             status = ZX_ERR_NO_MEMORY;
             goto fail;
         }
-        memcpy(dev->boot_metadata, pdev->boot_metadata, sz);
-        dev->boot_metadata_count = pdev->boot_metadata_count;
+        memcpy(dev->metadata, pdev->metadata, sz);
+        dev->metadata_count = pdev->metadata_count;
     }
 
     dev->bus = bus;
@@ -644,18 +661,18 @@ fail:
 }
 
 static zx_status_t platform_device_add_metadata(platform_dev_t* dev, uint32_t index) {
-    uint32_t type = dev->boot_metadata[index].type;
-    uint32_t extra = dev->boot_metadata[index].extra;
+    uint32_t type = dev->metadata[index].type;
+    uint32_t extra = dev->metadata[index].extra;
     platform_bus_t* bus = dev->bus;
     uint8_t* metadata = bus->metadata;
     zx_off_t offset = 0;
 
     while (offset < bus->metadata_size) {
-        bootdata_t* bootdata = (bootdata_t*)metadata;
-        size_t length = BOOTDATA_ALIGN(sizeof(bootdata_t) + bootdata->length);
+        zbi_header_t* header = (zbi_header_t*)metadata;
+        size_t length = ZBI_ALIGN(sizeof(zbi_header_t) + header->length);
 
-        if (bootdata->type == type && bootdata->extra == extra) {
-            return device_add_metadata(dev->zxdev, type, bootdata + 1, length - sizeof(bootdata_t));
+        if (header->type == type && header->extra == extra) {
+            return device_add_metadata(dev->zxdev, type, header + 1, length - sizeof(zbi_header_t));
         }
         metadata += length;
         offset += length;
@@ -694,7 +711,7 @@ zx_status_t platform_device_enable(platform_dev_t* dev, bool enable) {
             .prop_count = countof(props),
             .proxy_args = (new_devhost ? argstr : NULL),
             .flags = (new_devhost ? DEVICE_ADD_MUST_ISOLATE : 0) |
-                     (dev->boot_metadata_count ? DEVICE_ADD_INVISIBLE : 0),
+                     (dev->metadata_count ? DEVICE_ADD_INVISIBLE : 0),
         };
         // add PCI root at top level
         zx_device_t* parent = dev->bus->zxdev;
@@ -702,7 +719,7 @@ zx_status_t platform_device_enable(platform_dev_t* dev, bool enable) {
             parent = device_get_parent(parent);
         }
 
-        if (dev->boot_metadata_count) {
+        if (dev->metadata_count) {
             // keep device invisible until we add its metadata
             args.flags |= DEVICE_ADD_INVISIBLE;
         }
@@ -711,10 +728,10 @@ zx_status_t platform_device_enable(platform_dev_t* dev, bool enable) {
             return status;
         }
 
-        if (dev->boot_metadata_count) {
-            for (uint32_t i = 0; i < dev->boot_metadata_count; i++) {
-                pbus_boot_metadata_t* pbm = &dev->boot_metadata[i];
-                if (pbm->data && pbm->len && is_driver_meta(pbm->type)) {
+        if (dev->metadata_count) {
+            for (uint32_t i = 0; i < dev->metadata_count; i++) {
+                pbus_metadata_t* pbm = &dev->metadata[i];
+                if (pbm->data && pbm->len) {
                     device_add_metadata(dev->zxdev, pbm->type, pbm->data, pbm->len);
                 } else {
                     platform_device_add_metadata(dev, i);

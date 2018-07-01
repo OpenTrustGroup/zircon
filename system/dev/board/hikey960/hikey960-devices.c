@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <ddk/debug.h>
+#include <ddk/metadata.h>
 #include <ddk/protocol/platform-defs.h>
 #include <soc/hi3660/hi3660-hw.h>
 
@@ -13,7 +14,7 @@
 
 // #define GPIO_TEST 1
 // #define I2C_TEST 1
-#define DSI_ENABLE 1
+//#define DSI_ENABLE 1
 
 static const pbus_mmio_t dwc3_mmios[] = {
     {
@@ -36,6 +37,17 @@ static const pbus_bti_t dwc3_btis[] = {
     },
 };
 
+static usb_mode_t dwc3_mode = USB_MODE_HOST;
+
+static const pbus_metadata_t dwc2_metadata[] = {
+    {
+        .type       = DEVICE_METADATA_USB_MODE,
+        .extra      = 0,
+        .data       = &dwc3_mode,
+        .len        = sizeof(dwc3_mode),
+    }
+};
+
 static const pbus_dev_t dwc3_dev = {
     .name = "dwc3",
     .vid = PDEV_VID_GENERIC,
@@ -47,6 +59,8 @@ static const pbus_dev_t dwc3_dev = {
     .irq_count = countof(dwc3_irqs),
     .btis = dwc3_btis,
     .bti_count = countof(dwc3_btis),
+    .metadata = dwc2_metadata,
+    .metadata_count = countof(dwc2_metadata),
 };
 
 #ifdef DSI_ENABLE
@@ -110,40 +124,6 @@ static const pbus_dev_t dsi_dev = {
     .bti_count = countof(dsi_btis),
 };
 #endif
-
-static const pbus_mmio_t xhci_mmios[] = {
-    {
-        .base = MMIO_USB3OTG_BASE,
-        .length = MMIO_USB3OTG_LENGTH,
-    },
-};
-
-static const pbus_irq_t xhci_irqs[] = {
-    {
-        .irq = IRQ_USB3,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-};
-
-static const pbus_bti_t xhci_btis[] = {
-    {
-        .iommu_index = 0,
-        .bti_id = BTI_USB_XHCI,
-    },
-};
-
-static const pbus_dev_t xhci_dev = {
-    .name = "dwc3-xhci",
-    .vid = PDEV_VID_GENERIC,
-    .pid = PDEV_PID_GENERIC,
-    .did = PDEV_DID_USB_XHCI,
-    .mmios = xhci_mmios,
-    .mmio_count = countof(xhci_mmios),
-    .irqs = xhci_irqs,
-    .irq_count = countof(xhci_irqs),
-    .btis = xhci_btis,
-    .bti_count = countof(xhci_btis),
-};
 
 static const pbus_mmio_t mali_mmios[] = {
     {
@@ -236,35 +216,30 @@ zx_status_t hikey960_add_devices(hikey960_t* hikey) {
     zx_status_t status;
 
     if ((status = pbus_device_add(&hikey->pbus, &dwc3_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "hi3360_add_devices could not add dwc3_dev: %d\n", status);
-        return status;
-    }
-    // xhci_dev is enabled/disabled dynamically, so don't enable it here
-    if ((status = pbus_device_add(&hikey->pbus, &xhci_dev, PDEV_ADD_DISABLED)) != ZX_OK) {
-        zxlogf(ERROR, "hi3360_add_devices could not add xhci_dev: %d\n", status);
+        zxlogf(ERROR, "hikey960_add_devices could not add dwc3_dev: %d\n", status);
         return status;
     }
     if ((status = pbus_device_add(&hikey->pbus, &mali_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "hi3360_add_devices could not add mali_dev: %d\n", status);
+        zxlogf(ERROR, "hikey960_add_devices could not add mali_dev: %d\n", status);
         return status;
     }
 #ifdef DSI_ENABLE
     if ((status = pbus_device_add(&hikey->pbus, &dsi_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "hi3360_add_devices could not add dsi_dev: %d\n", status);
+        zxlogf(ERROR, "hikey960_add_devices could not add dsi_dev: %d\n", status);
         return status;
     }
 #endif
 
 #if GPIO_TEST
     if ((status = pbus_device_add(&hikey->pbus, &gpio_test_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "hi3360_add_devices could not add gpio_test_dev: %d\n", status);
+        zxlogf(ERROR, "hikey960_add_devices could not add gpio_test_dev: %d\n", status);
         return status;
     }
 #endif
 
 #if I2C_TEST
     if ((status = pbus_device_add(&hikey->pbus, &i2c_test_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "hi3360_add_devices could not add i2c_test_dev: %d\n", status);
+        zxlogf(ERROR, "hikey960_add_devices could not add i2c_test_dev: %d\n", status);
         return status;
     }
 #endif

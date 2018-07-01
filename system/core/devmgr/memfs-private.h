@@ -7,13 +7,13 @@
 #include <zircon/compiler.h>
 #include <zircon/thread_annotations.h>
 #include <zircon/types.h>
-#include <fdio/io.h>
-#include <fdio/remoteio.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/io.h>
+#include <lib/fdio/remoteio.h>
+#include <lib/fdio/vfs.h>
 
 #ifdef __cplusplus
 
-#include <memfs/vnode.h>
+#include <lib/memfs/cpp/vnode.h>
 
 using VnodeMemfs = memfs::VnodeMemfs;
 using VnodeDir = memfs::VnodeDir;

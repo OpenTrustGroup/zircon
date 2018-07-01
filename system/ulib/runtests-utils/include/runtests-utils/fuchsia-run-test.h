@@ -6,17 +6,19 @@
 
 #include <stdio.h>
 
+#include <fbl/unique_ptr.h>
 #include <runtests-utils/runtests-utils.h>
 
 namespace runtests {
 
 // Invokes a Fuchsia test binary and writes its output to a file.
 //
-// |argv| is list of argument strings passed to the test program.
-// |argc| is the number of strings in argv.
-// |out| is a file stream to which the test binary's output will be written. May be
-//   nullptr, in which output will not be redirected.
-//
-Result FuchsiaRunTest(const char* argv[], int argc, FILE* out);
+// |argv| is a null-terminated array of argument strings passed to the test
+//   program.
+// |output_filename| is the name of the file to which the test binary's output
+//   will be written. May be nullptr, in which case the output will not be
+//   redirected.
+fbl::unique_ptr<Result> FuchsiaRunTest(const char* argv[],
+                                       const char* output_filename);
 
 } // namespace runtests

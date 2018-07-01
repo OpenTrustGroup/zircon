@@ -236,7 +236,7 @@ std::string NameHandleZXObjType(types::HandleSubtype subtype) {
     case types::HandleSubtype::kResource:
         return "ZX_OBJ_TYPE_RESOURCE";
     case types::HandleSubtype::kEventpair:
-        return "ZX_OBJ_TYPE_EVENT_PAIR";
+        return "ZX_OBJ_TYPE_EVENTPAIR";
     case types::HandleSubtype::kJob:
         return "ZX_OBJ_TYPE_JOB";
     case types::HandleSubtype::kVmar:
@@ -282,6 +282,42 @@ std::string NameFlatCType(const flat::Type* type) {
             std::string name = NameName(identifier_type->name, "_", "_");
             if (identifier_type->nullability == types::Nullability::kNullable) {
                 name.push_back('*');
+            }
+            return name;
+        }
+        }
+    }
+}
+
+std::string NameFlatCOutType(const flat::Type* type) {
+    for (;;) {
+        switch (type->kind) {
+        case flat::Type::Kind::kHandle:
+        case flat::Type::Kind::kRequestHandle:
+            return "zx_handle_t*";
+
+        case flat::Type::Kind::kVector:
+            return "fidl_vector_t*";
+        case flat::Type::Kind::kString:
+            return "fidl_string_t*";
+
+        case flat::Type::Kind::kPrimitive: {
+            auto primitive_type = static_cast<const flat::PrimitiveType*>(type);
+            return NamePrimitiveCType(primitive_type->subtype) + "*";
+        }
+
+        case flat::Type::Kind::kArray: {
+            auto array_type = static_cast<const flat::ArrayType*>(type);
+            type = array_type->element_type.get();
+            continue;
+        }
+
+        case flat::Type::Kind::kIdentifier: {
+            auto identifier_type = static_cast<const flat::IdentifierType*>(type);
+            std::string name = NameName(identifier_type->name, "_", "_") + "*";
+            if (identifier_type->nullability == types::Nullability::kNullable) {
+                // Cannot make an out type for nullable types.
+                abort();
             }
             return name;
         }

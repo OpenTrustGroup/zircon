@@ -146,6 +146,8 @@ static void init_uart() {
     // enable FIFO, rx FIFO reset, tx FIFO reset, 16750 64 byte fifo enable,
     // Rx FIFO irq trigger level at 14-bytes
     uart_write(2, 0xe7);
+    // Drive flow control bits high since we don't actively manage them
+    uart_write(4, 0x3);
 
     /* figure out the fifo depth */
     uint8_t fcr = uart_read(2);
@@ -161,7 +163,7 @@ static void init_uart() {
 }
 
 bool platform_serial_enabled() {
-    return bootloader.uart.type != BOOTDATA_UART_NONE;
+    return bootloader.uart.type != ZBI_UART_NONE;
 }
 
 // This just initializes the default serial console to be disabled.
@@ -169,7 +171,7 @@ bool platform_serial_enabled() {
 // bootloader structure because our C++ compiler doesn't support non-trivial
 // designated initializers.
 void pc_init_debug_default_early() {
-    bootloader.uart.type = BOOTDATA_UART_NONE;
+    bootloader.uart.type = ZBI_UART_NONE;
 }
 
 static void handle_serial_cmdline() {
@@ -178,11 +180,11 @@ static void handle_serial_cmdline() {
         return;
     }
     if (!strcmp(serial_mode, "none")) {
-        bootloader.uart.type = BOOTDATA_UART_NONE;
+        bootloader.uart.type = ZBI_UART_NONE;
         return;
     }
     if (!strcmp(serial_mode, "legacy")) {
-        bootloader.uart.type = BOOTDATA_UART_PC_PORT;
+        bootloader.uart.type = ZBI_UART_PC_PORT;
         bootloader.uart.base = 0x3f8;
         bootloader.uart.irq = ISA_IRQ_SERIAL1;
         return;
@@ -221,9 +223,9 @@ static void handle_serial_cmdline() {
     memcpy(type_buf, serial_mode, type_len);
     type_buf[type_len] = 0;
     if (!strcmp(type_buf, "ioport")) {
-        bootloader.uart.type = BOOTDATA_UART_PC_PORT;
+        bootloader.uart.type = ZBI_UART_PC_PORT;
     } else if (!strcmp(type_buf, "mmio")) {
-        bootloader.uart.type = BOOTDATA_UART_PC_MMIO;
+        bootloader.uart.type = ZBI_UART_PC_MMIO;
     } else {
         goto bail;
     }
@@ -253,7 +255,7 @@ static void handle_serial_cmdline() {
     return;
 
 bail:
-    bootloader.uart.type = BOOTDATA_UART_NONE;
+    bootloader.uart.type = ZBI_UART_NONE;
     return;
 }
 
@@ -261,17 +263,17 @@ void pc_init_debug_early() {
     handle_serial_cmdline();
 
     switch (bootloader.uart.type) {
-    case BOOTDATA_UART_PC_PORT:
+    case ZBI_UART_PC_PORT:
         uart_io_port = static_cast<uint32_t>(bootloader.uart.base);
         uart_irq = bootloader.uart.irq;
         break;
-    case BOOTDATA_UART_PC_MMIO:
+    case ZBI_UART_PC_MMIO:
         uart_mem_addr = (uint64_t)paddr_to_physmap(bootloader.uart.base);
         uart_irq = bootloader.uart.irq;
         break;
-    case BOOTDATA_UART_NONE: // fallthrough
+    case ZBI_UART_NONE: // fallthrough
     default:
-        bootloader.uart.type = BOOTDATA_UART_NONE;
+        bootloader.uart.type = ZBI_UART_NONE;
         return;
     }
 

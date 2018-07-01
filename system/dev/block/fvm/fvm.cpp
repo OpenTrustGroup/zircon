@@ -125,9 +125,6 @@ zx_status_t VPartitionManager::DoIoLocked(zx_handle_t vmo, size_t off,
     size_t block_size = info_.block_size;
     size_t max_transfer = info_.max_transfer_size / block_size;
     size_t len_remaining = len / block_size;
-    if (max_transfer == 0) {
-        max_transfer = len_remaining;
-    }
     size_t vmo_offset = 0;
     size_t dev_offset = off / block_size;
     size_t num_txns = fbl::round_up(len_remaining, max_transfer) / max_transfer;
@@ -229,9 +226,9 @@ zx_status_t VPartitionManager::Load() {
 
     metadata_size_ = fvm::MetadataSize(DiskSize(), SliceSize());
     // Now that the slice size is known, read the rest of the metadata
-    auto make_metadata_vmo = [&](size_t offset, fbl::unique_ptr<MappedVmo>* out) {
-        fbl::unique_ptr<MappedVmo> mvmo;
-        zx_status_t status = MappedVmo::Create(MetadataSize(), "fvm-meta", &mvmo);
+    auto make_metadata_vmo = [&](size_t offset, fbl::unique_ptr<fs::MappedVmo>* out) {
+        fbl::unique_ptr<fs::MappedVmo> mvmo;
+        zx_status_t status = fs::MappedVmo::Create(MetadataSize(), "fvm-meta", &mvmo);
         if (status != ZX_OK) {
             return status;
         }
@@ -246,12 +243,12 @@ zx_status_t VPartitionManager::Load() {
         return ZX_OK;
     };
 
-    fbl::unique_ptr<MappedVmo> mvmo;
+    fbl::unique_ptr<fs::MappedVmo> mvmo;
     if ((status = make_metadata_vmo(0, &mvmo)) != ZX_OK) {
         fprintf(stderr, "fvm: Failed to load metadata vmo: %d\n", status);
         return status;
     }
-    fbl::unique_ptr<MappedVmo> mvmo_backup;
+    fbl::unique_ptr<fs::MappedVmo> mvmo_backup;
     if ((status = make_metadata_vmo(MetadataSize(), &mvmo_backup)) != ZX_OK) {
         fprintf(stderr, "fvm: Failed to load backup metadata vmo: %d\n", status);
         return status;
@@ -294,16 +291,16 @@ zx_status_t VPartitionManager::Load() {
     // of VPartitions.
     for (uint32_t i = 1; i <= GetFvmLocked()->pslice_count; i++) {
         const slice_entry_t* entry = GetSliceEntryLocked(i);
-        if (entry->vpart == FVM_SLICE_FREE) {
+        if (entry->Vpart() == FVM_SLICE_ENTRY_FREE) {
             continue;
         }
-        if (vpartitions[entry->vpart] == nullptr) {
+        if (vpartitions[entry->Vpart()] == nullptr) {
             continue;
         }
 
         // It's fine to load the slices while not holding the vpartition
         // lock; no VPartition devices exist yet.
-        vpartitions[entry->vpart]->SliceSetUnsafe(entry->vslice, i);
+        vpartitions[entry->Vpart()]->SliceSetUnsafe(entry->Vslice(), i);
     }
 
     lock.release();
@@ -360,13 +357,13 @@ zx_status_t VPartitionManager::FindFreeSliceLocked(size_t* out, size_t hint) con
     const size_t maxSlices = UsableSlicesCount(DiskSize(), SliceSize());
     hint = fbl::max(hint, 1lu);
     for (size_t i = hint; i <= maxSlices; i++) {
-        if (GetSliceEntryLocked(i)->vpart == 0) {
+        if (GetSliceEntryLocked(i)->Vpart() == 0) {
             *out = i;
             return ZX_OK;
         }
     }
     for (size_t i = 1; i < hint; i++) {
-        if (GetSliceEntryLocked(i)->vpart == 0) {
+        if (GetSliceEntryLocked(i)->Vpart() == 0) {
             *out = i;
             return ZX_OK;
         }
@@ -405,7 +402,7 @@ zx_status_t VPartitionManager::AllocateSlicesLocked(VPartition* vp, size_t vslic
                 ((status = vp->SliceSetLocked(vslice, static_cast<uint32_t>(pslice)) != ZX_OK))) {
                 for (int j = static_cast<int>(i - 1); j >= 0; j--) {
                     vslice = vslice_start + j;
-                    GetSliceEntryLocked(vp->SliceGetLocked(vslice))->vpart = PSLICE_UNALLOCATED;
+                    GetSliceEntryLocked(vp->SliceGetLocked(vslice))->SetVpart(FVM_SLICE_ENTRY_FREE);
                     vp->SliceFreeLocked(vslice);
                 }
 
@@ -415,8 +412,8 @@ zx_status_t VPartitionManager::AllocateSlicesLocked(VPartition* vp, size_t vslic
             auto vpart = vp->GetEntryIndex();
             ZX_DEBUG_ASSERT(vpart <= VPART_MAX);
             ZX_DEBUG_ASSERT(vslice <= VSLICE_MAX);
-            alloc_entry->vpart = vpart & VPART_MAX;
-            alloc_entry->vslice = vslice & VSLICE_MAX;
+            alloc_entry->SetVpart(vpart);
+            alloc_entry->SetVslice(vslice);
             hint = pslice + 1;
         }
     }
@@ -427,7 +424,7 @@ zx_status_t VPartitionManager::AllocateSlicesLocked(VPartition* vp, size_t vslic
         fbl::AutoLock lock(&vp->lock_);
         for (int j = static_cast<int>(count - 1); j >= 0; j--) {
             auto vslice = vslice_start + j;
-            GetSliceEntryLocked(vp->SliceGetLocked(vslice))->vpart = PSLICE_UNALLOCATED;
+            GetSliceEntryLocked(vp->SliceGetLocked(vslice))->SetVpart(FVM_SLICE_ENTRY_FREE);
             vp->SliceFreeLocked(vslice);
         }
     }
@@ -500,7 +497,7 @@ zx_status_t VPartitionManager::FreeSlicesLocked(VPartition* vp, size_t vslice_st
             // Special case: Freeing entire VPartition
             for (auto extent = vp->ExtentBegin(); extent.IsValid(); extent = vp->ExtentBegin()) {
                 for (size_t i = extent->start(); i < extent->end(); i++) {
-                    GetSliceEntryLocked(vp->SliceGetLocked(i))->vpart = PSLICE_UNALLOCATED;
+                    GetSliceEntryLocked(vp->SliceGetLocked(i))->SetVpart(FVM_SLICE_ENTRY_FREE);
                 }
                 vp->ExtentDestroyLocked(extent->start());
             }
@@ -526,7 +523,7 @@ zx_status_t VPartitionManager::FreeSlicesLocked(VPartition* vp, size_t vslice_st
                     } else {
                         ZX_ASSERT(vp->SliceFreeLocked(vslice));
                     }
-                    GetSliceEntryLocked(pslice)->vpart = 0;
+                    GetSliceEntryLocked(pslice)->SetVpart(FVM_SLICE_ENTRY_FREE);
                     freed_something = true;
                 }
             }
@@ -963,7 +960,7 @@ void VPartition::BlockQueue(block_op_t* txn) {
     if (vslice_start == vslice_end) {
         // Common case: txn occurs within one slice
         uint32_t pslice = SliceGetLocked(vslice_start);
-        if (pslice == FVM_SLICE_FREE) {
+        if (pslice == PSLICE_UNALLOCATED) {
             txn->completion_cb(txn, ZX_ERR_OUT_OF_RANGE);
             return;
         }
@@ -979,7 +976,7 @@ void VPartition::BlockQueue(block_op_t* txn) {
     // If any are missing, then this txn will fail.
     bool contiguous = true;
     for (size_t vslice = vslice_start; vslice <= vslice_end; vslice++) {
-        if (SliceGetLocked(vslice) == FVM_SLICE_FREE) {
+        if (SliceGetLocked(vslice) == PSLICE_UNALLOCATED) {
             txn->completion_cb(txn, ZX_ERR_OUT_OF_RANGE);
             return;
         }

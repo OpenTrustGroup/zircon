@@ -4,6 +4,7 @@
 
 #include "fidl/c_generator.h"
 
+#include "fidl/attributes.h"
 #include "fidl/names.h"
 
 namespace fidl {
@@ -51,6 +52,29 @@ void EmitEndExternC(std::ostream* file) {
 
 void EmitBlank(std::ostream* file) {
     *file << "\n";
+}
+
+void EmitMemberDecl(std::ostream* file, const CGenerator::Member& member) {
+    *file << member.type << " " << member.name;
+    for (uint32_t array_count : member.array_counts) {
+        *file << "[" << array_count << "]";
+    }
+}
+
+void EmitClientMethodDecl(std::ostream* file, StringView method_name,
+                          const std::vector<CGenerator::Member>& request,
+                          const std::vector<CGenerator::Member>& response) {
+    *file << "zx_status_t " << method_name << "(zx_handle_t _channel";
+    for (const auto& member : request) {
+        *file << ", ";
+        EmitMemberDecl(file, member);
+    }
+    for (auto member : response) {
+        *file << ", ";
+        member.name = "out_" + member.name;
+        EmitMemberDecl(file, member);
+    }
+    *file << ")";
 }
 
 // Various computational helper routines.
@@ -165,9 +189,11 @@ std::vector<uint32_t> ArrayCounts(const flat::Library* library, const flat::Type
     }
 }
 
-CGenerator::Member CreateMember(const flat::Library* library, const flat::Type* type,
-                                StringView name) {
-    auto type_name = NameFlatCType(type);
+template <typename T, std::string NameType(const flat::Type*) = NameFlatCType>
+CGenerator::Member CreateMember(const flat::Library* library, const T& decl) {
+    std::string name = NameIdentifier(decl.name);
+    const flat::Type* type = decl.type.get();
+    auto type_name = NameType(type);
     std::vector<uint32_t> array_counts = ArrayCounts(library, type);
     return CGenerator::Member{type_name, name, std::move(array_counts)};
 }
@@ -178,82 +204,94 @@ GenerateMembers(const flat::Library* library,
     std::vector<CGenerator::Member> members;
     members.reserve(union_members.size());
     for (const auto& union_member : union_members) {
-        const flat::Type* union_member_type = union_member.type.get();
-        auto union_member_name = NameIdentifier(union_member.name);
-        members.push_back(CreateMember(library, union_member_type, union_member_name));
+        members.push_back(CreateMember(library, union_member));
     }
     return members;
+}
+
+void GetMethodParameters(const flat::Library* library,
+                         const CGenerator::NamedMethod& method_info,
+                         std::vector<CGenerator::Member>* request,
+                         std::vector<CGenerator::Member>* response) {
+
+    request->reserve(method_info.request->parameters.size());
+    for (const auto& parameter : method_info.request->parameters) {
+        request->push_back(CreateMember(library, parameter));
+    }
+
+    if (method_info.response) {
+        response->reserve(method_info.request->parameters.size());
+        for (const auto& parameter : method_info.response->parameters) {
+            response->push_back(CreateMember<flat::Interface::Method::Parameter, NameFlatCOutType>(library, parameter));
+        }
+    }
 }
 
 } // namespace
 
 void CGenerator::GeneratePrologues() {
-    EmitFileComment(&header_file_);
-    EmitHeaderGuard(&header_file_);
-    EmitBlank(&header_file_);
-    EmitIncludeHeader(&header_file_, "<stdalign.h>");
-    EmitIncludeHeader(&header_file_, "<stdbool.h>");
-    EmitIncludeHeader(&header_file_, "<stdint.h>");
-    EmitIncludeHeader(&header_file_, "<zircon/fidl.h>");
-    EmitIncludeHeader(&header_file_, "<zircon/syscalls/object.h>");
-    EmitIncludeHeader(&header_file_, "<zircon/types.h>");
+    EmitFileComment(&file_);
+    EmitHeaderGuard(&file_);
+    EmitBlank(&file_);
+    EmitIncludeHeader(&file_, "<stdalign.h>");
+    EmitIncludeHeader(&file_, "<stdbool.h>");
+    EmitIncludeHeader(&file_, "<stdint.h>");
+    EmitIncludeHeader(&file_, "<zircon/fidl.h>");
+    EmitIncludeHeader(&file_, "<zircon/syscalls/object.h>");
+    EmitIncludeHeader(&file_, "<zircon/types.h>");
     for (const auto& pair : *library_->dependencies_) {
         if (pair.second.get() == library_)
             continue;
-        EmitIncludeHeader(&header_file_, "<" + NameLibraryCHeader(pair.first) + ">");
+        EmitIncludeHeader(&file_, "<" + NameLibraryCHeader(pair.first) + ">");
     }
-    EmitBlank(&header_file_);
-    EmitBeginExternC(&header_file_);
-    EmitBlank(&header_file_);
+    EmitBlank(&file_);
+    EmitBeginExternC(&file_);
+    EmitBlank(&file_);
 }
 
 void CGenerator::GenerateEpilogues() {
-    EmitEndExternC(&header_file_);
+    EmitEndExternC(&file_);
 }
 
 void CGenerator::GenerateIntegerDefine(StringView name, types::PrimitiveSubtype subtype,
                                        StringView value) {
     std::string literal_macro = NamePrimitiveIntegerCConstantMacro(subtype);
-    header_file_ << "#define " << name << " " << literal_macro << "(" << value << ")\n";
+    file_ << "#define " << name << " " << literal_macro << "(" << value << ")\n";
 }
 
 void CGenerator::GenerateIntegerTypedef(types::PrimitiveSubtype subtype, StringView name) {
     std::string underlying_type = NamePrimitiveCType(subtype);
-    header_file_ << "typedef " << underlying_type << " " << name << ";\n";
+    file_ << "typedef " << underlying_type << " " << name << ";\n";
 }
 
 void CGenerator::GenerateStructTypedef(StringView name) {
-    header_file_ << "typedef struct " << name << " " << name << ";\n";
+    file_ << "typedef struct " << name << " " << name << ";\n";
 }
 
 void CGenerator::GenerateStructDeclaration(StringView name, const std::vector<Member>& members) {
-    header_file_ << "struct " << name << " {\n";
-    header_file_ << kIndent << "FIDL_ALIGNDECL\n";
+    file_ << "struct " << name << " {\n";
+    file_ << kIndent << "FIDL_ALIGNDECL\n";
     for (const auto& member : members) {
-        header_file_ << kIndent << member.type << " " << member.name;
-        for (uint32_t array_count : member.array_counts) {
-            header_file_ << "[" << array_count << "]";
-        }
-        header_file_ << ";\n";
+        file_ << kIndent;
+        EmitMemberDecl(&file_, member);
+        file_ << ";\n";
     }
-    header_file_ << "};\n";
+    file_ << "};\n";
 }
 
 void CGenerator::GenerateTaggedUnionDeclaration(StringView name,
                                                 const std::vector<Member>& members) {
-    header_file_ << "struct " << name << " {\n";
-    header_file_ << kIndent << "FIDL_ALIGNDECL\n";
-    header_file_ << kIndent << "fidl_union_tag_t tag;\n";
-    header_file_ << kIndent << "union {\n";
+    file_ << "struct " << name << " {\n";
+    file_ << kIndent << "FIDL_ALIGNDECL\n";
+    file_ << kIndent << "fidl_union_tag_t tag;\n";
+    file_ << kIndent << "union {\n";
     for (const auto& member : members) {
-        header_file_ << kIndent << kIndent << member.type << " " << member.name;
-        for (uint32_t array_count : member.array_counts) {
-            header_file_ << "[" << array_count << "]";
-        }
-        header_file_ << ";\n";
+        file_ << kIndent << kIndent;
+        EmitMemberDecl(&file_, member);
+        file_ << ";\n";
     }
-    header_file_ << kIndent << "};\n";
-    header_file_ << "};\n";
+    file_ << kIndent << "};\n";
+    file_ << "};\n";
 }
 
 // TODO(TO-702) These should maybe check for global name
@@ -288,6 +326,7 @@ CGenerator::NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& 
             std::string method_name = NameMethod(interface_name, method);
             named_method.ordinal = method.ordinal.Value();
             named_method.ordinal_name = NameOrdinal(method_name);
+            named_method.c_name = method_name;
             if (method.maybe_request != nullptr) {
                 std::string c_name = NameMessage(method_name, types::MessageKind::kRequest);
                 std::string coded_name = NameTable(c_name);
@@ -353,13 +392,13 @@ void CGenerator::ProduceEnumForwardDeclaration(const NamedEnum& named_enum) {
         GenerateIntegerDefine(member_name, subtype, std::move(member_value));
     }
 
-    EmitBlank(&header_file_);
+    EmitBlank(&file_);
 }
 
 void CGenerator::ProduceInterfaceForwardDeclaration(const NamedInterface& named_interface) {
     for (const auto& method_info : named_interface.methods) {
-        header_file_ << "#define " << method_info.ordinal_name << " ((uint32_t)"
-                     << method_info.ordinal << ")\n";
+        file_ << "#define " << method_info.ordinal_name << " ((uint32_t)"
+              << method_info.ordinal << ")\n";
         if (method_info.request)
             GenerateStructTypedef(method_info.request->c_name);
         if (method_info.response)
@@ -378,10 +417,10 @@ void CGenerator::ProduceUnionForwardDeclaration(const NamedUnion& named_union) {
 void CGenerator::ProduceInterfaceExternDeclaration(const NamedInterface& named_interface) {
     for (const auto& method_info : named_interface.methods) {
         if (method_info.request)
-            header_file_ << "extern const fidl_type_t " << method_info.request->coded_name << ";\n";
+            file_ << "extern const fidl_type_t " << method_info.request->coded_name << ";\n";
         if (method_info.response)
-            header_file_ << "extern const fidl_type_t " << method_info.response->coded_name
-                         << ";\n";
+            file_ << "extern const fidl_type_t " << method_info.response->coded_name
+                  << ";\n";
     }
 }
 
@@ -389,7 +428,7 @@ void CGenerator::ProduceConstDeclaration(const NamedConst& named_const) {
     // TODO(TO-702)
     static_cast<void>(named_const);
 
-    EmitBlank(&header_file_);
+    EmitBlank(&file_);
 }
 
 void CGenerator::ProduceMessageDeclaration(const NamedMessage& named_message) {
@@ -397,13 +436,12 @@ void CGenerator::ProduceMessageDeclaration(const NamedMessage& named_message) {
     members.reserve(1 + named_message.parameters.size());
     members.push_back(MessageHeader());
     for (const auto& parameter : named_message.parameters) {
-        auto parameter_name = NameIdentifier(parameter.name);
-        members.push_back(CreateMember(library_, parameter.type.get(), parameter_name));
+        members.push_back(CreateMember(library_, parameter));
     }
 
     GenerateStructDeclaration(named_message.c_name, members);
 
-    EmitBlank(&header_file_);
+    EmitBlank(&file_);
 }
 
 void CGenerator::ProduceInterfaceDeclaration(const NamedInterface& named_interface) {
@@ -419,13 +457,12 @@ void CGenerator::ProduceStructDeclaration(const NamedStruct& named_struct) {
     std::vector<CGenerator::Member> members;
     members.reserve(named_struct.struct_info.members.size());
     for (const auto& struct_member : named_struct.struct_info.members) {
-        auto struct_member_name = NameIdentifier(struct_member.name);
-        members.push_back(CreateMember(library_, struct_member.type.get(), struct_member_name));
+        members.push_back(CreateMember(library_, struct_member));
     }
 
     GenerateStructDeclaration(named_struct.c_name, members);
 
-    EmitBlank(&header_file_);
+    EmitBlank(&file_);
 }
 
 void CGenerator::ProduceUnionDeclaration(const NamedUnion& named_union) {
@@ -443,10 +480,112 @@ void CGenerator::ProduceUnionDeclaration(const NamedUnion& named_union) {
         ++tag;
     }
 
-    EmitBlank(&header_file_);
+    EmitBlank(&file_);
 }
 
-std::ostringstream CGenerator::Produce() {
+void CGenerator::ProduceInterfaceClientDeclaration(const NamedInterface& named_interface) {
+    for (const auto& method_info : named_interface.methods) {
+        if (!method_info.request)
+            continue;
+        std::vector<Member> request;
+        std::vector<Member> response;
+        GetMethodParameters(library_, method_info, &request, &response);
+        EmitClientMethodDecl(&file_, method_info.c_name, request, response);
+        file_ << ";\n";
+    }
+
+    EmitBlank(&file_);
+}
+
+void CGenerator::ProduceInterfaceClientImplementation(const NamedInterface& named_interface) {
+    for (const auto& method_info : named_interface.methods) {
+        if (!method_info.request)
+            continue;
+        std::vector<Member> request;
+        std::vector<Member> response;
+        GetMethodParameters(library_, method_info, &request, &response);
+        EmitClientMethodDecl(&file_, method_info.c_name, request, response);
+        // TODO(FIDL-162): Compute max_wr_handles.
+        uint32_t max_wr_handles = 0;
+
+        file_ << "{\n";
+        file_ << kIndent << method_info.request->c_name << " _request;\n";
+        // TODO(FIDL-162): Allocate message space for input strings.
+        file_ << kIndent << "uint32_t _wr_num_bytes = sizeof(_request);\n";
+        file_ << kIndent << "memset(&_request, 0, _wr_num_bytes);\n";
+        file_ << kIndent << "_request.hdr.ordinal = " << method_info.ordinal << ";\n";
+        for (const auto& member : request) {
+            const auto& name = member.name;
+            file_ << kIndent << "memcpy(&_request." << name << ", &" << name << ", sizeof(_request." << name << ");\n";
+            // TODO(FIDL-162): Copy string data into the request.
+        }
+        StringView wr_handles = "NULL";
+        if (max_wr_handles > 0) {
+            wr_handles = "_wr_handles";
+            file_ << kIndent << "zx_handle_t _wr_handles[" << max_wr_handles << "];\n";
+        }
+        file_ << kIndent << "uint32_t _wr_num_handles = 0u;\n";
+        file_ << kIndent << "zx_status_t _status = fidl_encode(&" << method_info.request->coded_name
+              << ", &_request, _wr_num_bytes, " << wr_handles << ", " << max_wr_handles
+              << ", &_wr_num_handles, NULL);\n";
+        // TODO(FIDL-162): Clean up handles on error.
+        file_ << kIndent << "if (_status != ZX_OK)\n";
+        file_ << kIndent << kIndent << "return _status;\n";
+        if (!method_info.response) {
+            file_ << kIndent << "return zx_channel_write(_channel, 0u, &_request, _wr_num_bytes, "
+                  << wr_handles << ", _wr_num_handles);\n";
+        } else {
+            // TODO(FIDL-162): Compute max_rd_handles.
+            uint32_t max_rd_handles = 0;
+
+            file_ << kIndent << method_info.response->c_name << " _response;\n";
+            // TODO(FIDL-162): Allocate message space for output strings.
+            file_ << kIndent << "uint32_t _rd_num_bytes = sizeof(_request);\n";
+
+            StringView rd_handles = "NULL";
+            if (max_rd_handles > 0) {
+                rd_handles = "_rd_handles";
+                file_ << kIndent << "zx_handle_t _rd_handles[" << max_rd_handles << "];\n";
+            }
+
+            file_ << kIndent << "zx_channel_call_args_t _args = {\n";
+            file_ << kIndent << kIndent << ".wr_bytes = &_request,\n";
+            file_ << kIndent << kIndent << ".wr_handles = " << wr_handles << ",\n";
+            file_ << kIndent << kIndent << ".rd_bytes = &_response,\n";
+            file_ << kIndent << kIndent << ".rd_handles = " << rd_handles << ",\n";
+            file_ << kIndent << kIndent << ".wr_num_bytes = _wr_num_bytes,\n";
+            file_ << kIndent << kIndent << ".wr_num_handles = _wr_num_handles,\n";
+            file_ << kIndent << kIndent << ".rd_num_bytes = _rd_num_bytes,\n";
+            file_ << kIndent << kIndent << ".rd_num_handles = " << max_rd_handles << ",\n";
+            file_ << kIndent << "};\n";
+
+            file_ << kIndent << "uint32_t _actual_num_bytes = 0u;\n";
+            file_ << kIndent << "uint32_t _actual_num_handles = 0u;\n";
+            file_ << kIndent << "_status = zx_channel_call(_channel, 0u, ZX_TIME_INFINITE, &_args, &_actual_num_bytes, &_actual_num_handles);\n";
+            // TODO(FIDL-162): Clean up handles on error.
+            file_ << kIndent << "if (_status != ZX_OK)\n";
+            file_ << kIndent << kIndent << "return _status;\n";
+
+            // TODO(FIDL-162): Do we need to validate the response ordinal or does fidl_decode do that for us?
+            file_ << kIndent << "_status = fidl_decode(&" << method_info.response->coded_name
+                  << ", &_response, _actual_num_bytes, " << wr_handles << ", _actual_num_handles, NULL);\n";
+            // TODO(FIDL-162): Clean up handles on error.
+            file_ << kIndent << "if (_status != ZX_OK)\n";
+            file_ << kIndent << kIndent << "return _status;\n";
+
+            for (const auto& member : response) {
+                const auto& name = member.name;
+                file_ << kIndent << "memcpy(out_" << name << ", &_response." << name << ", sizeof(*out_" << name << ");\n";
+                // TODO(FIDL-162): Copy string data out of the response.
+            }
+
+            file_ << kIndent << "return ZX_OK;\n";
+        }
+        file_ << "}\n\n";
+    }
+}
+
+std::ostringstream CGenerator::ProduceHeader() {
     GeneratePrologues();
 
     std::map<const flat::Decl*, NamedConst> named_consts =
@@ -459,7 +598,7 @@ std::ostringstream CGenerator::Produce() {
     std::map<const flat::Decl*, NamedUnion> named_unions =
         NameUnions(library_->union_declarations_);
 
-    header_file_ << "\n// Forward declarations\n\n";
+    file_ << "\n// Forward declarations\n\n";
 
     for (const auto* decl : library_->declaration_order_) {
         switch (decl->kind) {
@@ -503,7 +642,7 @@ std::ostringstream CGenerator::Produce() {
         }
     }
 
-    header_file_ << "\n// Extern declarations\n\n";
+    file_ << "\n// Extern declarations\n\n";
 
     for (const auto* decl : library_->declaration_order_) {
         switch (decl->kind) {
@@ -525,14 +664,14 @@ std::ostringstream CGenerator::Produce() {
         }
     }
 
-    header_file_ << "\n// Declarations\n\n";
+    file_ << "\n// Declarations\n\n";
 
     for (const auto* decl : library_->declaration_order_) {
         switch (decl->kind) {
         case flat::Decl::Kind::kConst: {
             auto iter = named_consts.find(decl);
             if (iter != named_consts.end()) {
-                ProduceConstDeclaration(named_consts.find(decl)->second);
+                ProduceConstDeclaration(iter->second);
             }
             break;
         }
@@ -543,21 +682,45 @@ std::ostringstream CGenerator::Produce() {
         case flat::Decl::Kind::kInterface: {
             auto iter = named_interfaces.find(decl);
             if (iter != named_interfaces.end()) {
-                ProduceInterfaceDeclaration(named_interfaces.find(decl)->second);
+                ProduceInterfaceDeclaration(iter->second);
             }
             break;
         }
         case flat::Decl::Kind::kStruct: {
             auto iter = named_structs.find(decl);
             if (iter != named_structs.end()) {
-                ProduceStructDeclaration(named_structs.find(decl)->second);
+                ProduceStructDeclaration(iter->second);
             }
             break;
         }
         case flat::Decl::Kind::kUnion: {
             auto iter = named_unions.find(decl);
             if (iter != named_unions.end()) {
-                ProduceUnionDeclaration(named_unions.find(decl)->second);
+                ProduceUnionDeclaration(iter->second);
+            }
+            break;
+        }
+        default:
+            abort();
+        }
+    }
+
+    file_ << "\n// Simple clients \n\n";
+
+    for (const auto* decl : library_->declaration_order_) {
+        switch (decl->kind) {
+        case flat::Decl::Kind::kConst:
+        case flat::Decl::Kind::kEnum:
+        case flat::Decl::Kind::kStruct:
+        case flat::Decl::Kind::kUnion:
+            // Only interfaces have client declarations.
+            break;
+        case flat::Decl::Kind::kInterface: {
+            if (!HasSimpleLayout(decl))
+                break;
+            auto iter = named_interfaces.find(decl);
+            if (iter != named_interfaces.end()) {
+                ProduceInterfaceClientDeclaration(iter->second);
             }
             break;
         }
@@ -568,7 +731,47 @@ std::ostringstream CGenerator::Produce() {
 
     GenerateEpilogues();
 
-    return std::move(header_file_);
+    return std::move(file_);
+}
+
+std::ostringstream CGenerator::ProduceClient() {
+    EmitFileComment(&file_);
+    EmitIncludeHeader(&file_, "<lib/fidl/coding.h>");
+    EmitIncludeHeader(&file_, "<string.h>");
+    EmitIncludeHeader(&file_, "<zircon/syscalls.h>");
+    EmitIncludeHeader(&file_, "<" + NameLibraryCHeader(library_->name()) + ">");
+    EmitBlank(&file_);
+
+    std::map<const flat::Decl*, NamedInterface> named_interfaces =
+        NameInterfaces(library_->interface_declarations_);
+
+    for (const auto* decl : library_->declaration_order_) {
+        switch (decl->kind) {
+        case flat::Decl::Kind::kConst:
+        case flat::Decl::Kind::kEnum:
+        case flat::Decl::Kind::kStruct:
+        case flat::Decl::Kind::kUnion:
+            // Only interfaces have client implementations.
+            break;
+        case flat::Decl::Kind::kInterface: {
+            if (!HasSimpleLayout(decl))
+                break;
+            auto iter = named_interfaces.find(decl);
+            if (iter != named_interfaces.end()) {
+                ProduceInterfaceClientImplementation(iter->second);
+            }
+            break;
+        }
+        default:
+            abort();
+        }
+    }
+
+    return std::move(file_);
+}
+
+std::ostringstream CGenerator::ProduceServer() {
+    return std::move(file_);
 }
 
 } // namespace fidl

@@ -37,7 +37,7 @@ static void start_main(const struct start_params* p) {
         __libc_extensions_init(p->nhandles, p->handles, p->handle_info,
                                p->namec, p->names);
 
-    // Give any unclaimed handles to zx_get_startup_handle(). This function
+    // Give any unclaimed handles to zx_take_startup_handle(). This function
     // takes ownership of the data, but not the memory: it assumes that the
     // arrays are valid as long as the process is alive.
     __libc_startup_handles_init(p->nhandles, p->handles, p->handle_info);
@@ -56,15 +56,12 @@ __NO_SAFESTACK _Noreturn void __libc_start_main(
     // manglers in the same call to avoid the overhead of two system calls.
     // That means we need a temporary buffer on the stack, which we then
     // want to clear out so the values don't leak there.
-    size_t actual;
     struct randoms {
         uintptr_t stack_guard;
         struct setjmp_manglers setjmp_manglers;
     } randoms;
     static_assert(sizeof(randoms) <= ZX_CPRNG_DRAW_MAX_LEN, "");
-    zx_status_t status = _zx_cprng_draw(&randoms, sizeof(randoms), &actual);
-    if (status != ZX_OK || actual != sizeof(randoms))
-        __builtin_trap();
+    _zx_cprng_draw(&randoms, sizeof(randoms));
     __stack_chk_guard = randoms.stack_guard;
     __setjmp_manglers = randoms.setjmp_manglers;
     // Zero the stack temporaries.
@@ -78,7 +75,7 @@ __NO_SAFESTACK _Noreturn void __libc_start_main(
 
     struct start_params p = { .main = main };
     uint32_t nbytes;
-    status = zxr_message_size(bootstrap, &nbytes, &p.nhandles);
+    zx_status_t status = zxr_message_size(bootstrap, &nbytes, &p.nhandles);
     if (status != ZX_OK)
         nbytes = p.nhandles = 0;
 

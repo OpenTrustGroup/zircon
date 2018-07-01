@@ -26,27 +26,19 @@ namespace fidl {
 
 class CGenerator {
 public:
-    explicit CGenerator(const flat::Library* library) : library_(library) {}
+    explicit CGenerator(const flat::Library* library)
+        : library_(library) {}
 
     ~CGenerator() = default;
 
-    std::ostringstream Produce();
+    std::ostringstream ProduceHeader();
+    std::ostringstream ProduceClient();
+    std::ostringstream ProduceServer();
 
     struct Member {
         std::string type;
         std::string name;
         std::vector<uint32_t> array_counts;
-    };
-
-private:
-    struct NamedConst {
-        std::string name;
-        const flat::Const& const_info;
-    };
-
-    struct NamedEnum {
-        std::string name;
-        const flat::Enum& enum_info;
     };
 
     struct NamedMessage {
@@ -58,8 +50,20 @@ private:
     struct NamedMethod {
         uint32_t ordinal;
         std::string ordinal_name;
+        std::string c_name;
         std::unique_ptr<NamedMessage> request;
         std::unique_ptr<NamedMessage> response;
+    };
+
+private:
+    struct NamedConst {
+        std::string name;
+        const flat::Const& const_info;
+    };
+
+    struct NamedEnum {
+        std::string name;
+        const flat::Enum& enum_info;
     };
 
     struct NamedInterface {
@@ -112,8 +116,11 @@ private:
     void ProduceStructDeclaration(const NamedStruct& named_struct);
     void ProduceUnionDeclaration(const NamedUnion& named_union);
 
+    void ProduceInterfaceClientDeclaration(const NamedInterface& named_interface);
+    void ProduceInterfaceClientImplementation(const NamedInterface& named_interface);
+
     const flat::Library* library_;
-    std::ostringstream header_file_;
+    std::ostringstream file_;
 };
 
 } // namespace fidl

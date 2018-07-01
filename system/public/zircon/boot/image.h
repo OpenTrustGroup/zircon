@@ -116,7 +116,9 @@ typedef struct {
     macro(ZBI_TYPE_DEBUG_UART, "DEBUG_UART", ".bin") \
     macro(ZBI_TYPE_FRAMEBUFFER, "FRAMEBUFFER", ".bin") \
     macro(ZBI_TYPE_DRV_MAC_ADDRESS, "DRV_MAC_ADDRESS", ".bin") \
-    macro(ZBI_TYPE_DRV_PARTITION_MAP, "DRV_PARTITION_MAP", ".bin")
+    macro(ZBI_TYPE_DRV_PARTITION_MAP, "DRV_PARTITION_MAP", ".bin") \
+    macro(ZBI_TYPE_BOOT_CONFIG, "BOOT_CONFIG", ".bin") \
+    macro(ZBI_TYPE_BOOT_VERSION, "BOOT_VERSION", ".bin")
 
 // Each ZBI starts with a container header.
 //     length:          Total size of the image after this header.
@@ -214,9 +216,7 @@ typedef struct {
     zbi_header_t hdr_file;
     zbi_header_t hdr_kernel;
     zbi_kernel_t data_kernel;
-    // Some unspecified amount of available memory follows.
-    // TODO(mcgrathr): Make it hdr_kernel.extra bytes?
-    uint8_t reserved[];
+    uint8_t reserved[/*data_kernel.reserve_memory_size*/];
 } zircon_kernel_t;
 #endif
 
@@ -419,6 +419,14 @@ typedef struct {
 // E820 memory table, an array of e820entry_t.
 #define ZBI_TYPE_E820_TABLE             (0x30323845) // E820
 
+/* EFI Variable for Crash Log */
+#define ZIRCON_VENDOR_GUID \
+    {0x82305eb2, 0xd39e, 0x4575, {0xa0, 0xc8, 0x6c, 0x20, 0x72, 0xd0, 0x84, 0x4c}}
+#define ZIRCON_CRASHLOG_EFIVAR \
+    { 'c', 'r', 'a', 's', 'h', 'l', 'o', 'g', 0 };
+#define ZIRCON_CRASHLOG_EFIATTR \
+    (EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS)
+
 // Debug serial port, a zbi_uart_t entry.
 #define ZBI_TYPE_DEBUG_UART             (0x54524155) // UART
 #ifndef __ASSEMBLER__
@@ -434,6 +442,15 @@ typedef struct {
 
 // Framebuffer parameters, a zbi_swfb_t entry.
 #define ZBI_TYPE_FRAMEBUFFER            (0x42465753) // SWFB
+
+// A copy of the boot configuration stored as a kvstore
+// within the sysconfig partition.
+#define ZBI_TYPE_BOOT_CONFIG        (0x47464342) // BCFG
+
+// A copy of the boot version stored within the sysconfig
+// partition
+#define ZBI_TYPE_BOOT_VERSION       (0x53525642) // BVRS
+
 #ifndef __ASSEMBLER__
 typedef struct {
     // Physical memory address.

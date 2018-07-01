@@ -10,7 +10,6 @@
 #include <ddk/protocol/i2c.h>
 #include <ddk/protocol/iommu.h>
 #include <ddk/protocol/platform-bus.h>
-#include <ddk/protocol/usb-mode-switch.h>
 #include <soc/aml-a113/a113-clocks.h>
 
 #include <threads.h>
@@ -28,6 +27,7 @@ enum {
     BTI_AUDIO_IN,
     BTI_AUDIO_OUT,
     BTI_USB_XHCI,
+    BTI_AML_RAW_NAND,
 };
 
 typedef struct {
@@ -35,7 +35,6 @@ typedef struct {
     zx_device_t* parent;
     gpio_protocol_t gpio;
     i2c_protocol_t i2c;
-    usb_mode_switch_protocol_t usb_mode_switch;
     clk_protocol_t clk;
     iommu_protocol_t iommu;
     zx_handle_t bti_handle;
@@ -56,10 +55,12 @@ zx_status_t gauss_i2c_init(gauss_bus_t* bus);
 
 // gauss-usb.c
 zx_status_t gauss_usb_init(gauss_bus_t* bus);
-zx_status_t gauss_usb_set_mode(gauss_bus_t* bus, usb_mode_t mode);
 
 // gauss-clk.c
 zx_status_t gauss_clk_init(gauss_bus_t* bus);
 
 // gauss-pcie.c
 zx_status_t gauss_pcie_init(gauss_bus_t* bus);
+
+// gauss-raw_nand.c
+zx_status_t gauss_raw_nand_init(gauss_bus_t* bus);

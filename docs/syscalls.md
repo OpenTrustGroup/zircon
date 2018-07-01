@@ -2,6 +2,7 @@
 
 ## Handles
 + [handle_close](syscalls/handle_close.md) - close a handle
++ [handle_close_many](syscalls/handle_close_many.md) - close several handles
 + [handle_duplicate](syscalls/handle_duplicate.md) - create a duplicate handle (optionally with reduced rights)
 + [handle_replace](syscalls/handle_replace.md) - create a new handle (optionally with reduced rights) and destroy the old one
 
@@ -35,7 +36,6 @@
 ## Jobs
 + [job_create](syscalls/job_create.md) - create a new job within a job
 + [job_set_policy](syscalls/job_set_policy.md) - modify policies for a job and its descendants
-+ [job_set_relative_importance](syscalls/job_set_relative_importance.md) - update a global ordering of jobs
 
 ## Tasks (Thread, Process, or Job)
 + [task_bind_exception_port](syscalls/task_bind_exception_port.md) - attach an exception port to a task
@@ -98,6 +98,7 @@
 ## Time
 + [nanosleep](syscalls/nanosleep.md) - sleep for some number of nanoseconds
 + [clock_get](syscalls/clock_get.md) - read a system clock
++ [clock_get_monotonic](syscalls/clock_get_monotonic.md) - read the monotonic system clock
 + [ticks_get](syscalls/ticks_get.md) - read high-precision timer ticks
 + [ticks_per_second](syscalls/ticks_per_second.md) - read the number of high-precision timer ticks in a second
 
@@ -143,6 +144,6 @@
 + [smc_call](syscalls/smc_call.md) - Make an SMC call from user space
 + acpi_uefi_rsdp
 + mmap_device_io
-+ set_framebuffer
++ framebuffer_set_range
 + vmo_create_contiguous
 + vmo_create_physical

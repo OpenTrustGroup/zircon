@@ -21,13 +21,13 @@
 #include <zircon/processargs.h>
 #include <zircon/syscalls.h>
 
-#include <fdio/debug.h>
-#include <fdio/io.fidl.h>
-#include <fdio/io.h>
-#include <fdio/namespace.h>
-#include <fdio/remoteio.h>
-#include <fdio/util.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/debug.h>
+#include <lib/fdio/io.fidl.h>
+#include <lib/fdio/io.h>
+#include <lib/fdio/namespace.h>
+#include <lib/fdio/remoteio.h>
+#include <lib/fdio/util.h>
+#include <lib/fdio/vfs.h>
 
 #include "private-fidl.h"
 #include "private-remoteio.h"
@@ -99,8 +99,8 @@ zx_status_t zxrio_handle_close(zxrio_cb_t cb, void* cookie) {
 
     // remote side was closed;
 #ifdef ZXRIO_FIDL
-    ioObjectCloseRequest* request = (ioObjectCloseRequest*) &msg;
-    memset(request, 0, sizeof(ioObjectCloseRequest));
+    fuchsia_io_ObjectCloseRequest* request = (fuchsia_io_ObjectCloseRequest*) &msg;
+    memset(request, 0, sizeof(fuchsia_io_ObjectCloseRequest));
     request->hdr.ordinal = ZXFIDL_CLOSE;
 #else
     msg.op = ZXRIO_CLOSE;
@@ -126,15 +126,16 @@ zx_status_t zxrio_txn_handoff(zx_handle_t srv, zx_handle_t reply, zxrio_msg_t* m
     uint32_t dsize;
     switch (msg->op) {
     case ZXFIDL_OPEN: {
-        ioDirectoryOpenRequest* request = (ioDirectoryOpenRequest*) msg;
+        fuchsia_io_DirectoryOpenRequest* request = (fuchsia_io_DirectoryOpenRequest*) msg;
         request->object = FIDL_HANDLE_PRESENT;
-        dsize = FIDL_ALIGN(sizeof(ioDirectoryOpenRequest)) + FIDL_ALIGN(request->path.size);
+        dsize = FIDL_ALIGN(sizeof(fuchsia_io_DirectoryOpenRequest)) +
+            FIDL_ALIGN(request->path.size);
         break;
     }
     case ZXFIDL_CLONE: {
-        ioObjectCloneRequest* request = (ioObjectCloneRequest*) msg;
+        fuchsia_io_ObjectCloneRequest* request = (fuchsia_io_ObjectCloneRequest*) msg;
         request->object = FIDL_HANDLE_PRESENT;
-        dsize = sizeof(ioObjectCloneRequest);
+        dsize = sizeof(fuchsia_io_ObjectCloneRequest);
         break;
     }
     default:
@@ -147,10 +148,6 @@ zx_status_t zxrio_txn_handoff(zx_handle_t srv, zx_handle_t reply, zxrio_msg_t* m
     zx_status_t r;
     if ((r = zx_channel_write(srv, 0, msg, dsize, &reply, 1)) != ZX_OK) {
         printf("zxrio_txn_handoff: Failed to write\n");
-        // The caller may or may not be expecting a response. Either way,
-        // we need to close the channel, since it will not arrive at its
-        // intended destination.
-        zx_handle_close(reply);
     }
     return r;
 }
@@ -165,7 +162,6 @@ static zx_status_t zxrio_txn(zxrio_t* rio, zxrio_msg_t* msg) {
     xprintf("txn h=%x op=%d len=%u\n", rio->h, msg->op, msg->datalen);
 
     zx_status_t r;
-    zx_status_t rs = ZX_ERR_INTERNAL;
     uint32_t dsize;
 
     zx_channel_call_args_t args;
@@ -179,16 +175,10 @@ static zx_status_t zxrio_txn(zxrio_t* rio, zxrio_msg_t* msg) {
     args.rd_num_handles = FDIO_MAX_HANDLES;
     const uint32_t request_op = ZXRIO_OP(msg->op);
 
-    r = zx_channel_call(rio->h, 0, ZX_TIME_INFINITE, &args, &dsize, &msg->hcount, &rs);
+    r = zx_channel_call(rio->h, 0, ZX_TIME_INFINITE, &args, &dsize, &msg->hcount);
     if (r < 0) {
-        if (r == ZX_ERR_CALL_FAILED) {
-            // read phase failed, true status is in rs
-            msg->hcount = 0;
-            return rs;
-        } else {
-            // write phase failed, we must discard the handles
-            goto fail_discard_handles;
-        }
+        msg->hcount = 0;
+        return r;
     }
 
     // check for protocol errors
@@ -204,8 +194,7 @@ static zx_status_t zxrio_txn(zxrio_t* rio, zxrio_msg_t* msg) {
     return r;
 
 fail_discard_handles:
-    // We failed either writing at all (still have the handles)
-    // or after reading (need to abandon any handles we received)
+    // If we failed after reading, we need to abandon any handles we received.
     discard_handles(msg->handle, msg->hcount);
     msg->hcount = 0;
     return r;
@@ -514,7 +503,6 @@ static zx_status_t zxrio_sync_open_connection(zx_handle_t svc, uint32_t op,
     // Write the (one-way) request message
     if ((r = zx_channel_write(svc, 0, &msg, ZXRIO_HDR_SZ + msg.datalen,
                               msg.handle, msg.hcount)) < 0) {
-        zx_handle_close(msg.handle[0]);
         zx_handle_close(h);
         return r;
     }
@@ -553,13 +541,7 @@ static zx_status_t zxrio_connect(zx_handle_t svc, zx_handle_t cnxn,
     msg.handle[0] = cnxn;
     memcpy(msg.data, name, len);
 
-    zx_status_t r;
-    if ((r = zx_channel_write(svc, 0, &msg, ZXRIO_HDR_SZ + msg.datalen, msg.handle, 1)) < 0) {
-        zx_handle_close(cnxn);
-        return r;
-    }
-
-    return ZX_OK;
+    return zx_channel_write(svc, 0, &msg, ZXRIO_HDR_SZ + msg.datalen, msg.handle, 1);
 }
 
 static ssize_t write_common(uint32_t op, fdio_t* io, const void* _data, size_t len, off_t offset) {
@@ -779,6 +761,75 @@ ssize_t zxrio_ioctl(fdio_t* io, uint32_t op, const void* in_buf,
 
 #endif // ZXRIO_FIDL
 
+// Takes ownership of the optional |extra_handle|.
+//
+// Decodes the handle into |info|, if it exists and should
+// be decoded.
+static zx_status_t zxrio_decode_describe_handle(zxrio_describe_t* info,
+                                                zx_handle_t extra_handle) {
+    bool have_handle = (extra_handle != ZX_HANDLE_INVALID);
+    bool want_handle = false;
+    zx_handle_t* handle_target = NULL;
+
+    switch (info->extra.tag) {
+    // Case: No extra handles expected
+    case FDIO_PROTOCOL_SERVICE:
+    case FDIO_PROTOCOL_DIRECTORY:
+        break;
+    // Case: Extra handles optional
+    case FDIO_PROTOCOL_FILE:
+        handle_target = &info->extra.file.e;
+        goto handle_optional;
+    case FDIO_PROTOCOL_DEVICE:
+        handle_target = &info->extra.device.e;
+        goto handle_optional;
+    case FDIO_PROTOCOL_SOCKET:
+        handle_target = &info->extra.socket.s;
+        goto handle_optional;
+handle_optional:
+#ifdef ZXRIO_FIDL
+        want_handle = *handle_target == FIDL_HANDLE_PRESENT;
+#else
+        want_handle = have_handle;
+#endif
+        break;
+    // Case: Extra handles required
+    case FDIO_PROTOCOL_PIPE:
+        handle_target = &info->extra.pipe.s;
+        goto handle_required;
+    case FDIO_PROTOCOL_VMOFILE:
+        handle_target = &info->extra.vmofile.v;
+        goto handle_required;
+handle_required:
+#ifdef ZXRIO_FIDL
+        want_handle = *handle_target == FIDL_HANDLE_PRESENT;
+#else
+        want_handle = have_handle;
+#endif
+        if (!want_handle) {
+            goto fail;
+        }
+        break;
+    default:
+        printf("Unexpected protocol type opening connection\n");
+        goto fail;
+    }
+
+    if (have_handle != want_handle) {
+        goto fail;
+    }
+    if (have_handle) {
+        *handle_target = extra_handle;
+    }
+    return ZX_OK;
+
+fail:
+    if (have_handle) {
+        zx_handle_close(extra_handle);
+    }
+    return ZX_ERR_IO;
+}
+
 zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
     zx_object_wait_one(h, ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED,
                        ZX_TIME_INFINITE, NULL);
@@ -809,67 +860,27 @@ zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
         return r;
     }
 
-    // Confirm that the objects "zxrio_describe_t" and "ioObjectOnOpenEvent"
+    // Confirm that the objects "zxrio_describe_t" and "fuchsia_io_ObjectOnOpenEvent"
     // are aligned enough to be compatible.
     //
-    // This is somewhat complicated by the fact that the "ioObjectOnOpenEvent"
-    // object has an optional "ObjectInfo" secondary which exists immediately
+    // This is somewhat complicated by the fact that the "fuchsia_io_ObjectOnOpenEvent"
+    // object has an optional "fuchsia_io_ObjectInfo" secondary which exists immediately
     // following the struct.
     static_assert(__builtin_offsetof(zxrio_describe_t, extra) ==
-                  FIDL_ALIGN(sizeof(ioObjectOnOpenEvent)),
+                  FIDL_ALIGN(sizeof(fuchsia_io_ObjectOnOpenEvent)),
                   "RIO Description message doesn't align with FIDL response secondary");
-    static_assert(sizeof(zxrio_object_info_t) == sizeof(ObjectInfo),
+    static_assert(sizeof(zxrio_object_info_t) == sizeof(fuchsia_io_ObjectInfo),
                   "RIO Object Info doesn't align with FIDL object info");
     static_assert(__builtin_offsetof(zxrio_object_info_t, file.e) ==
-                  __builtin_offsetof(ObjectInfo, file.event), "Unaligned File");
+                  __builtin_offsetof(fuchsia_io_ObjectInfo, file.event), "Unaligned File");
     static_assert(__builtin_offsetof(zxrio_object_info_t, pipe.s) ==
-                  __builtin_offsetof(ObjectInfo, pipe.socket), "Unaligned Pipe");
+                  __builtin_offsetof(fuchsia_io_ObjectInfo, pipe.socket), "Unaligned Pipe");
     static_assert(__builtin_offsetof(zxrio_object_info_t, vmofile.v) ==
-                  __builtin_offsetof(ObjectInfo, vmofile.vmo), "Unaligned Vmofile");
+                  __builtin_offsetof(fuchsia_io_ObjectInfo, vmofile.vmo), "Unaligned Vmofile");
     static_assert(__builtin_offsetof(zxrio_object_info_t, device.e) ==
-                  __builtin_offsetof(ObjectInfo, device.event), "Unaligned Device");
+                  __builtin_offsetof(fuchsia_io_ObjectInfo, device.event), "Unaligned Device");
 
-    switch (info->extra.tag) {
-    // Case: No extra handles expected
-    case FDIO_PROTOCOL_SERVICE:
-    case FDIO_PROTOCOL_DIRECTORY:
-        if (extra_handle != ZX_HANDLE_INVALID) {
-            zx_handle_close(extra_handle);
-            return ZX_ERR_IO;
-        }
-        break;
-    // Case: Extra handles optional
-    case FDIO_PROTOCOL_FILE:
-        info->extra.file.e = extra_handle;
-        break;
-    case FDIO_PROTOCOL_DEVICE:
-        info->extra.device.e = extra_handle;
-        break;
-    case FDIO_PROTOCOL_SOCKET:
-        info->extra.socket.s = extra_handle;
-        break;
-    // Case: Extra handles required
-    case FDIO_PROTOCOL_PIPE:
-        if (extra_handle == ZX_HANDLE_INVALID) {
-            return ZX_ERR_IO;
-        }
-        info->extra.pipe.s = extra_handle;
-        break;
-    case FDIO_PROTOCOL_VMOFILE:
-        if (extra_handle == ZX_HANDLE_INVALID) {
-            return ZX_ERR_IO;
-        }
-        info->extra.vmofile.v = extra_handle;
-        break;
-    default:
-        printf("Unexpected protocol type opening connection\n");
-        if (extra_handle != ZX_HANDLE_INVALID) {
-            zx_handle_close(extra_handle);
-        }
-        return ZX_ERR_IO;
-    }
-
-    return r;
+    return zxrio_decode_describe_handle(info, extra_handle);
 }
 
 zx_status_t fdio_service_connect(const char* svcpath, zx_handle_t h) {
@@ -972,7 +983,7 @@ zx_status_t zxrio_misc(fdio_t* io, uint32_t op, int64_t off,
             if ((r = fidl_rewind(rio)) != ZX_OK) {
                 return r;
             }
-            // Fall-through to CMD_NONE
+            __FALLTHROUGH;
         case READDIR_CMD_NONE: {
             size_t out_sz;
             if ((r = fidl_readdirents(rio, ptr, maxreply, &out_sz)) != ZX_OK) {
@@ -1233,7 +1244,7 @@ zx_status_t fdio_from_handles(zx_handle_t handle, zxrio_object_info_t* info,
     case FDIO_PROTOCOL_SOCKET_CONNECTED:
     case FDIO_PROTOCOL_SOCKET: {
         int flags = (info->tag == FDIO_PROTOCOL_SOCKET_CONNECTED) ? IOFLAG_SOCKET_CONNECTED : 0;
-        if (handle == ZX_HANDLE_INVALID || info->socket.s == ZX_HANDLE_INVALID) {
+        if (info->socket.s == ZX_HANDLE_INVALID) {
             r = ZX_ERR_INVALID_ARGS;
             break;
         }

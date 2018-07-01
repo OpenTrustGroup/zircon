@@ -21,9 +21,9 @@
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/log.h>
 
-#include <fdio/io.fidl.h>
-#include <fdio/util.h>
-#include <fdio/remoteio.h>
+#include <lib/fdio/io.fidl.h>
+#include <lib/fdio/util.h>
+#include <lib/fdio/remoteio.h>
 
 #include "devcoordinator.h"
 #include "devhost.h"
@@ -248,13 +248,14 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
             goto fail;
         }
 
-        ioDirectoryOpenRequest* request = (ioDirectoryOpenRequest*) &msg;
+        fuchsia_io_DirectoryOpenRequest* request = (fuchsia_io_DirectoryOpenRequest*) &msg;
         zxrio_msg_t* rmsg = (zxrio_msg_t*) &msg;
 
         if (msg.op == ZXFIDL_OPEN) {
             // Decode open request (FIDL)
-            if ((msize < sizeof(ioDirectoryOpenRequest)) ||
-                (FIDL_ALIGN(sizeof(ioDirectoryOpenRequest)) + FIDL_ALIGN(request->path.size) != msize) ||
+            if ((msize < sizeof(fuchsia_io_DirectoryOpenRequest)) ||
+                (FIDL_ALIGN(sizeof(fuchsia_io_DirectoryOpenRequest)) +
+                 FIDL_ALIGN(request->path.size) != msize) ||
                 (request->object != FIDL_HANDLE_PRESENT) ||
                 (request->path.data != (char*) FIDL_ALLOC_PRESENT)) {
                 log(ERROR, "devhost: Malformed open request (bad message)\n");
@@ -263,7 +264,7 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
             }
             request->object = hin[0];
             request->path.data = (void*)((uintptr_t)(&msg) +
-                                         FIDL_ALIGN(sizeof(ioDirectoryOpenRequest)));
+                                         FIDL_ALIGN(sizeof(fuchsia_io_DirectoryOpenRequest)));
         } else {
             // Decode open request (RIO)
             rmsg->hcount = 1;
@@ -307,7 +308,7 @@ static zx_status_t dh_handle_rpc_read(zx_handle_t h, iostate_t* ios) {
             break;
         }
         zx_device_t* dev = newios->dev;
-        memcpy(dev->name, "proxy", 7);
+        strcpy(dev->name, "proxy");
         dev->protocol_id = msg.protocol_id;
         dev->ops = &device_default_ops;
         dev->rpc = hin[0];
@@ -649,7 +650,7 @@ static ssize_t _devhost_log_write(uint32_t flags, const void* _data, size_t len)
         if (c == '\n') {
             if (ctx->next) {
 flush_ctx:
-                zx_log_write(ctx->handle, ctx->next, ctx->data, flags);
+                zx_debuglog_write(ctx->handle, flags, ctx->data, ctx->next);
                 ctx->next = 0;
             }
             continue;
@@ -772,7 +773,6 @@ static zx_status_t devhost_rpc_etc(zx_device_t* dev, uint32_t op,
     }
     msg.op = op;
     msg.value = value;
-    msg.protocol_id = 0;
     if ((r = dc_msg_rpc(dev->rpc, &msg, msglen, NULL, 0, rsp, rsp_len, actual, outhandle)) < 0) {
         if (!(op == DC_OP_GET_METADATA && r == ZX_ERR_NOT_FOUND)) {
             log(ERROR, "devhost: rpc:%s failed: %d\n", opname, r);
@@ -965,13 +965,13 @@ __EXPORT int device_host_main(int argc, char** argv) {
 
     log(TRACE, "devhost: main()\n");
 
-    root_ios.ph.handle = zx_get_startup_handle(PA_HND(PA_USER0, 0));
+    root_ios.ph.handle = zx_take_startup_handle(PA_HND(PA_USER0, 0));
     if (root_ios.ph.handle == ZX_HANDLE_INVALID) {
         log(ERROR, "devhost: rpc handle invalid\n");
         return -1;
     }
 
-    root_resource_handle = zx_get_startup_handle(PA_HND(PA_RESOURCE, 0));
+    root_resource_handle = zx_take_startup_handle(PA_HND(PA_RESOURCE, 0));
     if (root_resource_handle == ZX_HANDLE_INVALID) {
         log(ERROR, "devhost: no root resource handle!\n");
     }

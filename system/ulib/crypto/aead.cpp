@@ -4,16 +4,19 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <crypto/aead.h>
 #include <crypto/bytes.h>
-#include <crypto/error.h>
+#include <fbl/algorithm.h>
 #include <fbl/auto_call.h>
 #include <fbl/unique_ptr.h>
-#include <fdio/debug.h>
+#include <lib/fdio/debug.h>
 #include <openssl/aead.h>
 #include <zircon/errors.h>
 #include <zircon/types.h>
+
+#include "error.h"
 
 #define ZXDEBUG 0
 
@@ -103,67 +106,14 @@ zx_status_t AEAD::GetTagLen(Algorithm algo, size_t* out) {
     return ZX_OK;
 }
 
-AEAD::AEAD() : ctx_(nullptr), direction_(Cipher::kUnset), tag_len_(0) {}
+AEAD::AEAD()
+    : ctx_(nullptr), direction_(Cipher::kUnset), tag_len_(0) {}
 
 AEAD::~AEAD() {}
 
-zx_status_t AEAD::InitSeal(Algorithm aead, const Bytes& key, const Bytes& iv) {
-    zx_status_t rc;
+zx_status_t AEAD::Seal(const Bytes& ptext, const uint8_t* aad, size_t aad_len, uint64_t* out_nonce,
+                       Bytes* out_ctext) {
 
-    if ((rc = Init(aead, key, Cipher::kEncrypt)) != ZX_OK) {
-        return rc;
-    }
-    if (iv.len() != iv_.len()) {
-        xprintf("wrong IV length; have %zu, need %zu\n", iv.len(), iv_.len());
-        return ZX_ERR_INVALID_ARGS;
-    }
-    if ((rc = iv_.Copy(iv)) != ZX_OK) {
-        return rc;
-    }
-
-    return ZX_OK;
-}
-
-zx_status_t AEAD::InitOpen(Algorithm aead, const Bytes& key) {
-    return Init(aead, key, Cipher::kDecrypt);
-}
-
-zx_status_t AEAD::SetAD(const Bytes& ad) {
-    zx_status_t rc;
-
-    if (direction_ == Cipher::kUnset) {
-        xprintf("not configured\n");
-        return ZX_ERR_BAD_STATE;
-    }
-
-    ad_.Reset();
-    if ((rc = ad_.Copy(ad)) != ZX_OK) {
-        return rc;
-    }
-
-    return ZX_OK;
-}
-
-zx_status_t AEAD::AllocAD(size_t ad_len, uintptr_t* out_ad) {
-    zx_status_t rc;
-
-    if (direction_ == Cipher::kUnset) {
-        xprintf("not configured\n");
-        return ZX_ERR_BAD_STATE;
-    }
-
-    ad_.Reset();
-    if ((rc = ad_.Resize(ad_len)) != ZX_OK) {
-        return rc;
-    }
-
-    if (out_ad) {
-        *out_ad = reinterpret_cast<uintptr_t>(ad_.get());
-    }
-    return ZX_OK;
-}
-
-zx_status_t AEAD::Seal(const Bytes& ptext, Bytes* iv, Bytes* ctext) {
     zx_status_t rc;
 
     if (direction_ != Cipher::kEncrypt) {
@@ -172,20 +122,21 @@ zx_status_t AEAD::Seal(const Bytes& ptext, Bytes* iv, Bytes* ctext) {
     }
 
     size_t ptext_len = ptext.len();
-    if (!iv || !ctext) {
-        xprintf("bad parameter(s): iv=%p, ctext=%p\n", iv, ctext);
+    if (!out_nonce || !out_ctext) {
+        xprintf("bad parameter(s): out_nonce=%p, ctext=%p\n", out_nonce, out_ctext);
         return ZX_ERR_INVALID_ARGS;
     }
 
+    // If the caller recycles the |Bytes| used for|ctext|, this becomes a no-op.
     size_t ctext_len = ptext_len + tag_len_;
-    if ((rc = ctext->Resize(ctext_len)) != ZX_OK || (rc = iv->Copy(iv_)) != ZX_OK ||
-        (rc = iv_.Increment()) != ZX_OK) {
+    if ((rc = out_ctext->Resize(ctext_len)) != ZX_OK) {
         return rc;
     }
 
+    uint8_t* iv8 = reinterpret_cast<uint8_t*>(iv_.get());
     size_t out_len;
-    if (EVP_AEAD_CTX_seal(&ctx_->impl, ctext->get(), &out_len, ctext_len, iv->get(), iv->len(),
-                          ptext.get(), ptext_len, ad_.get(), ad_.len()) != 1) {
+    if (EVP_AEAD_CTX_seal(&ctx_->impl, out_ctext->get(), &out_len, ctext_len, iv8, iv_len_,
+                          ptext.get(), ptext_len, aad, aad_len) != 1) {
         xprintf_crypto_errors(&rc);
         return rc;
     }
@@ -194,10 +145,19 @@ zx_status_t AEAD::Seal(const Bytes& ptext, Bytes* iv, Bytes* ctext) {
         return ZX_ERR_INTERNAL;
     }
 
+    // Increment nonce
+    uint64_t nonce = iv_[0];
+    iv_[0] += 1;
+    if (iv_[0] == iv0_) {
+        xprintf("exceeded maximum operations with this key\n");
+        return ZX_ERR_BAD_STATE;
+    }
+
+    *out_nonce = nonce;
     return ZX_OK;
 }
 
-zx_status_t AEAD::Open(const Bytes& iv, const Bytes& ctext, Bytes* ptext) {
+zx_status_t AEAD::Open(uint64_t nonce, const Bytes& ctext, const uint8_t* aad, size_t aad_len, Bytes* out_ptext) {
     zx_status_t rc;
 
     if (direction_ != Cipher::kDecrypt) {
@@ -205,22 +165,23 @@ zx_status_t AEAD::Open(const Bytes& iv, const Bytes& ctext, Bytes* ptext) {
         return ZX_ERR_BAD_STATE;
     }
 
-    size_t iv_len = iv_.len();
     size_t ctext_len = ctext.len();
-    if (iv.len() != iv_len || ctext_len < tag_len_ || !ptext) {
-        xprintf("bad parameter(s): iv.len=%zu, ctext.len=%zu, ptext=%p\n", iv.len(), ctext_len,
-                ptext);
+    if (ctext_len < tag_len_ || !out_ptext) {
+        xprintf("bad parameter(s): ctext.len=%zu, ptext=%p\n", ctext_len, out_ptext);
         return ZX_ERR_INVALID_ARGS;
     }
 
     size_t ptext_len = ctext_len - tag_len_;
-    if ((rc = ptext->Resize(ptext_len)) != ZX_OK) {
+    if ((rc = out_ptext->Resize(ptext_len)) != ZX_OK) {
         return rc;
     }
 
+    // Inject nonce
+    iv_[0] = nonce;
+    uint8_t* iv8 = reinterpret_cast<uint8_t*>(iv_.get());
     size_t out_len;
-    if (EVP_AEAD_CTX_open(&ctx_->impl, ptext->get(), &out_len, ptext_len, iv.get(), iv_len,
-                          ctext.get(), ctext_len, ad_.get(), ad_.len()) != 1) {
+    if (EVP_AEAD_CTX_open(&ctx_->impl, out_ptext->get(), &out_len, ptext_len, iv8, iv_len_,
+                          ctext.get(), ctext_len, aad, aad_len) != 1) {
         xprintf_crypto_errors(&rc);
         return rc;
     }
@@ -235,14 +196,14 @@ zx_status_t AEAD::Open(const Bytes& iv, const Bytes& ctext, Bytes* ptext) {
 void AEAD::Reset() {
     ctx_.reset();
     direction_ = Cipher::kUnset;
-    iv_.Reset();
-    ad_.Reset();
+    iv_len_ = 0;
     tag_len_ = 0;
 }
 
 // Private methods
 
-zx_status_t AEAD::Init(Algorithm algo, const Bytes& key, Cipher::Direction direction) {
+zx_status_t AEAD::Init(Algorithm algo, const Secret& key, const Bytes& iv,
+                       Cipher::Direction direction) {
     zx_status_t rc;
 
     Reset();
@@ -253,11 +214,17 @@ zx_status_t AEAD::Init(Algorithm algo, const Bytes& key, Cipher::Direction direc
     if ((rc = GetAEAD(algo, &aead)) != ZX_OK) {
         return rc;
     }
+    size_t key_len = EVP_AEAD_key_length(aead);
+    iv_len_ = EVP_AEAD_nonce_length(aead);
+    tag_len_ = EVP_AEAD_max_tag_len(aead);
 
     // Check parameters
-    size_t key_len = EVP_AEAD_key_length(aead);
     if (key.len() != key_len) {
         xprintf("wrong key length; have %zu, need %zu\n", key.len(), key_len);
+        return ZX_ERR_INVALID_ARGS;
+    }
+    if (iv.len() != iv_len_) {
+        xprintf("wrong IV length; have %zu, need %zu\n", iv.len(), iv_len_);
         return ZX_ERR_INVALID_ARGS;
     }
 
@@ -277,12 +244,14 @@ zx_status_t AEAD::Init(Algorithm algo, const Bytes& key, Cipher::Direction direc
     }
     direction_ = direction;
 
-    // Reserve space for IV and auth tag.
-    size_t iv_len = EVP_AEAD_nonce_length(aead);
-    if ((rc = iv_.Resize(iv_len)) != ZX_OK) {
-        return rc;
+    // Reserve space for IV
+    size_t n = fbl::round_up(iv_len_, sizeof(uint64_t)) / sizeof(uint64_t);
+    iv_.reset(new (&ac) uint64_t[n]{0});
+    if (!ac.check()) {
+        xprintf("failed to allocate %zu bytes\n", n * sizeof(uint64_t));
+        return ZX_ERR_NO_MEMORY;
     }
-    tag_len_ = EVP_AEAD_max_tag_len(aead);
+    memcpy(iv_.get(), iv.get(), iv_len_);
 
     cleanup.cancel();
     return ZX_OK;

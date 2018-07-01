@@ -12,6 +12,8 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_SRCS += \
     $(LOCAL_DIR)/alloc_checker.cpp \
     $(LOCAL_DIR)/memory_probe.cpp \
@@ -19,8 +21,6 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/string_piece.cpp \
     $(LOCAL_DIR)/string_printf.cpp \
     $(LOCAL_DIR)/string.cpp \
-    $(LOCAL_DIR)/vmar_manager.cpp \
-    $(LOCAL_DIR)/vmo_mapper.cpp \
 
 MODULE_LIBS := system/ulib/zx
 
@@ -37,6 +37,8 @@ include make/module.mk
 MODULE := $(LOCAL_DIR).hostlib
 
 MODULE_TYPE := hostlib
+
+MODULE_COMPILEFLAGS += -fvisibility=hidden
 
 MODULE_SRCS += \
     $(LOCAL_DIR)/alloc_checker.cpp \

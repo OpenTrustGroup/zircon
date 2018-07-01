@@ -14,9 +14,9 @@
 #include <fbl/atomic.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/vfs.h>
 #include <fs/vfs.h>
-#include <memfs/vnode.h>
+#include <lib/memfs/cpp/vnode.h>
 #include <zircon/device/vfs.h>
 
 #include "dnode.h"
@@ -79,6 +79,12 @@ zx_status_t VnodeDir::Getattr(vnattr_t* attr) {
     attr->nlink = link_count_;
     attr->create_time = create_time_;
     attr->modify_time = modify_time_;
+    return ZX_OK;
+}
+
+zx_status_t VnodeDir::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
+                                 zxrio_object_info_t* extra) {
+    *type = FDIO_PROTOCOL_DIRECTORY;
     return ZX_OK;
 }
 
@@ -251,44 +257,6 @@ zx_status_t VnodeDir::Link(fbl::StringPiece name, fbl::RefPtr<fs::Vnode> target)
     Dnode::AddChild(dnode_, fbl::move(targetdn));
 
     return ZX_OK;
-}
-
-zx_status_t VnodeDir::Ioctl(uint32_t op, const void* in_buf, size_t in_len,
-                            void* out_buf, size_t out_len, size_t* out_actual) {
-    switch (op) {
-    case IOCTL_VFS_VMO_CREATE: {
-        const auto* config = reinterpret_cast<const vmo_create_config_t*>(in_buf);
-        size_t namelen = in_len - sizeof(vmo_create_config_t) - 1;
-        fbl::StringPiece name(config->name, namelen);
-        if (in_len <= sizeof(vmo_create_config_t) || (namelen > NAME_MAX) ||
-            (name[namelen] != 0)) {
-            zx_handle_close(config->vmo);
-            return ZX_ERR_INVALID_ARGS;
-        }
-
-        // Ensure this is the last handle to this VMO; otherwise, the size
-        // may change from underneath us.
-        zx_info_handle_count_t info;
-        zx_status_t status = zx_object_get_info(config->vmo, ZX_INFO_HANDLE_COUNT,
-                                                &info, sizeof(info), nullptr, nullptr);
-        if (status != ZX_OK || info.handle_count != 1) {
-            zx_handle_close(config->vmo);
-            return ZX_ERR_INVALID_ARGS;
-        }
-
-        uint64_t size;
-        if ((status = zx_vmo_get_size(config->vmo, &size)) != ZX_OK) {
-            zx_handle_close(config->vmo);
-            return status;
-        }
-
-        bool vmofile = false;
-        *out_actual = 0;
-        return vfs()->CreateFromVmo(this, vmofile, name, config->vmo, 0, size);
-    }
-    default:
-        return VnodeMemfs::Ioctl(op, in_buf, in_len, out_buf, out_len, out_actual);
-    }
 }
 
 void VnodeDir::MountSubtree(fbl::RefPtr<VnodeDir> subtree) {

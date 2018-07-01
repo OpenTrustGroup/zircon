@@ -17,7 +17,7 @@
 
 #ifdef __Fuchsia__
 #include <zircon/syscalls.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/vfs.h>
 #include <fbl/auto_lock.h>
 #endif
 
@@ -62,7 +62,7 @@ void VnodeMinfs::InodeSync(WritebackWork* wb, uint32_t flags) {
         }
     }
 
-    fs_->InodeSync(wb, ino_, &inode_);
+    fs_->InodeUpdate(wb, ino_, &inode_);
 }
 
 // Delete all blocks (relative to a file) from "start" (inclusive) to the end of
@@ -150,8 +150,8 @@ zx_status_t VnodeMinfs::InitIndirectVmo() {
     }
 
     zx_status_t status;
-    if ((status = MappedVmo::Create(kMinfsBlockSize * (kMinfsIndirect + kMinfsDoublyIndirect),
-                                    "minfs-indirect", &vmo_indirect_)) != ZX_OK) {
+    if ((status = fs::MappedVmo::Create(kMinfsBlockSize * (kMinfsIndirect + kMinfsDoublyIndirect),
+                                        "minfs-indirect", &vmo_indirect_)) != ZX_OK) {
         return status;
     }
     if ((status = fs_->bc_->AttachVmo(vmo_indirect_->GetVmo(), &vmoid_indirect_)) != ZX_OK) {
@@ -306,7 +306,7 @@ zx_status_t VnodeMinfs::AllocateIndirect(WritebackWork* wb, blk_t index, Indirec
     // allocate new indirect block
     zx_status_t status;
     blk_t bno;
-    if ((status = fs_->BlockNew(wb, 0, &bno)) != ZX_OK) {
+    if ((status = fs_->BlockNew(wb, &bno)) != ZX_OK) {
         return status;
     }
 
@@ -339,7 +339,7 @@ zx_status_t VnodeMinfs::BlockOpDirect(WritebackWork* wb, DirectArgs* params) {
                 ZX_DEBUG_ASSERT(wb != nullptr);
                 if (bno == 0) {
                     zx_status_t status;
-                    if ((status = fs_->BlockNew(wb, 0, &bno)) != ZX_OK) {
+                    if ((status = fs_->BlockNew(wb, &bno)) != ZX_OK) {
                         return status;
                     }
                     inode_.block_count++;
@@ -1523,14 +1523,13 @@ zx_status_t VnodeMinfs::Allocate(Minfs* fs, uint32_t type, fbl::RefPtr<VnodeMinf
     return ZX_OK;
 }
 
-zx_status_t VnodeMinfs::Recreate(Minfs* fs, ino_t ino, const minfs_inode_t* inode,
-                                 fbl::RefPtr<VnodeMinfs>* out) {
+zx_status_t VnodeMinfs::Recreate(Minfs* fs, ino_t ino, fbl::RefPtr<VnodeMinfs>* out) {
     fbl::AllocChecker ac;
     *out = fbl::AdoptRef(new (&ac) VnodeMinfs(fs));
     if (!ac.check()) {
         return ZX_ERR_NO_MEMORY;
     }
-    memcpy(&(*out)->inode_, inode, kMinfsInodeSize);
+    fs->InodeLoad(ino, &(*out)->inode_);
     (*out)->ino_ = ino;
     return ZX_OK;
 }
@@ -1946,6 +1945,16 @@ zx_status_t VnodeMinfs::Link(fbl::StringPiece name, fbl::RefPtr<fs::Vnode> _targ
 }
 
 #ifdef __Fuchsia__
+zx_status_t VnodeMinfs::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
+                                   zxrio_object_info_t* extra) {
+    if (IsDirectory()) {
+        *type = FDIO_PROTOCOL_DIRECTORY;
+    } else {
+        *type = FDIO_PROTOCOL_FILE;
+    }
+    return ZX_OK;
+}
+
 void VnodeMinfs::Sync(SyncCallback closure) {
     TRACE_DURATION("minfs", "VnodeMinfs::Sync");
     fs_->Sync([this, cb = fbl::move(closure)](zx_status_t status) {

@@ -360,11 +360,7 @@ static int gpt_device_finalize_and_sync(gpt_device_t* dev, bool persist) {
         // backup gpt is in the last block
         header.backup = priv->blocks - 1;
         // generate a guid
-        size_t sz;
-        if (zx_cprng_draw(header.guid, GPT_GUID_LEN, &sz) != ZX_OK ||
-            sz != GPT_GUID_LEN) {
-            return -1;
-        }
+        zx_cprng_draw(header.guid, GPT_GUID_LEN);
     }
 
     // always write 128 entries in partition table

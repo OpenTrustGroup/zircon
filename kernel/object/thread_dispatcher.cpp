@@ -19,8 +19,8 @@
 #include <kernel/thread.h>
 #include <vm/kstack.h>
 #include <vm/vm.h>
-#include <vm/vm_aspace.h>
 #include <vm/vm_address_region.h>
+#include <vm/vm_aspace.h>
 #include <vm/vm_object_paged.h>
 
 #include <zircon/rights.h>
@@ -120,13 +120,13 @@ zx_status_t ThreadDispatcher::Initialize(const char* name, size_t len) {
     memset(thread_name + len, 0, ZX_MAX_NAME_LEN - len);
 
     // Map the kernel stack somewhere
-    void *stack_top;
+    void* stack_top;
     auto status = vm_allocate_kstack(false, &stack_top, &kstack_mapping_, &kstack_vmar_);
     if (status != ZX_OK)
         return status;
 #if __has_feature(safe_stack)
     status = vm_allocate_kstack(true, &stack_top,
-                            &unsafe_kstack_mapping_, &unsafe_kstack_vmar_);
+                                &unsafe_kstack_mapping_, &unsafe_kstack_vmar_);
     if (status != ZX_OK)
         return status;
 #endif
@@ -134,9 +134,9 @@ zx_status_t ThreadDispatcher::Initialize(const char* name, size_t len) {
     // create an underlying LK thread
     thread_t* lkthread = thread_create_etc(
         &thread_, thread_name, StartRoutine, this, DEFAULT_PRIORITY,
-        reinterpret_cast<void *>(kstack_mapping_->base()),
+        reinterpret_cast<void*>(kstack_mapping_->base()),
 #if __has_feature(safe_stack)
-        reinterpret_cast<void *>(unsafe_kstack_mapping_->base()),
+        reinterpret_cast<void*>(unsafe_kstack_mapping_->base()),
 #else
         nullptr,
 #endif
@@ -255,22 +255,22 @@ void ThreadDispatcher::Kill() {
     AutoLock lock(get_lock());
 
     switch (state_) {
-        case State::INITIAL:
-        case State::INITIALIZED:
-            // thread was never started, leave in this state
-            break;
-        case State::RUNNING:
-        case State::SUSPENDED:
-            // deliver a kernel kill signal to the thread
-            thread_kill(&thread_);
+    case State::INITIAL:
+    case State::INITIALIZED:
+        // thread was never started, leave in this state
+        break;
+    case State::RUNNING:
+    case State::SUSPENDED:
+        // deliver a kernel kill signal to the thread
+        thread_kill(&thread_);
 
-            // enter the dying state
-            SetStateLocked(State::DYING);
-            break;
-        case State::DYING:
-        case State::DEAD:
-            // already going down
-            break;
+        // enter the dying state
+        SetStateLocked(State::DYING);
+        break;
+    case State::DYING:
+    case State::DEAD:
+        // already going down
+        break;
     }
 }
 
@@ -289,7 +289,7 @@ zx_status_t ThreadDispatcher::Suspend() {
     DEBUG_ASSERT(suspend_count_ >= 0);
     suspend_count_++;
     if (suspend_count_ == 1)
-      return thread_suspend(&thread_);
+        return thread_suspend(&thread_);
 
     // It was already suspended.
     return ZX_OK;
@@ -319,10 +319,10 @@ zx_status_t ThreadDispatcher::Resume() {
     return ZX_OK;
 }
 
-static void ThreadCleanupDpc(dpc_t *d) {
+static void ThreadCleanupDpc(dpc_t* d) {
     LTRACEF("dpc %p\n", d);
 
-    ThreadDispatcher *t = reinterpret_cast<ThreadDispatcher *>(d->arg);
+    ThreadDispatcher* t = reinterpret_cast<ThreadDispatcher*>(d->arg);
     DEBUG_ASSERT(t);
 
     delete t;
@@ -424,9 +424,15 @@ void ThreadDispatcher::ThreadUserCallback(enum thread_user_state_change new_stat
     ThreadDispatcher* t = reinterpret_cast<ThreadDispatcher*>(arg);
 
     switch (new_state) {
-        case THREAD_USER_STATE_EXIT: t->Exiting(); return;
-        case THREAD_USER_STATE_SUSPEND: t->Suspending(); return;
-        case THREAD_USER_STATE_RESUME: t->Resuming(); return;
+    case THREAD_USER_STATE_EXIT:
+        t->Exiting();
+        return;
+    case THREAD_USER_STATE_SUSPEND:
+        t->Suspending();
+        return;
+    case THREAD_USER_STATE_RESUME:
+        t->Resuming();
+        return;
     }
 }
 
@@ -552,10 +558,10 @@ fbl::RefPtr<ExceptionPort> ThreadDispatcher::exception_port() {
 }
 
 zx_status_t ThreadDispatcher::ExceptionHandlerExchange(
-        fbl::RefPtr<ExceptionPort> eport,
-        const zx_exception_report_t* report,
-        const arch_exception_context_t* arch_context,
-        ExceptionStatus *out_estatus) {
+    fbl::RefPtr<ExceptionPort> eport,
+    const zx_exception_report_t* report,
+    const arch_exception_context_t* arch_context,
+    ExceptionStatus* out_estatus) {
     canary_.Assert();
 
     LTRACE_ENTRY_OBJ;
@@ -601,9 +607,13 @@ zx_status_t ThreadDispatcher::ExceptionHandlerExchange(
     // exception response is received (requiring a second resume).
     // Exceptions and suspensions are essentially treated orthogonally.
 
-    do {
-        status = event_wait_with_mask(&exception_event_, THREAD_SIGNAL_SUSPEND);
-    } while (status == ZX_ERR_INTERNAL_INTR_RETRY);
+    {
+        AutoBlocked by(Blocked::EXCEPTION);
+
+        do {
+            status = event_wait_with_mask(&exception_event_, THREAD_SIGNAL_SUSPEND);
+        } while (status == ZX_ERR_INTERNAL_INTR_RETRY);
+    }
 
     AutoLock lock(get_lock());
 
@@ -734,21 +744,21 @@ zx_status_t ThreadDispatcher::GetInfoForUserspace(zx_info_thread_t* info) {
 
     *info = {};
 
-    ThreadDispatcher::State state;
-    enum thread_state lk_state;
+    State state;
+    Blocked blocked_reason;
     ExceptionPort::Type excp_port_type;
     // We need to fetch all these values under lock, but once we have them
     // we no longer need the lock.
     {
         AutoLock state_lock(get_lock());
         state = state_;
-        lk_state = thread_.state;
+        blocked_reason = blocked_reason_;
         if (InExceptionLocked() &&
-                // A port type of !NONE here indicates to the caller that the
-                // thread is waiting for an exception response. So don't return
-                // !NONE if the thread just woke up but hasn't reacquired
-                // |state_lock_|.
-                exception_status_ == ExceptionStatus::UNPROCESSED) {
+            // A port type of !NONE here indicates to the caller that the
+            // thread is waiting for an exception response. So don't return
+            // !NONE if the thread just woke up but hasn't reacquired
+            // |state_lock_|.
+            exception_status_ == ExceptionStatus::UNPROCESSED) {
             DEBUG_ASSERT(exception_wait_port_ != nullptr);
             excp_port_type = exception_wait_port_->type();
         } else {
@@ -769,19 +779,37 @@ zx_status_t ThreadDispatcher::GetInfoForUserspace(zx_info_thread_t* info) {
     case ThreadDispatcher::State::RUNNING:
         // The thread may be "running" but be blocked in a syscall or
         // exception handler.
-        switch (lk_state) {
-        case THREAD_BLOCKED:
-            info->state = ZX_THREAD_STATE_BLOCKED;
+        switch (blocked_reason) {
+        case Blocked::NONE:
+            info->state = ZX_THREAD_STATE_RUNNING;
+            break;
+        case Blocked::EXCEPTION:
+            info->state = ZX_THREAD_STATE_BLOCKED_EXCEPTION;
+            break;
+        case Blocked::SLEEPING:
+            info->state = ZX_THREAD_STATE_BLOCKED_SLEEPING;
+            break;
+        case Blocked::FUTEX:
+            info->state = ZX_THREAD_STATE_BLOCKED_FUTEX;
+            break;
+        case Blocked::PORT:
+            info->state = ZX_THREAD_STATE_BLOCKED_PORT;
+            break;
+        case Blocked::CHANNEL:
+            info->state = ZX_THREAD_STATE_BLOCKED_CHANNEL;
+            break;
+        case Blocked::WAIT_ONE:
+            info->state = ZX_THREAD_STATE_BLOCKED_WAIT_ONE;
+            break;
+        case Blocked::WAIT_MANY:
+            info->state = ZX_THREAD_STATE_BLOCKED_WAIT_MANY;
+            break;
+        case Blocked::INTERRUPT:
+            info->state = ZX_THREAD_STATE_BLOCKED_INTERRUPT;
             break;
         default:
-            // If we're in the window where we've released |state_lock_| but
-            // haven't gone to sleep yet (to wait for an exception response)
-            // then we're still "blocked" as far as userspace is concerned.
-            if (excp_port_type != ExceptionPort::Type::NONE) {
-                info->state = ZX_THREAD_STATE_BLOCKED;
-            } else {
-                info->state = ZX_THREAD_STATE_RUNNING;
-            }
+            DEBUG_ASSERT_MSG(false, "unexpected blocked reason: %d",
+                             static_cast<int>(blocked_reason));
             break;
         }
         break;
@@ -868,7 +896,19 @@ zx_status_t ThreadDispatcher::ReadState(zx_thread_state_topic_t state_kind,
         if (buffer_len != sizeof(zx_thread_state_general_regs_t))
             return ZX_ERR_INVALID_ARGS;
         return arch_get_general_regs(
-                &thread_, static_cast<zx_thread_state_general_regs_t*>(buffer));
+            &thread_, static_cast<zx_thread_state_general_regs_t*>(buffer));
+    }
+    case ZX_THREAD_STATE_FP_REGS: {
+        if (buffer_len != sizeof(zx_thread_state_fp_regs_t))
+            return ZX_ERR_INVALID_ARGS;
+        return arch_get_fp_regs(
+            &thread_, static_cast<zx_thread_state_fp_regs_t*>(buffer));
+    }
+    case ZX_THREAD_STATE_VECTOR_REGS: {
+        if (buffer_len != sizeof(zx_thread_state_vector_regs_t))
+            return ZX_ERR_INVALID_ARGS;
+        return arch_get_vector_regs(
+            &thread_, static_cast<zx_thread_state_vector_regs_t*>(buffer));
     }
     case ZX_THREAD_STATE_SINGLE_STEP: {
         if (buffer_len != sizeof(zx_thread_state_single_step_t))
@@ -878,7 +918,7 @@ zx_status_t ThreadDispatcher::ReadState(zx_thread_state_topic_t state_kind,
         if (status != ZX_OK)
             return status;
         *static_cast<zx_thread_state_single_step_t*>(buffer) =
-              static_cast<zx_thread_state_single_step_t>(single_step);
+            static_cast<zx_thread_state_single_step_t>(single_step);
         return ZX_OK;
     }
     default:
@@ -908,11 +948,23 @@ zx_status_t ThreadDispatcher::WriteState(zx_thread_state_topic_t state_kind,
         return arch_set_general_regs(&thread_,
                                      static_cast<const zx_thread_state_general_regs_t*>(buffer));
     }
+    case ZX_THREAD_STATE_FP_REGS: {
+        if (buffer_len != sizeof(zx_thread_state_fp_regs_t))
+            return ZX_ERR_INVALID_ARGS;
+        return arch_set_fp_regs(&thread_,
+                                static_cast<const zx_thread_state_fp_regs_t*>(buffer));
+    }
+    case ZX_THREAD_STATE_VECTOR_REGS: {
+        if (buffer_len != sizeof(zx_thread_state_vector_regs_t))
+            return ZX_ERR_INVALID_ARGS;
+        return arch_set_vector_regs(&thread_,
+                                    static_cast<const zx_thread_state_vector_regs_t*>(buffer));
+    }
     case ZX_THREAD_STATE_SINGLE_STEP: {
         if (buffer_len != sizeof(zx_thread_state_single_step_t))
             return ZX_ERR_INVALID_ARGS;
         const zx_thread_state_single_step_t* single_step =
-                static_cast<const zx_thread_state_single_step_t*>(buffer);
+            static_cast<const zx_thread_state_single_step_t*>(buffer);
         if (*single_step != 0 && *single_step != 1)
             return ZX_ERR_INVALID_ARGS;
         return arch_set_single_step(&thread_, !!*single_step);

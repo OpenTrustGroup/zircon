@@ -333,6 +333,9 @@ static inline void swap_to_head(const char c, char* s, const size_t n) {
     s[i] = tmp;
 }
 
+size_t kernel_zone_size;
+efi_physical_addr kernel_zone_base;
+
 EFIAPI efi_status efi_main(efi_handle img, efi_system_table* sys) {
     xefi_init(img, sys);
     gConOut->ClearScreen(gConOut);
@@ -374,6 +377,20 @@ EFIAPI efi_status efi_main(efi_handle img, efi_system_table* sys) {
                gop->Mode->FrameBufferBase);
     }
 
+    // Set aside space for the kernel down at the 1MB mark up front
+    // to avoid other allocations getting in the way.
+    // The kernel itself is about 1MB, but we leave generous space
+    // for its BSS afterwards.
+    kernel_zone_base = 0x100000;
+    kernel_zone_size = 32 * 1024 * 1024;
+
+    if (gBS->AllocatePages(AllocateAddress, EfiLoaderData,
+                          BYTES_TO_PAGES(kernel_zone_size), &kernel_zone_base)) {
+        printf("boot: cannot obtain memory for kernel @ %p\n", (void*) kernel_zone_base);
+        kernel_zone_size = 0;
+    }
+    printf("KALLOC DONE\n");
+
     // Default boot defaults to network
     const char* defboot = cmdline_get("bootloader.default", "network");
     const char* nodename = cmdline_get("zircon.nodename", "");
@@ -400,8 +417,9 @@ EFIAPI efi_status efi_main(efi_handle img, efi_system_table* sys) {
 
     // First look for a self-contained zirconboot image
     size_t zedboot_size = 0;
-    void* zedboot_kernel = xefi_load_file(L"zedboot.bin", &zedboot_size, 0);
+    void* zedboot_kernel = NULL;
 
+    zedboot_kernel = xefi_load_file(L"zedboot.bin", &zedboot_size, 0);
     switch (identify_image(zedboot_kernel, zedboot_size)) {
     case IMAGE_COMBO:
         printf("zedboot.bin is a valid kernel+ramdisk combo image\n");
@@ -416,24 +434,31 @@ EFIAPI efi_status efi_main(efi_handle img, efi_system_table* sys) {
     // Look for a kernel image on disk
     size_t ksz = 0;
     unsigned ktype = IMAGE_INVALID;
-    void* kernel = xefi_load_file(L"zircon.bin", &ksz, 0);
+    void* kernel = NULL;
 
-    switch ((ktype = identify_image(kernel, ksz))) {
-    case IMAGE_EMPTY:
-        break;
-    case IMAGE_KERNEL:
-        printf("zircon.bin is a kernel image\n");
-        break;
-    case IMAGE_COMBO:
-        printf("zircon.bin is a kernel+ramdisk combo image\n");
-        break;
-    case IMAGE_RAMDISK:
-        printf("zircon.bin is a ramdisk?!\n");
-    case IMAGE_INVALID:
-        printf("zircon.bin is not a valid kernel or combo image\n");
-        ktype = IMAGE_INVALID;
-        ksz = 0;
-        kernel = NULL;
+    kernel = image_load_from_disk(img, sys, &ksz);
+    if (kernel != NULL) {
+        printf("zircon image loaded from zircon partition\n");
+        ktype = IMAGE_COMBO;
+    } else {
+        kernel = xefi_load_file(L"zircon.bin", &ksz, 0);
+        switch ((ktype = identify_image(kernel, ksz))) {
+        case IMAGE_EMPTY:
+            break;
+        case IMAGE_KERNEL:
+            printf("zircon.bin is a kernel image\n");
+            break;
+        case IMAGE_COMBO:
+            printf("zircon.bin is a kernel+ramdisk combo image\n");
+            break;
+        case IMAGE_RAMDISK:
+            printf("zircon.bin is a ramdisk?!\n");
+        case IMAGE_INVALID:
+            printf("zircon.bin is not a valid kernel or combo image\n");
+            ktype = IMAGE_INVALID;
+            ksz = 0;
+            kernel = NULL;
+        }
     }
 
     if (!have_network && zedboot_kernel == NULL && kernel == NULL) {

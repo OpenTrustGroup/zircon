@@ -5,10 +5,10 @@
 #pragma once
 
 #include <ddk/protocol/display-controller.h>
-#include <fbl/intrusive_double_list.h>
 #include <fbl/ref_counted.h>
 #include <fbl/ref_ptr.h>
 #include <lib/zx/vmo.h>
+#include <zircon/listnode.h>
 
 #include "fuchsia/display/c/fidl.h"
 #include "fence.h"
@@ -18,9 +18,12 @@ namespace display {
 
 class Controller;
 
-class Image : public fbl::RefCounted<Image>,
-        public IdMappable<fbl::RefPtr<Image>>,
-        public fbl::DoublyLinkedListable<fbl::RefPtr<Image>> {
+typedef struct image_node {
+    list_node_t link;
+    fbl::RefPtr<class Image> self;
+} image_node_t;
+
+class Image : public fbl::RefCounted<Image>, public IdMappable<fbl::RefPtr<Image>> {
 public:
     Image(Controller* controller, const image_t& info, zx::vmo vmo);
     ~Image();
@@ -49,10 +52,29 @@ public:
 
     bool IsReady() const { return wait_fence_ == nullptr; }
 
+    bool HasSameConfig(const image_t& config) const {
+        return info_.width == config.width
+                && info_.height == config.height
+                && info_.pixel_format == config.pixel_format
+                && info_.type == config.type;
+    }
+    bool HasSameConfig(const Image& other) const { return HasSameConfig(other.info_); }
+
     const zx::vmo& vmo() { return vmo_; }
+
+    // The image z_index is set/read by Controller.cpp for layer tracking.
+    void set_z_index(uint32_t z_index) { z_index_ = z_index; }
+    uint32_t z_index() const { return z_index_; }
+
+    image_node_t node = {
+        .link = LIST_INITIAL_CLEARED_VALUE,
+        .self = nullptr,
+    };
+
 private:
     image_t info_;
     Controller* controller_;
+    uint32_t z_index_;
 
     fbl::RefPtr<FenceReference> wait_fence_ = nullptr;
     fbl::RefPtr<FenceReference> present_fence_ = nullptr;

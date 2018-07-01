@@ -75,6 +75,12 @@ public:
         return BytePart(bytes_.data() + n, bytes_.capacity() - n, bytes_.actual() - n);
     }
 
+    // The message bytes interpreted as the given type.
+    template <typename T>
+    T* GetBytesAs() const {
+        return reinterpret_cast<T*>(bytes_.data());
+    }
+
     // The message payload that follows the header interpreted as the given type.
     //
     // Valid only if has_header().
@@ -144,7 +150,7 @@ public:
     // If this method returns ZX_OK, handles() will be empty because they were
     // consumed by this operation.
     zx_status_t Call(zx_handle_t channel, uint32_t flags, zx_time_t deadline,
-                     zx_status_t* read_status, Message* response);
+                     Message* response);
 
     // Stop tracking the handles in stored in handles(), without closing them.
     //

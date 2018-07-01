@@ -8,7 +8,7 @@
 
 #include <fbl/algorithm.h>
 #include <fbl/type_support.h>
-#include <fdio/util.h>
+#include <lib/fdio/util.h>
 #include <lib/fidl/coding.h>
 #include <zircon/assert.h>
 #include <zircon/syscalls.h>
@@ -92,8 +92,7 @@ bool TraceProviderImpl::Connection::ReadMessage() {
         return false;
 
     if (!DecodeAndDispatch(buffer, num_bytes, handles, num_handles)) {
-        for (uint32_t i = 0; i < num_handles; i++)
-            zx_handle_close(handles[i]);
+        zx_handle_close_many(handles, num_handles);
         return false;
     }
 
@@ -180,10 +179,8 @@ trace_provider_t* trace_provider_create(async_t* async) {
     zx_handle_t handles[] = {provider_client.release()};
     status = registry_client.write(0u, &request, sizeof(request),
                                    handles, static_cast<uint32_t>(fbl::count_of(handles)));
-    if (status != ZX_OK) {
-        provider_client.reset(handles[0]); // take back ownership after failure
+    if (status != ZX_OK)
         return nullptr;
-    }
 
     return new trace::internal::TraceProviderImpl(async, fbl::move(provider_service));
 }

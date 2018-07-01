@@ -20,7 +20,6 @@
 #include <hw/reg.h>
 
 #include <soc/aml-s912/s912-hw.h>
-#include <soc/aml-s912/s912-gpio.h>
 
 #include <zircon/assert.h>
 #include <zircon/process.h>
@@ -28,74 +27,6 @@
 #include <zircon/threads.h>
 
 #include "vim.h"
-
-// DMC MMIO for display driver
-static pbus_mmio_t vim_display_mmios[] = {
-    {
-        .base =     S912_PRESET_BASE,
-        .length =   S912_PRESET_LENGTH,
-    },
-    {
-        .base =     S912_HDMITX_BASE,
-        .length =   S912_HDMITX_LENGTH,
-    },
-    {
-        .base =     S912_HIU_BASE,
-        .length =   S912_HIU_LENGTH,
-    },
-    {
-        .base =     S912_VPU_BASE,
-        .length =   S912_VPU_LENGTH,
-    },
-    {
-        .base =     S912_HDMITX_SEC_BASE,
-        .length =   S912_HDMITX_SEC_LENGTH,
-    },
-    {
-        .base =     S912_DMC_REG_BASE,
-        .length =   S912_DMC_REG_LENGTH,
-    },
-    {
-        .base =     S912_CBUS_REG_BASE,
-        .length =   S912_CBUS_REG_LENGTH,
-    },
-};
-
-const pbus_gpio_t vim_display_gpios[] = {
-    {
-        // HPD
-        .gpio = S912_GPIOH(0),
-    },
-};
-
-static const pbus_irq_t vim_display_irqs[] = {
-    {
-        .irq = S912_VIU1_VSYNC_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-};
-
-static const pbus_bti_t vim_display_btis[] = {
-    {
-        .iommu_index = 0,
-        .bti_id = BTI_DISPLAY,
-    },
-};
-
-static const pbus_dev_t display_dev = {
-    .name = "display",
-    .vid = PDEV_VID_KHADAS,
-    .pid = PDEV_PID_VIM2,
-    .did = PDEV_DID_VIM_DISPLAY,
-    .mmios = vim_display_mmios,
-    .mmio_count = countof(vim_display_mmios),
-    .gpios = vim_display_gpios,
-    .gpio_count = countof(vim_display_gpios),
-    .irqs = vim_display_irqs,
-    .irq_count = countof(vim_display_irqs),
-    .btis = vim_display_btis,
-    .bti_count = countof(vim_display_btis),
-};
 
 static void vim_bus_release(void* ctx) {
     vim_bus_t* bus = ctx;
@@ -105,88 +36,6 @@ static void vim_bus_release(void* ctx) {
 static zx_protocol_device_t vim_bus_device_protocol = {
     .version = DEVICE_OPS_VERSION,
     .release = vim_bus_release,
-};
-
-static const pbus_i2c_channel_t led2472g_channels[] = {
-  {
-    .bus_id = 0,
-    .address = 0x46,
-  },
-};
-
-static const pbus_dev_t led2472g_dev = {
-  .name = "led2472g",
-  .vid = PDEV_VID_GENERIC,
-  .pid = PDEV_PID_GENERIC,
-  .did = PDEV_DID_LED2472G,
-  .i2c_channels = led2472g_channels,
-  .i2c_channel_count = countof(led2472g_channels),
-};
-
-static pbus_mmio_t vim_video_mmios[] = {
-    {
-        .base =     S912_FULL_CBUS_BASE,
-        .length =   S912_FULL_CBUS_LENGTH,
-    },
-    {
-        .base =     S912_DOS_BASE,
-        .length =   S912_DOS_LENGTH,
-    },
-    {
-        .base =     S912_HIU_BASE,
-        .length =   S912_HIU_LENGTH,
-    },
-    {
-        .base =     S912_AOBUS_BASE,
-        .length =   S912_AOBUS_LENGTH,
-    },
-    {
-        .base =     S912_DMC_REG_BASE,
-        .length =   S912_DMC_REG_LENGTH,
-    },
-};
-
-static const pbus_bti_t vim_video_btis[] = {
-    {
-        .iommu_index = 0,
-        .bti_id = BTI_VIDEO,
-    },
-};
-
-static const pbus_irq_t vim_video_irqs[] = {
-    {
-        .irq = S912_DEMUX_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S912_PARSER_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S912_DOS_MBOX_0_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S912_DOS_MBOX_1_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S912_DOS_MBOX_2_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-};
-
-static const pbus_dev_t video_dev = {
-    .name = "video",
-    .vid = PDEV_VID_AMLOGIC,
-    .pid = PDEV_PID_AMLOGIC_S912,
-    .did = PDEV_DID_AMLOGIC_VIDEO,
-    .mmios = vim_video_mmios,
-    .mmio_count = countof(vim_video_mmios),
-    .btis = vim_video_btis,
-    .bti_count = countof(vim_video_btis),
-    .irqs = vim_video_irqs,
-    .irq_count = countof(vim_video_irqs),
 };
 
 static int vim_start_thread(void* arg) {
@@ -210,7 +59,7 @@ static int vim_start_thread(void* arg) {
         goto fail;
     }
 
-    if ((status = vim_mali_init(bus)) != ZX_OK) {
+    if ((status = vim_mali_init(bus, BTI_MALI)) != ZX_OK) {
         zxlogf(ERROR, "vim_mali_init failed: %d\n", status);
         goto fail;
     }
@@ -220,32 +69,48 @@ static int vim_start_thread(void* arg) {
         goto fail;
     }
 
+    if ((status = vim_sdio_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_sdio_init failed: %d\n", status);
+        goto fail;
+    }
+
     if ((status = vim2_mailbox_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim2_mailbox_init failed: %d\n", status);
         goto fail;
     }
+
     if ((status = vim2_thermal_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim2_thermal_init failed: %d\n", status);
         goto fail;
     }
 
-    if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "vim_start_thread could not add display_dev: %d\n", status);
+    if ((status = vim_display_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_display_init failed: %d\n", status);
         goto fail;
     }
 
-    if ((status = pbus_device_add(&bus->pbus, &video_dev, 0)) != ZX_OK) {
-      zxlogf(ERROR, "vim_start_thread could not add video_dev: %d\n", status);
-      goto fail;
+    if ((status = vim_video_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_video_init failed: %d\n", status);
+        goto fail;
     }
 
-    if ((status = pbus_device_add(&bus->pbus, &led2472g_dev, 0)) != ZX_OK) {
-      zxlogf(ERROR, "vim_start_thread could not add led2472g_dev: %d\n", status);
-      goto fail;
+    if ((status = vim_led2472g_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_led2472g_init failed: %d\n", status);
+        goto fail;
     }
 
     if ((status = vim_eth_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_eth_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = vim_rtc_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_rtc_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = vim2_canvas_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim2_canvas_init failed: %d\n", status);
         goto fail;
     }
 

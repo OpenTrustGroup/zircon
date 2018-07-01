@@ -26,6 +26,10 @@ MODULE_SRCS += \
 # can be linked dynamically.  But it doesn't support any means to look
 # up other shared libraries, so everything else must be linked statically.
 
+# We can avoid this dependency if crashsvc connects directly to the analyzer.
+MODULE_FIDL_LIBS := \
+    system/fidl/crash
+
 # ddk is needed only for ddk/device.h
 MODULE_HEADER_DEPS := \
     system/ulib/ddk
@@ -67,6 +71,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/vfs-rpc.cpp
 
 MODULE_STATIC_LIBS := \
+    system/ulib/memfs.cpp \
     system/ulib/memfs \
     system/ulib/fs \
     system/ulib/loader-service \
@@ -140,6 +145,6 @@ MODULE_SRCS := \
 
 MODULE_STATIC_LIBS := system/ulib/ddk system/ulib/port
 
-MODULE_LIBS := system/ulib/driver system/ulib/launchpad system/ulib/fdio system/ulib/zircon system/ulib/c
+MODULE_LIBS := system/ulib/driver system/ulib/zircon system/ulib/c
 
 include make/module.mk

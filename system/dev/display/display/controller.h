@@ -32,9 +32,21 @@ class DisplayInfo : public IdMappable<fbl::unique_ptr<DisplayInfo>> {
 public:
     display_info_t info;
 
-    // TODO(stevensd): extract a list of all valid timings
-    edid::timing_params_t preferred_timing;
-    fbl::DoublyLinkedList<fbl::RefPtr<Image>> images;
+    edid::Edid edid;
+
+    // A list of all images which have been sent to display driver. For multiple
+    // images which are displayed at the same time, images with a lower z-order
+    // occur first.
+    list_node_t images = LIST_INITIAL_VALUE(images);
+    // The number of layers in the applied configuration.
+    uint32_t layer_count;
+
+    // Set when a layer change occurs on this display and cleared in vsync
+    // when the new layers are all active.
+    bool pending_layer_change;
+    // Flag indicating that a new configuration was delayed during a layer change
+    // and should be reapplied after the layer change completes.
+    bool delayed_apply;
 };
 
 using ControllerParent = ddk::Device<Controller, ddk::Unbindable, ddk::Openable, ddk::OpenAtable>;
@@ -51,14 +63,28 @@ public:
 
     void OnDisplaysChanged(uint64_t* displays_added, uint32_t added_count,
                            uint64_t* displays_removed, uint32_t removed_count);
-    void OnDisplayVsync(uint64_t display_id, void* handles);
+    void OnDisplayVsync(uint64_t display_id, void** handles, uint32_t handle_count);
     void OnClientDead(ClientProxy* client);
-    void SetVcOwner(bool vc_is_owner);
+    void SetVcMode(uint8_t mode);
     void ShowActiveDisplay();
 
-    void OnConfigApplied(DisplayConfig* configs[], int32_t count);
+    void ApplyConfig(DisplayConfig* configs[], int32_t count,
+                     bool vc_client, uint32_t apply_stamp);
 
     void ReleaseImage(Image* image);
+
+    // Calling GetPanelConfig requires holding |mtx()|, and it must be held
+    // for as long as |edid| and |params| are retained.
+    bool GetPanelConfig(uint64_t display_id, const edid::Edid** edid,
+                        const display_params_t** params) __TA_NO_THREAD_SAFETY_ANALYSIS;
+    // Calling GetSupportedPixelFormats requires holding |mtx()|
+    bool GetSupportedPixelFormats(uint64_t display_id, uint32_t* count_out,
+                                  fbl::unique_ptr<zx_pixel_format_t[]>* fmts_out)
+                                  __TA_NO_THREAD_SAFETY_ANALYSIS;
+    // Calling GetCursorInfo requires holding |mtx()|
+    bool GetCursorInfo(uint64_t display_id, uint32_t* count_out,
+                       fbl::unique_ptr<cursor_info_t[]>* cursor_info_out)
+                       __TA_NO_THREAD_SAFETY_ANALYSIS;
 
     display_controller_protocol_ops_t* ops() { return ops_.ops; }
     void* ops_ctx() { return ops_.ctx; }
@@ -72,10 +98,12 @@ private:
     mtx_t mtx_;
 
     DisplayInfo::Map displays_ __TA_GUARDED(mtx_);
+    bool vc_applied_;
+    uint32_t applied_stamp_ = UINT32_MAX;
 
     ClientProxy* vc_client_ __TA_GUARDED(mtx_) = nullptr;
     ClientProxy* primary_client_ __TA_GUARDED(mtx_) = nullptr;
-    bool vc_is_owner_ __TA_GUARDED(mtx_) = false;
+    uint8_t vc_mode_ __TA_GUARDED(mtx_) = fuchsia_display_VirtconMode_INACTIVE;
     ClientProxy* active_client_ __TA_GUARDED(mtx_) = nullptr;
 
     async::Loop loop_;

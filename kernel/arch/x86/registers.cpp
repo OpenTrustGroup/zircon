@@ -37,10 +37,17 @@
 #define LOCAL_TRACE 0
 
 #define IA32_XSS_MSR 0xDA0
-/* offset in xsave area that components >= 2 start at */
+
+// Offset in xsave area that components >= 2 start at.
 #define XSAVE_EXTENDED_AREA_OFFSET 576
-/* bits 2 through 62 of state vector can optionally be set */
-#define XSAVE_MAX_EXT_COMPONENTS 61
+
+// The first xsave component in the extended (non-legacy) area.
+#define XSAVE_FIRST_EXT_COMPONENT 2
+
+// Number of possible components in the state vector.
+#define XSAVE_MAX_COMPONENTS 63
+
+// Bit in XCOMP_BV field of xsave indicating compacted format.
 #define XSAVE_XCOMP_BV_COMPACT (1ULL << 63)
 
 static void fxsave(void* register_state);
@@ -54,12 +61,17 @@ static void xsaves(void* register_state, uint64_t feature_mask);
 static void read_xsave_state_info(void);
 static void recompute_state_size(void);
 
+// Indexed by component. Components 0 and 1 are the "legacy" floating point and
+// SSE ones. These do not have a size or align64 set in this structure since
+// they are inside the legacy xsave area. Use XSAVE_FIRST_EXT_COMPONENT for
+// the first valid entry.
 static struct {
-    /* Total size of this component in bytes */
+    // Total size of this component in bytes.
     uint32_t size;
-    /* If true, this component must be aligned to a 64-byte boundary */
+
+    // If true, this component must be aligned to a 64-byte boundary.
     bool align64;
-} state_components[XSAVE_MAX_EXT_COMPONENTS];
+} state_components[XSAVE_MAX_COMPONENTS];
 
 /* Supported bits in XCR0 (each corresponds to a state component) */
 static uint64_t xcr0_component_bitmap = 0;
@@ -94,11 +106,12 @@ static_assert(sizeof(x86_xsave_legacy_area) == 416, "Size of legacy xsave area s
 
 /* Format described in Intel 3A section 13.4 */
 struct xsave_area {
+    // Always valid, even when using the older fxsave.
     x86_xsave_legacy_area legacy;
 
     uint8_t reserved1[96];
 
-    /* xsave_header */
+    // The xsave header. It and the extended regions are only valid when using xsave, not fxsave.
     uint64_t xstate_bv;
     uint64_t xcomp_bv;
     uint8_t reserved2[48];
@@ -123,6 +136,37 @@ static void x86_extended_register_cpu_init(void) {
     DEBUG_ASSERT(enabled);
 }
 
+// Sets the portions of the xsave legacy area such that the x87 state is considered in its "initial
+// configuration" as defined by Intel Vol 1 section 13.6.
+//
+// "The x87 state component comprises bytes 23:0 and bytes 159:32." This doesn't count the MXCSR
+// register.
+static void set_x87_initial_state(x86_xsave_legacy_area* legacy_area) {
+    legacy_area->fcw = 0x037f;
+    legacy_area->fsw = 0;
+    // The initial value of the FTW register is 0xffff. The FTW field in the xsave area is an
+    // abbreviated version (see Intel manual sec 13.5.1). In the FTW register 1 bits indicate
+    // the empty tag (two per register), while the abbreviated version uses 1 bit per register and
+    // 0 indicates empty. So set to 0 to indicate all registers are empty.
+    legacy_area->ftw = 0;
+    legacy_area->fop = 0;
+    legacy_area->fip = 0;
+    legacy_area->fdp = 0;
+
+    // Register values are all 0.
+    constexpr size_t fp_reg_size = sizeof(legacy_area->st);
+    static_assert(fp_reg_size == 128, "Struct size is wrong");
+    memset(&legacy_area->st[0], 0, fp_reg_size);
+}
+
+// SSE state is only the XMM registers which is all 0 and does not count MXCSR as defined by Intel
+// Vol 1 section 13.6.
+static void set_sse_initial_state(x86_xsave_legacy_area* legacy_area) {
+    constexpr size_t sse_reg_size = sizeof(legacy_area->xmm);
+    static_assert(sse_reg_size == 256, "Struct size is wrong");
+    memset(&legacy_area->xmm[0], 0, sse_reg_size);
+}
+
 /* Figure out what forms of register saving this machine supports and
  * select the best one */
 void x86_extended_register_init(void) {
@@ -144,14 +188,16 @@ void x86_extended_register_init(void) {
             x86_extended_register_cpu_init();
             initialized_cpu_already = true;
 
-            /* Intel Vol 3 section 13.5.4 describes the XSAVE initialization. */
+            // Intel Vol 3 section 13.5.4 describes the XSAVE initialization. The only change we
+            // want to make to the init state is having SIMD exceptions masked. The "legacy" area
+            // of the xsave structure is valid for fxsave as well.
+            xsave_area* area = reinterpret_cast<xsave_area*>(extended_register_init_state);
+            set_x87_initial_state(&area->legacy);
+            set_sse_initial_state(&area->legacy);
+            area->legacy.mxcsr = 0x3f << 7;
+
             if (xsave_supported) {
-                /* The only change we want to make to the init state is having
-                 * SIMD exceptions masked */
-                struct xsave_area* area =
-                    (struct xsave_area*)extended_register_init_state;
                 area->xstate_bv |= X86_XSAVE_STATE_BIT_SSE;
-                area->legacy.mxcsr = 0x3f << 7;
 
                 /* If xsaves is being used, then make the saved state be in
                  * compact form.  xrstors will GPF if it is not. */
@@ -159,8 +205,6 @@ void x86_extended_register_init(void) {
                     area->xcomp_bv |= XSAVE_XCOMP_BV_COMPACT;
                     area->xcomp_bv |= area->xstate_bv;
                 }
-            } else {
-                fxsave(&extended_register_init_state);
             }
         }
 
@@ -387,21 +431,20 @@ static void read_xsave_state_info(void) {
     ac.cancel();
 
     /* Read info about the state components */
-    for (uint i = 0; i < XSAVE_MAX_EXT_COMPONENTS; ++i) {
-        uint idx = i + 2;
-        if (!(xcr0_component_bitmap & (1ULL << idx)) &&
-            !(xss_component_bitmap & (1ULL << idx))) {
+    for (int i = XSAVE_FIRST_EXT_COMPONENT; i < XSAVE_MAX_COMPONENTS; ++i) {
+        if (!(xcr0_component_bitmap & (1ULL << i)) &&
+            !(xss_component_bitmap & (1ULL << i))) {
             continue;
         }
-        x86_get_cpuid_subleaf(X86_CPUID_XSAVE, idx, &leaf);
+        x86_get_cpuid_subleaf(X86_CPUID_XSAVE, i, &leaf);
 
         bool align64 = !!(leaf.c & 0x2);
 
         state_components[i].size = leaf.a;
         state_components[i].align64 = align64;
-        LTRACEF("component %u size: %u (xcr0 %d)\n",
-                idx, state_components[i].size,
-                !!(xcr0_component_bitmap & (1ULL << idx)));
+        LTRACEF("component %d size: %u (xcr0 %d)\n",
+                i, state_components[i].size,
+                !!(xcr0_component_bitmap & (1ULL << i)));
 
         if (align64) {
             max_area = ROUNDUP(max_area, 64);
@@ -425,9 +468,8 @@ static void recompute_state_size(void) {
     if (xsaves_supported) {
         new_size = XSAVE_EXTENDED_AREA_OFFSET;
         uint64_t enabled_features = x86_xgetbv(0) | read_msr(IA32_XSS_MSR);
-        for (uint i = 0; i < XSAVE_MAX_EXT_COMPONENTS; ++i) {
-            uint idx = i + 2;
-            if (!(enabled_features & (1ULL << idx))) {
+        for (int i = XSAVE_FIRST_EXT_COMPONENT; i < XSAVE_MAX_COMPONENTS; ++i) {
+            if (!(enabled_features & (1ULL << i))) {
                 continue;
             }
 
@@ -526,17 +568,32 @@ void x86_xsetbv(uint32_t reg, uint64_t val) {
 }
 
 void* x86_get_extended_register_state_component(void* register_state, uint32_t component,
-                                                uint32_t* size) {
-    if (component >= XSAVE_MAX_EXT_COMPONENTS) {
+                                                bool mark_present, uint32_t* size) {
+    if (component >= XSAVE_MAX_COMPONENTS) {
         *size = 0;
         return nullptr;
     }
 
     xsave_area* area = reinterpret_cast<xsave_area*>(register_state);
 
+    uint64_t state_component_bit = (1ul << component);
+
     // Components 0 and 1 are special and are always present in the legacy area.
     if (component <= 1) {
         *size = sizeof(x86_xsave_legacy_area);
+        if (!(area->xstate_bv & state_component_bit)) {
+            // Component not written because registers were in the initial configuration. Set it so
+            // the caller sees the correct initial values.
+            if (component == 0) {
+                set_x87_initial_state(&area->legacy);
+            } else {
+                set_sse_initial_state(&area->legacy);
+            }
+            if (mark_present) {
+                area->xstate_bv |= state_component_bit;
+            }
+        }
+
         return area;
     }
 
@@ -548,19 +605,33 @@ void* x86_get_extended_register_state_component(void* register_state, uint32_t c
         if (leaf.a == 0) {
             return nullptr;
         }
-        return static_cast<uint8_t*>(register_state) + leaf.b;
+        uint8_t* component_begin = static_cast<uint8_t*>(register_state) + leaf.b;
+
+        if (!(area->xstate_bv & state_component_bit)) {
+            // Component not written because it's in the initial state. Write the initial values to
+            // the structure the caller sees the correct data. The initial state of all non-x87
+            // xsave components (x87 is handled above) is all 0's.
+            memset(component_begin, 0, *size);
+            if (mark_present) {
+                area->xstate_bv |= state_component_bit;
+            }
+        }
+        return component_begin;
     }
 
     // Compacted format used. The corresponding bit in xcomp_bv indicates whether the component is
     // present.
-    if (!(area->xcomp_bv & (1ul << component))) {
+    if (!(area->xcomp_bv & state_component_bit)) {
+        // Currently this doesn't support reading or writing compacted components that aren't
+        // currently marked present. In the future, we may want to add this which will require
+        // rewriting all the following components.
         *size = 0;
         return nullptr;
     }
 
     // Walk all present components and add up their sizes (optionally aligned up) to get the offset.
     uint32_t offset = XSAVE_EXTENDED_AREA_OFFSET;
-    for (uint32_t i = 2; i < component; i++) {
+    for (uint32_t i = XSAVE_FIRST_EXT_COMPONENT; i < component; i++) {
         if (!(area->xcomp_bv & (1ul << i))) {
             continue;
         }
@@ -573,8 +644,19 @@ void* x86_get_extended_register_state_component(void* register_state, uint32_t c
         offset = ROUNDUP(offset, 64);
     }
 
+    uint8_t* component_begin = static_cast<uint8_t*>(register_state) + offset;
     *size = state_components[component].size;
-    return static_cast<uint8_t*>(register_state) + offset;
+
+    if (!(area->xstate_bv & state_component_bit)) {
+        // Component not written because it's in the initial state. Write the initial values to
+        // the structure the caller sees the correct data. The initial state of all non-x87
+        // xsave components (x87 is handled above) is all 0's.
+        memset(component_begin, 0, *size);
+        if (mark_present) {
+            area->xstate_bv |= state_component_bit;
+        }
+    }
+    return component_begin;
 }
 
 // Set the extended register PT mode to trace either cpus (!threads)

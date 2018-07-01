@@ -7,11 +7,11 @@
 
 #include <bootdata/decompress.h>
 
-#include <fdio/namespace.h>
-#include <fdio/util.h>
-#include <fdio/watcher.h>
 #include <fs-management/ramdisk.h>
 #include <launchpad/launchpad.h>
+#include <lib/fdio/namespace.h>
+#include <lib/fdio/util.h>
+#include <lib/fdio/watcher.h>
 #include <loader-service/loader-service.h>
 
 #include <zircon/boot/bootdata.h>
@@ -29,13 +29,15 @@
 #include <string.h>
 #include <threads.h>
 
-#include "bootfs.h"
 #include "block-watcher.h"
+#include "bootfs.h"
 
 // When adding VMOs to the boot filesystem, add them under the directory
 // /boot/VMO_SUBDIR. This constant must end, but not start, with a slash.
 #define VMO_SUBDIR "kernel/"
 #define VMO_SUBDIR_LEN (sizeof(VMO_SUBDIR) - 1)
+
+#define LAST_PANIC_FILEPATH "log/last-panic.txt"
 
 struct callback_data {
     zx_handle_t vmo;
@@ -115,7 +117,7 @@ static void setup_last_crashlog(zx_handle_t vmo_in, uint64_t off_in, size_t sz) 
     if (copy_vmo(vmo_in, off_in, sz, &vmo) != ZX_OK) {
         return;
     }
-    bootfs_add_file("log/last-panic.txt", vmo, 0, sz);
+    bootfs_add_file(LAST_PANIC_FILEPATH, vmo, 0, sz);
 }
 
 struct bootdata_ramdisk {
@@ -168,13 +170,13 @@ static void setup_bootfs(void) {
     zx_handle_t vmo;
     unsigned idx = 0;
 
-    if ((vmo = zx_get_startup_handle(HND_BOOTFS(0)))) {
+    if ((vmo = zx_take_startup_handle(HND_BOOTFS(0)))) {
         setup_bootfs_vmo(idx++, BOOTDATA_BOOTFS_BOOT, vmo);
     } else {
         printf("devmgr: missing primary bootfs?!\n");
     }
 
-    for (unsigned n = 0; (vmo = zx_get_startup_handle(HND_BOOTDATA(n))); n++) {
+    for (unsigned n = 0; (vmo = zx_take_startup_handle(HND_BOOTDATA(n))); n++) {
         bootdata_t bootdata;
         zx_status_t status = zx_vmo_read(vmo, &bootdata, 0, sizeof(bootdata));
         if (status < 0) {
@@ -250,7 +252,7 @@ static void setup_bootfs(void) {
             off += itemlen;
             len -= itemlen;
         }
-done:
+    done:
         zx_handle_close(vmo);
     }
 }
@@ -259,7 +261,7 @@ done:
 // the filesystem under the path /boot/VMO_SUBDIR_LEN/<vmo-name>.
 static void fetch_vmos(uint_fast8_t type, const char* debug_type_name) {
     for (uint_fast16_t i = 0; true; ++i) {
-        zx_handle_t vmo = zx_get_startup_handle(PA_HND(type, i));
+        zx_handle_t vmo = zx_take_startup_handle(PA_HND(type, i));
         if (vmo == ZX_HANDLE_INVALID)
             break;
 
@@ -275,7 +277,7 @@ static void fetch_vmos(uint_fast8_t type, const char* debug_type_name) {
         char name[VMO_SUBDIR_LEN + ZX_MAX_NAME_LEN] = VMO_SUBDIR;
         size_t size;
         zx_status_t status = zx_object_get_property(vmo, ZX_PROP_NAME,
-                name + VMO_SUBDIR_LEN, sizeof(name) - VMO_SUBDIR_LEN);
+                                                    name + VMO_SUBDIR_LEN, sizeof(name) - VMO_SUBDIR_LEN);
         if (status != ZX_OK) {
             printf("devmgr: zx_object_get_property on %s %u: %s\n",
                    debug_type_name, i, zx_status_get_string(status));
@@ -294,7 +296,7 @@ static void fetch_vmos(uint_fast8_t type, const char* debug_type_name) {
         }
         if (!strcmp(name + VMO_SUBDIR_LEN, "crashlog")) {
             // the crashlog has a special home
-            strcpy(name, "log/last-panic.txt");
+            strcpy(name, LAST_PANIC_FILEPATH);
         }
         status = bootfs_add_file(name, vmo, 0, size);
         if (status != ZX_OK) {
@@ -331,18 +333,14 @@ zx_handle_t fs_root_clone(void) {
     return h;
 }
 
-zx_handle_t devmgr_load_file(const char* path) {
-    return ZX_HANDLE_INVALID;
-}
-
 static zx_handle_t fs_root;
 static zx_handle_t devfs_root;
 static zx_handle_t svc_root;
 static zx_handle_t fshost_event;
 
-#define FS_DIR_FLAGS \
-    (ZX_FS_RIGHT_READABLE | ZX_FS_RIGHT_ADMIN |\
-    ZX_FS_FLAG_DIRECTORY | ZX_FS_FLAG_NOREMOTE)
+#define FS_DIR_FLAGS                            \
+    (ZX_FS_RIGHT_READABLE | ZX_FS_RIGHT_ADMIN | \
+     ZX_FS_FLAG_DIRECTORY | ZX_FS_FLAG_NOREMOTE)
 
 zx_handle_t fs_clone(const char* path) {
     if (!strcmp(path, "svc")) {
@@ -382,11 +380,11 @@ int main(int argc, char** argv) {
         argv++;
     }
 
-    zx_handle_t _fs_root = zx_get_startup_handle(PA_HND(PA_USER0, 0));
-    devfs_root = zx_get_startup_handle(PA_HND(PA_USER0, 1));
-    svc_root = zx_get_startup_handle(PA_HND(PA_USER0, 2));
-    zx_handle_t devmgr_loader = zx_get_startup_handle(PA_HND(PA_USER0, 3));
-    fshost_event = zx_get_startup_handle(PA_HND(PA_USER1, 0));
+    zx_handle_t _fs_root = zx_take_startup_handle(PA_HND(PA_USER0, 0));
+    devfs_root = zx_take_startup_handle(PA_HND(PA_USER0, 1));
+    svc_root = zx_take_startup_handle(PA_HND(PA_USER0, 2));
+    zx_handle_t devmgr_loader = zx_take_startup_handle(PA_HND(PA_USER0, 3));
+    fshost_event = zx_take_startup_handle(PA_HND(PA_USER1, 0));
 
     fshost_start();
 

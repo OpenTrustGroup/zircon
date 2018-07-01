@@ -24,6 +24,8 @@ static constexpr uint64_t kMdscrSSMask = 1;
 static constexpr uint64_t kSSMaskSPSR = (1 << 21);
 
 zx_status_t arch_get_general_regs(struct thread* thread, zx_thread_state_general_regs_t* out) {
+    AutoThreadLock lock;
+
     // Punt if registers aren't available. E.g.,
     // ZX-563 (registers aren't available in synthetic exceptions)
     if (thread->arch.suspended_general_regs == nullptr)
@@ -43,6 +45,8 @@ zx_status_t arch_get_general_regs(struct thread* thread, zx_thread_state_general
 }
 
 zx_status_t arch_set_general_regs(struct thread* thread, const zx_thread_state_general_regs_t* in) {
+    AutoThreadLock lock;
+
     // Punt if registers aren't available. E.g.,
     // ZX-563 (registers aren't available in synthetic exceptions)
     if (thread->arch.suspended_general_regs == nullptr)
@@ -62,6 +66,8 @@ zx_status_t arch_set_general_regs(struct thread* thread, const zx_thread_state_g
 }
 
 zx_status_t arch_get_single_step(struct thread* thread, bool* single_step) {
+    AutoThreadLock lock;
+
     // Punt if registers aren't available. E.g.,
     // ZX-563 (registers aren't available in synthetic exceptions)
     if (thread->arch.suspended_general_regs == nullptr)
@@ -76,6 +82,8 @@ zx_status_t arch_get_single_step(struct thread* thread, bool* single_step) {
 }
 
 zx_status_t arch_set_single_step(struct thread* thread, bool single_step) {
+    AutoThreadLock lock;
+
     // Punt if registers aren't available. E.g.,
     // ZX-563 (registers aren't available in synthetic exceptions)
     if (thread->arch.suspended_general_regs == nullptr)
@@ -89,4 +97,74 @@ zx_status_t arch_set_single_step(struct thread* thread, bool single_step) {
         regs->spsr &= ~kSSMaskSPSR;
     }
     return ZX_OK;
+}
+
+zx_status_t arch_get_fp_regs(struct thread* thread, zx_thread_state_fp_regs* out) {
+    // There are no ARM fp regs.
+    (void)out;
+    return ZX_OK;
+}
+
+zx_status_t arch_set_fp_regs(struct thread* thread, const zx_thread_state_fp_regs* in) {
+    // There are no ARM fp regs.
+    (void)in;
+    return ZX_OK;
+}
+
+zx_status_t arch_get_vector_regs(struct thread* thread, zx_thread_state_vector_regs* out) {
+    AutoThreadLock lock;
+
+    if (thread->state == THREAD_RUNNING)
+        return ZX_ERR_BAD_STATE;
+
+    const fpstate* in = &thread->arch.fpstate;
+    out->fpcr = in->fpcr;
+    out->fpsr = in->fpsr;
+    for (int i = 0; i < 32; i++) {
+        out->v[i].low = in->regs[i * 2];
+        out->v[i].high = in->regs[i * 2 + 1];
+    }
+
+    return ZX_OK;
+}
+
+zx_status_t arch_set_vector_regs(struct thread* thread, const zx_thread_state_vector_regs* in) {
+    AutoThreadLock lock;
+
+    if (thread->state == THREAD_RUNNING)
+        return ZX_ERR_BAD_STATE;
+
+    fpstate* out = &thread->arch.fpstate;
+    out->fpcr = in->fpcr;
+    out->fpsr = in->fpsr;
+    for (int i = 0; i < 32; i++) {
+        out->regs[i * 2] = in->v[i].low;
+        out->regs[i * 2 + 1] = in->v[i].high;
+    }
+
+    return ZX_OK;
+}
+
+zx_status_t arch_get_x86_register_fs(struct thread* thread, uint64_t* out) {
+    // There are no FS register on ARM.
+    (void)out;
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t arch_set_x86_register_fs(struct thread* thread, const uint64_t* in) {
+    // There are no FS register on ARM.
+    (void)in;
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t arch_get_x86_register_gs(struct thread* thread, uint64_t* out) {
+    // There are no GS register on ARM.
+    (void)out;
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t arch_set_x86_register_gs(struct thread* thread, const uint64_t* in) {
+    // There are no GS register on ARM.
+    (void)in;
+    return ZX_ERR_NOT_SUPPORTED;
 }

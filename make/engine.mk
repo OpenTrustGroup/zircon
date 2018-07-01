@@ -153,6 +153,8 @@ GLOBAL_COMPILEFLAGS += -Wthread-safety
 GLOBAL_COMPILEFLAGS += -Wimplicit-fallthrough
 else
 GLOBAL_COMPILEFLAGS += -Wno-nonnull-compare
+# TODO(mcgrathr): New warning in GCC 7 biting a lot of code; figure it out.
+GLOBAL_COMPILEFLAGS += -Wno-format-truncation
 endif
 GLOBAL_CFLAGS := -std=c11 -Werror-implicit-function-declaration -Wstrict-prototypes -Wwrite-strings
 GLOBAL_CPPFLAGS := -std=c++14 -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wconversion -Wno-sign-conversion
@@ -399,7 +401,7 @@ FIRMWARE_SRC_DIR := prebuilt/downloads/firmware
 # TODO(mcgrathr): Force an absolute path for this so that every rhs in the
 # manifest either starts with $(BUILDDIR) or is absolute.
 # //scripts/build-zircon.sh needs this.
-FIRMWARE_SRC_DIR := $(shell cd $(FIRMWARE_SRC_DIR) && pwd)
+FIRMWARE_SRC_DIR := $(abspath $(FIRMWARE_SRC_DIR))
 
 # if someone defines this, the build id will be pulled into lib/version
 BUILDID ?=

@@ -8,6 +8,7 @@
 
 #include <crypto/aead.h>
 #include <crypto/bytes.h>
+#include <crypto/secret.h>
 #include <unittest/unittest.h>
 #include <zircon/errors.h>
 #include <zircon/types.h>
@@ -71,7 +72,8 @@ bool TestGetLengths_AES128_GCM_SIV(void) {
 bool TestInitSeal_Uninitialized(void) {
     BEGIN_TEST;
     AEAD sealer;
-    Bytes key, iv;
+    Secret key;
+    Bytes iv;
     EXPECT_ZX(sealer.InitSeal(AEAD::kUninitialized, key, iv), ZX_ERR_INVALID_ARGS);
     END_TEST;
 }
@@ -79,12 +81,13 @@ bool TestInitSeal_Uninitialized(void) {
 bool TestInitSeal(AEAD::Algorithm aead) {
     BEGIN_TEST;
     AEAD sealer;
-    Bytes key, iv;
+    Secret key;
+    Bytes iv;
     ASSERT_OK(GenerateKeyMaterial(aead, &key, &iv));
 
     // Bad key
-    Bytes bad_key;
-    ASSERT_OK(bad_key.Copy(key.get(), key.len() - 1));
+    Secret bad_key;
+    ASSERT_OK(bad_key.Generate(key.len() - 1));
     EXPECT_ZX(sealer.InitSeal(aead, bad_key, iv), ZX_ERR_INVALID_ARGS);
 
     // Bad IV
@@ -102,24 +105,31 @@ DEFINE_EACH(TestInitSeal)
 bool TestInitOpen_Uninitialized(void) {
     BEGIN_TEST;
     AEAD opener;
-    Bytes key;
-    EXPECT_ZX(opener.InitOpen(AEAD::kUninitialized, key), ZX_ERR_INVALID_ARGS);
+    Secret key;
+    Bytes iv;
+    EXPECT_ZX(opener.InitOpen(AEAD::kUninitialized, key, iv), ZX_ERR_INVALID_ARGS);
     END_TEST;
 }
 
 bool TestInitOpen(AEAD::Algorithm aead) {
     BEGIN_TEST;
     AEAD opener;
-    Bytes key, iv;
-    ASSERT_OK(GenerateKeyMaterial(aead, &key, nullptr));
+    Secret key;
+    Bytes iv;
+    ASSERT_OK(GenerateKeyMaterial(aead, &key, &iv));
 
     // Bad key
-    Bytes bad_key;
-    ASSERT_OK(bad_key.Copy(key.get(), key.len() - 1));
-    EXPECT_ZX(opener.InitOpen(aead, bad_key), ZX_ERR_INVALID_ARGS);
+    Secret bad_key;
+    ASSERT_OK(bad_key.Generate(key.len() - 1));
+    EXPECT_ZX(opener.InitOpen(aead, bad_key, iv), ZX_ERR_INVALID_ARGS);
+
+    // Bad IV
+    Bytes bad_iv;
+    ASSERT_OK(bad_iv.Copy(iv.get(), iv.len() - 1));
+    EXPECT_ZX(opener.InitOpen(aead, key, bad_iv), ZX_ERR_INVALID_ARGS);
 
     // Valid
-    EXPECT_OK(opener.InitOpen(aead, key));
+    EXPECT_OK(opener.InitOpen(aead, key, iv));
 
     END_TEST;
 }
@@ -128,162 +138,94 @@ DEFINE_EACH(TestInitOpen)
 bool TestSealData(AEAD::Algorithm aead) {
     BEGIN_TEST;
     AEAD sealer;
-    Bytes key, iv, ptext, ctext;
+    Secret key;
+    Bytes iv, ptext, ctext;
+    uint64_t nonce;
     ASSERT_OK(GenerateKeyMaterial(aead, &key, &iv));
-    ASSERT_OK(ptext.InitRandom(PAGE_SIZE));
+    ASSERT_OK(ptext.Randomize(PAGE_SIZE));
 
     // Not initialized
-    EXPECT_ZX(sealer.Seal(ptext, &iv, &ctext), ZX_ERR_BAD_STATE);
+    EXPECT_ZX(sealer.Seal(ptext, &nonce, &ctext), ZX_ERR_BAD_STATE);
     ASSERT_OK(sealer.InitSeal(aead, key, iv));
 
     // Missing parameters
     EXPECT_ZX(sealer.Seal(ptext, nullptr, &ctext), ZX_ERR_INVALID_ARGS);
-    EXPECT_ZX(sealer.Seal(ptext, &iv, nullptr), ZX_ERR_INVALID_ARGS);
+    EXPECT_ZX(sealer.Seal(ptext, &nonce, nullptr), ZX_ERR_INVALID_ARGS);
 
     // Wrong mode
-    EXPECT_ZX(sealer.Open(iv, ctext, &ptext), ZX_ERR_BAD_STATE);
+    EXPECT_ZX(sealer.Open(nonce, ctext, &ptext), ZX_ERR_BAD_STATE);
 
     // Valid
-    EXPECT_OK(sealer.Seal(ptext, &iv, &ctext));
-    ptext.Reset();
-    EXPECT_OK(sealer.Seal(ptext, &iv, &ctext));
+    EXPECT_OK(sealer.Seal(ptext, &nonce, &ctext));
+    ASSERT_OK(ptext.Resize(0));
+    EXPECT_OK(sealer.Seal(ptext, &nonce, &ctext));
 
     // Reset
     sealer.Reset();
-    EXPECT_ZX(sealer.Seal(ptext, &iv, &ctext), ZX_ERR_BAD_STATE);
+    EXPECT_ZX(sealer.Seal(ptext, &nonce, &ctext), ZX_ERR_BAD_STATE);
     END_TEST;
 }
 DEFINE_EACH(TestSealData)
 
 bool TestOpenData(AEAD::Algorithm aead) {
     BEGIN_TEST;
-    Bytes key, iv, ptext, ctext, result;
+    Secret key;
+    Bytes iv, ptext, ctext, result;
+    uint64_t nonce = 0;
     ASSERT_OK(GenerateKeyMaterial(aead, &key, &iv));
-    ASSERT_OK(ptext.InitRandom(PAGE_SIZE));
+    ASSERT_OK(ptext.Randomize(PAGE_SIZE));
 
     AEAD sealer;
     ASSERT_OK(sealer.InitSeal(aead, key, iv));
-    ASSERT_OK(sealer.Seal(ptext, &iv, &ctext));
+    // ASSERT_OK(sealer.Seal(ptext, &nonce, &ctext));
 
     // Not initialized
     AEAD opener;
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_BAD_STATE);
-    ASSERT_OK(opener.InitOpen(aead, key));
+    EXPECT_ZX(opener.Open(nonce, ctext, &result), ZX_ERR_BAD_STATE);
+    ASSERT_OK(opener.InitOpen(aead, key, iv));
 
     // Missing parameters
-    EXPECT_ZX(opener.Open(iv, ctext, nullptr), ZX_ERR_INVALID_ARGS);
+    EXPECT_ZX(opener.Open(nonce, ctext, nullptr), ZX_ERR_INVALID_ARGS);
 
     // Wrong IV
-    size_t iv_len = iv.len();
-    ASSERT_OK(iv.Resize(iv_len + 1));
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_INVALID_ARGS);
-    ASSERT_OK(iv.Resize(iv_len));
-    iv[0] ^= 1;
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
-    iv[0] ^= 1;
+    ASSERT_OK(sealer.Seal(ptext, &nonce, &ctext));
+    EXPECT_ZX(opener.Open(nonce + 1, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
 
     // Wrong tag
     size_t len;
     ASSERT_OK(AEAD::GetTagLen(aead, &len));
     ASSERT_OK(ctext.Resize(len - 1));
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_INVALID_ARGS);
+    EXPECT_ZX(opener.Open(nonce, ctext, &result), ZX_ERR_INVALID_ARGS);
 
-    ctext.Reset();
-    ASSERT_OK(sealer.Seal(ptext, &iv, &ctext));
+    ASSERT_OK(ctext.Resize(0));
+    ASSERT_OK(sealer.Seal(ptext, &nonce, &ctext));
     len = ctext.len();
     ctext[len - 1] ^= 1;
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
+    EXPECT_ZX(opener.Open(nonce, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
     ctext[len - 1] ^= 1;
 
     // Wrong data
     ctext[0] ^= 1;
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
+    EXPECT_ZX(opener.Open(nonce, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
     ctext[0] ^= 1;
 
     // Wrong mode
-    EXPECT_ZX(opener.Seal(ptext, &iv, &ctext), ZX_ERR_BAD_STATE);
+    EXPECT_ZX(opener.Seal(ptext, &nonce, &ctext), ZX_ERR_BAD_STATE);
 
     // Valid
-    ASSERT_OK(sealer.Seal(ptext, &iv, &ctext));
-    EXPECT_OK(opener.Open(iv, ctext, &result));
+    ASSERT_OK(sealer.Seal(ptext, &nonce, &ctext));
+    EXPECT_OK(opener.Open(nonce, ctext, &result));
 
-    ASSERT_OK(sealer.Seal(ptext, &iv, &ctext));
-    EXPECT_OK(opener.Open(iv, ctext, &result));
+    ASSERT_OK(sealer.Seal(ptext, &nonce, &ctext));
+    EXPECT_OK(opener.Open(nonce, ctext, &result));
     EXPECT_TRUE(ptext == result);
 
     // Reset
     opener.Reset();
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_BAD_STATE);
+    EXPECT_ZX(opener.Open(nonce, ctext, &result), ZX_ERR_BAD_STATE);
     END_TEST;
 }
 DEFINE_EACH(TestOpenData)
-
-bool TestStaticAD(AEAD::Algorithm aead) {
-    BEGIN_TEST;
-    Bytes key, iv, ad, ptext, ctext, result;
-    ASSERT_OK(GenerateKeyMaterial(aead, &key, &iv));
-    ASSERT_OK(ad.InitRandom(16));
-    ASSERT_OK(ptext.InitRandom(PAGE_SIZE));
-
-    AEAD sealer, opener;
-    ASSERT_OK(sealer.InitSeal(aead, key, iv));
-    ASSERT_OK(opener.InitOpen(aead, key));
-
-    // Bad AD
-    Bytes ad_seal;
-    EXPECT_OK(sealer.SetAD(ad));
-    EXPECT_OK(sealer.Seal(ptext, &iv, &ctext));
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
-
-    // Valid
-    Bytes ad_open;
-    EXPECT_OK(opener.SetAD(ad));
-    EXPECT_OK(opener.Open(iv, ctext, &result));
-    EXPECT_TRUE(ptext == result);
-
-    END_TEST;
-}
-DEFINE_EACH(TestStaticAD)
-
-bool TestDynamicAD(AEAD::Algorithm aead) {
-    BEGIN_TEST;
-    Bytes key, iv, ptext, ctext, result;
-    ASSERT_OK(GenerateKeyMaterial(aead, &key, &iv));
-    ASSERT_OK(ptext.InitRandom(PAGE_SIZE));
-
-    AEAD sealer, opener;
-    ASSERT_OK(sealer.InitSeal(aead, key, iv));
-    ASSERT_OK(opener.InitOpen(aead, key));
-
-    // Bad AD
-    uintptr_t p;
-    EXPECT_ZX(sealer.AllocAD(1, nullptr), ZX_ERR_INVALID_ARGS);
-    EXPECT_ZX(sealer.AllocAD(0, &p), ZX_ERR_INVALID_ARGS);
-    EXPECT_ZX(sealer.AllocAD((size_t)-1, &p), ZX_ERR_NO_MEMORY);
-
-    EXPECT_OK(sealer.AllocAD(sizeof(uint64_t), &p));
-    uint64_t * ad_seal = reinterpret_cast<uint64_t *>(p);
-    EXPECT_OK(opener.AllocAD(sizeof(uint64_t), &p));
-    uint64_t *ad_open = reinterpret_cast<uint64_t *>(p);
-
-    // Wrong AD
-    *ad_seal = 0;
-    EXPECT_OK(sealer.Seal(ptext, &iv, &ctext));
-    *ad_open = 1;
-    EXPECT_ZX(opener.Open(iv, ctext, &result), ZX_ERR_IO_DATA_INTEGRITY);
-
-    // Valid
-    for (uint64_t i = 0; i < 16; ++i) {
-        *ad_seal = i;
-        *ad_open = i;
-        EXPECT_OK(sealer.Seal(ptext, &iv, &ctext));
-        EXPECT_OK(opener.Open(iv, ctext, &result));
-        EXPECT_TRUE(ptext == result);
-    }
-
-    END_TEST;
-}
-DEFINE_EACH(TestDynamicAD)
 
 // The following tests are taken from NIST's SP 800-38D.  The tests with non-byte non-standard IV
 // and tag lengths are omitted.  Of those remaining, the first non-failing test of each combination
@@ -291,8 +233,10 @@ DEFINE_EACH(TestDynamicAD)
 bool TestAes128Gcm_TC(const char* xkey, const char* xiv, const char* xct, const char* xaad,
                       const char* xtag, const char* xpt) {
     BEGIN_TEST;
-    Bytes ptext, aad, key, iv, ctext, tag, result;
-    ASSERT_OK(HexToBytes(xkey, &key));
+    Secret key;
+    Bytes ptext, aad, iv, ctext, tag, result;
+    uint64_t nonce;
+    ASSERT_OK(HexToSecret(xkey, &key));
     ASSERT_OK(HexToBytes(xiv, &iv));
     ASSERT_OK(HexToBytes(xct, &ctext));
     ASSERT_OK(HexToBytes(xaad, &aad));
@@ -302,15 +246,13 @@ bool TestAes128Gcm_TC(const char* xkey, const char* xiv, const char* xct, const 
 
     AEAD sealer;
     EXPECT_OK(sealer.InitSeal(AEAD::kAES128_GCM, key, iv));
-    EXPECT_OK(sealer.SetAD(aad));
-    EXPECT_OK(sealer.Seal(ptext, &iv, &result));
+    EXPECT_OK(sealer.Seal(ptext, aad, &nonce, &result));
     EXPECT_TRUE(result == ctext);
 
-    result.Reset();
+    ASSERT_OK(result.Resize(0));
     AEAD opener;
-    EXPECT_OK(opener.InitOpen(AEAD::kAES128_GCM, key));
-    EXPECT_OK(opener.SetAD(aad));
-    EXPECT_OK(opener.Open(iv, ctext, &result));
+    EXPECT_OK(opener.InitOpen(AEAD::kAES128_GCM, key, iv));
+    EXPECT_OK(opener.Open(nonce, ctext, aad, &result));
     EXPECT_TRUE(result == ptext);
     END_TEST;
 }
@@ -532,24 +474,24 @@ bool TestAes128Gcm_TC21(void) {
 bool TestAes128GcmSiv_TC(const char* xpt, const char* xaad, const char* xkey, const char* xnonce,
                          const char* xresult) {
     BEGIN_TEST;
-    Bytes ptext, aad, key, iv, ctext, tag, result;
+    Secret key;
+    Bytes ptext, aad, iv, ctext, tag, result;
+    uint64_t nonce;
     ASSERT_OK(HexToBytes(xpt, &ptext));
     ASSERT_OK(HexToBytes(xaad, &aad));
-    ASSERT_OK(HexToBytes(xkey, &key));
+    ASSERT_OK(HexToSecret(xkey, &key));
     ASSERT_OK(HexToBytes(xnonce, &iv));
     ASSERT_OK(HexToBytes(xresult, &result));
 
     AEAD sealer;
     EXPECT_OK(sealer.InitSeal(AEAD::kAES128_GCM_SIV, key, iv));
-    EXPECT_OK(sealer.SetAD(aad));
-    EXPECT_OK(sealer.Seal(ptext, &iv, &ctext));
+    EXPECT_OK(sealer.Seal(ptext, aad, &nonce, &ctext));
     EXPECT_TRUE(ctext == result);
 
-    result.Reset();
+    ASSERT_OK(result.Resize(0));
     AEAD opener;
-    EXPECT_OK(opener.InitOpen(AEAD::kAES128_GCM_SIV, key));
-    EXPECT_OK(opener.SetAD(aad));
-    EXPECT_OK(opener.Open(iv, ctext, &result));
+    EXPECT_OK(opener.InitOpen(AEAD::kAES128_GCM_SIV, key, iv));
+    EXPECT_OK(opener.Open(nonce, ctext, aad, &result));
     EXPECT_TRUE(ptext == result);
     END_TEST;
 }

@@ -21,8 +21,11 @@ struct percpu {
     // per cpu timer queue
     struct list_node timer_queue;
 
-    // per cpu preemption timer
-    timer_t preempt_timer;
+    // per cpu preemption timer; ZX_TIME_INFINITE means not set
+    zx_time_t preempt_timer_deadline;
+
+    // deadline of this cpu's platform timer or ZX_TIME_INFINITE if not set
+    zx_time_t next_timer_deadline;
 
     // per cpu run queue and bitmap to indicate which queues are non empty
     struct list_node run_queue[NUM_PRIORITIES];
@@ -40,6 +43,10 @@ struct percpu {
     // dpc context
     list_node_t dpc_list;
     event_t dpc_event;
+    // request the dpc thread to stop by setting to true; guarded by dpc_lock
+    bool dpc_stop;
+    // each cpu has a dedicated thread for processing dpcs
+    thread_t* dpc_thread;
 } __CPU_ALIGN;
 
 // the kernel per-cpu structure

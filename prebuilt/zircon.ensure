@@ -30,11 +30,11 @@ $VerifiedPlatform mac-amd64
 
 # Clang
 @Subdir clang
-fuchsia/clang/${platform} git_revision:4c6142e3bc986b79dc0f7c9deafc82af13eab12f
+fuchsia/clang/${platform} git_revision:bf0e3dfee52b8515aa95cde6239d0ba4ff3bac5d
 
 # GCC
 @Subdir gcc
-fuchsia/gcc/${platform} git_revision:4c9ce848d0459c3d872c88f897c40e09f0831122,6ce348a507d0bd3308f8a131023de49576692c37
+fuchsia/gcc/${platform} git_revision:fb02152947d8ef666961e3b8b6527ed39de18334,653a4ab26cb08800c45b8c3446c3753d6f2102df
 
 # sysroot
 @Subdir sysroot
@@ -42,7 +42,7 @@ fuchsia/sysroot/${os=linux}-${arch} git_revision:a96053c799a0f1ad0b7e8ab8199edbf
 
 # Symbolizer tool.  This is a standalone executable, not a subdirectory.
 @Subdir
-fuchsia/tools/symbolize/${platform} git_revision:fa12438b6e168011e6bd677036778c2b7cf62a21
+fuchsia/tools/symbolize/${platform} git_revision:829a2862fba77bf5c8fdc43357ec29f49057cde9
 
 # QEMU
 @Subdir qemu

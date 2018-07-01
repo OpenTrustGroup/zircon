@@ -96,11 +96,10 @@ typedef struct zx_info_thread {
     // One of ZX_THREAD_STATE_* values.
     uint32_t state;
 
-    // If nonzero, the thread has gotten an exception and is waiting for
-    // the exception to be handled by the specified port.
+    // If |state| is ZX_THREAD_STATE_BLOCKED_EXCEPTION, the thread has gotten
+    // an exception and is waiting for the exception to be handled by the
+    // specified port.
     // The value is one of ZX_EXCEPTION_PORT_TYPE_*.
-    // Note: If the thread is waiting for an exception response then |state|
-    // will have the value ZX_THREAD_STATE_BLOCKED.
     uint32_t wait_exception_port_type;
 } zx_info_thread_t;
 
@@ -371,9 +370,6 @@ typedef struct zx_info_resource {
 // Argument is the base address of the vDSO mapping (or zero), a uintptr_t.
 #define ZX_PROP_PROCESS_VDSO_BASE_ADDRESS   6u
 
-// Argument is a zx_job_importance_t value.
-#define ZX_PROP_JOB_IMPORTANCE              7u
-
 // Argument is a size_t.
 #define ZX_PROP_SOCKET_RX_BUF_MAX           8u
 #define ZX_PROP_SOCKET_RX_BUF_SIZE          9u
@@ -384,29 +380,29 @@ typedef struct zx_info_resource {
 // endpoint can have pending in its tx direction.
 #define ZX_PROP_CHANNEL_TX_MSG_MAX          12u
 
-// Describes how important a job is.
-typedef int32_t zx_job_importance_t;
+// Basic thread states, in zx_info_thread_t.state.
+#define ZX_THREAD_STATE_NEW                 0x0000u
+#define ZX_THREAD_STATE_RUNNING             0x0001u
+#define ZX_THREAD_STATE_SUSPENDED           0x0002u
+// ZX_THREAD_STATE_BLOCKED is never returned by itself.
+// It is always returned with a more precise reason.
+// See ZX_THREAD_STATE_BLOCKED_* below.
+#define ZX_THREAD_STATE_BLOCKED             0x0003u
+#define ZX_THREAD_STATE_DYING               0x0004u
+#define ZX_THREAD_STATE_DEAD                0x0005u
 
-// Valid zx_job_importance_t values and range.
-// The non-negative values must fit in 8 bits.
+// More precise thread states.
+#define ZX_THREAD_STATE_BLOCKED_EXCEPTION       0x0103u
+#define ZX_THREAD_STATE_BLOCKED_SLEEPING        0x0203u
+#define ZX_THREAD_STATE_BLOCKED_FUTEX           0x0303u
+#define ZX_THREAD_STATE_BLOCKED_PORT            0x0403u
+#define ZX_THREAD_STATE_BLOCKED_CHANNEL         0x0503u
+#define ZX_THREAD_STATE_BLOCKED_WAIT_ONE        0x0603u
+#define ZX_THREAD_STATE_BLOCKED_WAIT_MANY       0x0703u
+#define ZX_THREAD_STATE_BLOCKED_INTERRUPT       0x0803u
 
-// A job with this importance will inherit its actual importance from
-// the closest ancestor with a non-INHERITED importance property value.
-#define ZX_JOB_IMPORTANCE_INHERITED ((zx_job_importance_t)-1)
-
-// The lowest importance. Jobs with this importance value are likely to be
-// killed first in an out-of-memory situation.
-#define ZX_JOB_IMPORTANCE_MIN       ((zx_job_importance_t)0)
-
-// The highest importance.
-#define ZX_JOB_IMPORTANCE_MAX       ((zx_job_importance_t)255)
-
-// Values for zx_info_thread_t.state.
-#define ZX_THREAD_STATE_NEW                 0u
-#define ZX_THREAD_STATE_RUNNING             1u
-#define ZX_THREAD_STATE_SUSPENDED           2u
-#define ZX_THREAD_STATE_BLOCKED             3u
-#define ZX_THREAD_STATE_DYING               4u
-#define ZX_THREAD_STATE_DEAD                5u
+// Reduce possibly-more-precise state to a basic state.
+// Useful if, for example, you want to check for BLOCKED on anything.
+#define ZX_THREAD_STATE_BASIC(n) ((n) & 0xff)
 
 __END_CDECLS

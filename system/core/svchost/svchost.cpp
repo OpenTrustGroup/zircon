@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <fdio/util.h>
+#include <fbl/algorithm.h>
 #include <lib/async-loop/cpp/loop.h>
+#include <lib/crashanalyzer/crashanalyzer.h>
+#include <lib/fdio/util.h>
 #include <lib/process-launcher/launcher.h>
 #include <lib/svc/outgoing.h>
 #include <zircon/process.h>
@@ -98,18 +100,25 @@ zx_status_t publish_tracelink(const fbl::RefPtr<fs::PseudoDir>& dir) {
 // environment. Instead, we should make the test environment hermetic and
 // remove the dependencies on these services.
 static constexpr const char* deprecated_services[] = {
-    "cobalt.CobaltEncoderFactory",
-    "component.ApplicationLauncher",
-    "component.Environment",
-    "device_settings.DeviceSettingsManager",
-    "logger.Log",
-    "logger.LogSink",
-    "media.AudioServer",
-    "media_player.MediaPlayer",
+    // remove amber.Control when CP-50 is resolved
+    "fuchsia.amber.Control",
+    "fuchsia.cobalt.CobaltEncoderFactory",
+    "fuchsia.devicesettings.DeviceSettingsManager",
+    "fuchsia.logger.Log",
+    "fuchsia.logger.LogSink",
+    "fuchsia.media.Audio",
+    "fuchsia.mediaplayer.MediaPlayer",
+    "fuchsia.netstack.Netstack",
+    "fuchsia.net_stack.Stack",
+    "fuchsia.power.PowerManager",
+    "fuchsia.sys.Environment",
+    "fuchsia.sys.Launcher",
+    "fuchsia.wlan.service.Wlan",
+    // fdio name for Netstack. Will be removed with the new interfaces defined
+    // in NET-863.
     "net.Netstack",
-    "netstack.Netstack",
-    "power_manager.PowerManager",
-    "wlan_service.Wlan",
+    // TODO(IN-458): This entry is temporary, until IN-458 is resolved.
+    "fuchsia.tracing.TraceController",
     nullptr,
     // DO NOT ADD MORE ENTRIES TO THIS LIST.
     // Tests should not be accessing services from the environment. Instead,
@@ -133,7 +142,7 @@ int main(int argc, char** argv) {
     async_t* async = loop.async();
     svc::Outgoing outgoing(async);
 
-    appmgr_svc = zx_get_startup_handle(PA_HND(PA_USER0, 0));
+    appmgr_svc = zx_take_startup_handle(PA_HND(PA_USER0, 0));
 
     zx_status_t status = outgoing.ServeFromStartupInfo();
     if (status != ZX_OK) {
@@ -142,16 +151,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    zx_service_provider_instance_t launcher = {
-        .provider = launcher_get_service_provider(),
-        .ctx = nullptr,
+    zx_service_provider_instance_t service_providers[] = {
+        {.provider = launcher_get_service_provider(), .ctx = nullptr},
+        {.provider = crashanalyzer_get_service_provider(), .ctx = nullptr},
     };
 
-    status = provider_load(&launcher, async, outgoing.public_dir());
-    if (status != ZX_OK) {
-        fprintf(stderr, "svchost: error: Failed to load launcher service: %d (%s).\n",
-                status, zx_status_get_string(status));
-        return 1;
+    for (size_t i = 0; i < fbl::count_of(service_providers); ++i) {
+        status = provider_load(&service_providers[i], async, outgoing.public_dir());
+        if (status != ZX_OK) {
+            fprintf(stderr, "svchost: error: Failed to load service provider %zu: %d (%s).\n",
+                    i, status, zx_status_get_string(status));
+            return 1;
+        }
     }
 
     status = publish_tracelink(outgoing.public_dir());
@@ -164,6 +175,10 @@ int main(int argc, char** argv) {
     publish_deprecated_services(outgoing.public_dir());
 
     status = loop.Run();
-    provider_release(&launcher);
+
+    for (size_t i = 0; i < fbl::count_of(service_providers); ++i) {
+        provider_release(&service_providers[i]);
+    }
+
     return status;
 }

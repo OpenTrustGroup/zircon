@@ -18,6 +18,9 @@ enum {
     BTI_USB_XHCI,
     BTI_DISPLAY,
     BTI_MALI,
+    BTI_VIDEO,
+    BTI_AML_RAW_NAND,
+    BTI_SDIO,
 };
 
 typedef struct {
@@ -34,6 +37,9 @@ zx_status_t aml_gpio_init(aml_bus_t* bus);
 
 // astro-i2c.c
 zx_status_t aml_i2c_init(aml_bus_t* bus);
+
+// astro-bluetooth.c
+zx_status_t aml_bluetooth_init(aml_bus_t* bus);
 
 // astro-usb.c
 zx_status_t aml_usb_init(aml_bus_t* bus);
@@ -52,3 +58,7 @@ enum {
 #define I2C_BACKLIGHT_ADDR (0x2C)
 // astro-touch.c
 zx_status_t astro_touch_init(aml_bus_t* bus);
+// aml-raw_nand.c
+zx_status_t aml_raw_nand_init(aml_bus_t* bus);
+// astro-sdio.c
+zx_status_t aml_sdio_init(aml_bus_t* bus);

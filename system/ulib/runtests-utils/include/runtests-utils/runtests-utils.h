@@ -4,15 +4,15 @@
 
 // Helper functions for running test binaries and recording their results.
 
-#pragma once
+#ifndef ZIRCON_SYSTEM_ULIB_RUNTESTS_UTILS_INCLUDE_RUNTESTS_UTILS_RUNTESTS_UTILS_H_
+#define ZIRCON_SYSTEM_ULIB_RUNTESTS_UTILS_INCLUDE_RUNTESTS_UTILS_RUNTESTS_UTILS_H_
 
 #include <inttypes.h>
 
-#include <fbl/function.h>
 #include <fbl/string.h>
 #include <fbl/string_piece.h>
+#include <fbl/unique_ptr.h>
 #include <fbl/vector.h>
-#include <lib/async-loop/cpp/loop.h>
 
 namespace runtests {
 
@@ -21,8 +21,10 @@ enum LaunchStatus {
     SUCCESS,
     FAILED_TO_LAUNCH,
     FAILED_TO_WAIT,
+    FAILED_DURING_IO,
     FAILED_TO_RETURN_CODE,
     FAILED_NONZERO_RETURN_CODE,
+    FAILED_UNKNOWN,
 };
 
 // Represents the result of a single test run.
@@ -40,12 +42,26 @@ struct Result {
 
 // Function that invokes a test binary and writes its output to a file.
 //
-// |argv| is the commandline to use to run the test program.
-// |argc| is the number of strings in argv.
-// |out| is a file stream to which the test binary's output will be written. May be
-//   nullptr, in which output will not be redirected.
-//
-using RunTestFn = fbl::Function<Result(const char* argv[], int argc, FILE* out)>;
+// |argv| is the commandline to use to run the test program; must be
+//   null-terminated.
+// |output_filename| is the name of the file to which the test binary's output
+//   will be written. May be nullptr, in which case the output will not be
+//   redirected.
+typedef fbl::unique_ptr<Result> (*RunTestFn)(const char* argv[],
+                                             const char* output_filename);
+
+// A means of measuring how long it takes to run tests.
+class Stopwatch {
+public:
+    virtual ~Stopwatch() = default;
+
+    // Starts timing.
+    virtual void Start() = 0;
+
+    // Returns the elapsed time in milliseconds since invoking Start(), or else
+    // since initialization if Start() has not yet been called.
+    virtual int64_t DurationInMsecs() = 0;
+};
 
 // Splits |input| by ',' and appends the results onto |output|.
 // Empty strings are not put into output.
@@ -72,7 +88,7 @@ fbl::String JoinPath(fbl::StringPiece parent, fbl::StringPiece child);
 // |summary_json| is the file stream to write the JSON summary to.
 //
 // Returns 0 on success, else an error code compatible with errno.
-int WriteSummaryJSON(const fbl::Vector<Result>& results,
+int WriteSummaryJSON(const fbl::Vector<fbl::unique_ptr<Result>>& results,
                      const fbl::StringPiece output_file_basename,
                      const fbl::StringPiece syslog_path,
                      FILE* summary_json);
@@ -80,11 +96,11 @@ int WriteSummaryJSON(const fbl::Vector<Result>& results,
 // Resolves a set of globs.
 //
 // |globs| is an array of glob patterns.
-// |num_globs| is the number of strings in |globs|.
 // |resolved| will hold the results of resolving |globs|.
 //
 // Returns 0 on success, else an error code from glob.h.
-int ResolveGlobs(const char* const* globs, int num_globs, fbl::Vector<fbl::String>* resolved);
+int ResolveGlobs(const fbl::Vector<fbl::String>& globs,
+                 fbl::Vector<fbl::String>* resolved);
 
 // Executes all test binaries in a directory (non-recursive).
 //
@@ -109,6 +125,26 @@ int ResolveGlobs(const char* const* globs, int num_globs, fbl::Vector<fbl::Strin
 bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
                    const fbl::Vector<fbl::String>& filter_names, const char* output_dir,
                    const char* output_file_basename, signed char verbosity,
-                   int* num_failed, fbl::Vector<Result>* results);
+                   int* num_failed, fbl::Vector<fbl::unique_ptr<Result>>* results);
+
+// Conditionally runs all tests within given directories, with the option
+// of writing an aggregated summary file.
+//
+// |RunTest|: function to run each test.
+// |argc|: length of |argv|.
+// |argv|: see //system/ulib/runtests-utils/run-all-tests.cpp,
+//    specifically the 'Usage()' function, for documentation.
+// |default_test_dirs|: directories in which to look for tests if no test
+//    directory globs are specified.
+// |stopwatch|: for timing how long all tests took to run.
+// |syslog_file_name|: if an output directory is specified ("-o"), syslog ouput
+//    will be written to a file under that directory and this name.
+//
+// Returns EXIT_SUCCESS if all tests passed; else, returns EXIT_FAILURE.
+int RunAllTests(const RunTestFn& RunTest, int argc, const char* const* argv,
+                const fbl::Vector<fbl::String>& default_test_dirs,
+                Stopwatch* stopwatch, const fbl::StringPiece syslog_file_name);
 
 } // namespace runtests
+
+#endif // ZIRCON_SYSTEM_ULIB_RUNTESTS_UTILS_INCLUDE_RUNTESTS_UTILS_RUNTESTS_UTILS_H_

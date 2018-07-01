@@ -37,7 +37,7 @@ static int get_log_line(char* out) {
     char buf[ZX_LOG_RECORD_MAX + 1];
     zx_log_record_t* rec = (zx_log_record_t*)buf;
     for (;;) {
-        if (zx_log_read(loghandle, ZX_LOG_RECORD_MAX, rec, 0) > 0) {
+        if (zx_debuglog_read(loghandle, 0, rec, ZX_LOG_RECORD_MAX) > 0) {
             if (rec->datalen && (rec->data[rec->datalen - 1] == '\n')) {
                 rec->datalen--;
             }
@@ -63,7 +63,7 @@ int debuglog_init(void) {
     }
 
     // Set up our timeout to expire immediately, so that we check for pending log messages
-    debuglog_next_timeout = zx_clock_get(ZX_CLOCK_MONOTONIC);
+    debuglog_next_timeout = zx_clock_get_monotonic();
 
     seqno = 1;
     pending = 0;

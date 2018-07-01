@@ -15,9 +15,10 @@ MODULE_TYPE := userlib
 MODULE_GROUP := test
 
 MODULE_SRCS += \
-    $(LOCAL_DIR)/log-exporter.cpp \
-    $(LOCAL_DIR)/runtests-utils.cpp \
     $(LOCAL_DIR)/fuchsia-run-test.cpp \
+    $(LOCAL_DIR)/log-exporter.cpp \
+    $(LOCAL_DIR)/run-all-tests.cpp \
+    $(LOCAL_DIR)/runtests-utils.cpp \
 
 MODULE_FIDL_LIBS := \
     system/fidl/logger
@@ -36,7 +37,30 @@ MODULE_STATIC_LIBS := \
 MODULE_LIBS := \
     system/ulib/c \
     system/ulib/fdio \
-    system/ulib/launchpad \
+    system/ulib/unittest \
     system/ulib/zircon \
+
+include make/module.mk
+
+#
+# Host library.
+#
+
+MODULE := $(LOCAL_DIR).hostlib
+
+MODULE_TYPE := hostlib
+
+MODULE_SRCS += \
+    $(LOCAL_DIR)/posix-run-test.cpp \
+    $(LOCAL_DIR)/run-all-tests.cpp \
+    $(LOCAL_DIR)/runtests-utils.cpp \
+
+MODULE_COMPILEFLAGS := \
+    -Isystem/ulib/fbl/include \
+    -Isystem/ulib/unittest/include \
+
+MODULE_HOST_LIBS := \
+    system/ulib/fbl.hostlib \
+    system/ulib/unittest.hostlib \
 
 include make/module.mk

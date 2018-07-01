@@ -3,20 +3,42 @@
 // found in the LICENSE file.
 
 #include <fcntl.h>
-#include <fdio/limits.h>
-#include <fdio/namespace.h>
-#include <fdio/spawn.h>
-#include <fdio/util.h>
+#include <lib/fdio/limits.h>
+#include <lib/fdio/namespace.h>
+#include <lib/fdio/spawn.h>
+#include <lib/fdio/util.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <zircon/dlfcn.h>
 #include <zircon/process.h>
+#include <zircon/processargs.h>
+#include <zircon/syscalls.h>
 
 static bool has_fd(int fd) {
     zx_handle_t handles[FDIO_MAX_HANDLES];
     uint32_t ids[FDIO_MAX_HANDLES];
-    return fdio_clone_fd(fd, fd + 50, handles, ids) > 0;
+    zx_status_t status = fdio_clone_fd(fd, fd + 50, handles, ids);
+    if (status > 0) {
+        size_t n = (size_t)status;
+        zx_handle_close_many(handles, n);
+        return true;
+    }
+    return false;
+}
+
+static bool has_ns(const char* path) {
+    zx_handle_t h1, h2;
+    zx_status_t status = zx_channel_create(0, &h1, &h2);
+    if (status != ZX_OK)
+        return false;
+    status = fdio_service_connect(path, h1);
+    zx_handle_close(h2);
+    return status == ZX_OK;
+}
+
+static bool has_arg(uint32_t arg) {
+    return zx_take_startup_handle(arg) != ZX_HANDLE_INVALID;
 }
 
 static int check_flags(uint32_t flags, int success) {
@@ -24,7 +46,7 @@ static int check_flags(uint32_t flags, int success) {
     // always add it into the flags.
     flags |= FDIO_SPAWN_CLONE_LDSVC;
 
-    bool should_have_job = (flags & FDIO_SPAWN_SHARE_JOB) != 0;
+    bool should_have_job = (flags & FDIO_SPAWN_CLONE_JOB) != 0;
     bool has_job = zx_job_default() != ZX_HANDLE_INVALID;
     if (has_job != should_have_job)
         return -1;
@@ -76,7 +98,7 @@ int main(int argc, char** argv) {
         if (!strcmp(flags, "none"))
             return check_flags(0, 51);
         if (!strcmp(flags, "job"))
-            return check_flags(FDIO_SPAWN_SHARE_JOB, 52);
+            return check_flags(FDIO_SPAWN_CLONE_JOB, 52);
         if (!strcmp(flags, "namespace"))
             return check_flags(FDIO_SPAWN_CLONE_NAMESPACE, 53);
         if (!strcmp(flags, "stdio"))
@@ -113,9 +135,15 @@ int main(int argc, char** argv) {
             return -252;
         const char* action = argv[2];
         if (!strcmp(action, "clone-fd"))
-            return fcntl(21, F_GETFD) >= 0 ? 71 : -1;
-        if (!strcmp(action, "clone-fd"))
-            return fcntl(22, F_GETFD) >= 0 ? 72 : -2;
+            return has_fd(21) && !has_fd(22) ? 71 : -1;
+        if (!strcmp(action, "transfer-fd"))
+            return has_fd(21) && !has_fd(22) ? 72 : -2;
+        if (!strcmp(action, "clone-and-transfer-fd"))
+            return has_fd(21) && has_fd(22) && !has_fd(23) ? 73 : -3;
+        if (!strcmp(action, "ns-entry"))
+            return has_ns("/foo/bar/baz") && !has_ns("/baz/bar/foo") ? 74 : -4;
+        if (!strcmp(action, "add-handle"))
+            return has_arg(PA_USER0) && !has_arg(PA_USER1) ? 75 : -5;
     }
 
     return -250;

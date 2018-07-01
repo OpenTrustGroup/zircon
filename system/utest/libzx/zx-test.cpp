@@ -139,15 +139,15 @@ static bool channel_test() {
 
 static bool channel_rw_test() {
     BEGIN_TEST;
-    zx::eventpair evpair[2];
-    ASSERT_EQ(zx::eventpair::create(0u, &evpair[0], &evpair[1]), ZX_OK);
+    zx::eventpair eventpair[2];
+    ASSERT_EQ(zx::eventpair::create(0u, &eventpair[0], &eventpair[1]), ZX_OK);
 
     zx::channel channel[2];
     ASSERT_EQ(zx::channel::create(0u, &channel[0], &channel[1]), ZX_OK);
 
     zx_handle_t handles[2] = {
-        evpair[0].release(),
-        evpair[1].release()
+        eventpair[0].release(),
+        eventpair[1].release()
     };
 
     zx_handle_t recv[2] = {0};
@@ -162,15 +162,15 @@ static bool channel_rw_test() {
 
 static bool channel_rw_etc_test() {
     BEGIN_TEST;
-    zx::eventpair evpair[2];
-    ASSERT_EQ(zx::eventpair::create(0u, &evpair[0], &evpair[1]), ZX_OK);
+    zx::eventpair eventpair[2];
+    ASSERT_EQ(zx::eventpair::create(0u, &eventpair[0], &eventpair[1]), ZX_OK);
 
     zx::channel channel[2];
     ASSERT_EQ(zx::channel::create(0u, &channel[0], &channel[1]), ZX_OK);
 
     zx_handle_t handles[2] = {
-        evpair[0].release(),
-        evpair[1].release()
+        eventpair[0].release(),
+        eventpair[1].release()
     };
 
     zx_handle_info_t recv[2] = {{}};
@@ -180,8 +180,8 @@ static bool channel_rw_etc_test() {
     ASSERT_EQ(channel[1].read_etc(0u, nullptr, 0u, nullptr, recv, 2, &h_count), ZX_OK);
 
     ASSERT_EQ(h_count, 2u);
-    ASSERT_EQ(recv[0].type, ZX_OBJ_TYPE_EVENT_PAIR, ZX_OK);
-    ASSERT_EQ(recv[1].type, ZX_OBJ_TYPE_EVENT_PAIR, ZX_OK);
+    ASSERT_EQ(recv[0].type, ZX_OBJ_TYPE_EVENTPAIR, ZX_OK);
+    ASSERT_EQ(recv[1].type, ZX_OBJ_TYPE_EVENTPAIR, ZX_OK);
 
     ASSERT_EQ(zx_handle_close(recv[0].handle), ZX_OK);
     ASSERT_EQ(zx_handle_close(recv[1].handle), ZX_OK);
@@ -200,10 +200,10 @@ static bool socket_test() {
 
 static bool eventpair_test() {
     BEGIN_TEST;
-    zx::eventpair evpair[2];
-    ASSERT_EQ(zx::eventpair::create(0u, &evpair[0], &evpair[1]), ZX_OK);
-    ASSERT_EQ(validate_handle(evpair[0].get()), ZX_OK);
-    ASSERT_EQ(validate_handle(evpair[1].get()), ZX_OK);
+    zx::eventpair eventpair[2];
+    ASSERT_EQ(zx::eventpair::create(0u, &eventpair[0], &eventpair[1]), ZX_OK);
+    ASSERT_EQ(validate_handle(eventpair[0].get()), ZX_OK);
+    ASSERT_EQ(validate_handle(eventpair[1].get()), ZX_OK);
     // TODO(cpu): test more.
     END_TEST;
 }
@@ -280,6 +280,8 @@ static bool time_test() {
     ASSERT_EQ(d.get(), ZX_MIN(19));
     d /= 19u;
     ASSERT_EQ(d.get(), ZX_MIN(1));
+
+    ASSERT_EQ((zx::sec(19) % zx::sec(7)).get(), ZX_SEC(5));
 
     zx::time t(0u);
     t += zx::msec(19);
@@ -427,6 +429,126 @@ static bool handle_conversion_test() {
     END_TEST;
 }
 
+static bool unowned_test() {
+    BEGIN_TEST;
+
+    // Create a handle to test with.
+    zx::event handle;
+    ASSERT_EQ(zx::event::create(0, &handle), ZX_OK);
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify that unowned<T>(zx_handle_t) doesn't close handle on teardown.
+    {
+      zx::unowned<zx::event> unowned(handle.get());
+      EXPECT_EQ(unowned->get(), handle.get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify that unowned<T>(const T&) doesn't close handle on teardown.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_EQ(unowned->get(), handle.get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify that unowned<T>(const unowned<T>&) doesn't close on teardown.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      zx::unowned<zx::event> unowned2(unowned);
+      EXPECT_EQ(unowned->get(), unowned2->get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned2));
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify copy-assignment from unowned<> to unowned<> doesn't close.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      zx::unowned<zx::event> unowned2;
+      ASSERT_FALSE(unowned2->is_valid());
+
+      const zx::unowned<zx::event>& assign_ref = unowned2 = unowned;
+      EXPECT_EQ(assign_ref->get(), unowned2->get());
+      EXPECT_EQ(unowned->get(), unowned2->get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned2));
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify move from unowned<> to unowned<> doesn't close on teardown.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      zx::unowned<zx::event> unowned2(
+          static_cast<zx::unowned<zx::event>&&>(unowned));
+      EXPECT_EQ(unowned2->get(), handle.get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned2));
+      EXPECT_FALSE(unowned->is_valid());
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify move-assignment from unowned<> to unowned<> doesn't close.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      zx::unowned<zx::event> unowned2;
+      ASSERT_FALSE(unowned2->is_valid());
+
+      const zx::unowned<zx::event>& assign_ref =
+          unowned2 = static_cast<zx::unowned<zx::event>&&>(unowned);
+      EXPECT_EQ(assign_ref->get(), unowned2->get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned2));
+      EXPECT_FALSE(unowned->is_valid());
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Verify move-assignment into non-empty unowned<>  doesn't close.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      zx::unowned<zx::event> unowned2(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned2));
+
+      unowned2 = static_cast<zx::unowned<zx::event>&&>(unowned);
+      EXPECT_EQ(unowned2->get(), handle.get());
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned2));
+      EXPECT_FALSE(unowned->is_valid());
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Explicitly verify dereference operator allows methods to be called.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      const zx::event& event_ref = *unowned;
+      zx::event duplicate;
+      EXPECT_EQ(event_ref.duplicate(ZX_RIGHT_SAME_RIGHTS, &duplicate), ZX_OK);
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    // Explicitly verify member access operator allows methods to be called.
+    {
+      zx::unowned<zx::event> unowned(handle);
+      EXPECT_TRUE(reference_thing<zx::event>(*unowned));
+
+      zx::event duplicate;
+      EXPECT_EQ(unowned->duplicate(ZX_RIGHT_SAME_RIGHTS, &duplicate), ZX_OK);
+    }
+    ASSERT_EQ(validate_handle(handle.get()), ZX_OK);
+
+    END_TEST;
+}
+
 BEGIN_TEST_CASE(libzx_tests)
 RUN_TEST(handle_invalid_test)
 RUN_TEST(handle_close_test)
@@ -451,6 +573,7 @@ RUN_TEST(thread_suspend_test)
 RUN_TEST(process_self_test)
 RUN_TEST(vmar_root_self_test)
 RUN_TEST(job_default_test)
+RUN_TEST(unowned_test)
 END_TEST_CASE(libzx_tests)
 
 int main(int argc, char** argv) {

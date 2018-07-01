@@ -39,14 +39,15 @@
 
 #include <blobfs/common.h>
 #include <blobfs/format.h>
+#include <blobfs/lz4.h>
 #include <blobfs/metrics.h>
 #include <blobfs/writeback.h>
 
 namespace blobfs {
 
 class Blobfs;
+class Compressor;
 class VnodeBlob;
-class WriteTxn;
 class WritebackWork;
 
 using ReadTxn = fs::ReadTxn<kBlobfsBlockSize, Blobfs>;
@@ -56,9 +57,9 @@ typedef uint32_t BlobFlags;
 
 // clang-format off
 
-// After Open;
+// After Open:
 constexpr BlobFlags kBlobStateEmpty       = 0x00000001; // Not yet allocated
-// After Ioctl configuring size:
+// After Space Allocated:
 constexpr BlobFlags kBlobStateDataWrite   = 0x00000002; // Data is being written
 // After Writing:
 constexpr BlobFlags kBlobStateReadable    = 0x00000004; // Readable
@@ -132,6 +133,19 @@ public:
     virtual ~VnodeBlob();
     void CompleteSync();
 
+    // When blob VMOs are cloned and returned to clients, blobfs watches
+    // the original VMO handle for the signal |ZX_VMO_ZERO_CHILDREN|.
+    // While this signal is not set, the blob's Vnode keeps an extra
+    // reference to itself to prevent teardown while clients are using
+    // this Vmo. This reference is internally called the "clone watcher".
+    //
+    // This function may be called on a blob to tell it to forcefully release
+    // the "reference to itself" that is kept when the blob is mapped.
+    //
+    // Returns this reference, if it exists, to provide control over
+    // when the Vnode destructor is executed.
+    fbl::RefPtr<VnodeBlob> CloneWatcherTeardown();
+
     // Constructs a blob, reads in data, verifies the contents, then destroys the in-memory copy.
     static zx_status_t VerifyBlob(Blobfs* bs, size_t node_index);
 private:
@@ -176,6 +190,13 @@ private:
     // depending on the state.
     zx_status_t WriteInternal(const void* data, size_t len, size_t* actual);
 
+    // For a blob being written, consider stopping the compressor,
+    // the blob to eventually be written uncompressed to disk.
+    //
+    // For blobs which don't compress very well, this provides an escape
+    // hatch to avoid wasting work.
+    void ConsiderCompressionAbort();
+
     // Reads from a blob.
     // Requires: kBlobStateReadable
     zx_status_t ReadInternal(void* data, size_t len, size_t off, size_t* actual);
@@ -208,11 +229,18 @@ private:
     // the contents of a VMO into memory when it is opened.
     zx_status_t InitVmos();
 
+    // Initialize a compressed blob by reading it from disk and decompressing
+    // it.
+    // Does not verify the blob.
+    zx_status_t InitCompressed();
+
+    // Initialize a deompressed blob by reading it from disk.
+    // Does not verify the blob.
+    zx_status_t InitUncompressed();
+
     // Verify the integrity of the in-memory Blob.
     // InitVmos() must have already been called for this blob.
     zx_status_t Verify() const;
-
-    void WriteShared(WriteTxn* txn, size_t start, size_t len, uint64_t start_block);
 
     // Called by Blob once the last write has completed, updating the
     // on-disk metadata.
@@ -231,7 +259,7 @@ private:
     // The blob_ here consists of:
     // 1) The Merkle Tree
     // 2) The Blob itself, aligned to the nearest kBlobfsBlockSize
-    fbl::unique_ptr<MappedVmo> blob_ = {};
+    fbl::unique_ptr<fs::MappedVmo> blob_ = {};
     vmoid_t vmoid_ = {};
 
     // Watches any clones of "blob_" provided to clients.
@@ -245,12 +273,20 @@ private:
     fbl::RefPtr<VnodeBlob> clone_ref_ = {};
 
     zx::event readable_event_ = {};
-    uint64_t bytes_written_ = {};
     uint8_t digest_[Digest::kLength] = {};
 
     uint32_t fd_count_ = {};
     size_t map_index_ = {};
     blobfs_inode_t inode_ = {};
+
+    // Data used exclusively during writeback.
+    struct WritebackInfo {
+        uint64_t bytes_written = {};
+        Compressor compressor;
+        fbl::unique_ptr<fs::MappedVmo> compressed_blob = {};
+    };
+
+    fbl::unique_ptr<WritebackInfo> write_info_ = {};
 };
 
 // We need to define this structure to allow the Blob to be indexable by a key
@@ -320,7 +356,11 @@ public:
 
     zx_status_t Readdir(fs::vdircookie_t* cookie, void* dirents, size_t len, size_t* out_actual);
 
+    // Allocate a vmoid registering a VMO with the underlying block device.
     zx_status_t AttachVmo(zx_handle_t vmo, vmoid_t* out);
+    // Release an allocated vmoid.
+    zx_status_t DetachVmo(vmoid_t vmoid);
+
     zx_status_t Txn(block_fifo_request_t* requests, size_t count) {
         TRACE_DURATION("blobfs", "Blobfs::Txn", "count", count);
         return block_fifo_txn(fifo_client_, requests, count);
@@ -383,8 +423,13 @@ public:
 
     // Updates aggregate information about reading blobs from storage
     // since mounting.
-    void UpdateMerkleDiskReadMetrics(uint64_t size, const fs::Duration& read_duration,
-                                     const fs::Duration& verify_duration);
+    void UpdateMerkleDiskReadMetrics(uint64_t size, const fs::Duration& duration);
+
+    // Updates aggregate information about decompressing blobs from storage
+    // since mounting.
+    void UpdateMerkleDecompressMetrics(uint64_t size_compressed, uint64_t size_uncompressed,
+                                       const fs::Duration& read_duration,
+                                       const fs::Duration& decompress_duration);
 
     // Updates aggregate information about general verification info
     // since mounting.
@@ -456,11 +501,14 @@ private:
     // Reserves space for a block in memory. Does not update disk.
     zx_status_t ReserveBlocks(size_t nblocks, size_t* blkno_out);
 
+    // Unreserves space for blocks in memory. Does not update disk.
+    void UnreserveBlocks(size_t nblocks, size_t blkno_start);
+
     // Adds reserved blocks to allocated bitmap and writes the bitmap out to disk.
-    void PersistBlocks(WriteTxn* txn, size_t nblocks, size_t blkno);
+    void PersistBlocks(WritebackWork* wb, size_t nblocks, size_t blkno);
 
     // Frees blocks from the reserved/allocated maps and updates disk if necessary.
-    void FreeBlocks(WriteTxn* txn, size_t nblocks, size_t blkno);
+    void FreeBlocks(WritebackWork* wb, size_t nblocks, size_t blkno);
 
     // Finds an unallocated node between indices start (inclusive) and end (exclusive).
     // If it exists, sets |*node_index_out| to the first available value.
@@ -470,11 +518,11 @@ private:
     zx_status_t ReserveNode(size_t* node_index_out);
 
     // Writes node data to the inode table and updates disk.
-    void PersistNode(WriteTxn* txn, size_t node_index, const blobfs_inode_t& inode);
+    void PersistNode(WritebackWork* wb, size_t node_index, const blobfs_inode_t& inode);
 
     // Frees a node, from both the reserved map and the inode table. If the inode was allocated
     // in the inode table, write the deleted inode out to disk.
-    void FreeNode(WriteTxn* txn, size_t node_index);
+    void FreeNode(WritebackWork* wb, size_t node_index);
 
     // Returns a reference to the |index|th inode of the node map.
     // This should only be accessed on two occasions:
@@ -486,14 +534,14 @@ private:
     // Given a contiguous number of blocks after a starting block,
     // write out the bitmap to disk for the corresponding blocks.
     // Should only be called by PersistBlocks and FreeBlocks.
-    void WriteBitmap(WriteTxn* txn, uint64_t nblocks, uint64_t start_block);
+    void WriteBitmap(WritebackWork* wb, uint64_t nblocks, uint64_t start_block);
 
     // Given a node within the node map at an index, write it to disk.
     // Should only be called by AllocateNode and FreeNode.
-    void WriteNode(WriteTxn* txn, size_t map_index);
+    void WriteNode(WritebackWork* wb, size_t map_index);
 
     // Enqueues an update for allocated inode/block counts.
-    void WriteInfo(WriteTxn* txn);
+    void WriteInfo(WritebackWork* wb);
 
     // Creates an unique identifier for this instance. This is to be called only during
     // "construction".
@@ -518,9 +566,9 @@ private:
 
     RawBitmap block_map_ = {};
     vmoid_t block_map_vmoid_ = {};
-    fbl::unique_ptr<MappedVmo> node_map_ = {};
+    fbl::unique_ptr<fs::MappedVmo> node_map_ = {};
     vmoid_t node_map_vmoid_ = {};
-    fbl::unique_ptr<MappedVmo> info_vmo_= {};
+    fbl::unique_ptr<fs::MappedVmo> info_vmo_= {};
     vmoid_t info_vmoid_= {};
 
     // The reserved_blocks_ and reserved_nodes_ bitmaps only hold in-flight reservations.

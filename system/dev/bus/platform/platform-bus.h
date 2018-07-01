@@ -9,6 +9,7 @@
 #include <ddk/device.h>
 #include <ddk/protocol/clk.h>
 #include <ddk/protocol/gpio.h>
+#include <ddk/protocol/canvas.h>
 #include <ddk/protocol/i2c.h>
 #include <ddk/protocol/iommu.h>
 #include <ddk/protocol/platform-bus.h>
@@ -17,7 +18,7 @@
 #include <ddk/protocol/mailbox.h>
 #include <ddk/protocol/scpi.h>
 #include <sync/completion.h>
-#include <zircon/boot/bootdata.h>
+#include <zircon/boot/image.h>
 #include <zircon/types.h>
 
 typedef struct pdev_req pdev_req_t;
@@ -35,9 +36,10 @@ typedef struct {
     i2c_impl_protocol_t i2c;
     clk_protocol_t clk;
     iommu_protocol_t iommu;
+    canvas_protocol_t canvas;
     zx_handle_t resource;   // root resource for platform bus
-    bootdata_platform_id_t platform_id;
-    uint8_t* metadata;   // metadata extracted from bootdata
+    zbi_platform_id_t platform_id;
+    uint8_t* metadata;   // metadata extracted from ZBI
     size_t metadata_size;
 
     list_node_t devices;    // list of platform_dev_t
@@ -69,14 +71,14 @@ typedef struct {
     pbus_i2c_channel_t* i2c_channels;
     pbus_clk_t* clks;
     pbus_bti_t* btis;
-    pbus_boot_metadata_t* boot_metadata;
+    pbus_metadata_t* metadata;
     uint32_t mmio_count;
     uint32_t irq_count;
     uint32_t gpio_count;
     uint32_t i2c_channel_count;
     uint32_t clk_count;
     uint32_t bti_count;
-    uint32_t boot_metadata_count;
+    uint32_t metadata_count;
 } platform_dev_t;
 
 // platform-bus.c

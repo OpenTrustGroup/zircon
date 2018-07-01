@@ -729,7 +729,7 @@ int suspended_in_syscall_reg_access_thread_func(void* arg_) {
             .rd_num_handles = 0,
         };
         zx_status_t call_status = zx_channel_call(arg->syscall_handle, 0, ZX_TIME_INFINITE,
-                                                  &call_args, &actual_bytes, &actual_handles, NULL);
+                                                  &call_args, &actual_bytes, &actual_handles);
         ASSERT_EQ(call_status, ZX_OK);
         EXPECT_EQ(actual_bytes, sizeof(recv_buf));
         EXPECT_EQ(memcmp(recv_buf + sizeof(zx_txid_t), "y", sizeof(recv_buf) - sizeof(zx_txid_t)), 0);
@@ -783,12 +783,14 @@ bool suspended_in_syscall_reg_access_worker(bool do_channel_call) {
 
     // Busy-wait until thread is blocked inside the syscall.
     zx_info_thread_t thread_info;
+    uint32_t expected_blocked_reason =
+        do_channel_call ? ZX_THREAD_STATE_BLOCKED_CHANNEL : ZX_THREAD_STATE_BLOCKED_WAIT_ONE;
     do {
         // Don't check too frequently here as it can blow up tracing output
         // when debugging with kernel tracing turned on.
         zx_nanosleep(zx_deadline_after(ZX_USEC(100)));
         thread_info = tu_thread_get_info(thread);
-    } while (thread_info.state != ZX_THREAD_STATE_BLOCKED);
+    } while (thread_info.state != expected_blocked_reason);
     ASSERT_EQ(thread_info.wait_exception_port_type, ZX_EXCEPTION_PORT_TYPE_NONE);
 
     // Extra sanity check for channels.
@@ -1171,7 +1173,7 @@ bool msg_loop(zx_handle_t channel) {
 }
 
 void test_inferior() {
-    zx_handle_t channel = zx_get_startup_handle(PA_USER0);
+    zx_handle_t channel = zx_take_startup_handle(PA_USER0);
     unittest_printf("test_inferior: got handle %d\n", channel);
 
     if (!msg_loop(channel))

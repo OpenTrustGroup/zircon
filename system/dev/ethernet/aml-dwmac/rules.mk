@@ -23,6 +23,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/ddktl \
     system/ulib/zxcpp \
     system/ulib/fbl \
+    system/ulib/vmo-utils \
     system/ulib/zx \
     system/ulib/pretty \
 

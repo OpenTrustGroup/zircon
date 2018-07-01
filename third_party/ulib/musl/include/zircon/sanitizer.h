@@ -12,12 +12,12 @@
 // unsanitized builds (only unsanitized shared library binaries are used at
 // link time, including linking the sanitizer runtime shared libraries).
 
-#include <zircon/compiler.h>
-#include <zircon/types.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <threads.h>
+#include <zircon/compiler.h>
+#include <zircon/types.h>
 
 __BEGIN_CDECLS
 
@@ -37,11 +37,13 @@ __typeof(memset) __unsanitized_memset;
 //     [shadow_limit,   memory_limit)   Address space available to the user.
 //     [shadow_base,    shadow_limit)   Shadow memory, preallocated.
 //     [0,              shadow_base)    Shadow gap, cannot be allocated.
-typedef struct {
+typedef struct saniziter_shadow_bounds {
     uintptr_t shadow_base;
     uintptr_t shadow_limit;
     uintptr_t memory_limit;
 } sanitizer_shadow_bounds_t;
+
+// Returns the shadow bounds for the current process.
 sanitizer_shadow_bounds_t __sanitizer_shadow_bounds(void);
 
 // Write logging information from the sanitizer runtime.  The buffer
@@ -91,7 +93,7 @@ zx_status_t __sanitizer_get_configuration(const char* config_name,
 // This is called at program startup, with the arguments that will be
 // passed to main.  This is called before any other application code,
 // including both static constructors and initialization of things like
-// fdio and zx_get_startup_handle.  It's basically the first thing called
+// fdio and zx_take_startup_handle.  It's basically the first thing called
 // after libc's most basic internal global initialization is complete and
 // the initial thread has switched to its real thread stack.  Since not
 // even all of libc's own constructors have run yet, this should not call
@@ -104,7 +106,7 @@ __EXPORT void __sanitizer_startup_hook(int argc, char** argv, char** envp,
 // been allocated.  All that remains is to actually start the thread
 // running (which can fail only in catastrophic bug situations).  Its
 // return value will be passed to __sanitizer_thread_create_hook, below.
-__EXPORT void *__sanitizer_before_thread_create_hook(
+__EXPORT void* __sanitizer_before_thread_create_hook(
     thrd_t thread, bool detached, const char* name,
     void* stack_base, size_t stack_size);
 

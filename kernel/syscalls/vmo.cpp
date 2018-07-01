@@ -38,8 +38,11 @@ zx_status_t sys_vmo_create(uint64_t size, uint32_t options,
                            user_out_handle* out) {
     LTRACEF("size %#" PRIx64 "\n", size);
 
-    if (options != 0u)
-        return ZX_ERR_INVALID_ARGS;
+    switch (options) {
+    case 0: options = VmObjectPaged::kResizable; break;
+    case ZX_VMO_NON_RESIZABLE: options = 0u; break;
+    default: return ZX_ERR_INVALID_ARGS;
+    }
 
     auto up = ProcessDispatcher::GetCurrent();
     zx_status_t res = up->QueryPolicy(ZX_POL_NEW_VMO);
@@ -48,7 +51,7 @@ zx_status_t sys_vmo_create(uint64_t size, uint32_t options,
 
     // create a vm object
     fbl::RefPtr<VmObject> vmo;
-    res = VmObjectPaged::Create(0, size, &vmo);
+    res = VmObjectPaged::Create(PMM_ALLOC_FLAG_ANY, options, size, &vmo);
     if (res != ZX_OK)
         return res;
 
@@ -184,13 +187,15 @@ zx_status_t sys_vmo_op_range(zx_handle_t handle, uint32_t op, uint64_t offset, u
     auto up = ProcessDispatcher::GetCurrent();
 
     // lookup the dispatcher from handle
-    // TODO(ZX-967): test rights on the handle
+    // save the rights and pass down into the dispatcher for further testing
     fbl::RefPtr<VmObjectDispatcher> vmo;
-    zx_status_t status = up->GetDispatcher(handle, &vmo);
-    if (status != ZX_OK)
+    zx_rights_t rights;
+    zx_status_t status = up->GetDispatcherAndRights(handle, &vmo, &rights);
+    if (status != ZX_OK) {
         return status;
+    }
 
-    return vmo->RangeOp(op, offset, size, _buffer, buffer_size);
+    return vmo->RangeOp(op, offset, size, _buffer, buffer_size, rights);
 }
 
 zx_status_t sys_vmo_set_cache_policy(zx_handle_t handle, uint32_t cache_policy) {

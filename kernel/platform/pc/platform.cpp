@@ -38,7 +38,8 @@
 #include <vm/physmap.h>
 #include <vm/pmm.h>
 #include <vm/vm_aspace.h>
-#include <zircon/boot/bootdata.h>
+#include <zbi/zbi-cpp.h>
+#include <zircon/boot/image.h>
 #include <zircon/boot/multiboot.h>
 #include <zircon/pixelformat.h>
 #include <zircon/types.h>
@@ -52,17 +53,12 @@ extern "C" {
 
 #define LOCAL_TRACE 0
 
-// Set to 1 to do crc32 checks on boot data
-// KERNEL_LL_DEBUG and a uart or early gfxconsole are necessary
-// to see the output from this debug feature
-#define DEBUG_BOOT_DATA 0
-
 extern multiboot_info_t* _multiboot_info;
-extern bootdata_t* _bootdata_base;
+extern zbi_header_t* _zbi_base;
 
 pc_bootloader_info_t bootloader;
 
-// Stashed values from BOOTDATA_LAST_CRASHLOG if we saw it
+// Stashed values from ZBI_TYPE_CRASHLOG if we saw it
 static const void* last_crashlog = nullptr;
 static size_t last_crashlog_len = 0;
 
@@ -86,145 +82,102 @@ static unsigned pixel_format_fixup(unsigned pf) {
 
 static bool early_console_disabled;
 
-static int process_bootitem(bootdata_t* bd, void* item) {
-    switch (bd->type) {
-    case BOOTDATA_ACPI_RSDP:
-        if (bd->length >= sizeof(uint64_t)) {
-            bootloader.acpi_rsdp = *((uint64_t*)item);
+zbi_result_t process_zbi_item(zbi_header_t* hdr, void* payload, void* cookie) {
+    switch (hdr->type) {
+    case ZBI_TYPE_ACPI_RSDP:
+        if (hdr->length >= sizeof(uint64_t)) {
+            bootloader.acpi_rsdp = *((uint64_t*)payload);
         }
         break;
-    case BOOTDATA_SMBIOS:
-        if (bd->length >= sizeof(uint64_t)) {
-            bootloader.smbios = *((uint64_t*)item);
+    case ZBI_TYPE_SMBIOS:
+        if (hdr->length >= sizeof(uint64_t)) {
+            bootloader.smbios = *((uint64_t*)payload);
         }
         break;
-    case BOOTDATA_EFI_SYSTEM_TABLE:
-        if (bd->length >= sizeof(uint64_t)) {
-            bootloader.efi_system_table = (void*)*((uint64_t*)item);
+    case ZBI_TYPE_EFI_SYSTEM_TABLE:
+        if (hdr->length >= sizeof(uint64_t)) {
+            bootloader.efi_system_table = (void*)*((uint64_t*)payload);
         }
         break;
-    case BOOTDATA_FRAMEBUFFER: {
-        if (bd->length >= sizeof(bootdata_swfb_t)) {
-            memcpy(&bootloader.fb, item, sizeof(bootdata_swfb_t));
+    case ZBI_TYPE_FRAMEBUFFER: {
+        if (hdr->length >= sizeof(zbi_swfb_t)) {
+            memcpy(&bootloader.fb, payload, sizeof(zbi_swfb_t));
         }
         bootloader.fb.format = pixel_format_fixup(bootloader.fb.format);
         break;
     }
-    case BOOTDATA_CMDLINE:
-        if (bd->length > 0) {
-            ((char*)item)[bd->length - 1] = 0;
-            cmdline_append((char*)item);
+    case ZBI_TYPE_CMDLINE:
+        if (hdr->length > 0) {
+            ((char*)payload)[hdr->length - 1] = 0;
+            cmdline_append((char*)payload);
         }
         break;
-    case BOOTDATA_EFI_MEMORY_MAP:
-        bootloader.efi_mmap = item;
-        bootloader.efi_mmap_size = bd->length;
+    case ZBI_TYPE_EFI_MEMORY_MAP:
+        bootloader.efi_mmap = payload;
+        bootloader.efi_mmap_size = hdr->length;
         break;
-    case BOOTDATA_E820_TABLE:
-        bootloader.e820_table = item;
-        bootloader.e820_count = bd->length / sizeof(e820entry_t);
+    case ZBI_TYPE_E820_TABLE:
+        bootloader.e820_table = payload;
+        bootloader.e820_count = hdr->length / sizeof(e820entry_t);
         break;
-    case BOOTDATA_LASTLOG_NVRAM2:
+    case ZBI_TYPE_NVRAM_DEPRECATED:
     // fallthrough: this is a legacy/typo variant
-    case BOOTDATA_LASTLOG_NVRAM:
-        if (bd->length >= sizeof(bootdata_nvram_t)) {
-            memcpy(&bootloader.nvram, item, sizeof(bootdata_nvram_t));
+    case ZBI_TYPE_NVRAM:
+        if (hdr->length >= sizeof(zbi_nvram_t)) {
+            memcpy(&bootloader.nvram, payload, sizeof(zbi_nvram_t));
         }
         break;
-    case BOOTDATA_DEBUG_UART:
-        if (bd->length >= sizeof(bootdata_uart_t)) {
-            memcpy(&bootloader.uart, item, sizeof(bootdata_uart_t));
+    case ZBI_TYPE_DEBUG_UART:
+        if (hdr->length >= sizeof(zbi_uart_t)) {
+            memcpy(&bootloader.uart, payload, sizeof(zbi_uart_t));
         }
         break;
-    case BOOTDATA_LAST_CRASHLOG:
-        last_crashlog = item;
-        last_crashlog_len = bd->length;
+    case ZBI_TYPE_CRASHLOG:
+        last_crashlog = payload;
+        last_crashlog_len = hdr->length;
         break;
-    case BOOTDATA_IGNORE:
+    case ZBI_TYPE_DISCARD:
         break;
     }
-    return 0;
+    return ZBI_RESULT_OK;
 }
 
-static void process_bootdata(bootdata_t* hdr, uintptr_t phys, bool verify) {
-    if ((hdr->type != BOOTDATA_CONTAINER) ||
-        (hdr->extra != BOOTDATA_MAGIC) ||
-        !(hdr->flags & BOOTDATA_FLAG_V2)) {
-        printf("bootdata: invalid %08x %08x %08x %08x\n",
-               hdr->type, hdr->length, hdr->extra, hdr->flags);
+static void process_zbi(zbi_header_t* hdr, uintptr_t phys) {
+    uint8_t* zbi_base = reinterpret_cast<uint8_t*>(hdr);
+
+    zbi::Zbi image(zbi_base);
+
+    // Make sure the image is in good shape.
+    zbi_header_t* bad_hdr;
+    zbi_result_t result = image.Check(&bad_hdr);
+    if (result != ZBI_RESULT_OK) {
+        printf("zbi: invalid %08x %08x %08x %08x, retcode = %d\n",
+               bad_hdr->type, bad_hdr->length, bad_hdr->extra, bad_hdr->flags,
+               result);
         return;
     }
 
-    size_t total_len = hdr->length + sizeof(bootdata_t);
+    printf("zbi: @ %p (%zu bytes)\n", image.Base(), image.Length());
 
-    printf("bootdata: @ %p (%zu bytes)\n", hdr, total_len);
-
-    bootdata_t* bd = hdr + 1;
-
-    size_t remain = hdr->length;
-    while (remain > sizeof(bootdata_t)) {
-        remain -= sizeof(bootdata_t);
-        uintptr_t item = reinterpret_cast<uintptr_t>(bd + 1);
-
-#if DEBUG_BOOT_DATA
-        char tag[5];
-        uint8_t* x = reinterpret_cast<uint8_t*>(&bd->type);
-        unsigned n;
-        for (n = 0; n < 4; n++) {
-            tag[n] = ((*x >= ' ') && (*x <= 127)) ? *x : '.';
-            x++;
-        }
-        tag[n] = 0;
-        printf("bootdata: @ %p typ=%08x (%s) len=%08x ext=%08x flg=%08x\n",
-               bd, bd->type, tag, bd->length, bd->extra, bd->flags);
-#endif
-
-        if (hdr->magic != BOOTITEM_MAGIC) {
-            printf("bootdata: bad magic\n");
-            break;
-        }
-
-        size_t advance = BOOTDATA_ALIGN(bd->length);
-        if (advance > remain) {
-            printf("bootdata: truncated\n");
-            break;
-        }
-#if DEBUG_BOOT_DATA
-        if (verify && (bd->flags & BOOTDATA_FLAG_CRC32)) {
-            uint32_t crc = 0;
-            uint32_t tmp = hdr->crc32;
-            hdr->crc32 = 0;
-            crc = crc32(crc, reinterpret_cast<uint8_t*>(bd), sizeof(bootdata_t));
-            crc = crc32(crc, reinterpret_cast<uint8_t*>(item), bd->length);
-            hdr->crc32 = tmp;
-            printf("bootdata: crc %08x, computed %08x: %s\n", tmp, crc,
-                   (tmp == crc) ? "OKAY" : "FAIL");
-        }
-#endif
-        if (!verify) {
-            if (process_bootitem(bd, reinterpret_cast<void*>(item))) {
-                break;
-            }
-        }
-        bd = reinterpret_cast<bootdata_t*>(item + advance);
-        remain -= advance;
+    result = image.ForEach(process_zbi_item, nullptr);
+    if (result != ZBI_RESULT_OK) {
+        printf("zbi: failed to process bootdata, reason = %d\n", result);
+        return;
     }
 
-    if (!verify) {
-        boot_alloc_reserve(phys, total_len);
-        bootloader.ramdisk_base = phys;
-        bootloader.ramdisk_size = total_len;
-    }
+    boot_alloc_reserve(phys, image.Length());
+    bootloader.ramdisk_base = phys;
+    bootloader.ramdisk_size = image.Length();
 }
 
 extern bool halt_on_panic;
 
-static void platform_save_bootloader_data(bool verify) {
+static void platform_save_bootloader_data(void) {
     if (_multiboot_info != NULL) {
         multiboot_info_t* mi = (multiboot_info_t*)X86_PHYS_TO_VIRT(_multiboot_info);
         printf("multiboot: info @ %p flags %#x\n", mi, mi->flags);
 
-        if ((mi->flags & MB_INFO_CMD_LINE) && mi->cmdline && (!verify)) {
+        if ((mi->flags & MB_INFO_CMD_LINE) && mi->cmdline) {
             const char* cmdline = (const char*)X86_PHYS_TO_VIRT(mi->cmdline);
             printf("multiboot: cmdline @ %p\n", cmdline);
             cmdline_append(cmdline);
@@ -233,14 +186,14 @@ static void platform_save_bootloader_data(bool verify) {
             module_t* mod = (module_t*)X86_PHYS_TO_VIRT(mi->mods_addr);
             if (mi->mods_count > 0) {
                 printf("multiboot: ramdisk @ %08x..%08x\n", mod->mod_start, mod->mod_end);
-                process_bootdata(reinterpret_cast<bootdata_t*>(X86_PHYS_TO_VIRT(mod->mod_start)),
-                                 mod->mod_start, verify);
+                process_zbi(reinterpret_cast<zbi_header_t*>(X86_PHYS_TO_VIRT(mod->mod_start)),
+                                 mod->mod_start);
             }
         }
     }
-    if (_bootdata_base != NULL) {
-        bootdata_t* bd = (bootdata_t*)X86_PHYS_TO_VIRT(_bootdata_base);
-        process_bootdata(bd, (uintptr_t)_bootdata_base, verify);
+    if (_zbi_base != NULL) {
+        zbi_header_t* bd = (zbi_header_t*)X86_PHYS_TO_VIRT(_zbi_base);
+        process_zbi(bd, (uintptr_t)_zbi_base);
     }
 
     halt_on_panic = cmdline_get_bool("kernel.halt-on-panic", false);
@@ -280,6 +233,10 @@ void* platform_get_ramdisk(size_t* size) {
 
 zx_status_t display_get_info(struct display_info* info) {
     return gfxconsole_display_get_info(info);
+}
+
+bool platform_early_console_enabled() {
+    return !early_console_disabled;
 }
 
 static void platform_early_display_init(void) {
@@ -535,7 +492,7 @@ static void e820_entry_walk(uint64_t base, uint64_t size, bool is_mem, void* voi
 
 // Give the platform an opportunity to append any platform specific bootdata
 // sections.
-zx_status_t platform_mexec_patch_bootdata(uint8_t* bootdata, const size_t len) {
+zx_status_t platform_mexec_patch_zbi(uint8_t* bootdata, const size_t len) {
     uint8_t e820buf[sizeof(e820entry_t) * 32];
 
     e820_walk_ctx ctx;
@@ -556,89 +513,95 @@ zx_status_t platform_mexec_patch_bootdata(uint8_t* bootdata, const size_t len) {
         return ctx.ret;
     }
 
+    zbi::Zbi image(bootdata, len);
+    zbi_result_t result;
+
+    const uint32_t kNoZbiFlags = 0;
+    const uint32_t kNoZbiExtra = 0;
+
     uint32_t section_length = (uint32_t)(sizeof(e820buf) - ctx.len);
+    result = image.AppendSection(section_length, ZBI_TYPE_E820_TABLE,
+                                 kNoZbiExtra, kNoZbiFlags, e820buf);
 
-    ret = bootdata_append_section(bootdata, len, e820buf, section_length,
-                                  BOOTDATA_E820_TABLE, 0, 0);
-
-    if (ret != ZX_OK) {
-        printf("mexec: Failed to append e820 map to bootdata. len = %lu, "
-               "section length = %u, retcode = %d\n",
-               len, section_length,
-               ret);
-        return ret;
+    if (result != ZBI_RESULT_OK) {
+        printf("mexec: Failed to append e820 map to zbi. len = %lu, section "
+               "length = %u, retcode = %d\n", len, section_length, result);
+        return ZX_ERR_INTERNAL;
     }
 
     // Append information about the framebuffer to the bootdata
     if (bootloader.fb.base) {
-        ret = bootdata_append_section(bootdata, len, (uint8_t*)&bootloader.fb,
-                                      sizeof(bootloader.fb), BOOTDATA_FRAMEBUFFER, 0, 0);
-        if (ret != ZX_OK) {
-            printf("mexec: Failed to append framebuffer data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n",
-                   len,
-                   sizeof(bootloader.fb), ret);
-            return ret;
+        result = image.AppendSection(sizeof(bootloader.fb),
+                                     ZBI_TYPE_FRAMEBUFFER, kNoZbiExtra,
+                                     kNoZbiFlags,(uint8_t*)&bootloader.fb);
+        if (result != ZBI_RESULT_OK) {
+            printf("mexec: Failed to append framebuffer data to bootdata. "
+                   "len = %lu, section length = %lu, retcode = %d\n", len,
+                   sizeof(bootloader.fb), result);
+            return ZX_ERR_INTERNAL;
         }
     }
 
     if (bootloader.efi_system_table) {
-        ret = bootdata_append_section(bootdata, len, (uint8_t*)&bootloader.efi_system_table,
-                                      sizeof(bootloader.efi_system_table),
-                                      BOOTDATA_EFI_SYSTEM_TABLE, 0, 0);
-        if (ret != ZX_OK) {
-            printf("mexec: Failed to append efi sys table data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n",
-                   len,
-                   sizeof(bootloader.efi_system_table), ret);
-            return ret;
+        result = image.AppendSection(sizeof(bootloader.efi_system_table),
+                                     ZBI_TYPE_EFI_SYSTEM_TABLE, kNoZbiExtra,
+                                     kNoZbiFlags,
+                                     (uint8_t*)&bootloader.efi_system_table);
+        if (result != ZBI_RESULT_OK) {
+            printf("mexec: Failed to append efi sys table data to bootdata. "
+                   "len = %lu, section length = %lu, retcode = %d\n", len,
+                   sizeof(bootloader.efi_system_table), result);
+            return ZX_ERR_INTERNAL;
         }
     }
 
     if (bootloader.acpi_rsdp) {
-        ret = bootdata_append_section(bootdata, len, (uint8_t*)&bootloader.acpi_rsdp,
-                                      sizeof(bootloader.acpi_rsdp), BOOTDATA_ACPI_RSDP, 0, 0);
-        if (ret != ZX_OK) {
-            printf("mexec: Failed to append acpi rsdp data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n",
-                   len,
-                   sizeof(bootloader.acpi_rsdp), ret);
-            return ret;
+        result = image.AppendSection(sizeof(bootloader.acpi_rsdp),
+                                     ZBI_TYPE_ACPI_RSDP, kNoZbiExtra,
+                                     kNoZbiFlags,
+                                     (uint8_t*)&bootloader.acpi_rsdp);
+        if (result != ZBI_RESULT_OK) {
+            printf("mexec: Failed to append acpi rsdp data to bootdata. "
+                   "len = %lu, section length = %lu, retcode = %d\n", len,
+                   sizeof(bootloader.acpi_rsdp), result);
+            return ZX_ERR_INTERNAL;
         }
     }
 
     if (bootloader.smbios) {
-        ret = bootdata_append_section(bootdata, len, (uint8_t*)&bootloader.smbios,
-                                      sizeof(bootloader.smbios), BOOTDATA_SMBIOS, 0, 0);
-        if (ret != ZX_OK) {
-            printf("mexec: Failed to append smbios data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n", len,
-                   sizeof(bootloader.smbios), ret);
-            return ret;
+        result = image.AppendSection(sizeof(bootloader.smbios), ZBI_TYPE_SMBIOS,
+                                     kNoZbiExtra, kNoZbiFlags,
+                                     (uint8_t*)&bootloader.smbios);
+        if (result != ZBI_RESULT_OK) {
+            printf("mexec: Failed to append smbios data to bootdata. len = %lu,"
+                   " section length = %lu, retcode = %d\n", len,
+                   sizeof(bootloader.smbios), result);
+            return ZX_ERR_INTERNAL;
         }
     }
 
-    if (bootloader.uart.type != BOOTDATA_UART_NONE) {
-        ret = bootdata_append_section(bootdata, len, (uint8_t*)&bootloader.uart,
-                                      sizeof(bootloader.uart), BOOTDATA_DEBUG_UART, 0, 0);
-        if (ret != ZX_OK) {
+    if (bootloader.uart.type != ZBI_UART_NONE) {
+        result = image.AppendSection(sizeof(bootloader.uart),
+                                     ZBI_TYPE_DEBUG_UART, kNoZbiExtra,
+                                     kNoZbiFlags, (uint8_t*)&bootloader.uart);
+        if (result != ZBI_RESULT_OK) {
             printf("mexec: Failed to append uart data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n",
-                   len,
-                   sizeof(bootloader.uart), ret);
-            return ret;
+                   "section length = %lu, retcode = %d\n", len, 
+                   sizeof(bootloader.uart), result);
+            return ZX_ERR_INTERNAL;
         }
     }
 
     if (bootloader.nvram.base) {
-        ret = bootdata_append_section(bootdata, len, (uint8_t*)&bootloader.nvram,
-                                      sizeof(bootloader.nvram), BOOTDATA_LASTLOG_NVRAM2, 0, 0);
-        if (ret != ZX_OK) {
+        result = image.AppendSection(sizeof(bootloader.nvram),
+                                     ZBI_TYPE_NVRAM, kNoZbiExtra,
+                                     kNoZbiFlags, (uint8_t*)&bootloader.nvram);
+
+        if (result != ZBI_RESULT_OK) {
             printf("mexec: Failed to append nvram data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n",
-                   len,
-                   sizeof(bootloader.nvram), ret);
-            return ret;
+                   "section length = %lu, retcode = %d\n", len,
+                   sizeof(bootloader.nvram), result);
+            return ZX_ERR_INTERNAL;
         }
     }
 
@@ -766,7 +729,7 @@ void platform_early_init(void) {
 
     /* extract bootloader data while still accessible */
     /* this includes debug uart config, etc. */
-    platform_save_bootloader_data(false);
+    platform_save_bootloader_data();
 
     /* get the debug output working */
     pc_init_debug_early();
@@ -778,11 +741,6 @@ void platform_early_init(void) {
 
     /* if the bootloader has framebuffer info, use it for early console */
     platform_early_display_init();
-
-#if DEBUG_BOOT_DATA
-    // second pass to verify crc32s so we can see the results
-    platform_save_bootloader_data(true);
-#endif
 
     /* initialize the boot memory reservation system */
     boot_reserve_init();

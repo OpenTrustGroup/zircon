@@ -53,8 +53,8 @@ const char* obj_type_get_name(zx_obj_type_t type) {
         return "socket";
     case ZX_OBJ_TYPE_RESOURCE:
         return "resource";
-    case ZX_OBJ_TYPE_EVENT_PAIR:
-        return "event_pair";
+    case ZX_OBJ_TYPE_EVENTPAIR:
+        return "eventpair";
     case ZX_OBJ_TYPE_JOB:
         return "job";
     case ZX_OBJ_TYPE_VMAR:
@@ -359,7 +359,7 @@ private:
             if (info.wait_exception_port_type != ZX_EXCEPTION_PORT_TYPE_NONE) {
                 state = "EXCEPTION";
             } else {
-                switch (info.state) {
+                switch (ZX_THREAD_STATE_BASIC(info.state)) {
                 case ZX_THREAD_STATE_NEW:
                     state = "NEW";
                     break;

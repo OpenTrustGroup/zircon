@@ -11,7 +11,7 @@ namespace zx {
 
 class eventpair : public object<eventpair> {
 public:
-    static constexpr zx_obj_type_t TYPE = ZX_OBJ_TYPE_EVENT_PAIR;
+    static constexpr zx_obj_type_t TYPE = ZX_OBJ_TYPE_EVENTPAIR;
 
     constexpr eventpair() = default;
 
@@ -30,6 +30,6 @@ public:
                               eventpair* endpoint1);
 };
 
-using unowned_eventpair = const unowned<eventpair>;
+using unowned_eventpair = unowned<eventpair>;
 
 } // namespace zx

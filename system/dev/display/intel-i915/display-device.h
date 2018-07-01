@@ -20,6 +20,16 @@
 namespace i915 {
 
 class Controller;
+class DisplayDevice;
+
+// Thread safe weak-ref to the DisplayDevice, because the backlight device
+// lifecycle is managed by devmgr but the DisplayDevice lifecycle is managed
+// by the display controller class.
+typedef struct display_ref {
+    mtx_t mtx;
+    DisplayDevice* display_device __TA_GUARDED(mtx);
+} display_ref_t;
+
 
 class DisplayDevice {
 public:
@@ -27,7 +37,7 @@ public:
                   registers::Ddi ddi, registers::Trans trans, registers::Pipe pipe);
     virtual ~DisplayDevice();
 
-    void ApplyConfiguration(display_config_t* config);
+    void ApplyConfiguration(const display_config_t* config);
 
     bool Init();
     bool Resume();
@@ -47,12 +57,16 @@ public:
     uint32_t height() const { return info_.h_addressable; }
     uint32_t format() const { return ZX_PIXEL_FORMAT_ARGB_8888; }
 
+    virtual bool HasBacklight() { return false; }
+    virtual void SetBacklightState(bool power, uint8_t brightness) {}
+    virtual void GetBacklightState(bool* power, uint8_t* brightness) {}
+
 protected:
     // Queries the DisplayDevice to see if there is a supported display attached. If
     // there is, then returns true and populates |edid| and |info|.
     virtual bool QueryDevice(edid::Edid* edid) = 0;
     // Configures the hardware to display a framebuffer at the preferred resolution.
-    virtual bool DoModeset() = 0;
+    virtual bool ConfigureDdi() = 0;
 
     hwreg::RegisterIo* mmio_space() const;
     const display_mode_t& mode() const { return info_; }
@@ -61,6 +75,10 @@ private:
     void ResetPipe();
     bool ResetTrans();
     bool ResetDdi();
+
+    void ConfigurePrimaryPlane(uint32_t plane_num, const primary_layer_t* primary, bool enable_csc);
+    void ConfigureCursorPlane(const cursor_layer_t* cursor, bool enable_csc);
+    void SetColorConversionOffsets(bool preoffsets, const float vals[3]);
 
     // Borrowed reference to Controller instance
     Controller* controller_;
@@ -74,11 +92,11 @@ private:
     PowerWellRef pipe_power_;
 
     bool inited_ = false;
-    display_mode_t info_;
-
-    uint32_t image_type_;
+    display_mode_t info_ = {};
     edid::Edid edid_;
-    bool is_enabled_;
+
+    zx_device_t* backlight_device_ = nullptr;
+    display_ref_t* display_ref_ = nullptr;
 };
 
 } // namespace i915

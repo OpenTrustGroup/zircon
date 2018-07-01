@@ -7,19 +7,6 @@
 
 #pragma once
 
-static inline void update_bits(uint32_t *x, uint32_t mask, uint32_t loc, uint32_t val) {
-    *x &= ~mask;
-    *x |= ((val << loc) & mask);
-}
-
-static inline uint32_t get_bits(uint32_t x, uint32_t mask, uint32_t loc) {
-    return (x & mask) >> loc;
-}
-
-static inline bool get_bit(uint32_t x, uint32_t mask) {
-    return (x & mask) ? 1 : 0;
-}
-
 //From EMMC Design documentation provided by AMLOGIC
 #define AML_SD_EMMC_IRQ_ALL_CLEAR            0x3fff
 #define AML_SD_EMMC_MIN_FREQ                 400000     //400KHz
@@ -40,9 +27,31 @@ static inline bool get_bit(uint32_t x, uint32_t mask) {
 #define AML_SD_EMMC_DEFAULT_RC_CC            4          //16 core clock cycles
 #define AML_SD_EMMC_DEFAULT_CLK_SRC          0          //24MHz
 #define AML_SD_EMMC_DEFAULT_CLK_DIV          60         //Defaults to 400KHz
-#define AML_SD_EMMC_DEFAULT_CLK_CORE_PHASE   2
-#define AML_SD_EMMC_MAX_TUNING_TRIES         4
+#define AML_SD_EMMC_DEFAULT_CLK_CORE_PHASE   3
+#define AML_SD_EMMC_MAX_TUNING_TRIES         7
 #define AML_SD_EMMC_ADJ_DELAY_TEST_ATTEMPTS  10
+
+#define AML_SD_EMMC_SRAM_MEMORY_BASE         0x200
+#define AML_SD_EMMC_SRAM_MEMORY_SIZE         512
+#define AML_SD_EMMC_PING_BUFFER_BASE         0x400
+#define AML_SD_EMMC_PING_BUFFER_SIZE         512
+#define AML_SD_EMMC_PONG_BUFER_BASE          0x600
+#define AML_SD_EMMC_PONG_BUFFER_SIZE         512
+#define AML_SD_EMMC_MAX_PIO_DESCS            32  // 16 * 32 = 512
+#define AML_SD_EMMC_MAX_PIO_DATA_SIZE        AML_SD_EMMC_PING_BUFFER_SIZE + \
+                                             AML_SD_EMMC_PONG_BUFFER_SIZE
+static inline void update_bits(uint32_t *x, uint32_t mask, uint32_t loc, uint32_t val) {
+    *x &= ~mask;
+    *x |= ((val << loc) & mask);
+}
+
+static inline uint32_t get_bits(uint32_t x, uint32_t mask, uint32_t loc) {
+    return (x & mask) >> loc;
+}
+
+static inline bool get_bit(uint32_t x, uint32_t mask) {
+    return (x & mask) ? 1 : 0;
+}
 
 typedef struct {
     volatile uint32_t sd_emmc_clock;            // 0x00
@@ -213,7 +222,11 @@ typedef struct {
     uint32_t resp_addr;
 } aml_sd_emmc_desc_t;
 
-const uint8_t aml_sd_emmc_tuning_blk_pattern_4bit[64] = {
+typedef struct {
+    bool supports_dma;
+} aml_sd_emmc_config_t;
+
+static const uint8_t aml_sd_emmc_tuning_blk_pattern_4bit[64] = {
     0xff, 0x0f, 0xff, 0x00, 0xff, 0xcc, 0xc3, 0xcc,
     0xc3, 0x3c, 0xcc, 0xff, 0xfe, 0xff, 0xfe, 0xef,
     0xff, 0xdf, 0xff, 0xdd, 0xff, 0xfb, 0xff, 0xfb,
@@ -224,7 +237,7 @@ const uint8_t aml_sd_emmc_tuning_blk_pattern_4bit[64] = {
     0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde,
 };
 
-const uint8_t aml_sd_emmc_tuning_blk_pattern_8bit[128] = {
+static const uint8_t aml_sd_emmc_tuning_blk_pattern_8bit[128] = {
     0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00,
     0xff, 0xff, 0xcc, 0xcc, 0xcc, 0x33, 0xcc, 0xcc,
     0xcc, 0x33, 0x33, 0xcc, 0xcc, 0xcc, 0xff, 0xff,

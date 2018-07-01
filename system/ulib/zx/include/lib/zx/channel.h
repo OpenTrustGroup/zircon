@@ -52,13 +52,12 @@ public:
 
     zx_status_t call(uint32_t flags, zx::time deadline,
                      const zx_channel_call_args_t* args,
-                     uint32_t* actual_bytes, uint32_t* actual_handles,
-                     zx_status_t* read_status) const {
+                     uint32_t* actual_bytes, uint32_t* actual_handles) const {
         return zx_channel_call(get(), flags, deadline.get(), args, actual_bytes,
-                               actual_handles, read_status);
+                               actual_handles);
     }
 };
 
-using unowned_channel = const unowned<channel>;
+using unowned_channel = unowned<channel>;
 
 } // namespace zx

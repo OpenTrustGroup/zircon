@@ -130,13 +130,25 @@ static int aml_thermal_notify_thread(void* ctx) {
 
 static zx_status_t aml_thermal_set_dvfs_opp(aml_thermal_t* dev,
                                      dvfs_info_t* info) {
+    uint16_t op_idx;
+    zx_status_t status = scpi_get_dvfs_idx(&dev->scpi, info->power_domain, &op_idx);
+    if (status != ZX_OK) {
+        THERMAL_ERROR("Unable to get current dvfs info");
+        return status;
+    }
+
+    if (op_idx == info->op_idx) {
+        return ZX_OK;
+    }
+
     return scpi_set_dvfs_idx(&dev->scpi, info->power_domain, info->op_idx);
 }
 
 static void aml_thermal_get_device_info(aml_thermal_t* dev,
                                         thermal_device_info_t* info) {
-    info->active_cooling        = true;
-    info->passive_cooling       = true;
+    info->active_cooling        = dev->device->active_cooling;
+    info->passive_cooling       = dev->device->passive_cooling;
+    info->gpu_throttling        = dev->device->gpu_throttling;
     info->num_trip_points       = dev->device->trip_point_count;
     memcpy(&info->trip_point_info, &dev->device->trip_point_info,
            sizeof(dev->device->trip_point_info));
@@ -296,7 +308,7 @@ static zx_status_t aml_thermal_bind(void* ctx, zx_device_t* parent) {
         return ZX_ERR_NO_MEMORY;
     }
     size_t actual;
-    status = device_get_metadata(parent, DEVICE_METADATA_DRIVER_DATA,
+    status = device_get_metadata(parent, DEVICE_METADATA_PRIVATE,
                                  dev_config, sizeof(aml_thermal_config_t), &actual);
     if (status != ZX_OK || actual != sizeof(aml_thermal_config_t)) {
         THERMAL_ERROR("Could not get metadata\n");
@@ -330,7 +342,7 @@ static zx_status_t aml_thermal_bind(void* ctx, zx_device_t* parent) {
     return ZX_OK;
 fail:
     aml_thermal_release(thermal);
-    return ZX_OK;
+    return status;
 }
 
 static zx_driver_ops_t aml_thermal_driver_ops = {

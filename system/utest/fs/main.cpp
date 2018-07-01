@@ -7,9 +7,9 @@
 #include <unistd.h>
 
 #include <fbl/unique_fd.h>
-#include <fvm/fvm.h>
+#include <fs-management/fvm.h>
 #include <lib/async-loop/cpp/loop.h>
-#include <memfs/memfs.h>
+#include <lib/memfs/memfs.h>
 #include <unittest/unittest.h>
 #include <zircon/device/device.h>
 
@@ -43,6 +43,9 @@ int main(int argc, char** argv) {
                 return -1;
             } else if (ioctl_device_get_topo_path(fd.get(), test_disk_path, PATH_MAX) < 0) {
                 fprintf(stderr, "[fs] Could not acquire topological path of block device\n");
+                return -1;
+            } else if (ioctl_block_get_info(fd.get(), &real_disk_info) < 0) {
+                fprintf(stderr, "[fs] Could not read disk info\n");
                 return -1;
             }
             // If we previously tried running tests on this disk, it may

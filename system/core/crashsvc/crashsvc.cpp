@@ -99,17 +99,14 @@ static void HandOffException(const zx::handle& root_job, const zx::channel& chan
     zx_status_t status =
         channel.write(0, &packet.type, sizeof(packet.type), handles, countof(handles));
     if (status != ZX_OK) {
-        // If the channel write failed, things are going badly, and this
-        // process still owns the handles. Attempt to resume the excepted
-        // thread which will typically result in the process being terminated
-        // by the kernel.
+        // If the channel write failed, things are going badly, attempt to
+        // resume the excepted  thread which will typically result in the
+        // process being terminated by the kernel.
         fprintf(stderr, "crashsvc: channel write failed: %d\n", status);
         status = zx_task_resume(handles[1], ZX_RESUME_EXCEPTION | ZX_RESUME_TRY_NEXT);
         if (status != ZX_OK) {
             fprintf(stderr, "crashsvc: zx_task_resume failed: %d\n", status);
         }
-        zx_handle_close(handles[0]);
-        zx_handle_close(handles[1]);
     }
 }
 
@@ -122,17 +119,17 @@ int main(int argc, char** argv) {
     // - the root job handle
     // - the exception port handle, already bound
     // - a channel on which to write messages when exceptions are encountered
-    zx::handle root_job(zx_get_startup_handle(PA_HND(PA_USER0, 0)));
+    zx::handle root_job(zx_take_startup_handle(PA_HND(PA_USER0, 0)));
     if (!root_job.is_valid()) {
         fprintf(stderr, "crashsvc: no root job\n");
         return 1;
     }
-    zx::port exception_port(zx_get_startup_handle(PA_HND(PA_USER0, 1)));
+    zx::port exception_port(zx_take_startup_handle(PA_HND(PA_USER0, 1)));
     if (!exception_port.is_valid()) {
         fprintf(stderr, "crashsvc: no exception port\n");
         return 1;
     }
-    zx::channel channel(zx_get_startup_handle(PA_HND(PA_USER0, 2)));
+    zx::channel channel(zx_take_startup_handle(PA_HND(PA_USER0, 2)));
     if (!channel.is_valid()) {
         fprintf(stderr, "crashsvc: no channel\n");
         return 1;

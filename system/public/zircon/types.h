@@ -50,6 +50,12 @@ typedef uint64_t zx_ticks_t;
 #define ZX_MIN(n)  (ZX_SEC(n) * 60ULL)
 #define ZX_HOUR(n) (ZX_MIN(n) * 60ULL)
 
+// clock ids
+typedef uint32_t zx_clock_t;
+#define ZX_CLOCK_MONOTONIC        ((zx_clock_t)0)
+#define ZX_CLOCK_UTC              ((zx_clock_t)1)
+#define ZX_CLOCK_THREAD           ((zx_clock_t)2)
+
 typedef uint32_t zx_signals_t;
 
 #define ZX_SIGNAL_NONE              ((zx_signals_t)0u)
@@ -106,9 +112,9 @@ typedef uint32_t zx_signals_t;
 #define ZX_EVENT_SIGNAL_MASK        (ZX_USER_SIGNAL_ALL | __ZX_OBJECT_SIGNALED)
 
 // EventPair
-#define ZX_EPAIR_SIGNALED           __ZX_OBJECT_SIGNALED
-#define ZX_EPAIR_PEER_CLOSED        __ZX_OBJECT_PEER_CLOSED
-#define ZX_EPAIR_SIGNAL_MASK        (ZX_USER_SIGNAL_ALL | __ZX_OBJECT_SIGNALED | __ZX_OBJECT_PEER_CLOSED)
+#define ZX_EVENTPAIR_SIGNALED       __ZX_OBJECT_SIGNALED
+#define ZX_EVENTPAIR_PEER_CLOSED    __ZX_OBJECT_PEER_CLOSED
+#define ZX_EVENTPAIR_SIGNAL_MASK    (ZX_USER_SIGNAL_ALL | __ZX_OBJECT_SIGNALED | __ZX_OBJECT_PEER_CLOSED)
 
 // Channel
 #define ZX_CHANNEL_READABLE         __ZX_OBJECT_READABLE
@@ -229,6 +235,8 @@ typedef uint32_t zx_rights_t;
 #define ZX_RIGHTS_POLICY \
     (ZX_RIGHT_GET_POLICY | ZX_RIGHT_SET_POLICY)
 
+// VM Object creation options
+#define ZX_VMO_NON_RESIZABLE             1u
 
 // VM Object opcodes
 #define ZX_VMO_OP_COMMIT                 1u
@@ -242,26 +250,23 @@ typedef uint32_t zx_rights_t;
 #define ZX_VMO_OP_CACHE_CLEAN_INVALIDATE 9u
 
 // VM Object clone flags
-#define ZX_VMO_CLONE_COPY_ON_WRITE       1u
+#define ZX_VMO_CLONE_COPY_ON_WRITE        (1u << 0)
+#define ZX_VMO_CLONE_NON_RESIZEABLE       (1u << 1)
 
 // Mapping flags to vmar routines
-#define ZX_VM_FLAG_PERM_READ          (1u << 0)
-#define ZX_VM_FLAG_PERM_WRITE         (1u << 1)
-#define ZX_VM_FLAG_PERM_EXECUTE       (1u << 2)
-#define ZX_VM_FLAG_COMPACT            (1u << 3)
-#define ZX_VM_FLAG_SPECIFIC           (1u << 4)
-#define ZX_VM_FLAG_SPECIFIC_OVERWRITE (1u << 5)
-#define ZX_VM_FLAG_CAN_MAP_SPECIFIC   (1u << 6)
-#define ZX_VM_FLAG_CAN_MAP_READ       (1u << 7)
-#define ZX_VM_FLAG_CAN_MAP_WRITE      (1u << 8)
-#define ZX_VM_FLAG_CAN_MAP_EXECUTE    (1u << 9)
-#define ZX_VM_FLAG_MAP_RANGE          (1u << 10)
-#define ZX_VM_FLAG_MAP_NS             (1u << 11)
-
-// clock ids
-#define ZX_CLOCK_MONOTONIC        (0u)
-#define ZX_CLOCK_UTC              (1u)
-#define ZX_CLOCK_THREAD           (2u)
+#define ZX_VM_FLAG_PERM_READ              (1u << 0)
+#define ZX_VM_FLAG_PERM_WRITE             (1u << 1)
+#define ZX_VM_FLAG_PERM_EXECUTE           (1u << 2)
+#define ZX_VM_FLAG_COMPACT                (1u << 3)
+#define ZX_VM_FLAG_SPECIFIC               (1u << 4)
+#define ZX_VM_FLAG_SPECIFIC_OVERWRITE     (1u << 5)
+#define ZX_VM_FLAG_CAN_MAP_SPECIFIC       (1u << 6)
+#define ZX_VM_FLAG_CAN_MAP_READ           (1u << 7)
+#define ZX_VM_FLAG_CAN_MAP_WRITE          (1u << 8)
+#define ZX_VM_FLAG_CAN_MAP_EXECUTE        (1u << 9)
+#define ZX_VM_FLAG_MAP_RANGE              (1u << 10)
+#define ZX_VM_FLAG_REQUIRE_NON_RESIZABLE  (1u << 11)
+#define ZX_VM_FLAG_MAP_NS                 (1u << 12)
 
 // virtual address
 typedef uintptr_t zx_vaddr_t;
@@ -270,6 +275,8 @@ typedef uintptr_t zx_vaddr_t;
 typedef uintptr_t zx_paddr_t;
 // low mem physical address
 typedef uint32_t  zx_paddr32_t;
+// Hypervisor guest physical addresses.
+typedef uintptr_t zx_gpaddr_t;
 
 // offset
 typedef uint64_t zx_off_t;
@@ -360,7 +367,7 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_SMC             ((zx_obj_type_t)13u)
 #define ZX_OBJ_TYPE_SOCKET          ((zx_obj_type_t)14u)
 #define ZX_OBJ_TYPE_RESOURCE        ((zx_obj_type_t)15u)
-#define ZX_OBJ_TYPE_EVENT_PAIR      ((zx_obj_type_t)16u)
+#define ZX_OBJ_TYPE_EVENTPAIR       ((zx_obj_type_t)16u)
 #define ZX_OBJ_TYPE_JOB             ((zx_obj_type_t)17u)
 #define ZX_OBJ_TYPE_VMAR            ((zx_obj_type_t)18u)
 #define ZX_OBJ_TYPE_FIFO            ((zx_obj_type_t)19u)

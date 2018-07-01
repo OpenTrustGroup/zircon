@@ -16,8 +16,8 @@
 #include <zircon/device/vfs.h>
 
 #include <fbl/ref_ptr.h>
-#include <fdio/debug.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/debug.h>
+#include <lib/fdio/vfs.h>
 #include <sync/completion.h>
 #include <zircon/syscalls.h>
 
@@ -42,11 +42,7 @@ void VnodeBlob::fbl_recycle() {
 void VnodeBlob::TearDown() {
     ZX_ASSERT(clone_watcher_.object() == ZX_HANDLE_INVALID);
     if (blob_ != nullptr) {
-        block_fifo_request_t request;
-        request.txnid = blobfs_->TxnId();
-        request.vmoid = vmoid_;
-        request.opcode = BLOCKIO_CLOSE_VMO;
-        blobfs_->Txn(&request, 1);
+        blobfs_->DetachVmo(vmoid_);
     }
     blob_ = nullptr;
 }
@@ -100,8 +96,13 @@ zx_status_t VnodeBlob::Write(const void* data, size_t len, size_t offset,
 
 zx_status_t VnodeBlob::Append(const void* data, size_t len, size_t* out_end,
                               size_t* out_actual) {
-    zx_status_t status = Write(data, len, bytes_written_, out_actual);
-    *out_actual = bytes_written_;
+    zx_status_t status = WriteInternal(data, len, out_actual);
+    if (GetState() == kBlobStateDataWrite) {
+        ZX_DEBUG_ASSERT(write_info_ != nullptr);
+        *out_actual = write_info_->bytes_written;
+    } else {
+        *out_actual = inode_.blob_size;
+    }
     return status;
 }
 
@@ -280,6 +281,15 @@ void VnodeBlob::Sync(SyncCallback closure) {
 void VnodeBlob::CompleteSync() {
     fsync(blobfs_->Fd());
     atomic_store(&syncing_, false);
+}
+
+fbl::RefPtr<VnodeBlob> VnodeBlob::CloneWatcherTeardown() {
+    if (clone_watcher_.is_pending()) {
+        clone_watcher_.Cancel();
+        clone_watcher_.set_object(ZX_HANDLE_INVALID);
+        return fbl::move(clone_ref_);
+    }
+    return nullptr;
 }
 
 zx_status_t VnodeBlob::Open(uint32_t flags, fbl::RefPtr<Vnode>* out_redirect) {

@@ -19,8 +19,8 @@ void on_displays_changed(void* ctx, uint64_t* displays_added, uint32_t added_cou
             displays_added, added_count, displays_removed, removed_count);
 }
 
-void on_display_vsync(void* ctx, uint64_t display, void* handle) {
-    static_cast<display::Controller*>(ctx)->OnDisplayVsync(display, handle);
+void on_display_vsync(void* ctx, uint64_t display, void** handles, uint32_t handle_count) {
+    static_cast<display::Controller*>(ctx)->OnDisplayVsync(display, handles, handle_count);
 }
 
 display_controller_cb_t dc_cb = {
@@ -34,7 +34,7 @@ namespace display {
 
 void Controller::OnDisplaysChanged(uint64_t* displays_added, uint32_t added_count,
                                    uint64_t* displays_removed, uint32_t removed_count) {
-    const DisplayInfo* added_success[added_count];
+    uint64_t added_success[added_count];
     int32_t added_success_count = 0;
     uint64_t removed_success[removed_count];
     int32_t removed_success_count = 0;
@@ -45,10 +45,11 @@ void Controller::OnDisplaysChanged(uint64_t* displays_added, uint32_t added_coun
         if (target) {
             removed_success[removed_success_count++] = displays_removed[i];
 
-            while (!target->images.is_empty()) {
-                auto image = target->images.pop_front();
-                image->StartRetire();
-                image->OnRetire();
+            image_node_t* node;
+            while ((node = list_remove_head_type(&target->images, image_node_t, link)) != nullptr) {
+                node->self->StartRetire();
+                node->self->OnRetire();
+                node->self.reset();
             }
         } else {
             zxlogf(TRACE, "Unknown display %ld removed\n", displays_removed[i]);
@@ -62,6 +63,8 @@ void Controller::OnDisplaysChanged(uint64_t* displays_added, uint32_t added_coun
             zxlogf(INFO, "Out of memory when processing display hotplug\n");
             break;
         }
+        info->pending_layer_change = false;
+        info->layer_count = 0;
 
         info->id = displays_added[i];
         if (ops_.ops->get_display_info(ops_.ctx, info->id, &info->info) != ZX_OK) {
@@ -69,18 +72,21 @@ void Controller::OnDisplaysChanged(uint64_t* displays_added, uint32_t added_coun
             continue;
         }
         if (info->info.edid_present) {
-            edid::Edid edid;
             const char* edid_err = "No preferred timing";
-            if (!edid.Init(info->info.panel.edid.data, info->info.panel.edid.length, &edid_err)
-                    || !edid.GetPreferredTiming(&info->preferred_timing)) {
+            if (!info->edid.Init(info->info.panel.edid.data,
+                                 info->info.panel.edid.length, &edid_err)) {
                 zxlogf(TRACE, "Failed to parse edid \"%s\"\n", edid_err);
                 continue;
             }
+
+            if (zxlog_level_enabled_etc(DDK_LOG_TRACE)) {
+                info->edid.Print([](const char* str) {printf("%s", str);});
+            }
         }
 
-        auto info_ptr = info.get();
+        uint64_t id = info->id;
         if (displays_.insert_or_find(fbl::move(info))) {
-            added_success[added_success_count++] = info_ptr;
+            added_success[added_success_count++] = id;
         } else {
             zxlogf(INFO, "Ignoring duplicate display\n");
         }
@@ -103,66 +109,199 @@ void Controller::OnDisplaysChanged(uint64_t* displays_added, uint32_t added_coun
     }
 }
 
-void Controller::OnDisplayVsync(uint64_t display_id, void* handle) {
+void Controller::OnDisplayVsync(uint64_t display_id, void** handles, uint32_t handle_count) {
     fbl::AutoLock lock(&mtx_);
-    fbl::DoublyLinkedList<fbl::RefPtr<Image>>* images = nullptr;
+    DisplayInfo* info = nullptr;
     for (auto& display_config : displays_) {
         if (display_config.id == display_id) {
-            images = &display_config.images;
+            info = &display_config;
             break;
         }
     }
 
-    if (images) {
-        while (!images->is_empty()) {
-            auto& image = images->front();
-            image.OnPresent();
-            if (image.info().handle == handle) {
+    if (!info) {
+        return;
+    }
+
+    // See ::ApplyConfig for more explaination of how vsync image tracking works.
+    //
+    // If there's a pending layer change, don't process any present/retire actions
+    // until the change is complete.
+    if (info->pending_layer_change) {
+        if (handle_count != info->layer_count) {
+            // There's an unexpected number of layers, so wait until the next vsync.
+            return;
+        } else if (list_is_empty(&info->images)) {
+            // If the images list is empty, then we can't have any pending layers and
+            // the change is done when there are no handles being displayed.
+            ZX_ASSERT(info->layer_count == 0);
+            if (handle_count != 0) {
+                return;
+            }
+        } else {
+            // Otherwise the change is done when the last handle_count==info->layer_count
+            // images match the handles in the correct order.
+            auto node = list_peek_tail_type(&info->images, image_node_t, link);
+            int32_t handle_idx = handle_count - 1;
+            while (handle_idx >= 0 && node != nullptr) {
+                if (handles[handle_idx] != node->self->info().handle) {
+                    break;
+                }
+                node = list_prev_type(&info->images, &node->link, image_node_t, link);
+                handle_idx--;
+            }
+            if (handle_idx != -1) {
+                return;
+            }
+        }
+
+        info->pending_layer_change = false;
+
+        if (active_client_ && info->delayed_apply) {
+            active_client_->ReapplyConfig();
+        }
+    }
+
+    // Since we know there are no pending layer changes, we know that every layer (i.e z_index)
+    // has an image. So every image either matches a handle (in which case it's being displayed),
+    // is older than its layer's image (i.e. in front of in the queue) and can be retired, or is
+    // newer than its layer's image (i.e. behind in the queue) and has yet to be presented.
+    uint32_t z_indices[handle_count];
+    for (unsigned i = 0; i < handle_count; i++) {
+        z_indices[i] = UINT32_MAX;
+    }
+    image_node_t* cur;
+    image_node_t* tmp;
+    list_for_every_entry_safe(&info->images, cur, tmp, image_node_t, link) {
+        bool handle_match = false;
+        bool z_already_matched = false;
+        for (unsigned i = 0; i < handle_count; i++) {
+            if (handles[i] == cur->self->info().handle) {
+                handle_match = true;
+                z_indices[i] = cur->self->z_index();
                 break;
-            } else {
-                image.OnRetire();
-                images->pop_front();
+            } else if (z_indices[i] == cur->self->z_index()) {
+                z_already_matched = true;
+                break;
+            }
+        }
+
+        if (!z_already_matched) {
+            cur->self->OnPresent();
+            if (!handle_match) {
+                list_delete(&cur->link);
+                cur->self->OnRetire();
+                cur->self.reset();
             }
         }
     }
 }
 
-void Controller::OnConfigApplied(DisplayConfig* configs[], int32_t count) {
-    fbl::AutoLock lock(&mtx_);
-    for (int i = 0; i < count; i++) {
-        auto* config = configs[i];
-        if (config->displayed_image) {
-            auto display = displays_.find(config->id);
-            if (display.IsValid()) {
-                // This can happen if we reapply a display's current configuration or if
-                // we switch display owners rapidly. The fact that this is being put back in
-                // the queue means we don't want to retire the image yet. So at worst this
-                // will delay the image's retire by a few frames.
-                if (static_cast<fbl::DoublyLinkedListable<fbl::RefPtr<Image>>*>(
-                            config->displayed_image.get())->InContainer()) {
-                    display->images.erase(*config->displayed_image);
-                } else {
-                    config->displayed_image->StartPresent();
+void Controller::ApplyConfig(DisplayConfig* configs[], int32_t count,
+                             bool is_vc, uint32_t client_stamp) {
+    const display_config_t* display_configs[count];
+    uint32_t display_count = 0;
+    {
+        fbl::AutoLock lock(&mtx_);
+        // The fact that there could already be a vsync waiting to be handled when a config
+        // is applied means that a vsync with no handle for a layer could be interpreted as either
+        // nothing in the layer has been presented or everything in the layer can be retired. To
+        // prevent that ambiguity, we don't allow a layer to be disabled until an image from
+        // it has been displayed.
+        //
+        // Since layers can be moved between displays but the implementation only supports
+        // tracking the image in one display's queue, we need to ensure that the old display is
+        // done with the a migrated image before the new display is done with it. This means
+        // that the new display can't flip until the configuration change is done. However, we
+        // don't want to completely prohibit flips, as that would add latency if the layer's new
+        // image is being waited for when the configuration is applied.
+        //
+        // To handle both of these cases, we force all layer changes to complete before the client
+        // can apply a new configuration. We allow the client to apply a more complete version of
+        // the configuration, although Client::HandleApplyConfig won't migrate a layer's current
+        // image if there is also a pending image.
+        if (vc_applied_ != is_vc || applied_stamp_ != client_stamp) {
+            for (int i = 0; i < count; i++) {
+                auto* config = configs[i];
+                auto display = displays_.find(config->id);
+                if (!display.IsValid()) {
+                    continue;
                 }
-                display->images.push_back(config->displayed_image);
+
+                if (display->pending_layer_change) {
+                    display->delayed_apply = true;
+                    return;
+                }
+            }
+        }
+
+        for (int i = 0; i < count; i++) {
+            auto* config = configs[i];
+            auto display = displays_.find(config->id);
+            if (!display.IsValid()) {
+                continue;
+            }
+
+            display->pending_layer_change = config->apply_layer_change() || is_vc != vc_applied_;
+            display->layer_count = config->current_layer_count();
+            display->delayed_apply = false;
+
+            if (display->layer_count == 0) {
+                continue;
+            }
+
+            display_configs[display_count++] = config->current_config();
+
+            for (auto& layer_node : config->get_current_layers()) {
+                Layer* layer = layer_node.layer;
+                if (layer->is_skipped()) {
+                    continue;
+                }
+
+
+                fbl::RefPtr<Image> image = layer->current_image();
+                ZX_ASSERT(image); // Displayed layers must always have images
+
+                // Set the image z index so vsync knows what layer the image is in
+                image->set_z_index(layer->z_order());
+                image->StartPresent();
+
+                // It's possible that the image's layer was moved between displays. The logic around
+                // pending_layer_change guarantees that the old display will be done with the image
+                // before the new display is, so deleting it from the old list is fine.
+                //
+                // Even if we're on the same display, the entry needs to be moved to the end of the
+                // list to ensure that the last config->current.layer_count elements in the queue
+                // are the current images.
+                if (list_in_list(&image->node.link)) {
+                    list_delete(&image->node.link);
+                } else {
+                    image->node.self = image;
+                }
+                list_add_tail(&display->images, &image->node.link);
             }
         }
     }
+    vc_applied_ = is_vc;
+    applied_stamp_ = client_stamp;
+
+    ops_.ops->apply_configuration(ops_.ctx, display_configs, display_count);
 }
 
 void Controller::ReleaseImage(Image* image) {
     ops_.ops->release_image(ops_.ctx, &image->info());
 }
 
-void Controller::SetVcOwner(bool vc_is_owner) {
+void Controller::SetVcMode(uint8_t vc_mode) {
     fbl::AutoLock lock(&mtx_);
-    vc_is_owner_ = vc_is_owner;
+    vc_mode_ = vc_mode;
     HandleClientOwnershipChanges();
 }
 
 void Controller::HandleClientOwnershipChanges() {
     ClientProxy* new_active;
-    if (vc_is_owner_ || primary_client_ == nullptr) {
+    if (vc_mode_ == fuchsia_display_VirtconMode_FORCED
+            || (vc_mode_ == fuchsia_display_VirtconMode_FALLBACK && primary_client_ == nullptr)) {
         new_active = vc_client_;
     } else {
         new_active = primary_client_;
@@ -183,12 +322,52 @@ void Controller::OnClientDead(ClientProxy* client) {
     fbl::AutoLock lock(&mtx_);
     if (client == vc_client_) {
         vc_client_ = nullptr;
-        vc_is_owner_ = false;
+        vc_mode_ = fuchsia_display_VirtconMode_INACTIVE;
     } else if (client == primary_client_) {
         primary_client_ = nullptr;
     }
     HandleClientOwnershipChanges();
 }
+
+bool Controller::GetPanelConfig(uint64_t display_id, const edid::Edid** edid,
+                                const display_params_t** params) {
+    ZX_DEBUG_ASSERT(mtx_trylock(&mtx_) == thrd_busy);
+    for (auto& display : displays_) {
+        if (display.id == display_id) {
+            if (display.info.edid_present) {
+                *edid = &display.edid;
+                *params = nullptr;
+            } else {
+                *params = &display.info.panel.params;
+                *edid = nullptr;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+#define GET_DISPLAY_INFO(FN_NAME, COUNT_FIELD, TYPE_FIELD, TYPE) \
+bool Controller::FN_NAME(uint64_t display_id, uint32_t* count_out, \
+                         fbl::unique_ptr<TYPE[]>* data_out) { \
+    ZX_DEBUG_ASSERT(mtx_trylock(&mtx_) == thrd_busy); \
+    for (auto& display : displays_) { \
+        if (display.id == display_id) { \
+            *count_out = display.info.COUNT_FIELD; \
+            fbl::AllocChecker ac; \
+            *data_out = fbl::unique_ptr<TYPE[]>(new (&ac) TYPE[*count_out]); \
+            if (!ac.check()) { \
+                return false; \
+            } \
+            memcpy(data_out->get(), display.info.TYPE_FIELD, sizeof(TYPE) * *count_out); \
+            return true; \
+        } \
+    } \
+    return false; \
+}
+
+GET_DISPLAY_INFO(GetCursorInfo, cursor_info_count, cursor_infos, cursor_info_t)
+GET_DISPLAY_INFO(GetSupportedPixelFormats, pixel_format_count, pixel_formats, zx_pixel_format_t);
 
 zx_status_t Controller::DdkOpen(zx_device_t** dev_out, uint32_t flags) {
     return DdkOpenAt(dev_out, "", flags);
@@ -218,10 +397,10 @@ zx_status_t Controller::DdkOpenAt(zx_device_t** dev_out, const char* path, uint3
 
     // Add all existing displays to the client
     if (displays_.size() > 0) {
-        const DisplayInfo* current_displays[displays_.size()];
+        uint64_t current_displays[displays_.size()];
         int idx = 0;
         for (const DisplayInfo& display : displays_) {
-            current_displays[idx++] = &display;
+            current_displays[idx++] = display.id;
         }
         if ((status = client->OnDisplaysChanged(current_displays, idx, nullptr, 0)) != ZX_OK) {
             zxlogf(TRACE, "Failed to init client %d\n", status);

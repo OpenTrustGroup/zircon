@@ -54,6 +54,8 @@ zx_status_t IntelDspIpc::SendIpcWait(Txn* txn) {
     if (res != ZX_OK) {
         dsp_.DeviceShutdown();
     }
+    // TODO(yky): ZX-2261: Figure out why this is needed and eliminate it.
+    zx_nanosleep(zx_deadline_after(ZX_MSEC(1)));
     return res;
 }
 
@@ -195,7 +197,8 @@ void IntelDspIpc::ProcessIpc(const IpcMessage& message) {
 void IntelDspIpc::ProcessIpcNotification(const IpcMessage& notif) {
     switch (notif.notif_type()) {
     case NotificationType::FW_READY:
-        LOG(INFO, "firmware ready\n");
+        LOG(TRACE, "firmware ready\n");
+        completion_signal(&fw_ready_completion_);
         break;
     case NotificationType::RESOURCE_EVENT: {
         ResourceEventData data;
@@ -233,7 +236,7 @@ void IntelDspIpc::ProcessIpcReply(const IpcMessage& reply) {
     pending.reply = reply;
     pending.done = true;
 
-    LOG(INFO, "got reply (status %u) for pending msg, pri 0x%08x ext 0x%08x\n",
+    LOG(DEBUG1, "got reply (status %u) for pending msg, pri 0x%08x ext 0x%08x\n",
               to_underlying(reply.status()), reply.primary, reply.extension);
 
     if (reply.msg_tgt() == MsgTarget::MODULE_MSG) {
@@ -260,7 +263,7 @@ void IntelDspIpc::ProcessLargeConfigGetReply(Txn* txn) {
                         "large_param_id mismatch, expected %u got %u\n",
                         txn->request.large_param_id(), txn->reply.large_param_id());
 
-    LOG(INFO, "got LARGE_CONFIG_GET reply, id %u init_block %d final_block %d data_off_size %u\n",
+    LOG(DEBUG1, "got LARGE_CONFIG_GET reply, id %u init_block %d final_block %d data_off_size %u\n",
         txn->reply.large_param_id(), txn->reply.init_block(), txn->reply.final_block(),
         txn->reply.data_off_size());
 

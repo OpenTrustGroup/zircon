@@ -8,11 +8,18 @@
 #include <stdint.h>
 
 #include <zircon/types.h>
+#include <zircon/boot/image.h>
 
 // nand_info_t is used to retrieve various parameters describing the geometry of
 // the underlying NAND chip(s). This is retrieved using the query api in
 // nand_protocol_ops.
 typedef struct nand_info nand_info_t;
+
+enum {
+    NAND_CLASS_PARTMAP = 1,   // NAND device contains multiple partitions.
+    NAND_CLASS_FTL = 2,       // NAND device is a FTL partition.
+    NAND_CLASS_BBS = 3,       // NAND device is a bad block skip partition.
+};
 
 struct nand_info {
     uint32_t page_size;         // Read/write unit size, in bytes.
@@ -21,6 +28,8 @@ struct nand_info {
     uint32_t ecc_bits;          // Number of ECC bits (correctable bit flips),
                                 // per correction chunk.
     uint32_t oob_size;          // Available out of band bytes per page.
+    uint32_t nand_class;        // NAND_CLASS_PARTMAP, NAND_CLASS_FTL or NAND_CLASS_RAW.
+    uint8_t partition_guid[ZBI_PARTITION_GUID_LEN]; // partition type GUID from partition map.
 };
 
 // nand_op_t's are submitted for processing via the queue() method of the
@@ -43,9 +52,13 @@ struct nand_info {
 // NOTE: The protocol can be extended with barriers to support controllers that
 // may issue multiple simultaneous request to the IO chips.
 
+#define NAND_OP_READ                    0x00000001
+#define NAND_OP_WRITE                   0x00000002
+#define NAND_OP_ERASE                   0x00000003
+
+// These operations are deprecated. Don't use for new code. See ZX-2233.
 #define NAND_OP_READ_DATA               0x00000001
 #define NAND_OP_WRITE_DATA              0x00000002
-#define NAND_OP_ERASE                   0x00000003
 #define NAND_OP_READ_OOB                0x00000004
 #define NAND_OP_WRITE_OOB               0x00000005
 
@@ -56,14 +69,43 @@ struct nand_op {
         // All Commands.
         uint32_t command;                // Command.
 
-        // NAND_OP_READ_DATA, NAND_OP_WRITE_DATA.
+        // NAND_OP_READ, NAND_OP_WRITE.
+        //
+        // A single operation can read or write an arbitrary number of pages,
+        // including out of band (OOB) data for each page. If either regular
+        // data or OOB is not required, the relevant VMO handle should be set to
+        // ZX_HANDLE_INVALID.
+        //
+        // Note that length dictates the number of pages to access, regardless
+        // of the type of data requested: regular data, OOB or both.
+        //
+        // The OOB data will be copied to (and from) a contiguous memory range
+        // starting at the given offset. Note that said offset is given in nand
+        // pages even though OOB is just a handful of bytes per page. In other
+        // words, after said offset, the OOB data for each page is located
+        // nand_info.oob_size bytes apart.
+        //
+        // For example, to read 5 pages worth of data + OOB, with page size of
+        // 2 kB and 16 bytes of OOB per page, setting:
+        //
+        //     data_vmo = oob_vmo = vmo_handle
+        //     length = 5
+        //     offset_nand = 20
+        //     offset_data_vmo = 0
+        //     offset_oob_vmo = 5
+        //
+        // will transfer pages [20, 24] to the first 2048 * 5 bytes of the vmo,
+        // followed by 16 * 5 bytes of OOB data starting at offset 2048 * 5.
+        //
         struct {
             uint32_t command;            // Command.
-            zx_handle_t vmo;             // vmo of data to read or write.
-            uint32_t length;             // Transfer length in pages.
+            zx_handle_t data_vmo;        // vmo of data to read or write.
+            zx_handle_t oob_vmo;         // vmo of OOB data to read or write.
+            uint32_t length;             // Number of pages to access.
                                          // (0 is invalid).
             uint32_t offset_nand;        // Offset into nand, in pages.
-            uint64_t offset_vmo;         // vmo offset in (nand) pages.
+            uint64_t offset_data_vmo;    // Data vmo offset in (nand) pages.
+            uint64_t offset_oob_vmo;     // OOB vmo offset in (nand) pages.
             uint64_t* pages;             // Optional physical page list.
             // Return value from READ_DATA, max corrected bit flips in any
             // underlying ECC chunk read. The caller can compare this value

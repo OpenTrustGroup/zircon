@@ -18,7 +18,7 @@
 #include <fbl/algorithm.h>
 #include <fbl/auto_call.h>
 #include <fbl/limits.h>
-#include <fdio/io.h>
+#include <lib/fdio/io.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -46,19 +46,11 @@ zx_status_t DoCallImpl(const zx::channel& channel,
     args.rd_num_handles = resp_handle_out ? 1 : 0;
 
     uint32_t bytes, handles;
-    zx_status_t read_status, write_status;
 
-    write_status = channel.call(0, zx::deadline_after(CALL_TIMEOUT), &args, &bytes, &handles,
-                                &read_status);
-
-    if (write_status != ZX_OK) {
-        if (write_status == ZX_ERR_CALL_FAILED) {
-            printf("Cmd read failure (cmd %04x, res %d)\n", req.hdr.cmd, read_status);
-            return read_status;
-        } else {
-            printf("Cmd write failure (cmd %04x, res %d)\n", req.hdr.cmd, write_status);
-            return write_status;
-        }
+    zx_status_t status = channel.call(0, zx::deadline_after(CALL_TIMEOUT), &args, &bytes, &handles);
+    if (status != ZX_OK) {
+        printf("Cmd failure (cmd %04x, res %d)\n", req.hdr.cmd, status);
+        return status;
     }
 
     // If the caller wants to know the size of the response length, let them
@@ -271,6 +263,25 @@ zx_status_t AudioDeviceStream::SetMute(bool mute) {
     return res;
 }
 
+zx_status_t AudioDeviceStream::SetAgc(bool enabled) {
+    audio_stream_cmd_set_gain_req  req;
+    audio_stream_cmd_set_gain_resp resp;
+
+    req.hdr.cmd = AUDIO_STREAM_CMD_SET_GAIN;
+    req.hdr.transaction_id = 1;
+    req.flags = enabled
+              ? static_cast<audio_set_gain_flags_t>(AUDIO_SGF_AGC_VALID | AUDIO_SGF_AGC)
+              : AUDIO_SGF_AGC_VALID;
+
+    zx_status_t res = DoCall(stream_ch_, req, &resp);
+    if (res != ZX_OK)
+        printf("Failed to %sable AGC for stream! (res %d)\n", enabled ? "en" : "dis", res);
+    else
+        printf("Stream AGC is now %sabled\n", enabled ? "en" : "dis");
+
+    return res;
+}
+
 zx_status_t AudioDeviceStream::SetGain(float gain) {
     audio_stream_cmd_set_gain_req  req;
     audio_stream_cmd_set_gain_resp resp;
@@ -300,6 +311,30 @@ zx_status_t AudioDeviceStream::GetGain(audio_stream_cmd_get_gain_resp_t* out_gai
     req.hdr.transaction_id = 1;
 
     return DoNoFailCall(stream_ch_, req, out_gain);
+}
+
+zx_status_t AudioDeviceStream::GetUniqueId(audio_stream_cmd_get_unique_id_resp_t* out_id) const {
+    if (out_id == nullptr)
+        return ZX_ERR_INVALID_ARGS;
+
+    audio_stream_cmd_get_unique_id_req req;
+    req.hdr.cmd = AUDIO_STREAM_CMD_GET_UNIQUE_ID;
+    req.hdr.transaction_id = 1;
+
+    return DoNoFailCall(stream_ch_, req, out_id);
+}
+
+zx_status_t AudioDeviceStream::GetString(audio_stream_string_id_t id,
+                                         audio_stream_cmd_get_string_resp_t* out_str) const {
+    if (out_str == nullptr)
+        return ZX_ERR_INVALID_ARGS;
+
+    audio_stream_cmd_get_string_req req;
+    req.hdr.cmd = AUDIO_STREAM_CMD_GET_STRING;
+    req.hdr.transaction_id = 1;
+    req.id = id;
+
+    return DoNoFailCall(stream_ch_, req, out_str);
 }
 
 zx_status_t AudioDeviceStream::PlugMonitor(float duration) {
@@ -376,7 +411,7 @@ zx_status_t AudioDeviceStream::PlugMonitor(float duration) {
                 duration);
 
         while (true) {
-            zx_time_t now = zx_clock_get(ZX_CLOCK_MONOTONIC);
+            zx_time_t now = zx_clock_get_monotonic();
             if (now >= deadline)
                 break;
 

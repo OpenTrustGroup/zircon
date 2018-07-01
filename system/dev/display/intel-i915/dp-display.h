@@ -17,7 +17,7 @@ public:
 
 private:
     bool QueryDevice(edid::Edid* edid) final;
-    bool DoModeset() final;
+    bool ConfigureDdi() final;
     bool DdcRead(uint8_t segment, uint8_t offset, uint8_t* buf, uint8_t len) final;
 
     bool DpAuxRead(uint32_t dp_cmd, uint32_t addr, uint8_t* buf, size_t size);
@@ -43,12 +43,21 @@ private:
     bool LinkTrainingStage2(dpcd::TrainingPatternSet* tp_set, dpcd::TrainingLaneSet* lanes);
 
     bool SetBacklightOn(bool on);
+
+    bool IsBacklightOn();
     // Sets the backlight brightness with |val| as a coefficient on the maximum
     // brightness. |val| must be in [0, 1]. If the panel has a minimum fractional
     // brightness, then |val| will be clamped to [min, 1].
     bool SetBacklightBrightness(double val);
 
+    // Gets the backlight brightness as a coefficient on the maximum brightness,
+    // between the minimum brightness and 1.
+    double GetBacklightBrightness();
+
     bool HandleHotplug(bool long_pulse) override;
+    bool HasBacklight() override;
+    void SetBacklightState(bool power, uint8_t brightness) override;
+    void GetBacklightState(bool* power, uint8_t* brightness) override;
 
     uint8_t dp_lane_count_;
     uint32_t dp_link_rate_mhz_;

@@ -55,7 +55,7 @@ DECLARE_DISPTAG(LogDispatcher, ZX_OBJ_TYPE_LOG)
 DECLARE_DISPTAG(SmcDispatcher, ZX_OBJ_TYPE_SMC)
 DECLARE_DISPTAG(SocketDispatcher, ZX_OBJ_TYPE_SOCKET)
 DECLARE_DISPTAG(ResourceDispatcher, ZX_OBJ_TYPE_RESOURCE)
-DECLARE_DISPTAG(EventPairDispatcher, ZX_OBJ_TYPE_EVENT_PAIR)
+DECLARE_DISPTAG(EventPairDispatcher, ZX_OBJ_TYPE_EVENTPAIR)
 DECLARE_DISPTAG(JobDispatcher, ZX_OBJ_TYPE_JOB)
 DECLARE_DISPTAG(VmAddressRegionDispatcher, ZX_OBJ_TYPE_VMAR)
 DECLARE_DISPTAG(FifoDispatcher, ZX_OBJ_TYPE_FIFO)
@@ -248,6 +248,10 @@ private:
 //     foo0->Init(&foo1);
 //     foo1->Init(&foo0);
 
+// A PeeredDispatcher object, in its |on_zero_handles| call must clear
+// out its peer's |peer_| field. This is needed to avoid leaks, and to
+// ensure that |user_signal| can correctly report ZX_ERR_PEER_CLOSED.
+
 // TODO(kulakowski) We should investigate turning this into one
 // allocation. This would mean PeerHolder would have two EndPoint
 // members, and that PeeredDispatcher would have custom refcounting.
@@ -293,6 +297,24 @@ public:
             return ZX_ERR_PEER_CLOSED;
         peer_->UpdateStateLocked(clear_mask, set_mask);
         return ZX_OK;
+    }
+
+    // All subclasses of PeeredDispatcher must implement a public
+    // |void on_zero_handles_locked()|. The peer lifetime management
+    // (i.e. the peer zeroing) is centralized here.
+    void on_zero_handles() override final TA_NO_THREAD_SAFETY_ANALYSIS {
+        fbl::AutoLock lock(get_lock());
+        auto peer = fbl::move(peer_);
+        static_cast<Self*>(this)->on_zero_handles_locked();
+
+        // This is needed to avoid leaks, and to ensure that
+        // |user_signal| can correctly report ZX_ERR_PEER_CLOSED.
+        if (peer != nullptr) {
+            // This defeats the lock analysis in the usual way: it
+            // can't reason that the peers' get_lock() calls alias.
+            peer->peer_.reset();
+            static_cast<Self*>(peer.get())->OnPeerZeroHandlesLocked();
+        }
     }
 
     fbl::Mutex* get_lock() const override { return holder_->get_lock(); }

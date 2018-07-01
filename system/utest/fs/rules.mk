@@ -42,7 +42,6 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/test-truncate.cpp \
     $(LOCAL_DIR)/test-unlink.cpp \
     $(LOCAL_DIR)/test-utils.cpp \
-    $(LOCAL_DIR)/test-vmo.cpp \
     $(LOCAL_DIR)/test-watcher.cpp \
 
 MODULE_LDFLAGS := --wrap open --wrap unlink --wrap stat --wrap mkdir
@@ -60,7 +59,6 @@ MODULE_STATIC_LIBS := \
     system/ulib/fbl \
     system/ulib/fvm \
     system/ulib/fs \
-    system/ulib/memfs \
     system/ulib/sync \
     system/ulib/trace \
     system/ulib/zx \
@@ -73,6 +71,7 @@ MODULE_LIBS := \
     system/ulib/fdio \
     system/ulib/fs-management \
     system/ulib/launchpad \
+    system/ulib/memfs \
     system/ulib/trace-engine \
     system/ulib/unittest \
     system/ulib/zircon \

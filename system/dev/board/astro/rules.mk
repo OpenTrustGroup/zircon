@@ -10,11 +10,14 @@ MODULE_TYPE := driver
 
 MODULE_SRCS += \
     $(LOCAL_DIR)/astro.c \
+    $(LOCAL_DIR)/astro-bluetooth.c \
     $(LOCAL_DIR)/astro-gpio.c \
     $(LOCAL_DIR)/astro-i2c.c \
     $(LOCAL_DIR)/astro-usb.c \
     $(LOCAL_DIR)/astro-display.c \
     $(LOCAL_DIR)/astro-touch.c \
+    $(LOCAL_DIR)/astro-rawnand.c \
+    $(LOCAL_DIR)/astro-sdio.c \
 
 MODULE_STATIC_LIBS := \
     system/dev/lib/amlogic \

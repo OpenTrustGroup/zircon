@@ -29,7 +29,22 @@ typedef enum disk_format_type {
     DISK_FORMAT_BLOBFS,
     DISK_FORMAT_FVM,
     DISK_FORMAT_ZXCRYPT,
+    DISK_FORMAT_COUNT_,
 } disk_format_t;
+
+static const char* disk_format_string_[DISK_FORMAT_COUNT_] = {
+        [DISK_FORMAT_UNKNOWN] = "unknown",
+        [DISK_FORMAT_GPT] = "gpt",
+        [DISK_FORMAT_MBR] = "mbr",
+        [DISK_FORMAT_MINFS] = "minfs",
+        [DISK_FORMAT_FAT] = "fat",
+        [DISK_FORMAT_BLOBFS] = "blobfs",
+        [DISK_FORMAT_FVM] = "fvm",
+        [DISK_FORMAT_ZXCRYPT] = "zxcrypt"};
+
+static inline const char* disk_format_string(disk_format_t fs_type) {
+    return disk_format_string_[fs_type];
+}
 
 #define HEADER_SIZE 4096
 
@@ -95,15 +110,21 @@ extern const fsck_options_t default_fsck_options;
 typedef zx_status_t (*LaunchCallback)(int argc, const char** argv,
                                       zx_handle_t* hnd, uint32_t* ids, size_t len);
 
-// Creates kernel logs, does not wait for process to terminate
-zx_status_t launch_logs_async(int argc, const char** argv, zx_handle_t* handles,
-                              uint32_t* types, size_t len);
-// Creates stdio logs, waits for process to terminate
+// Creates no logs, waits for process to terminate.
+zx_status_t launch_silent_sync(int argc, const char** argv, zx_handle_t* handles,
+                               uint32_t* types, size_t len);
+// Creates no logs, does not wait for process to terminate.
+zx_status_t launch_silent_async(int argc, const char** argv, zx_handle_t* handles,
+                                uint32_t* types, size_t len);
+// Creates stdio logs, waits for process to terminate.
 zx_status_t launch_stdio_sync(int argc, const char** argv, zx_handle_t* handles,
                               uint32_t* types, size_t len);
-// Creates stdio logs, does not wait for process to terminate
+// Creates stdio logs, does not wait for process to terminate.
 zx_status_t launch_stdio_async(int argc, const char** argv, zx_handle_t* handles,
                                uint32_t* types, size_t len);
+// Creates kernel logs, does not wait for process to terminate.
+zx_status_t launch_logs_async(int argc, const char** argv, zx_handle_t* handles,
+                              uint32_t* types, size_t len);
 
 // Given the following:
 //  - A device containing a filesystem image of a known format

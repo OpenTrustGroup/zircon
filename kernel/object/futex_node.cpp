@@ -5,6 +5,7 @@
 // https://opensource.org/licenses/MIT
 
 #include <object/futex_node.h>
+#include <object/thread_dispatcher.h>
 
 #include <assert.h>
 #include <err.h>
@@ -17,16 +18,12 @@
 
 FutexNode::FutexNode() {
     LTRACE_ENTRY;
-
-    wait_queue_ = WAIT_QUEUE_INITIAL_VALUE(wait_queue_);
 }
 
 FutexNode::~FutexNode() {
     LTRACE_ENTRY;
 
     DEBUG_ASSERT(!IsInQueue());
-
-    wait_queue_destroy(&wait_queue_);
 }
 
 bool FutexNode::IsInQueue() const {
@@ -150,6 +147,7 @@ FutexNode* FutexNode::RemoveFromHead(FutexNode* list_head, uint32_t count,
 // does not reclaim the mutex on return.
 zx_status_t FutexNode::BlockThread(fbl::Mutex* mutex, zx_time_t deadline) TA_NO_THREAD_SAFETY_ANALYSIS {
     AutoThreadLock lock;
+    ThreadDispatcher::AutoBlocked by(ThreadDispatcher::Blocked::FUTEX);
 
     // We specifically want reschedule=false here, otherwise the
     // combination of releasing the mutex and enqueuing the current thread
@@ -159,7 +157,7 @@ zx_status_t FutexNode::BlockThread(fbl::Mutex* mutex, zx_time_t deadline) TA_NO_
     thread_t* current_thread = get_current_thread();
     zx_status_t result;
     current_thread->interruptable = true;
-    result = wait_queue_block(&wait_queue_, deadline);
+    result = wait_queue_.Block(deadline);
     current_thread->interruptable = false;
 
     return result;
@@ -182,7 +180,7 @@ void FutexNode::WakeThread() {
     MarkAsNotInQueue();
 
     AutoThreadLock lock;
-    wait_queue_wake_one(&wait_queue_, /* reschedule */ true, ZX_OK);
+    wait_queue_.WakeOne(/* reschedule */ true, ZX_OK);
 }
 
 // Set |node1| and |node2|'s list pointers so that |node1| is immediately

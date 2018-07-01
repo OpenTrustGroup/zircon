@@ -31,8 +31,6 @@ public:
     bool has_state_tracker() const final { return true; }
     zx_status_t add_observer(StateObserver* observer) final;
 
-    void on_zero_handles() final;
-
     // Read from this endpoint's message queue.
     // |msg_size| and |msg_handle_count| are in-out parameters. As input, they specify the maximum
     // size and handle count, respectively. On ZX_OK or ZX_ERR_BUFFER_TOO_SMALL, they specify the
@@ -45,8 +43,7 @@ public:
 
     // Write to the opposing endpoint's message queue.
     zx_status_t Write(fbl::unique_ptr<MessagePacket> msg) TA_NO_THREAD_SAFETY_ANALYSIS;
-    zx_status_t Call(fbl::unique_ptr<MessagePacket> msg,
-                     zx_time_t deadline, bool* return_handles,
+    zx_status_t Call(fbl::unique_ptr<MessagePacket> msg, zx_time_t deadline,
                      fbl::unique_ptr<MessagePacket>* reply) TA_NO_THREAD_SAFETY_ANALYSIS;
 
     // Performs the wait-then-read half of Call.  This is meant for retrying
@@ -96,6 +93,10 @@ public:
         zx_status_t status_;
     };
 
+    // PeeredDispatcher implementation.
+    void on_zero_handles_locked() TA_REQ(get_lock());
+    void OnPeerZeroHandlesLocked() TA_REQ(get_lock());
+
 private:
     using MessageList = fbl::DoublyLinkedList<fbl::unique_ptr<MessagePacket>>;
     using WaiterList = fbl::DoublyLinkedList<MessageWaiter*>;
@@ -106,7 +107,6 @@ private:
     void Init(fbl::RefPtr<ChannelDispatcher> other);
     void WriteSelf(fbl::unique_ptr<MessagePacket> msg) TA_REQ(get_lock());
     zx_status_t UserSignalSelf(uint32_t clear_mask, uint32_t set_mask) TA_REQ(get_lock());
-    void OnPeerZeroHandlesLocked();
 
     fbl::Canary<fbl::magic("CHAN")> canary_;
 

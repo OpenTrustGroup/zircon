@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <fbl/function.h>
+#include <fbl/string.h>
 #include <perftest/results.h>
 
 // This is a library for writing performance tests.  It supports
@@ -177,8 +178,33 @@ void RegisterSimpleTest(const char* test_name) {
 // Entry point for the perf test runner that a test executable should call
 // from main().  This will run the registered perf tests and/or unit tests,
 // based on the command line arguments.  (See the "--help" output for more
-// details.)
-int PerfTestMain(int argc, char** argv);
+// details.)  |test_suite| is included in the test results JSON and is used to
+// categorize test results in the performance dashboard.
+int PerfTestMain(int argc, char** argv, const char* test_suite = "");
+
+// Run a single test for |test_suite| |run_count| times, and add the results to
+// |results_set| using the given name, |test_name|.  On error, this returns
+// false and sets |*error_out| to an error string.
+//
+// This function is useful for test suites that don't want to use
+// PerfTestMain() -- e.g. for test cases with complex parameters based on
+// command line arguments, or for test cases that reuse some shared state
+// and must be run in a particular order.
+bool RunTest(const char* test_suite, const char* test_name,
+             const fbl::Function<TestFunc>& test_func,
+             uint32_t run_count, ResultsSet* results_set,
+             fbl::String* error_out);
+
+// DoNotOptimize() can be used to prevent the computation of |value| from
+// being optimized away by the compiler.  It also prevents the compiler
+// from optimizing away reads or writes to memory that |value| points to
+// (if |value| is a pointer).
+template <typename Type>
+inline void DoNotOptimize(const Type& value) {
+    // The "memory" constraint tells the compiler that the inline assembly
+    // must be assumed to access memory that |value| points to.
+    asm volatile("" : : "g"(value) : "memory");
+}
 
 }  // namespace perftest
 

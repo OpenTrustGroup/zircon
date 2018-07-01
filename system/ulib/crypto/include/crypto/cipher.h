@@ -10,11 +10,13 @@
 #include <crypto/bytes.h>
 #include <fbl/macros.h>
 #include <zircon/types.h>
+#include <crypto/secret.h>
 
 // |crypto::Cipher| is used to encrypt and decrypt data.  Ciphers differ from AEADs in that they
 // require block-aligned lengths and do not check data integrity.  This implementation can be used
 // as either a stream cipher, or as a random access cipher if the cipher has a "tweaked codebook
-// mode".  See the variants of |Init| and |Transform| for details.
+// mode".  See the variants of |Init| and |Transform| for details.  A 64 bit nonce is used to seal
+// plain texts, meaning a given key and IV can be used for at most 2^64 - 1 operations.
 namespace crypto {
 
 class Cipher final {
@@ -55,24 +57,24 @@ public:
     //   - A stream ciphers, using the first variant that omits the |alignment|.
     //   - As a random access cipher, using the second variant.  All offsets must be
     //   |alignment|-aligned, and |alignment| must be a power of 2.
-    zx_status_t Init(Algorithm algo, Direction direction, const Bytes& key, const Bytes& iv,
+    zx_status_t Init(Algorithm algo, Direction direction, const Secret& key, const Bytes& iv,
                      uint64_t alignment);
 
     // Sets up the cipher to encrypt data using the given |key| and |iv|, either as a stream cipher
     // or a random access cipher, as described above in |Init|.
-    zx_status_t InitEncrypt(Algorithm algo, const Bytes& key, const Bytes& iv) {
+    zx_status_t InitEncrypt(Algorithm algo, const Secret& key, const Bytes& iv) {
         return Init(algo, kEncrypt, key, iv, 0);
     }
-    zx_status_t InitEncrypt(Algorithm algo, const Bytes& key, const Bytes& iv, uint64_t alignment) {
+    zx_status_t InitEncrypt(Algorithm algo, const Secret& key, const Bytes& iv, uint64_t alignment) {
         return Init(algo, kEncrypt, key, iv, alignment);
     }
 
     // Sets up the cipher to decrypt data using the given |key| and |iv|, either as a stream cipher
     // or a random access cipher, as described above in |Init|.
-    zx_status_t InitDecrypt(Algorithm algo, const Bytes& key, const Bytes& iv) {
+    zx_status_t InitDecrypt(Algorithm algo, const Secret& key, const Bytes& iv) {
         return Init(algo, kDecrypt, key, iv, 0);
     }
-    zx_status_t InitDecrypt(Algorithm algo, const Bytes& key, const Bytes& iv, uint64_t alignment) {
+    zx_status_t InitDecrypt(Algorithm algo, const Secret& key, const Bytes& iv, uint64_t alignment) {
         return Init(algo, kDecrypt, key, iv, alignment);
     }
 
@@ -81,7 +83,7 @@ public:
     //  - Must have been configured with the same |direction|.
     //  - If |alignment| was non-zero, |offset| must be a multiple of it.
     // Finally, |length| must be a multiple of cipher blocks, and |out| must have room for |length|
-    // bytes.
+    // bytes.  This method will fail if called 2^64 or more times with the same key and IV.
     zx_status_t Transform(const uint8_t* in, zx_off_t offset, size_t length, uint8_t* out,
                           Direction Direction);
 
@@ -118,11 +120,11 @@ private:
     Direction direction_;
     // Cipher block size.
     size_t block_size_;
-    // Buffer used to hold the initial vector.
-    Bytes iv_;
-    // Buffer used to hold the tweaked initial vector.
-    Bytes tweaked_iv_;
-    // Indicates how offsets
+    // Buffer holding initial vector.  The IV is expanded to be |zx_off_t|-aligned.
+    fbl::unique_ptr<zx_off_t[]> iv_;
+    // Original value of |iv_[0]|.  |Transform| will fail if |iv_[0]| wraps around to this value.
+    zx_off_t iv0_;
+    // If non-zero, indicates how many bytes to use a nonce for before incrementing.
     uint64_t alignment_;
 };
 } // namespace crypto

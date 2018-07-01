@@ -15,9 +15,27 @@
 namespace audio {
 namespace intel_hda {
 
-IntelDspStream::IntelDspStream(uint32_t id, bool is_input, const DspPipeline& pipeline)
+IntelDspStream::IntelDspStream(uint32_t id,
+                               bool is_input,
+                               const DspPipeline& pipeline,
+                               const audio_stream_unique_id_t* unique_id)
     : IntelHDAStreamBase(id, is_input), pipeline_(pipeline) {
     snprintf(log_prefix_, sizeof(log_prefix_), "IHDA DSP %cStream #%u", is_input ? 'I' : 'O', id);
+
+    if (unique_id) {
+        SetPersistentUniqueId(*unique_id);
+    } else {
+        const audio_stream_unique_id_t uid = {
+            'I', 'D', 'S', 'P',
+            static_cast<uint8_t>(id >> 24),
+            static_cast<uint8_t>(id >> 16),
+            static_cast<uint8_t>(id >> 8),
+            static_cast<uint8_t>(id),
+            static_cast<uint8_t>(is_input),
+            0
+        };
+        SetPersistentUniqueId(uid);
+    }
 }
 
 zx_status_t IntelDspStream::ProcessSetStreamFmt(const ihda_proto::SetStreamFmtResp& codec_resp,
@@ -283,14 +301,21 @@ void IntelDspStream::ProcessClientRbDeactivate(const dispatcher::Channel* channe
 
 zx_status_t IntelDspStream::OnActivateLocked() {
     // FIXME(yky) Hardcode supported formats.
+    audio_stream_format_range_t fmt;
+    fmt.sample_formats = AUDIO_SAMPLE_FORMAT_16BIT;
+    fmt.min_frames_per_second =
+    fmt.max_frames_per_second = 48000;
+    fmt.min_channels =
+    fmt.max_channels = 2;
+    fmt.flags = ASF_RANGE_FLAG_FPS_48000_FAMILY;
+
     fbl::Vector<audio_proto::FormatRange> supported_formats;
-    zx_status_t res = MakeFormatRangeList(SampleCaps(IHDA_PCM_SIZE_16BITS | IHDA_PCM_RATE_48000,
-                                                     IHDA_PCM_FORMAT_PCM),
-                                          2,
-                                          &supported_formats);
-    if (res != ZX_OK) {
-        return res;
+    fbl::AllocChecker ac;
+    supported_formats.push_back(fmt, &ac);
+    if (!ac.check()) {
+        return ZX_ERR_NO_MEMORY;
     }
+
     SetSupportedFormatsLocked(fbl::move(supported_formats));
     return ZX_OK;
 }
@@ -329,17 +354,47 @@ zx_status_t IntelDspStream::FinishChangeStreamFormatLocked(uint16_t encoded_fmt)
 
 void IntelDspStream::OnGetGainLocked(audio_proto::GetGainResp* out_resp) {
     LOG(TRACE, "OnGetGainLocked\n");
+    IntelHDAStreamBase::OnGetGainLocked(out_resp);
 }
 
 void IntelDspStream::OnSetGainLocked(const audio_proto::SetGainReq& req,
                                      audio_proto::SetGainResp* out_resp) {
     LOG(TRACE, "OnSetGainLocked\n");
+    IntelHDAStreamBase::OnSetGainLocked(req, out_resp);
 }
 
 void IntelDspStream::OnPlugDetectLocked(dispatcher::Channel* response_channel,
                                         const audio_proto::PlugDetectReq& req,
                                         audio_proto::PlugDetectResp* out_resp) {
     LOG(TRACE, "OnPlugDetectLocked\n");
+    IntelHDAStreamBase::OnPlugDetectLocked(response_channel, req, out_resp);
+}
+
+void IntelDspStream::OnGetStringLocked(const audio_proto::GetStringReq& req,
+                                       audio_proto::GetStringResp* out_resp) {
+    ZX_DEBUG_ASSERT(out_resp);
+    const char* requested_string = nullptr;
+
+    switch (req.id) {
+        case AUDIO_STREAM_STR_ID_MANUFACTURER:
+            requested_string = "Intel";
+            break;
+
+        case AUDIO_STREAM_STR_ID_PRODUCT:
+            requested_string = is_input() ? "Builtin Microphone" : "Builtin Speakers";
+            break;
+
+        default:
+            IntelHDAStreamBase::OnGetStringLocked(req, out_resp);
+            return;
+    }
+
+    int res = snprintf(reinterpret_cast<char*>(out_resp->str), sizeof(out_resp->str), "%s",
+                       requested_string ? requested_string : "<unassigned>");
+    ZX_DEBUG_ASSERT(res >= 0);
+    out_resp->result = ZX_OK;
+    out_resp->strlen = fbl::min<uint32_t>(res, sizeof(out_resp->str) - 1);
+    out_resp->id = req.id;
 }
 
 }  // namespace intel_hda

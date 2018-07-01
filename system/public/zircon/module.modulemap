@@ -97,6 +97,10 @@ module Zircon [system] [extern_c] {
       header "syscalls/profile.h"
       export *
     }
+    module smc {
+      header "syscalls/smc.h"
+      export *
+    }
     module system {
       header "syscalls/system.h"
       export *
@@ -199,6 +203,10 @@ module Zircon [system] [extern_c] {
     }
     module ktrace {
       header "device/ktrace.h"
+      export *
+    }
+    module media_codec {
+      header "device/media-codec.h"
       export *
     }
     module midi {

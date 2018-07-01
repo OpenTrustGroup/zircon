@@ -39,6 +39,7 @@ typedef struct {
     int32_t fan_level;
     int32_t big_cluster_dvfs_opp;
     int32_t little_cluster_dvfs_opp;
+    int32_t gpu_clk_freq_source;
 } thermal_temperature_info_t;
 
 typedef struct {
@@ -47,6 +48,9 @@ typedef struct {
 
     // passive cooling support
     bool passive_cooling;
+
+    // gpu throttling support
+    bool gpu_throttling;
 
     // number of trip points
     uint32_t num_trip_points;

@@ -31,6 +31,7 @@ fbl_common_tests := \
     $(LOCAL_DIR)/string_printf_tests.cpp \
     $(LOCAL_DIR)/string_tests.cpp \
     $(LOCAL_DIR)/string_traits_tests.cpp \
+    $(LOCAL_DIR)/type_info_tests.cpp \
     $(LOCAL_DIR)/type_support_tests.cpp \
     $(LOCAL_DIR)/unique_free_ptr_tests.cpp \
     $(LOCAL_DIR)/unique_ptr_tests.cpp \
@@ -48,11 +49,6 @@ fbl_device_tests += \
     $(LOCAL_DIR)/memory_probe_tests.cpp \
     $(LOCAL_DIR)/ref_counted_tests.cpp \
     $(LOCAL_DIR)/slab_allocator_tests.cpp \
-
-# These tests need zircon VMO and VMARs which are not currently supported on the
-# host.
-fbl_device_tests += \
-    $(LOCAL_DIR)/vmo_vmar_tests.cpp \
 
 fbl_host_tests := $(fbl_common_tests)
 

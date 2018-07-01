@@ -6,13 +6,12 @@
 
 #include <digest/digest.h>
 #include <gpt/gpt.h>
-#include <zircon/device/block.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define FVM_MAGIC (0x54524150204d5646ull) // 'FVM PART'
 #define FVM_VERSION 0x00000001
-#define FVM_SLICE_FREE 0
+#define FVM_SLICE_ENTRY_FREE 0
 #define FVM_BLOCK_SIZE 8192lu
 #define FVM_GUID_LEN GPT_GUID_LEN
 #define FVM_GUID_STRLEN GPT_GUID_STRLEN
@@ -75,17 +74,38 @@ static_assert(sizeof(vpart_entry_t) * FVM_MAX_ENTRIES % FVM_BLOCK_SIZE == 0,
 
 #define VPART_BITS 16
 #define VPART_MAX ((1UL << VPART_BITS) - 1)
+#define VPART_MASK VPART_MAX
+
 #define VSLICE_BITS 32
 #define VSLICE_MAX ((1UL << VSLICE_BITS) - 1)
+#define VSLICE_MASK ((VSLICE_MAX) << VPART_BITS)
+
 #define RESERVED_BITS 16
 
 #define PSLICE_UNALLOCATED 0
 
+// A Slice Entry represents the allocation of a slice.
+//
+// Slice Entries are layed out in an array on disk.  The index into this array
+// determines the "physical slice" being accessed, where physical slices consist
+// of all disk space immediately following the FVM metadata on an FVM partition.
+//
+// The "Vpart" field describes which virtual partition allocated the slice.
+// If this field is set to FVM_SLICE_ENTRY_FREE, the slice is not allocated.
+//
+// If the slice is allocated, the "Vslice" field describes which virtual slice
+// within the virtual partition is using this slice.
 typedef struct slice_entry {
-    size_t vpart : VPART_BITS; // '0' if unallocated
-    size_t vslice : VSLICE_BITS;
-    size_t reserved : RESERVED_BITS;
-} __attribute__((packed)) slice_entry_t;
+    uint64_t data;
+
+    // Vpart is set to 'FVM_SLICE_ENTRY_FREE' if unallocated.
+    uint64_t Vpart() const;
+    void SetVpart(uint64_t vpart);
+
+    // Vslice is only valid if Vpart is not set to 'FVM_SLICE_ENTRY_FREE'.
+    uint64_t Vslice() const;
+    void SetVslice(uint64_t vslice);
+} slice_entry_t;
 
 static_assert(FVM_MAX_ENTRIES <= VPART_MAX, "vpart adress space too small");
 static_assert(sizeof(slice_entry_t) == 8, "Unexpected FVM slice entry size");
@@ -139,35 +159,5 @@ void fvm_update_hash(void* metadata, size_t metadata_size);
 // valid copy of either metadata or backup on success.
 zx_status_t fvm_validate_header(const void* metadata, const void* backup,
                                 size_t metadata_size, const void** out);
-
-// Format a block device to be an empty FVM.
-zx_status_t fvm_init(int fd, size_t slice_size);
-// Queries driver to obtain slice_size, then overwrites and unbinds an FVM
-zx_status_t fvm_destroy(const char* path);
-// Given the slice_size, overwrites and unbinds an FVM
-zx_status_t fvm_overwrite(const char* path, size_t slice_size);
-
-// Allocates a new vpartition in the fvm, and waits for it to become
-// accessible (by watching for a corresponding block device).
-//
-// Returns an open fd to the new partition on success, -1 on error.
-int fvm_allocate_partition(int fvm_fd, const alloc_req_t* request);
-
-// TODO(smklein): Move the following function out of ulib/fvm, it is
-// also applicable to the GPT
-
-// Waits for a partition with a GUID pair to appear, and opens it.
-//
-// If one of the GUIDs is null, it is ignored. For example:
-//   wait_for_partition(NULL, systemGUID, ZX_SEC(5));
-// Waits for any partition with the corresponding system GUID to appear.
-// At least one of the GUIDs must be non-null.
-//
-// Returns an open fd to the partition on success, -1 on error.
-int open_partition(const uint8_t* uniqueGUID, const uint8_t* typeGUID,
-                   zx_duration_t timeout, char* out_path);
-
-// Finds and destroys the partition with the given GUID pair, if it exists.
-zx_status_t destroy_partition(const uint8_t* uniqueGUID, const uint8_t* typeGUID);
 
 __END_CDECLS

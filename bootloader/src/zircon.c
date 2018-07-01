@@ -77,6 +77,20 @@ static int add_bootdata(void** ptr, size_t* avail,
     return 0;
 }
 
+size_t image_getsize(void* image, size_t sz) {
+    if (sz < sizeof(zircon_kernel_t)) {
+        return 0;
+    }
+    zircon_kernel_t* kernel = image;
+    if ((kernel->hdr_file.type != ZBI_TYPE_CONTAINER) ||
+        (kernel->hdr_file.magic != ZBI_ITEM_MAGIC) ||
+        (kernel->hdr_kernel.type != ZBI_TYPE_KERNEL_X64) ||
+        (kernel->hdr_kernel.magic != ZBI_ITEM_MAGIC)) {
+        return 0;
+    }
+    return ZBI_ALIGN(kernel->hdr_file.length) + sizeof(zbi_header_t);
+}
+
 static int header_check(void* image, size_t sz, uint64_t* _entry,
                         size_t* _flen, size_t* _klen) {
     zbi_header_t* bd = image;
@@ -194,6 +208,10 @@ int boot_zircon(efi_handle img, efi_system_table* sys,
         printf("boot: ramdisk missing or too small\n");
         return -1;
     }
+    if (isz > kernel_zone_size) {
+        printf("boot: kernel image too large\n");
+        return -1;
+    }
 
     zbi_header_t* hdr0 = ramdisk;
     if ((hdr0->type != ZBI_TYPE_CONTAINER) ||
@@ -282,15 +300,7 @@ int boot_zircon(efi_handle img, efi_system_table* sys,
         }
     }
 
-    // Allocate at 1M and copy kernel down there
-    efi_physical_addr mem = 0x100000;
-    unsigned pages = BYTES_TO_PAGES(isz);
-    //TODO: sort out why pages + 1?  Inherited from deprecated_load()
-    if (bs->AllocatePages(AllocateAddress, EfiLoaderData, pages + 1, &mem)) {
-        printf("boot: cannot obtain memory @ %p\n", (void*) mem);
-        goto fail;
-    }
-    memcpy((void*)mem, image, isz);
+    memcpy((void*)kernel_zone_base, image, isz);
 
     // Obtain the system memory map
     size_t msize, dsize;
@@ -353,7 +363,6 @@ int boot_zircon(efi_handle img, efi_system_table* sys,
     start_zircon(entry, ramdisk - FRONT_BYTES);
 
 fail:
-    bs->FreePages(mem, pages);
     return -1;
 }
 

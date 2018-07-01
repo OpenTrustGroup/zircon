@@ -14,12 +14,6 @@ int getentropy(void* buffer, size_t length) {
         return -1;
     }
 
-    size_t actual_length;
-    zx_status_t status = _zx_cprng_draw(buffer, length, &actual_length);
-    if (status != ZX_OK || actual_length != length) {
-        errno = EIO;
-        return -1;
-    }
-
+    _zx_cprng_draw(buffer, length);
     return 0;
 }

@@ -23,30 +23,15 @@ lines starting with # are ignored.  Whitespace is not allowed in names.
 If this option is set, the system will not use Address Space Layout
 Randomization.
 
-## crashsvc.analyzer=\<path\>
+## crashsvc.analyzer=\<service-host\>
 
-If this option is set, the given analyzer will be used when crashsvc encounters
-an exception. If it is empty, the default (`/boot/bin/crashanalyzer`) will be
-used which logs exception information and a backtrace to the system log. The
-analyzer process is passed two startup handles: the process and thread that
-sustained the exception.
+If this is empty, the default crash analyzer in svchost will be used
+which logs exception information and a backtrace to the system log. If
+it is set, the crash analyzer will be found in the given service bundle.
+The only valid non-empty value for this currently is "from-appmgr".
 
-## crashlogger.pt=true
-
-If this option is set, the crashlogger will attempt to generate a
-"processor trace" dump along with the crash report. The dump files
-are written as /tmp/crash-pt.\*. This option requires processor tracing
-to be enabled in the kernel. This can be done by running "ipt" program after
-the system has booted. E.g., set zircon.autorun.system like this
-
-```
-zircon.autorun.system=ipt+--circular+--control+init+start
-```
-
-After the files are written, copy them to the host and print them
-with the "ipt-dump" program. See its docs for more info.
-
-This option is only supported on Intel x86 platforms.
+The analyzer process is passed two startup handles: the process and
+thread that sustained the exception.
 
 ## devmgr\.epoch=\<seconds\>
 
@@ -119,6 +104,11 @@ needed for debugging it may speed up boot to disable it.
 
 This option asks the graphics console to use a specific font.  Currently
 only "9x16" (the default) and "18x32" (a double-size font) are supported.
+
+## iommu.enable=\<bool>
+
+This option (disabled by default) allows the system to use a hardware IOMMU
+if present.
 
 ## kernel.entropy-mixin=\<hex>
 
@@ -320,6 +310,8 @@ you to pass arguments to an executable.
 
 ## zircon.system.blob-init=\<command>
 
+**DEPRECATED** See [`zircon.system.pkgfs.cmd`](#zircon.system.pkgfs.cmd).
+
 This option requests that *command* be run once the blob partition is
 mounted. The given command is expected to mount /system, and then signal its
 process handle with `ZX_USER_SIGNAL_0`.
@@ -334,11 +326,35 @@ ramdisk is present. blob init will take precedence over a minfs
 partition with the system GUID, and the minfs partition will not be mounted
 if `zircon.system.blob-init` is set.
 
-## zircon.system.disable-automount=<\bool>
+## zircon.system.disable-automount=\<bool>
 
 This option prevents the fshost from auto-mounting any disk filesystems
 (/system, /data, etc), which can be useful for certain low level test setups.
 It is false by default.  It is implied by **netsvc.netboot=true**
+
+## zircon.system.pkgfs.cmd=\<command>
+
+This option requests that *command* be run once the blob partition is mounted.
+Any `+` characters in *command* are treated as argument separators, allowing
+you to pass arguments to an executable.
+
+The executable and its dependencies (dynamic linker and shared libraries) are
+found in the blob filesystem.  The executable *path* is *command* before the
+first `+`.  The dynamic linker (`PT_INTERP`) and shared library (`DT_NEEDED`)
+name strings sent to the loader service are prefixed with `lib/` to produce a
+*path*.  Each such *path* is resolved to a blob ID (i.e. merkleroot in ASCII
+hex) using the `zircon.system.pkgfs.file.`*path* command line argument.  In
+this way, `/boot/config/devmgr` contains a fixed manifest of files used to
+start the process.
+
+The new process receives a `PA_USER0` channel handle at startup that will be
+used as the client filesystem handle mounted at `/pkgfs`.  The command is
+expected to start serving on this channel and then signal its process handle
+with `ZX_USER_SIGNAL_0`.  Then `/pkgfs/system` will be mounted as `/system`.
+
+## zircon.system.pkgfs.file.*path*=\<blobid>
+
+Used with [`zircon.system.pkgfs.cmd`](#zircon.system.pkgfs.cmd), above.
 
 ## zircon.system.writable=\<bool>
 
@@ -408,12 +424,17 @@ when the process it launches exits.
 ## vdso.soft_ticks=\<bool>
 
 If this option is set, the `zx_ticks_get` and `zx_ticks_per_second` system
-calls will use `zx_clock_get(ZX_CLOCK_MONOTONIC)` in nanoseconds rather than
+calls will use `zx_clock_get_monotonic()` in nanoseconds rather than
 hardware cycle counters in a hardware-based time unit.  Defaults to false.
 
 ## virtcon.disable
 
 Do not launch the virtual console service if this option is present.
+
+## virtcon.hide-on-boot
+
+If this option is present, the virtual console will not take ownership of any
+displays until the user switches to it with a device control key combination.
 
 ## virtcon.keep-log-visible
 

@@ -33,10 +33,30 @@ zircon/syscalls/debug.h for the contents of the structures on each platform.
 The buffer must point to a **zx_thread_state_general_regs_t** structure that
 contains the general registers for the current architecture.
 
+### ZX_THREAD_STATE_FP_REGS
+
+The buffer must point to a **zx_thread_state_fp_regs_t** structure. On 64-bit
+ARM platforms, float point state is in the vector registers and this structure
+is empty.
+
+### ZX_THREAD_STATE_VECTOR_REGS
+
+The buffer must point to a **zx_thread_state_vector_regs_t** structure.
+
 ### ZX_THREAD_STATE_SINGLE_STEP
 
 The buffer must point to a **zx_thread_state_single_step_t** value which
 may contain either 0 (normal running), or 1 (single stepping enabled).
+
+### ZX_THREAD_X86_REGISTER_FS
+
+The buffer must point to a **zx_thread_x86_register_fs_t** structure which contains
+a uint64. This is only relevant on x86 platforms.
+
+### ZX_THREAD_X86_REGISTER_GS
+
+The buffer must point to a **zx_thread_x86_register_gs_t** structure which contains
+a uint64. This is only relevant on x86 platforms.
 
 ## RETURN VALUE
 
@@ -53,7 +73,9 @@ In the event of failure, a negative error value is returned.
 
 **ZX_ERR_INVALID_ARGS**  *kind* is not valid or *buffer* is an invalid pointer.
 
-**ZX_ERR_NO_MEMORY**  Temporary out of memory failure.
+**ZX_ERR_NO_MEMORY**  Failure due to lack of memory.
+There is no good way for userspace to handle this (unlikely) error.
+In a future build this error will no longer occur.
 
 **ZX_ERR_BUFFER_TOO_SMALL**  The buffer length *len* is too small to hold
 the data required by *kind*.

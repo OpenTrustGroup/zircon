@@ -6,7 +6,7 @@
 
 #include <zircon/types.h>
 #include <lib/zx/vmo.h>
-#include <fbl/vmo_mapper.h>
+#include <lib/vmo-utils/vmo_mapper.h>
 
 #include <intel-hda/utils/intel-hda-registers.h>
 #include <intel-hda/utils/pinned-vmo.h>
@@ -31,19 +31,18 @@ public:
     void DumpRegisters();
 
     zx_status_t Initialize() __WARN_UNUSED_RESULT;
-    zx_status_t TransferFirmware(const zx::vmo& fw, size_t fw_size);
+    zx_status_t TransferFirmware(const PinnedVmo& pinned_fw, size_t fw_size);
+    void StopTransfer();
 
 private:
-    zx_status_t StripFirmware(const zx::vmo& fw, void* out, size_t* size_inout);
-
     // Log prefix storage
     char log_prefix_[LOG_PREFIX_STORAGE] = { 0 };
 
     // Buffer descriptor list
     // TODO(yky) Look into factoring BDL functionality out to a utility class,
     // because it is shared between the code loader and stream DMA.
-    fbl::VmoMapper bdl_cpu_mem_;
-    PinnedVmo      bdl_dsp_mem_;
+    vmo_utils::VmoMapper bdl_cpu_mem_;
+    PinnedVmo bdl_dsp_mem_;
 
     // Registers
     adsp_code_loader_registers_t* regs_ = nullptr;

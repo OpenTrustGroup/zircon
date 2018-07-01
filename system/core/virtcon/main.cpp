@@ -10,22 +10,20 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <launchpad/launchpad.h>
-
+#include <lib/fdio/io.h>
+#include <lib/fdio/spawn.h>
+#include <lib/fdio/util.h>
+#include <lib/fdio/watcher.h>
+#include <port/port.h>
 #include <zircon/device/pty.h>
 #include <zircon/device/vfs.h>
 #include <zircon/listnode.h>
 #include <zircon/process.h>
 #include <zircon/processargs.h>
+#include <zircon/status.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/log.h>
 #include <zircon/syscalls/object.h>
-
-#include <fdio/io.h>
-#include <fdio/util.h>
-#include <fdio/watcher.h>
-
-#include <port/port.h>
 
 #include "vc.h"
 
@@ -44,7 +42,7 @@ static zx_status_t log_reader_cb(port_handler_t* ph, zx_signals_t signals, uint3
     zx_log_record_t* rec = (zx_log_record_t*)buf;
     zx_status_t status;
     for (;;) {
-        if ((status = zx_log_read(ph->handle, ZX_LOG_RECORD_MAX, rec, 0)) < 0) {
+        if ((status = zx_debuglog_read(ph->handle, 0, rec, ZX_LOG_RECORD_MAX)) < 0) {
             if (status == ZX_ERR_SHOULD_WAIT) {
                 // return non-OK to avoid needlessly re-arming the repeating wait
                 return ZX_ERR_NEXT;
@@ -78,21 +76,30 @@ static zx_status_t log_reader_cb(port_handler_t* ph, zx_signals_t signals, uint3
 }
 
 static zx_status_t launch_shell(vc_t* vc, int fd, const char* cmd) {
-    const char* args[] = { "/boot/bin/sh", "-c", cmd };
+    const char* argv[] = { "/boot/bin/sh", nullptr, nullptr, nullptr };
 
-    launchpad_t* lp;
-    launchpad_create(zx_job_default(), "vc:sh", &lp);
-    launchpad_load_from_file(lp, args[0]);
-    launchpad_set_args(lp, cmd ? 3 : 1, args);
-    launchpad_transfer_fd(lp, fd, FDIO_FLAG_USE_FOR_STDIO | 0);
-    launchpad_clone(lp, LP_CLONE_FDIO_NAMESPACE | LP_CLONE_ENVIRON | LP_CLONE_DEFAULT_JOB);
-
-    const char* errmsg;
-    zx_status_t r;
-    if ((r = launchpad_go(lp, &vc->proc, &errmsg)) < 0) {
-        printf("vc: cannot spawn shell: %s: %d\n", errmsg, r);
+    if (cmd) {
+        argv[1] = "-c";
+        argv[2] = cmd;
     }
-    return r;
+
+    fdio_spawn_action_t actions[2] = {};
+    actions[0].action = FDIO_SPAWN_ACTION_SET_NAME;
+    actions[0].name.data = "vc:sh";
+    actions[1].action = FDIO_SPAWN_ACTION_TRANSFER_FD;
+    actions[1].fd = {.local_fd = fd, .target_fd = FDIO_FLAG_USE_FOR_STDIO};
+
+    uint32_t flags = FDIO_SPAWN_CLONE_ALL & ~FDIO_SPAWN_CLONE_STDIO;
+
+    char err_msg[FDIO_SPAWN_ERR_MSG_MAX_LENGTH];
+    zx_status_t status = fdio_spawn_etc(ZX_HANDLE_INVALID, flags, argv[0], argv,
+                                        nullptr, countof(actions), actions,
+                                        &vc->proc, err_msg);
+    if (status != ZX_OK) {
+        printf("vc: cannot spawn shell: %s: %d (%s)\n", err_msg, status,
+               zx_status_get_string(status));
+    }
+    return status;
 }
 
 static void session_destroy(vc_t* vc) {
@@ -129,7 +136,7 @@ static zx_status_t session_io_cb(port_fd_handler_t* fh, unsigned pollevt, uint32
                 goto fail;
             }
 
-            if(launch_shell(vc, fd, NULL) < 0) {
+            if (launch_shell(vc, fd, NULL) < 0) {
                 goto fail;
             }
             return ZX_OK;
@@ -228,10 +235,10 @@ static zx_status_t new_vc_cb(port_handler_t* ph, zx_signals_t signals, uint32_t 
     zx_handle_t handles[FDIO_MAX_HANDLES];
     uint32_t types[FDIO_MAX_HANDLES];
     zx_status_t r = fdio_transfer_fd(fd, FDIO_FLAG_USE_FOR_STDIO | 0, handles, types);
-    if ((r != 2) || (zx_channel_write(h, 0, types, 2 * sizeof(uint32_t), handles, 2) < 0)) {
-        for (int n = 0; n < r; n++) {
-            zx_handle_close(handles[n]);
-        }
+    if (r != 2) {
+        zx_handle_close_many(handles, r);
+        session_destroy(vc);
+    } else if (zx_channel_write(h, 0, types, 2 * sizeof(uint32_t), handles, 2) != ZX_OK) {
         session_destroy(vc);
     } else {
         port_wait(&port, &vc->fh.ph);
@@ -307,7 +314,7 @@ static bool handle_dir_event(port_handler_t* ph, zx_signals_t signals,
         // add temporary nul
         uint8_t tmp = msg[namelen];
         msg[namelen] = 0;
-        event_handler(event, (char*) msg);
+        event_handler(event, (char*)msg);
         msg[namelen] = tmp;
         msg += namelen;
         len -= (namelen + 2u);
@@ -337,8 +344,8 @@ int main(int argc, char** argv) {
     const char* value = getenv("virtcon.keep-log-visible");
     if (value == NULL ||
         ((strcmp(value, "0") == 0) ||
-        (strcmp(value, "false") == 0) ||
-        (strcmp(value, "off") == 0))) {
+         (strcmp(value, "false") == 0) ||
+         (strcmp(value, "off") == 0))) {
         keep_log = false;
     } else {
         keep_log = true;
@@ -394,7 +401,7 @@ int main(int argc, char** argv) {
     log_ph.func = log_reader_cb;
     log_ph.waitfor = ZX_LOG_READABLE;
 
-    if ((new_vc_ph.handle = zx_get_startup_handle(PA_HND(PA_USER0, 0))) != ZX_HANDLE_INVALID) {
+    if ((new_vc_ph.handle = zx_take_startup_handle(PA_HND(PA_USER0, 0))) != ZX_HANDLE_INVALID) {
         new_vc_ph.func = new_vc_cb;
         new_vc_ph.waitfor = ZX_CHANNEL_READABLE;
         port_wait(&port, &new_vc_ph);

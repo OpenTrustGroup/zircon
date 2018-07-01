@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <crypto/bytes.h>
+#include <crypto/secret.h>
 #include <crypto/cipher.h>
 #include <fbl/macros.h>
 #include <zircon/types.h>
@@ -15,7 +16,8 @@
 // |crypto::AEAD| is an authenticated encryption and decryption cipher.  It differs from |Cipher| in
 // that it incurs additional overhead to store its authentication tag, but can verify data integrity
 // as a result.  The ciphertext produced by an AEAD is the same length as its plaintext, excluding
-// the IV and tag.
+// the IV and tag.  A 64 bit nonce is used to seal plain texts, meaning a given key and IV can be
+// used for at most 2^64 - 1 operations.
 namespace crypto {
 
 class AEAD final {
@@ -42,31 +44,37 @@ public:
 
     // Sets up the AEAD to use the algorithm indicated by |aead| to encrypt data using the given
     // |key| and |iv|.
-    zx_status_t InitSeal(Algorithm aead, const Bytes& key, const Bytes& iv);
+    zx_status_t InitSeal(Algorithm aead, const Secret& key, const Bytes& iv) {
+        return Init(aead, key, iv, Cipher::kEncrypt);
+    }
 
     // Sets up the AEAD to use the algorithm indicated by |aead| to decrypt data using the given
-    // |key|.
-    zx_status_t InitOpen(Algorithm aead, const Bytes& key);
-
-    // Copies the additional authenticated data from the given |ad|.
-    zx_status_t SetAD(const Bytes& ad);
-
-    // Allocates |ad_len| bytes and returns a handle to the region in |out_ad|.  This memory will be
-    // included as additional authenticated data each time data is |Seal|ed or |Open|ed, and may be
-    // modified between those calls.
-    zx_status_t AllocAD(size_t ad_len, uintptr_t* out_ad);
+    // |key| and |iv|.
+    zx_status_t InitOpen(Algorithm aead, const Secret& key, const Bytes& iv) {
+        return Init(aead, key, iv, Cipher::kDecrypt);
+    }
 
     // Encrypts data from |ptext| to |ctext|, based on the parameters set in |InitSeal|.  Saves the
     // |iv| used;  |iv| will be resized and filled automatically.  The AEAD tag is stored at the end
-    // of |ctext|  The current contents of the additional authenticated data region set up in
-    // |InitSeal| are included in the tag calculation.
-    zx_status_t Seal(const Bytes& ptext, Bytes* iv, Bytes* ctext);
+    // of |ctext|  This method will fail if called 2^64 or more times with the same key and IV.  The
+    // second variant includes additional authenticated data in the tag calculation.
+    zx_status_t Seal(const Bytes& ptext, uint64_t* out_nonce, Bytes* out_ctext) {
+        return Seal(ptext, nullptr, 0, out_nonce, out_ctext);
+    }
+    zx_status_t Seal(const Bytes& ptext, const Bytes& aad, uint64_t* out_nonce, Bytes* out_ctext) {
+        return Seal(ptext, aad.get(), aad.len(), out_nonce, out_ctext);
+    }
 
     // Decrypts data from |ctext| to |ptext|, based on the parameters set in |InitOpen|.
     // Decryption can only succeed if the |iv| matches those produced by |Seal| and the AEAD tag is
-    // included in |ctext|.  The current contents of the additional authenticated data region set up
-    // in |InitSeal| are included in the tag calculation.
-    zx_status_t Open(const Bytes& iv, const Bytes& ctext, Bytes* ptext);
+    // included in |ctext|.  The second variant includes additional authenticated data in the tag
+    // calculation.
+    zx_status_t Open(uint64_t nonce, const Bytes& ctext, Bytes* out_ptext) {
+        return Open(nonce, ctext, nullptr, 0, out_ptext);
+    }
+    zx_status_t Open(uint64_t nonce, const Bytes& ctext, const Bytes& aad, Bytes* out_ptext) {
+        return Open(nonce, ctext, aad.get(), aad.len(), out_ptext);
+    }
 
     // Clears all state from this instance.
     void Reset();
@@ -76,7 +84,12 @@ private:
 
     // Sets up the aead to encrypt or decrypt data using the given |key| based on the
     // given |direction|.
-    zx_status_t Init(Algorithm aead, const Bytes& key, Cipher::Direction direction);
+    zx_status_t Init(Algorithm aead, const Secret& key, const Bytes& iv,
+                     Cipher::Direction direction);
+    zx_status_t Seal(const Bytes& ptext, const uint8_t* aad, size_t aad_len, uint64_t* out_nonce,
+                     Bytes* out_ctext);
+    zx_status_t Open(uint64_t nonce, const Bytes& ctext, const uint8_t* aad, size_t aad_len,
+                     Bytes* out_ptext);
 
     // Opaque crypto implementation context.
     struct Context;
@@ -85,10 +98,12 @@ private:
     fbl::unique_ptr<Context> ctx_;
     // Indicates whether configured to encrypt or decrypt.
     Cipher::Direction direction_;
-    // Buffer and length used to hold the initial vector.
-    Bytes iv_;
-    // Additional authenticated data (AAD).
-    Bytes ad_;
+    // Buffer holding initial vector.  The IV is expanded to be |uint64_t|-aligned.
+    fbl::unique_ptr<uint64_t[]> iv_;
+    // Original value of |iv_[0]|.  |Seal| will fail if |iv_[0]| wraps around to this value.
+    uint64_t iv0_;
+    // Size of the actual IV.
+    size_t iv_len_;
     // Length of authentication tag.
     size_t tag_len_;
 };

@@ -14,9 +14,9 @@
 #include <fbl/atomic.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
-#include <fdio/vfs.h>
+#include <lib/fdio/vfs.h>
 #include <fs/vfs.h>
-#include <memfs/vnode.h>
+#include <lib/memfs/cpp/vnode.h>
 #include <zircon/device/vfs.h>
 
 #include "dnode.h"
@@ -122,11 +122,7 @@ zx_status_t VnodeFile::GetVmo(int flags, zx_handle_t* out) {
             return status;
         }
 
-        if ((status = zx_handle_replace(*out, rights, out)) != ZX_OK) {
-            zx_handle_close(*out);
-            return status;
-        }
-        return ZX_OK;
+        return zx_handle_replace(*out, rights, out);
     }
 
     return zx_handle_duplicate(vmo_, rights, out);
@@ -142,6 +138,12 @@ zx_status_t VnodeFile::Getattr(vnattr_t* attr) {
     attr->nlink = link_count_;
     attr->create_time = create_time_;
     attr->modify_time = modify_time_;
+    return ZX_OK;
+}
+
+zx_status_t VnodeFile::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
+                                  zxrio_object_info_t* extra) {
+    *type = FDIO_PROTOCOL_FILE;
     return ZX_OK;
 }
 

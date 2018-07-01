@@ -94,26 +94,26 @@ fbl::String JoinPath(const fbl::StringPiece parent, const fbl::StringPiece child
     return fbl::String::Concat({parent, child});
 }
 
-int WriteSummaryJSON(const fbl::Vector<Result>& results,
+int WriteSummaryJSON(const fbl::Vector<fbl::unique_ptr<Result>>& results,
                      const fbl::StringPiece output_file_basename,
                      const fbl::StringPiece syslog_path,
                      FILE* summary_json) {
     int test_count = 0;
     fprintf(summary_json, "{\"tests\":[\n");
-    for (const Result& result : results) {
+    for (const fbl::unique_ptr<Result>& result : results) {
         if (test_count != 0) {
             fprintf(summary_json, ",\n");
         }
         fprintf(summary_json, "{");
 
         // Write the name of the test.
-        fprintf(summary_json, "\"name\":\"%s\"", result.name.c_str());
+        fprintf(summary_json, "\"name\":\"%s\"", result->name.c_str());
 
         // Write the path to the output file, relative to the test output root
         // (i.e. what's passed in via -o). The test name is already a path to
         // the test binary on the target, so to make this a relative path, we
         // only have to skip leading '/' characters in the test name.
-        fbl::String output_file = runtests::JoinPath(result.name, output_file_basename);
+        fbl::String output_file = runtests::JoinPath(result->name, output_file_basename);
         size_t i;
         for (i = 0; i < output_file.size() && output_file[i] == '/'; i++) {
         }
@@ -126,14 +126,14 @@ int WriteSummaryJSON(const fbl::Vector<Result>& results,
         // Write the result of the test, which is either PASS or FAIL. We only
         // have one PASS condition in TestResult, which is SUCCESS.
         fprintf(summary_json, ",\"result\":\"%s\"",
-                result.launch_status == runtests::SUCCESS ? "PASS" : "FAIL");
+                result->launch_status == runtests::SUCCESS ? "PASS" : "FAIL");
 
         fprintf(summary_json, "}");
         test_count++;
     }
     fprintf(summary_json, "\n]");
     if (!syslog_path.empty()) {
-        fprintf(summary_json, ",\n\"outputs\": {\n");
+        fprintf(summary_json, ",\n\"outputs\":{\n");
         fprintf(summary_json, "\"syslog_file\":\"%.*s\"",
                 static_cast<int>(syslog_path.length()),
                 syslog_path.data());
@@ -143,18 +143,19 @@ int WriteSummaryJSON(const fbl::Vector<Result>& results,
     return 0;
 }
 
-int ResolveGlobs(const char* const* globs, const int num_globs,
+int ResolveGlobs(const fbl::Vector<fbl::String>& globs,
                  fbl::Vector<fbl::String>* resolved) {
     glob_t resolved_glob;
     auto auto_call_glob_free = fbl::MakeAutoCall([&resolved_glob] { globfree(&resolved_glob); });
-    for (int i = 0; i < num_globs; i++) {
-        const int flags = i > 0 ? GLOB_APPEND : 0;
-        int err = glob(globs[i], flags, nullptr, &resolved_glob);
+    int flags = 0;
+    for (const auto& test_dir_glob : globs) {
+        int err = glob(test_dir_glob.c_str(), flags, nullptr, &resolved_glob);
 
         // Ignore a lack of matches.
         if (err && err != GLOB_NOMATCH) {
             return err;
         }
+        flags = GLOB_APPEND;
     }
     resolved->reserve(resolved_glob.gl_pathc);
     for (size_t i = 0; i < resolved_glob.gl_pathc; ++i) {
@@ -163,10 +164,11 @@ int ResolveGlobs(const char* const* globs, const int num_globs,
     return 0;
 }
 
-bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
-                   const fbl::Vector<fbl::String>& filter_names, const char* output_dir,
-                   const char* output_file_basename, const signed char verbosity,
-                   int* num_failed, fbl::Vector<Result>* results) {
+bool RunTestsInDir(const RunTestFn& RunTest, const fbl::StringPiece dir_path,
+                   const fbl::Vector<fbl::String>& filter_names,
+                   const char* output_dir, const char* output_file_basename,
+                   const signed char verbosity, int* num_failed,
+                   fbl::Vector<fbl::unique_ptr<Result>>* results) {
     if ((output_dir != nullptr) && (output_file_basename == nullptr)) {
         printf("Error: output_file_basename is not null, but output_dir is.\n");
         return false;
@@ -178,10 +180,10 @@ bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
         return false;
     }
 
-    // max value for a signed char is 127, so 2 chars for "v=", 3 for integer, 1 for terminator.
+    // max value for a signed char is 127, so 2 chars for "v=", 3 for integer, 1
+    // for terminator.
     char verbosity_arg[6];
     snprintf(verbosity_arg, sizeof(verbosity_arg), "v=%d", verbosity);
-    const int argc = verbosity >= 0 ? 2 : 1;
 
     struct dirent* de;
     struct stat stat_buf;
@@ -191,11 +193,12 @@ bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
     // and executing them via run_test as they're found. Skips over test binaries
     // whose names aren't in filter_names.
     //
-    // TODO(mknyszek): Iterate over these dirents (or just discovered test binaries)
-    // in a deterministic order.
+    // TODO(mknyszek): Iterate over these dirents (or just discovered test
+    // binaries) in a deterministic order.
     while ((de = readdir(dir)) != nullptr) {
         const char* test_name = de->d_name;
-        if (!filter_names.is_empty() && !runtests::IsInWhitelist(test_name, filter_names)) {
+        if (!filter_names.is_empty() &&
+            !runtests::IsInWhitelist(test_name, filter_names)) {
             continue;
         }
 
@@ -205,46 +208,38 @@ bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
         }
 
         if (verbosity > 0) {
-            printf("\n------------------------------------------------\n"
-                   "RUNNING TEST: %s\n\n",
-                   test_name);
+            printf(
+                "\n------------------------------------------------\n"
+                "RUNNING TEST: %s\n\n",
+                test_name);
         }
 
-        // If output_dir was specified, ask run_test to redirect stdout/stderr
+        // If output_dir was specified, ask |RunTest| to redirect stdout/stderr
         // to a file whose name is based on the test name.
-        FILE* out = nullptr;
+        fbl::String output_filename_str;
         if (output_dir != nullptr) {
-            const fbl::String test_output_dir = runtests::JoinPath(output_dir, test_path);
+            const fbl::String test_output_dir =
+                runtests::JoinPath(output_dir, test_path);
             const int error = runtests::MkDirAll(test_output_dir);
             if (error) {
                 printf("Error: Could not output directory for test %s: %s\n", test_name,
                        strerror(error));
                 return false;
             }
-
-            out = fopen(runtests::JoinPath(test_output_dir, output_file_basename).c_str(), "w");
-            if (out == nullptr) {
-                printf("Error: Could not open output file for test %s: %s\n", test_name,
-                       strerror(errno));
-                return false;
-            }
+            output_filename_str = JoinPath(test_output_dir, output_file_basename);
         }
 
         // Execute the test binary.
-        const char* argv[] = {test_path.c_str(), verbosity_arg};
-        results->push_back(run_test(argv, argc, out));
-        if ((*results)[results->size() - 1].launch_status != runtests::SUCCESS) {
+        const char* argv1 = (verbosity >= 0)? verbosity_arg : nullptr;
+        const char* argv[] = {test_path.c_str(), argv1, nullptr};
+        const char* output_filename =
+            output_filename_str.empty() ? nullptr : output_filename_str.c_str();
+        fbl::unique_ptr<Result> result = RunTest(argv, output_filename);
+        if (result->launch_status != runtests::SUCCESS) {
             failed_count++;
         }
-
-        // Clean up the output file.
-        if (out != nullptr && fclose(out)) {
-            printf("FAILURE: Failed to close output file for test %s: %s\n", de->d_name,
-                   strerror(errno));
-            continue;
-        }
+        results->push_back(fbl::move(result));
     }
-
     closedir(dir);
     *num_failed = failed_count;
     return failed_count == 0;

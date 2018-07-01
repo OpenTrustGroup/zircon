@@ -25,12 +25,12 @@
 #include <object/thread_dispatcher.h>
 #include <object/vm_address_region_dispatcher.h>
 
-#include <zircon/syscalls/debug.h>
-#include <zircon/syscalls/policy.h>
 #include <fbl/auto_lock.h>
 #include <fbl/inline_array.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/string_piece.h>
+#include <zircon/syscalls/debug.h>
+#include <zircon/syscalls/policy.h>
 
 #include "priv.h"
 
@@ -98,8 +98,12 @@ zx_status_t get_process(ProcessDispatcher* up,
 // This represents the local storage for thread_read/write_state. It should be large enough to
 // handle all structures passed over these APIs.
 union thread_state_local_buffer_t {
-    zx_thread_state_general_regs general_regs;  // ZX_THREAD_STATE_GENERAL_REGS
-    uint32_t single_step;  // ZX_THREAD_STATE_SINGLE_STEP
+    zx_thread_state_general_regs_t general_regs; // ZX_THREAD_STATE_GENERAL_REGS
+    zx_thread_state_fp_regs_t fp_regs;           // ZX_THREAD_STATE_FP_REGS
+    zx_thread_state_vector_regs_t vector_regs;   // ZX_THREAD_STATE_VECTOR_REGS
+    uint32_t single_step;                        // ZX_THREAD_STATE_SINGLE_STEP
+    uint64_t x86_register_fs;                    // ZX_THREAD_X86_REGISTER_FS;
+    uint64_t x86_register_gs;                    // ZX_THREAD_X86_REGISTER_GS;
 };
 
 // Validates the input topic to thread_read_state and thread_write_state is a valid value, and
@@ -110,8 +114,20 @@ zx_status_t validate_thread_state_input(uint32_t in_topic, size_t in_len, size_t
     case ZX_THREAD_STATE_GENERAL_REGS:
         *out_len = sizeof(zx_thread_state_general_regs_t);
         break;
+    case ZX_THREAD_STATE_FP_REGS:
+        *out_len = sizeof(zx_thread_state_fp_regs_t);
+        break;
+    case ZX_THREAD_STATE_VECTOR_REGS:
+        *out_len = sizeof(zx_thread_state_vector_regs_t);
+        break;
     case ZX_THREAD_STATE_SINGLE_STEP:
         *out_len = sizeof(zx_thread_state_single_step_t);
+        break;
+    case ZX_THREAD_X86_REGISTER_FS:
+        *out_len = sizeof(zx_thread_x86_register_fs_t);
+        break;
+    case ZX_THREAD_X86_REGISTER_GS:
+        *out_len = sizeof(zx_thread_x86_register_gs_t);
         break;
     default:
         return ZX_ERR_INVALID_ARGS;
@@ -122,7 +138,7 @@ zx_status_t validate_thread_state_input(uint32_t in_topic, size_t in_len, size_t
     return ZX_OK;
 }
 
-}  // namespace
+} // namespace
 
 zx_status_t sys_thread_create(zx_handle_t process_handle,
                               user_in_ptr<const char> _name, size_t name_len,
@@ -179,10 +195,15 @@ zx_status_t sys_thread_start(zx_handle_t thread_handle, zx_vaddr_t entry,
     auto up = ProcessDispatcher::GetCurrent();
 
     fbl::RefPtr<ThreadDispatcher> thread;
-    zx_status_t status = up->GetDispatcherWithRights(thread_handle, ZX_RIGHT_WRITE,
+    zx_status_t status = up->GetDispatcherWithRights(thread_handle, ZX_RIGHT_MANAGE_THREAD,
                                                      &thread);
-    if (status != ZX_OK)
-        return status;
+    if (status != ZX_OK) {
+        // Try again, but with the WRITE right.
+        // TODO(kulakowski) Remove this when all callers are using MANAGE_THREAD.
+        status = up->GetDispatcherWithRights(thread_handle, ZX_RIGHT_WRITE, &thread);
+        if (status != ZX_OK)
+            return status;
+    }
 
     ktrace(TAG_THREAD_START, (uint32_t)thread->get_koid(), 0, 0, 0);
     return thread->Start(entry, stack, arg1, arg2, /* initial_thread= */ false);
@@ -317,20 +338,25 @@ zx_status_t sys_process_create(zx_handle_t job_handle,
     if (options != 0)
         return ZX_ERR_INVALID_ARGS;
 
+    auto up = ProcessDispatcher::GetCurrent();
+
+    // We check the policy against the process calling zx_process_create, which
+    // is the operative policy, rather than against |job_handle|. Access to
+    // |job_handle| is controlled by the rights associated with the handle.
+    zx_status_t result = up->QueryPolicy(ZX_POL_NEW_PROCESS);
+    if (result != ZX_OK)
+        return result;
+
     // copy out the name
     char buf[ZX_MAX_NAME_LEN];
     fbl::StringPiece sp;
     // Silently truncate the given name.
     if (name_len > sizeof(buf))
         name_len = sizeof(buf);
-    zx_status_t result = copy_user_string(_name, name_len,
-                                          buf, sizeof(buf), &sp);
+    result = copy_user_string(_name, name_len, buf, sizeof(buf), &sp);
     if (result != ZX_OK)
         return result;
     LTRACEF("name %s\n", buf);
-
-    // convert job handle to job dispatcher
-    auto up = ProcessDispatcher::GetCurrent();
 
     fbl::RefPtr<JobDispatcher> job;
     // TODO(ZX-968): define process creation job rights.
@@ -342,11 +368,11 @@ zx_status_t sys_process_create(zx_handle_t job_handle,
     fbl::RefPtr<Dispatcher> proc_dispatcher;
     fbl::RefPtr<VmAddressRegionDispatcher> vmar_dispatcher;
     zx_rights_t proc_rights, vmar_rights;
-    zx_status_t res = ProcessDispatcher::Create(fbl::move(job), sp, options,
-                                                &proc_dispatcher, &proc_rights,
-                                                &vmar_dispatcher, &vmar_rights);
-    if (res != ZX_OK)
-        return res;
+    result = ProcessDispatcher::Create(fbl::move(job), sp, options,
+                                       &proc_dispatcher, &proc_rights,
+                                       &vmar_dispatcher, &vmar_rights);
+    if (result != ZX_OK)
+        return result;
 
     uint32_t koid = (uint32_t)proc_dispatcher->get_koid();
     ktrace(TAG_PROC_CREATE, koid, 0, 0, 0);
@@ -383,29 +409,28 @@ zx_status_t sys_process_start(zx_handle_t process_handle, zx_handle_t thread_han
     // get process dispatcher
     fbl::RefPtr<ProcessDispatcher> process;
     zx_status_t status = get_process(up, process_handle, &process);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        up->RemoveHandle(arg_handle_value);
         return status;
+    }
 
     // get thread_dispatcher
     fbl::RefPtr<ThreadDispatcher> thread;
     status = up->GetDispatcherWithRights(thread_handle, ZX_RIGHT_WRITE, &thread);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        up->RemoveHandle(arg_handle_value);
         return status;
+    }
+
+    HandleOwner arg_handle = up->RemoveHandle(arg_handle_value);
 
     // test that the thread belongs to the starting process
     if (thread->process() != process.get())
         return ZX_ERR_ACCESS_DENIED;
-
-    HandleOwner arg_handle;
-    {
-        fbl::AutoLock lock(up->handle_table_lock());
-        auto handle = up->GetHandleLocked(arg_handle_value);
-        if (!handle)
-            return ZX_ERR_BAD_HANDLE;
-        if (!handle->HasRights(ZX_RIGHT_TRANSFER))
-            return ZX_ERR_ACCESS_DENIED;
-        arg_handle = up->RemoveHandleLocked(arg_handle_value);
-    }
+    if (!arg_handle)
+        return ZX_ERR_BAD_HANDLE;
+    if (!arg_handle->HasRights(ZX_RIGHT_TRANSFER))
+        return ZX_ERR_ACCESS_DENIED;
 
     auto arg_nhv = process->MapHandleToValue(arg_handle);
     process->AddHandle(fbl::move(arg_handle));
@@ -413,9 +438,8 @@ zx_status_t sys_process_start(zx_handle_t process_handle, zx_handle_t thread_han
     status = thread->Start(pc, sp, static_cast<uintptr_t>(arg_nhv),
                            arg2, /* initial_thread */ true);
     if (status != ZX_OK) {
-        // Put back the |arg_handle| into the calling process.
-        auto handle = process->RemoveHandle(arg_nhv);
-        up->AddHandle(fbl::move(handle));
+        // Remove |arg_handle| from the process that failed to start.
+        process->RemoveHandle(arg_nhv);
         return status;
     }
 
@@ -590,14 +614,14 @@ zx_status_t sys_task_kill(zx_handle_t task_handle) {
 
     // see if it's a process or thread and dispatch accordingly
     switch (dispatcher->get_type()) {
-        case ZX_OBJ_TYPE_PROCESS:
-            return kill_task<ProcessDispatcher>(fbl::move(dispatcher));
-        case ZX_OBJ_TYPE_THREAD:
-            return kill_task<ThreadDispatcher>(fbl::move(dispatcher));
-        case ZX_OBJ_TYPE_JOB:
-            return kill_task<JobDispatcher>(fbl::move(dispatcher));
-        default:
-            return ZX_ERR_WRONG_TYPE;
+    case ZX_OBJ_TYPE_PROCESS:
+        return kill_task<ProcessDispatcher>(fbl::move(dispatcher));
+    case ZX_OBJ_TYPE_THREAD:
+        return kill_task<ThreadDispatcher>(fbl::move(dispatcher));
+    case ZX_OBJ_TYPE_JOB:
+        return kill_task<JobDispatcher>(fbl::move(dispatcher));
+    default:
+        return ZX_ERR_WRONG_TYPE;
     }
 }
 
@@ -643,7 +667,8 @@ zx_status_t sys_job_set_policy(zx_handle_t job_handle, uint32_t options,
 
     fbl::AllocChecker ac;
     fbl::InlineArray<
-        zx_policy_basic, kPolicyBasicInlineCount> policy(&ac, count);
+        zx_policy_basic, kPolicyBasicInlineCount>
+        policy(&ac, count);
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
@@ -659,40 +684,4 @@ zx_status_t sys_job_set_policy(zx_handle_t job_handle, uint32_t options,
         return status;
 
     return job->SetPolicy(options, policy.get(), policy.size());
-}
-
-zx_status_t sys_job_set_relative_importance(
-    zx_handle_t resource_handle,
-    zx_handle_t job_handle, zx_handle_t less_important_job_handle) {
-
-    ProcessDispatcher* up = ProcessDispatcher::GetCurrent();
-
-    // If the caller has a valid handle to the root resource, let them perform
-    // this operation no matter the rights on the job handles.
-    {
-        fbl::RefPtr<ResourceDispatcher> resource;
-        zx_status_t status = up->GetDispatcherWithRights(
-            resource_handle, ZX_RIGHT_NONE, &resource);
-        if (status != ZX_OK)
-            return status;
-        // TODO(ZX-971): Check that this is actually the appropriate resource
-    }
-
-    // Get the job to modify.
-    fbl::RefPtr<JobDispatcher> job;
-    zx_status_t status = up->GetDispatcherWithRights(
-        job_handle, ZX_RIGHT_NONE, &job);
-    if (status != ZX_OK)
-        return status;
-
-    // Get its less-important neighbor, or null.
-    fbl::RefPtr<JobDispatcher> li_job;
-    if (less_important_job_handle != ZX_HANDLE_INVALID) {
-        status = up->GetDispatcherWithRights(
-            less_important_job_handle, ZX_RIGHT_NONE, &li_job);
-        if (status != ZX_OK)
-            return status;
-    }
-
-    return job->MakeMoreImportantThan(fbl::move(li_job));
 }

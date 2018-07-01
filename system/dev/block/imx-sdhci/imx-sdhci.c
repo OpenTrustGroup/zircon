@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
+#include <unistd.h>
 
 // DDK Includes
 #include <ddk/binding.h>
@@ -28,7 +29,6 @@
 
 
 // Zircon Includes
-#include <fdio/watcher.h>
 #include <zircon/threads.h>
 #include <zircon/assert.h>
 #include <sync/completion.h>
@@ -277,12 +277,12 @@ static uint32_t imx_sdhci_prepare_cmd(sdmmc_req_t* req) {
 
 static zx_status_t imx_sdhci_wait_for_reset(imx_sdhci_device_t* dev,
                                             const uint32_t mask, zx_time_t timeout) {
-    zx_time_t deadline = zx_clock_get(ZX_CLOCK_MONOTONIC) + timeout;
+    zx_time_t deadline = zx_clock_get_monotonic() + timeout;
     while (true) {
         if (!(dev->regs->sys_ctrl & mask)) {
             break;
         }
-        if (zx_clock_get(ZX_CLOCK_MONOTONIC) > deadline) {
+        if (zx_clock_get_monotonic() > deadline) {
             SDHCI_ERROR("time out while waiting for reset\n");
             return ZX_ERR_TIMED_OUT;
         }
@@ -510,9 +510,11 @@ static int imx_sdhci_irq_thread(void *args) {
 
 static zx_status_t imx_sdhci_build_dma_desc(imx_sdhci_device_t* dev, sdmmc_req_t* req) {
     SDHCI_FUNC_ENTRY_LOG;
-    block_op_t* bop = &req->txn->bop;
-    uint64_t pagecount = ((bop->rw.offset_vmo & PAGE_MASK) + bop->rw.length + PAGE_MASK) /
-                         PAGE_SIZE;
+    uint64_t req_len = req->blockcount * req->blocksize;
+    bool is_read = req->cmd_flags & SDMMC_CMD_READ;
+
+    uint64_t pagecount = ((req->buf_offset & PAGE_MASK) + req_len + PAGE_MASK) /
+                           PAGE_SIZE;
     if (pagecount > SDMMC_PAGES_COUNT) {
         SDHCI_ERROR("too many pages %lu vs %lu\n", pagecount, SDMMC_PAGES_COUNT);
         return ZX_ERR_INVALID_ARGS;
@@ -522,9 +524,9 @@ static zx_status_t imx_sdhci_build_dma_desc(imx_sdhci_device_t* dev, sdmmc_req_t
     zx_paddr_t phys[SDMMC_PAGES_COUNT];
     zx_handle_t pmt;
     // offset_vmo is converted to bytes by the sdmmc layer
-    uint32_t options = bop->command == BLOCK_OP_READ ? ZX_BTI_PERM_WRITE : ZX_BTI_PERM_READ;
-    zx_status_t st = zx_bti_pin(dev->bti_handle, options, bop->rw.vmo,
-                                bop->rw.offset_vmo & ~PAGE_MASK,
+    uint32_t options = is_read ? ZX_BTI_PERM_WRITE : ZX_BTI_PERM_READ;
+    zx_status_t st = zx_bti_pin(dev->bti_handle, options, req->dma_vmo,
+                                req->buf_offset & ~PAGE_MASK,
                                 pagecount * PAGE_SIZE, phys, pagecount, &pmt);
     if (st != ZX_OK) {
         SDHCI_ERROR("error %d bti_pin\n", st);
@@ -536,8 +538,8 @@ static zx_status_t imx_sdhci_build_dma_desc(imx_sdhci_device_t* dev, sdmmc_req_t
     phys_iter_buffer_t buf = {
         .phys = phys,
         .phys_count = pagecount,
-        .length = bop->rw.length,
-        .vmo_offset = bop->rw.offset_vmo,
+        .length = req_len,
+        .vmo_offset = req->buf_offset,
     };
     phys_iter_t iter;
     phys_iter_init(&iter, &buf, ADMA2_DESC_MAX_LENGTH);
@@ -577,7 +579,7 @@ static zx_status_t imx_sdhci_build_dma_desc(imx_sdhci_device_t* dev, sdmmc_req_t
         desc = dev->descs;
         do {
             SDHCI_TRACE("desc: addr=0x%" PRIx32 " length=0x%04x attr=0x%04x\n",
-                    desc->address, desc->length, desc->attr);
+                         desc->address, desc->length, desc->attr);
         } while (!(desc++)->end);
     }
     return ZX_OK;
@@ -727,6 +729,20 @@ static zx_status_t imx_sdhci_finish_req(imx_sdhci_device_t* dev, sdmmc_req_t* re
     zx_status_t status = ZX_OK;
 
     if (req->use_dma && req->pmt != ZX_HANDLE_INVALID) {
+        /*
+         * Clean the cache one more time after the DMA operation because there
+         * might be a possibility of cpu prefetching while the DMA operation is
+         * going on.
+         */
+        uint64_t req_len = req->blockcount * req->blocksize;
+        if ((req->cmd_flags & SDMMC_CMD_READ) && req->use_dma) {
+            status = zx_vmo_op_range(req->dma_vmo, ZX_VMO_OP_CACHE_CLEAN_INVALIDATE,
+                                             req->buf_offset, req_len, NULL, 0);
+            if (status != ZX_OK) {
+                zxlogf(ERROR, "aml-sd-emmc: cache clean failed with error  %d\n", status);
+            }
+        }
+
         status = zx_pmt_unpin(req->pmt);
         if (status != ZX_OK) {
             SDHCI_ERROR("error %d in pmt_unpin\n", status);
@@ -1052,6 +1068,11 @@ static zx_status_t imx_sdhci_perform_tuning(void* ctx) {
    return ZX_OK;
 }
 
+static zx_status_t imx_sdhci_get_oob_irq(void* ctx, zx_handle_t *oob_irq_handle) {
+    // Currently we do not support SDIO
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
 static sdmmc_protocol_ops_t sdmmc_proto = {
     .host_info = imx_sdhci_host_info,
     .set_signal_voltage = imx_sdhci_set_signal_voltage,
@@ -1061,6 +1082,7 @@ static sdmmc_protocol_ops_t sdmmc_proto = {
     .hw_reset = imx_sdhci_hw_reset,
     .perform_tuning = imx_sdhci_perform_tuning,
     .request = imx_sdhci_request,
+    .get_sdio_oob_irq = imx_sdhci_get_oob_irq,
 };
 
 static void imx_sdhci_unbind(void* ctx) {
@@ -1165,7 +1187,7 @@ static zx_status_t imx_sdhci_bind(void* ctx, zx_device_t* parent) {
     if (status != ZX_OK) {
         SDHCI_ERROR("Could not allocate DMA buffer. Falling to PIO Mode\n");
         dev->dma_mode = false;
-        dev->info.max_transfer_size = 0;
+        dev->info.max_transfer_size = BLOCK_MAX_TRANSFER_UNBOUNDED;
     } else {
         SDHCI_ERROR("0x%lx %p\n", io_buffer_phys(&dev->iobuf), io_buffer_virt(&dev->iobuf));
         dev->descs = io_buffer_virt(&dev->iobuf);
@@ -1178,7 +1200,7 @@ static zx_status_t imx_sdhci_bind(void* ctx, zx_device_t* parent) {
 #else
         SDHCI_ERROR("DMA Mode Disabled. Using PIO Mode\n");
         dev->dma_mode = false;
-        dev->info.max_transfer_size = 0;
+        dev->info.max_transfer_size = BLOCK_MAX_TRANSFER_UNBOUNDED;
 #endif
 
     // Disable all interrupts

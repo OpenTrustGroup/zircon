@@ -949,7 +949,7 @@ bool DpDisplay::QueryDevice(edid::Edid* edid) {
     return true;
 }
 
-bool DpDisplay::DoModeset() {
+bool DpDisplay::ConfigureDdi() {
     bool is_edp = controller()->igd_opregion().IsEdp(ddi());
     if (is_edp) {
         auto panel_ctrl = registers::PanelPowerCtrl::Get().ReadFrom(mmio_space());
@@ -986,9 +986,6 @@ bool DpDisplay::DoModeset() {
             return ZX_ERR_INTERNAL;
         }
     }
-
-    edid::timing_params_t timing;
-    edid().GetPreferredTiming(&timing);
 
     registers::TranscoderRegs trans_regs(trans());
 
@@ -1059,7 +1056,7 @@ bool DpDisplay::DoModeset() {
 
     // Pixel clock rate: The rate at which pixels are sent, in pixels per
     // second (Hz), divided by 10000.
-    uint32_t pixel_clock_rate = timing.pixel_freq_10khz;
+    uint32_t pixel_clock_rate = mode().pixel_clock_10khz;
 
     // This is the rate at which bits are sent on a single DisplayPort
     // lane, in raw bits per second, divided by 10000.
@@ -1148,7 +1145,8 @@ bool DpDisplay::DoModeset() {
     ddi_func.set_ddi_select(ddi());
     ddi_func.set_trans_ddi_mode_select(ddi_func.kModeDisplayPortSst);
     ddi_func.set_bits_per_color(ddi_func.k8bbc); // kPixelFormat
-    ddi_func.set_sync_polarity(timing.vertical_sync_polarity << 1 | timing.horizontal_sync_polarity);
+    ddi_func.set_sync_polarity((!!(mode().mode_flags & MODE_FLAG_VSYNC_POSITIVE)) << 1
+                                | (!!(mode().mode_flags & MODE_FLAG_HSYNC_POSITIVE)));
     ddi_func.set_port_sync_mode_enable(0);
     ddi_func.set_edp_input_select(
             pipe() == registers::PIPE_A ? ddi_func.kPipeA :
@@ -1161,28 +1159,8 @@ bool DpDisplay::DoModeset() {
 
     auto trans_conf = trans_regs.Conf().FromValue(0);
     trans_conf.set_transcoder_enable(1);
-    trans_conf.set_interlaced_mode(timing.interlaced);
+    trans_conf.set_interlaced_mode(!!(mode().mode_flags & MODE_FLAG_INTERLACED));
     trans_conf.WriteTo(mmio_space());
-
-    // Configure the pipe
-    registers::PipeRegs pipe_regs(pipe());
-
-    auto pipe_size = pipe_regs.PipeSourceSize().FromValue(0);
-    pipe_size.set_horizontal_source_size(h_active);
-    pipe_size.set_vertical_source_size(v_active);
-    pipe_size.WriteTo(mmio_space());
-
-
-    auto plane_control = pipe_regs.PlaneControl().FromValue(0);
-    plane_control.set_plane_enable(1);
-    plane_control.set_source_pixel_format(plane_control.kFormatRgb8888); // kPixelFormat
-    plane_control.set_tiled_surface(plane_control.kLinear);
-    plane_control.WriteTo(mmio_space());
-
-    auto plane_size = pipe_regs.PlaneSurfaceSize().FromValue(0);
-    plane_size.set_width_minus_1(h_active);
-    plane_size.set_height_minus_1(v_active);
-    plane_size.WriteTo(mmio_space());
 
     if (controller()->igd_opregion().IsEdp(ddi())) {
         dpcd::EdpConfigCap config_cap;
@@ -1238,6 +1216,29 @@ bool DpDisplay::SetBacklightOn(bool on) {
     return !on || SetBacklightBrightness(backlight_brightness_);
 }
 
+bool DpDisplay::IsBacklightOn() {
+    // If there is no embedded display, return false.
+    if (!controller()->igd_opregion().IsEdp(ddi())) {
+        return false;
+    }
+
+    if (backlight_aux_power_) {
+        dpcd::EdpDisplayCtrl ctrl;
+
+        if (!DpcdRead(dpcd::DPCD_EDP_DISPLAY_CTRL, ctrl.reg_value_ptr(), 1)) {
+            LOG_ERROR("Failed to read backlight\n");
+            return false;
+        }
+
+        return ctrl.backlight_enable();
+    } else {
+        return registers::PanelPowerCtrl::Get().ReadFrom(mmio_space())
+                .backlight_enable()
+            || registers::SouthBacklightCtl1::Get().ReadFrom(mmio_space())
+                .enable();
+    }
+}
+
 bool DpDisplay::SetBacklightBrightness(double val) {
     if (!controller()->igd_opregion().IsEdp(ddi())) {
         return true;
@@ -1264,6 +1265,41 @@ bool DpDisplay::SetBacklightBrightness(double val) {
     }
 
     return true;
+}
+
+double DpDisplay::GetBacklightBrightness() {
+    if (!HasBacklight()) {
+        return 0;
+    }
+
+    double percent = 0;
+
+    if (backlight_aux_brightness_) {
+        uint8_t lsb;
+        uint8_t msb;
+        if (!DpcdRead(dpcd::DPCD_EDP_BACKLIGHT_BRIGHTNESS_MSB, &msb, 1)
+                || !DpcdRead(dpcd::DPCD_EDP_BACKLIGHT_BRIGHTNESS_LSB, &lsb,
+                        1)) {
+            LOG_ERROR("Failed to read backlight brightness\n");
+            return 0;
+        }
+
+        uint16_t brightness =
+                static_cast<uint16_t>((lsb & 0xff) | (msb << 8));
+
+        percent = (brightness * 1.0f) / 0xffff;
+
+    } else {
+        auto backlight_ctrl =
+                registers::SouthBacklightCtl2::Get().ReadFrom(mmio_space());
+        uint16_t max = static_cast<uint16_t>(backlight_ctrl.modulation_freq());
+        uint16_t duty_cycle =
+                static_cast<uint16_t>(backlight_ctrl.duty_cycle());
+
+        percent = duty_cycle / max;
+    }
+
+    return percent;
 }
 
 bool DpDisplay::HandleHotplug(bool long_pulse) {
@@ -1300,4 +1336,23 @@ bool DpDisplay::HandleHotplug(bool long_pulse) {
     }
     return false;
 }
+
+bool DpDisplay::HasBacklight() {
+    return controller()->igd_opregion().IsEdp(ddi());
+}
+
+void DpDisplay::SetBacklightState(bool power, uint8_t brightness) {
+    SetBacklightOn(power);
+
+    double range = 1.0f - controller()->igd_opregion().GetMinBacklightBrightness();
+    double percent = static_cast<double>(brightness) / 255.0f;
+    SetBacklightBrightness(
+            (range * percent) + controller()->igd_opregion().GetMinBacklightBrightness());
+}
+
+void DpDisplay::GetBacklightState(bool* power, uint8_t* brightness) {
+    *power = IsBacklightOn();
+    *brightness = static_cast<uint8_t>(GetBacklightBrightness() * 255);
+}
+
 } // namespace i915

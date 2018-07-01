@@ -30,12 +30,13 @@
 #include <fbl/unique_fd.h>
 #include <fbl/unique_ptr.h>
 #include <fbl/vector.h>
+#include <fs-management/fvm.h>
 #include <fs-management/mount.h>
 #include <fs-management/ramdisk.h>
 #include <fvm/fvm.h>
 #include <lib/async-loop/cpp/loop.h>
 #include <lib/zx/vmo.h>
-#include <memfs/memfs.h>
+#include <lib/memfs/memfs.h>
 #include <minfs/format.h>
 #include <zircon/device/block.h>
 #include <zircon/device/device.h>
