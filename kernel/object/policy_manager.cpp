@@ -43,9 +43,9 @@ union Encoding {
         uint64_t new_socket      :  4;
         uint64_t new_fifo        :  4;
         uint64_t new_timer       :  4;
-        uint64_t new_smc         :  4;
         uint64_t new_process     :  4;
-        uint64_t unused_bits     : 15;
+        uint64_t new_smc         :  4;
+        uint64_t unused_bits     : 11;
         uint64_t cookie_mode     :  1;  // see kPolicyInCookie.
     };
 

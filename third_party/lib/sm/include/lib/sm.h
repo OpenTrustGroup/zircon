@@ -27,7 +27,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#include <zircon/syscalls/smc.h>
+#include <zircon/syscalls/smc_service.h>
 
 typedef uint64_t ns_addr_t;
 typedef uint32_t ns_size_t;

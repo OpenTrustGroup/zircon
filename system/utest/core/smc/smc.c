@@ -14,7 +14,7 @@
 #include <unittest/unittest.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
-#include <zircon/syscalls/smc.h>
+#include <zircon/syscalls/smc_service.h>
 
 static zx_handle_t smc_handle;
 static zx_handle_t shm_vmo_handle;

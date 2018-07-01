@@ -13,7 +13,7 @@
 
 #include <fbl/canary.h>
 #include <fbl/mutex.h>
-#include <zircon/syscalls/smc.h>
+#include <zircon/syscalls/smc_service.h>
 
 class SmcDispatcher final : public SoloDispatcher {
 public:

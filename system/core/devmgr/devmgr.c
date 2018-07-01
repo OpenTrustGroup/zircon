@@ -983,24 +983,32 @@ void devmgr_gzos_svc_init(void) {
     zx_handle_t handles[] = {ZX_HANDLE_INVALID, ZX_HANDLE_INVALID, ZX_HANDLE_INVALID};
     uint32_t handle_types[] = {PA_JOB_DEFAULT, PA_HND(PA_USER0, 0), PA_HND(PA_USER0, 1)};
 
+    int argc_smc_service = 1;
     const char* argv_smc_service[] = { "/system/bin/smc_service" };
     handles[0] = job_copy1;
     handles[1] = ree_agent_cli;
     handle_count = 2;
-    status = devmgr_launch(gzos_svcs_job_handle, "smc_service", 1, argv_smc_service,
-                           NULL, -1, handles, handle_types, handle_count, NULL, 0);
+    status = devmgr_launch(gzos_svcs_job_handle, "smc_service",
+                           &devmgr_launch_load, NULL,
+                           argc_smc_service, argv_smc_service, NULL, -1,
+                           handles, handle_types, handle_count,
+                           NULL, 0);
     if (status != ZX_OK) {
         printf("devmgr: gzos_svc_init: failed to launch smc_service: %d\n", status);
         goto error;
     }
 
+    int argc_ree_agent = 1;
     const char* argv_ree_agent[] = { "/system/bin/ree_agent" };
     handles[0] = job_copy2;
     handles[1] = ree_agent_svc;
     handles[2] = appmgr_svc;
     handle_count = 3;
-    status = devmgr_launch(gzos_svcs_job_handle, "ree_agent", 1, argv_ree_agent,
-                           NULL, -1, handles, handle_types, handle_count, NULL, 0);
+    status = devmgr_launch(gzos_svcs_job_handle, "ree_agent",
+                           &devmgr_launch_load, NULL,
+                           argc_ree_agent, argv_ree_agent, NULL, -1,
+                           handles, handle_types, handle_count,
+                           NULL, 0);
     if (status != ZX_OK) {
         printf("devmgr: gzos_svc_init: failed to launch ree_agent: %d\n", status);
         goto error;
