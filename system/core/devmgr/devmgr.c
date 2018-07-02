@@ -574,6 +574,29 @@ static zx_status_t fuchsia_create_job(void) {
     return ZX_OK;
 }
 
+static zx_status_t gzos_create_job(void) {
+    zx_status_t status = zx_job_create(root_job_handle, 0u, &gzos_svcs_job_handle);
+    if (status < 0) {
+        printf("devmgr: unable to create gzos service job: %d (%s)\n",
+                status, zx_status_get_string(status));
+    }
+    zx_object_set_property(gzos_svcs_job_handle, ZX_PROP_NAME, "gzos-services", 13);
+
+    const zx_policy_basic_t gzos_job_policy[] = {
+        {.condition = ZX_POL_NEW_PROCESS, .policy = ZX_POL_ACTION_DENY},
+    };
+
+    status = zx_job_set_policy(gzos_svcs_job_handle, ZX_JOB_POL_RELATIVE, ZX_JOB_POL_BASIC,
+                               gzos_job_policy, countof(gzos_job_policy));
+    if (status != ZX_OK) {
+        printf("devmgr: unable to set policy to gzos service job: %d (%s)\n", status,
+               zx_status_get_string(status));
+        return status;
+    }
+
+    return ZX_OK;
+}
+
 int main(int argc, char** argv) {
     // Close the loader-service channel so the service can go away.
     // We won't use it any more (no dlopen calls in this process).
@@ -596,11 +619,8 @@ int main(int argc, char** argv) {
     }
     zx_object_set_property(svcs_job_handle, ZX_PROP_NAME, "zircon-services", 16);
 
-    status = zx_job_create(root_job_handle, 0u, &gzos_svcs_job_handle);
-    if (status < 0) {
-        printf("unable to create gzos service job\n");
-    }
-    zx_object_set_property(gzos_svcs_job_handle, ZX_PROP_NAME, "gzos-services", 13);
+    if (gzos_create_job() != ZX_OK)
+        return 1;
 
     if (fuchsia_create_job() != ZX_OK)
         return 1;
@@ -966,28 +986,21 @@ void devmgr_gzos_svc_init(void) {
     }
 
     zx_handle_t ree_agent_cli = ZX_HANDLE_INVALID;
-    zx_handle_t ree_agent_svc = ZX_HANDLE_INVALID;
-    status = zx_channel_create(0, &ree_agent_cli, &ree_agent_svc);
+    zx_handle_t ree_agent_srv = ZX_HANDLE_INVALID;
+    status = zx_channel_create(0, &ree_agent_cli, &ree_agent_srv);
     if (status != ZX_OK) {
         printf("devmgr: gzos_svc_init: failed to create ree_agent_svc channel: %d\n", status);
         goto error;
     }
 
-    // Remove creating new process permission from job_copy1 and job_copy2
-    zx_handle_t job_copy1 = ZX_HANDLE_INVALID;
-    zx_handle_t job_copy2 = ZX_HANDLE_INVALID;
-    zx_handle_duplicate(gzos_svcs_job_handle, ZX_RIGHTS_BASIC | ZX_RIGHT_READ, &job_copy1);
-    zx_handle_duplicate(gzos_svcs_job_handle, ZX_RIGHTS_BASIC | ZX_RIGHT_READ, &job_copy2);
-
     unsigned int handle_count;
-    zx_handle_t handles[] = {ZX_HANDLE_INVALID, ZX_HANDLE_INVALID, ZX_HANDLE_INVALID};
-    uint32_t handle_types[] = {PA_JOB_DEFAULT, PA_HND(PA_USER0, 0), PA_HND(PA_USER0, 1)};
+    zx_handle_t handles[] = {ZX_HANDLE_INVALID, ZX_HANDLE_INVALID};
+    uint32_t handle_types[] = {PA_HND(PA_USER0, 0), PA_HND(PA_USER0, 1)};
 
     int argc_smc_service = 1;
     const char* argv_smc_service[] = { "/system/bin/smc_service" };
-    handles[0] = job_copy1;
-    handles[1] = ree_agent_cli;
-    handle_count = 2;
+    handles[0] = ree_agent_cli;
+    handle_count = 1;
     status = devmgr_launch(gzos_svcs_job_handle, "smc_service",
                            &devmgr_launch_load, NULL,
                            argc_smc_service, argv_smc_service, NULL, -1,
@@ -1000,10 +1013,9 @@ void devmgr_gzos_svc_init(void) {
 
     int argc_ree_agent = 1;
     const char* argv_ree_agent[] = { "/system/bin/ree_agent" };
-    handles[0] = job_copy2;
-    handles[1] = ree_agent_svc;
-    handles[2] = appmgr_svc;
-    handle_count = 3;
+    handles[0] = ree_agent_srv;
+    handles[1] = appmgr_svc;
+    handle_count = 2;
     status = devmgr_launch(gzos_svcs_job_handle, "ree_agent",
                            &devmgr_launch_load, NULL,
                            argc_ree_agent, argv_ree_agent, NULL, -1,
@@ -1023,10 +1035,6 @@ error:
         zx_handle_close(appmgr_svc);
     if (ree_agent_cli != ZX_HANDLE_INVALID)
         zx_handle_close(ree_agent_cli);
-    if (ree_agent_svc != ZX_HANDLE_INVALID)
-        zx_handle_close(ree_agent_svc);
-    if (job_copy1 != ZX_HANDLE_INVALID)
-        zx_handle_close(job_copy1);
-    if (job_copy2 != ZX_HANDLE_INVALID)
-        zx_handle_close(job_copy2);
+    if (ree_agent_srv != ZX_HANDLE_INVALID)
+        zx_handle_close(ree_agent_srv);
 }
