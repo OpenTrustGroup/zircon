@@ -1,5 +1,4 @@
 // Copyright 2018 Open Trust Group
-// Copyright 2016 The Fuchsia Authors
 //
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file or at
@@ -172,6 +171,11 @@ SmcDispatcher::SmcDispatcher(uint32_t options, zx_info_smc_t info)
       can_serve_next_smc(true),
       smc_info(info) {
     event_init(&result_event_, false, EVENT_FLAG_AUTOUNSIGNAL);
+
+    int i;
+    for (i = 0; i < SMP_MAX_CPUS; i++) {
+        event_init(&req_nop_event_[i], false, EVENT_FLAG_AUTOUNSIGNAL);
+    }
 }
 
 SmcDispatcher::~SmcDispatcher() {
@@ -250,6 +254,52 @@ zx_status_t SmcDispatcher::SetResult(long result) {
     return ZX_ERR_BAD_STATE;
 }
 
+zx_status_t SmcDispatcher::WriteNopRequest(uint32_t cpu_num,
+                                           smc32_args_t* args) {
+    canary_.Assert();
+
+    if (!args || !is_valid_cpu_num(cpu_num))
+        return ZX_ERR_INVALID_ARGS;
+
+    LTRACEF("thread %s, cpu_num %u\n", get_current_thread()->name, cpu_num);
+
+    {
+        AutoLock lock(get_lock());
+        memcpy(&req_nop_args[cpu_num], args, sizeof(smc32_args_t));
+    }
+    event_signal(&req_nop_event_[cpu_num], true);
+    return ZX_OK;
+}
+
+zx_status_t SmcDispatcher::ReadNopRequest(uint32_t cpu_num,
+                                          smc32_args_t* args) {
+    canary_.Assert();
+
+    if (!args || !is_valid_cpu_num(cpu_num))
+        return ZX_ERR_INVALID_ARGS;
+
+    LTRACEF("thread %s, cpu_num %u\n", get_current_thread()->name, cpu_num);
+
+    zx_status_t status = event_wait_deadline(&req_nop_event_[cpu_num],
+                                             ZX_TIME_INFINITE, true);
+    if (status != ZX_OK)
+        return status;
+
+    AutoLock lock(get_lock());
+    memcpy(args, &req_nop_args[cpu_num], sizeof(smc32_args_t));
+    return ZX_OK;
+}
+
+zx_status_t SmcDispatcher::CancelNop() {
+    uint32_t cpu;
+
+    for (cpu = 0; cpu < SMP_MAX_CPUS; cpu++) {
+        event_signal_etc(&req_nop_event_[cpu], false, ZX_ERR_CANCELED);
+    }
+    return ZX_OK;
+}
+
+
 #if WITH_LIB_SM
 long notify_smc_service(smc32_args_t* args) {
     if (args == nullptr) return SM_ERR_INVALID_PARAMETERS;
@@ -266,5 +316,18 @@ long notify_smc_service(smc32_args_t* args) {
     if (status != ZX_OK) return SM_ERR_BUSY;
 
     return smc_disp->WaitForResult();
+}
+
+long notify_nop_service(smc32_args_t* args) {
+    if (args == nullptr) return SM_ERR_INVALID_PARAMETERS;
+
+    if (smc_disp == nullptr) return smc_undefined(args);
+
+    zx_status_t status = smc_disp->WriteNopRequest(arch_curr_cpu_num(), args);
+    if (status != ZX_OK) {
+        TRACEF("warning: Failed to send nop request, status %d\n", status);
+    }
+
+    return SM_OK;
 }
 #endif
