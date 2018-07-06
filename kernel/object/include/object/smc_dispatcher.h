@@ -1,5 +1,4 @@
 // Copyright 2018 Open Trust Group
-// Copyright 2016 The Fuchsia Authors
 //
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file or at
@@ -28,11 +27,14 @@ public:
     /* called by libsm */
     zx_status_t NotifyUser(smc32_args_t* args);
     long WaitForResult();
+    zx_status_t WriteNopRequest(uint32_t cpu_num, smc32_args_t* args);
 
     /* called by smc service via syscalls */
     zx_status_t ReadArgs(smc32_args_t* args);
     zx_status_t SetResult(long result);
     zx_info_smc_t GetSmcInfo();
+    zx_status_t ReadNopRequest(uint32_t cpu_num, smc32_args_t* args);
+    zx_status_t CancelReadNopRequest();
 
 private:
     explicit SmcDispatcher(uint32_t options, zx_info_smc_t info);
@@ -45,4 +47,6 @@ private:
     bool can_serve_next_smc TA_GUARDED(get_lock());
     event_t result_event_;
     zx_info_smc_t smc_info;
+    smc32_args_t req_nop_args[SMP_MAX_CPUS]{} TA_GUARDED(get_lock());
+    event_t req_nop_event_[SMP_MAX_CPUS];
 };

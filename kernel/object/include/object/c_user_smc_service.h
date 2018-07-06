@@ -14,5 +14,6 @@ __BEGIN_CDECLS
 // This is the interface for LK's libsm to notify the
 // userspace smc service to handle smc request.
 long notify_smc_service(smc32_args_t* args);
+long notify_nop_thread(smc32_args_t* args);
 
 __END_CDECLS

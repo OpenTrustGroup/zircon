@@ -775,6 +775,18 @@ syscall smc_call_test
     (handle: zx_handle_t, args: smc32_args_t[1] INOUT, smc_ret: long[1] OUT)
     returns (zx_status_t);
 
+syscall smc_read_nop
+    (handle: zx_handle_t, cpu_num: uint32_t, args: smc32_args_t[1] OUT)
+    returns (zx_status_t);
+
+syscall smc_cancel_read_nop
+    (handle: zx_handle_t)
+    returns (zx_status_t);
+
+syscall smc_nop_call_test
+    (handle: zx_handle_t, args: smc32_args_t[1] IN)
+    returns (zx_status_t);
+
 # Test syscalls (keep at the end)
 
 syscall syscall_test_0() returns (zx_status_t);
