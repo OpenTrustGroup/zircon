@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "608ad104_cac20cf7",
+        "filename": "kernel/object/include/object/smc_dispatcher.h",
+        "patchSetId": 2
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-07-11T16:12:55Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "46ac8a1b_4af344c0",
+      "range": {
+        "startLine": 37,
+        "startChar": 16,
+        "endLine": 37,
+        "endChar": 25
+      },
+      "revId": "fe9b73ce068d7a59cb4d948f340bccca0923d23a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "cea25645_d3c933a1",
         "filename": "kernel/object/smc_dispatcher.cpp",
         "patchSetId": 2
@@ -48,6 +72,30 @@
     },
     {
       "key": {
+        "uuid": "21f75cd8_e2022dab",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 2
+      },
+      "lineNbr": 176,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-07-11T16:12:55Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "cea25645_d3c933a1",
+      "range": {
+        "startLine": 175,
+        "startChar": 4,
+        "endLine": 176,
+        "endChar": 40
+      },
+      "revId": "fe9b73ce068d7a59cb4d948f340bccca0923d23a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "60875183_d0265532",
         "filename": "kernel/object/smc_dispatcher.cpp",
         "patchSetId": 2
@@ -59,6 +107,30 @@
       "writtenOn": "2018-07-09T15:10:22Z",
       "side": 1,
       "message": "naming is a little confusing, notify_smc_service() is to notify a user-space process called smc_service, but we don\u0027t have a process called nop_service, and nop itself is serviced in smc_service.\nMaybe we can rename to notify_stdcall_serivce() and notify_nop_serivce()",
+      "range": {
+        "startLine": 321,
+        "startChar": 5,
+        "endLine": 321,
+        "endChar": 23
+      },
+      "revId": "fe9b73ce068d7a59cb4d948f340bccca0923d23a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "757d2ff2_96580e6d",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 2
+      },
+      "lineNbr": 321,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-07-11T16:12:55Z",
+      "side": 1,
+      "message": "rename to notify_nop_thread()",
+      "parentUuid": "60875183_d0265532",
       "range": {
         "startLine": 321,
         "startChar": 5,
@@ -91,6 +163,30 @@
       "revId": "fe9b73ce068d7a59cb4d948f340bccca0923d23a",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "ad3efb22_0212ee08",
+        "filename": "system/public/zircon/syscalls.abigen",
+        "patchSetId": 2
+      },
+      "lineNbr": 782,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-07-11T16:12:55Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "55603822_5c44a5b5",
+      "range": {
+        "startLine": 782,
+        "startChar": 8,
+        "endLine": 782,
+        "endChar": 22
+      },
+      "revId": "fe9b73ce068d7a59cb4d948f340bccca0923d23a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     }
   ]
 }
