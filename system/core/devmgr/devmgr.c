@@ -985,6 +985,8 @@ void devmgr_gzos_svc_init(void) {
         goto error;
     }
 
+#ifdef DISABLE_RPC_AGENT
+
     zx_handle_t ree_agent_cli = ZX_HANDLE_INVALID;
     zx_handle_t ree_agent_srv = ZX_HANDLE_INVALID;
     status = zx_channel_create(0, &ree_agent_cli, &ree_agent_srv);
@@ -1026,6 +1028,24 @@ void devmgr_gzos_svc_init(void) {
         goto error;
     }
 
+#else
+    unsigned int handle_count = 1;
+    zx_handle_t handles[] = {appmgr_svc};
+    uint32_t handle_types[] = {PA_HND(PA_USER0, 0)};
+
+    int argc_rpc_agent = 1;
+    const char* argv_rpc_agent[] = { "/system/bin/rpc_agent" };
+    status = devmgr_launch(gzos_svcs_job_handle, "rpc_agent",
+                           &devmgr_launch_load, NULL,
+                           argc_rpc_agent, argv_rpc_agent, NULL, -1,
+                           handles, handle_types, handle_count,
+                           NULL, 0);
+    if (status != ZX_OK) {
+        printf("devmgr: gzos_svc_init: failed to launch rpc_agent: %d\n", status);
+        goto error;
+    }
+#endif
+
     return;
 
 error:
@@ -1033,8 +1053,10 @@ error:
     // fdio_service_connect_at.
     if (appmgr_svc != ZX_HANDLE_INVALID)
         zx_handle_close(appmgr_svc);
+#ifdef DISABLE_RPC_AGENT
     if (ree_agent_cli != ZX_HANDLE_INVALID)
         zx_handle_close(ree_agent_cli);
     if (ree_agent_srv != ZX_HANDLE_INVALID)
         zx_handle_close(ree_agent_srv);
+#endif
 }
