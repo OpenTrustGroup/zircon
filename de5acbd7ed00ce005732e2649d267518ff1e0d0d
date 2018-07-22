@@ -22,6 +22,30 @@
       "revId": "de5acbd7ed00ce005732e2649d267518ff1e0d0d",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "316a4a77_5c6d6b16",
+        "filename": "system/core/devmgr/devmgr.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 971,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-07-22T14:35:44Z",
+      "side": 1,
+      "message": "rpc_agent is default enabled, so we can change the macro to \"DISABLE_RPC_AGENT\" so that we can remove this line.",
+      "parentUuid": "18bf3c8f_14fc9960",
+      "range": {
+        "startLine": 970,
+        "startChar": 0,
+        "endLine": 971,
+        "endChar": 0
+      },
+      "revId": "de5acbd7ed00ce005732e2649d267518ff1e0d0d",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
     }
   ]
 }
