@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2018 Open Trust Group
  * Copyright (c) 2013-2016 Google Inc. All rights reserved
  *
  * Permission is hereby granted, free of charge, to any person obtaining
