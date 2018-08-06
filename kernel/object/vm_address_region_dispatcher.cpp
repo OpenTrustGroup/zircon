@@ -1,3 +1,4 @@
+// Copyright 2018 Open Trust Group
 // Copyright 2016 The Fuchsia Authors
 //
 // Use of this source code is governed by a MIT-style
