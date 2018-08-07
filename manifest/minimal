@@ -3,7 +3,7 @@
   <projects>
     <project name="zircon"
              path="zircon"
-             remote="ssh://review.gerrithub.io:29418/OpenTrustGroup/zircon"
+             remote="https://review.gerrithub.io/OpenTrustGroup/zircon"
              remotebranch="gzos"
              gerrithost="https://review.gerrithub.io"/>
   </projects>
