@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "5d520db8_66754679",
+        "filename": "system/public/zircon/syscalls/smc_defs.h",
+        "patchSetId": 2
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-08-09T01:47:29Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4d227fb9_9f5c895e",
+      "range": {
+        "startLine": 3,
+        "startChar": 3,
+        "endLine": 3,
+        "endChar": 38
+      },
+      "revId": "2ab38f1fee427a32adc5c709a7582ed8abbcfdaf",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "71d18549_b0cad6be",
         "filename": "system/public/zircon/syscalls/smc_service.h",
         "patchSetId": 2
@@ -36,6 +60,30 @@
       "writtenOn": "2018-08-09T01:21:13Z",
       "side": 1,
       "message": "should be the first line",
+      "range": {
+        "startLine": 3,
+        "startChar": 3,
+        "endLine": 3,
+        "endChar": 38
+      },
+      "revId": "2ab38f1fee427a32adc5c709a7582ed8abbcfdaf",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "e1b09cb3_e0d210d9",
+        "filename": "system/public/zircon/syscalls/smc_service.h",
+        "patchSetId": 2
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-08-09T01:47:29Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "71d18549_b0cad6be",
       "range": {
         "startLine": 3,
         "startChar": 3,
@@ -71,6 +119,30 @@
     },
     {
       "key": {
+        "uuid": "1278be27_8326ad21",
+        "filename": "third_party/lib/sm/include/lib/sm.h",
+        "patchSetId": 2
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-08-09T01:47:29Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "e97a38f0_1b552e7c",
+      "range": {
+        "startLine": 3,
+        "startChar": 3,
+        "endLine": 3,
+        "endChar": 38
+      },
+      "revId": "2ab38f1fee427a32adc5c709a7582ed8abbcfdaf",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "9052b804_3e9ededc",
         "filename": "third_party/lib/sm/sm.c",
         "patchSetId": 2
@@ -94,6 +166,30 @@
     },
     {
       "key": {
+        "uuid": "569081a1_ce2c2e36",
+        "filename": "third_party/lib/sm/sm.c",
+        "patchSetId": 2
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-08-09T01:47:29Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "9052b804_3e9ededc",
+      "range": {
+        "startLine": 3,
+        "startChar": 3,
+        "endLine": 3,
+        "endChar": 38
+      },
+      "revId": "2ab38f1fee427a32adc5c709a7582ed8abbcfdaf",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "9c8245ad_25fe2d78",
         "filename": "third_party/lib/sm/smcall.c",
         "patchSetId": 2
@@ -105,6 +201,30 @@
       "writtenOn": "2018-08-09T01:21:13Z",
       "side": 1,
       "message": "should be the first line",
+      "range": {
+        "startLine": 3,
+        "startChar": 3,
+        "endLine": 3,
+        "endChar": 38
+      },
+      "revId": "2ab38f1fee427a32adc5c709a7582ed8abbcfdaf",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "e8d32180_cbe48571",
+        "filename": "third_party/lib/sm/smcall.c",
+        "patchSetId": 2
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-08-09T01:47:29Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "9c8245ad_25fe2d78",
       "range": {
         "startLine": 3,
         "startChar": 3,
