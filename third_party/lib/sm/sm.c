@@ -26,6 +26,7 @@
 #include <trace.h>
 #include <kernel/event.h>
 #include <kernel/thread.h>
+#include <lib/console.h>
 #include <lib/sm.h>
 #include <lk/init.h>
 #include <string.h>
@@ -66,6 +67,7 @@ struct sm {
     bool ns_threads_started;
     struct sm_stdcall_state stdcall_state;
     ns_shm_info_t ns_shm;
+    bool disable;
 };
 
 static struct sm sm = {
@@ -292,16 +294,20 @@ static int __NO_RETURN sm_wait_for_smcall(void *arg __UNUSED)
     uint cpu_num;
     long ret = 0;
 
-    /* TODO: remove time delay after appmgr is implemented. We should guarantee
-     * all timers are triggered and removed from timer queue before return to
-     * normal world during boot process, or UEFI bootloader will get panic due to
-     * secure timer interrupt cannot be handled by UEFI bootloader.
+    /* We should guarantee all TEE interrupts are handled before return to
+     * normal world during boot process, or UEFI bootloader will get panic
+     * due to IRQ exception occurred.
      */
-    thread_sleep_relative(ZX_SEC(10));
+    thread_sleep_relative(ZX_SEC(2));
 
     LTRACEF("wait for stdcalls, on cpu %u\n", arch_curr_cpu_num());
 
     while (true) {
+        if (sm.disable) {
+            thread_sleep_relative(ZX_SEC(1));
+            continue;
+        }
+
         /*
          * Disable interrupts so stdcallstate.active_cpu does not
          * change to or from this cpu after checking it below.
@@ -390,6 +396,8 @@ static int __NO_RETURN sm_stdcall_loop(void *arg)
 
 static void sm_init(uint level)
 {
+    sm.disable = false;
+
     sm.stdcallthread = thread_create("sm-stdcall", sm_stdcall_loop, NULL,
                       LOWEST_PRIORITY + 2);
     if (!sm.stdcallthread) {
@@ -428,3 +436,30 @@ static void resume_nsthreads(uint level)
 }
 
 LK_INIT_HOOK(libsm_resume_nsthreads, resume_nsthreads, LK_INIT_LEVEL_LAST);
+
+
+static int cmd_sm(int argc, const cmd_args* argv, uint32_t flags) {
+    int rc = 0;
+
+    if (argc < 2) {
+        printf("not enough arguments:\n");
+    usage:
+        printf("%s disable         : disable secure monitor\n", argv[0].str);
+        printf("%s enable          : enable secure monitor\n", argv[0].str);
+        return -1;
+    }
+
+    if (strcmp(argv[1].str, "disable") == 0) {
+        sm.disable = true;
+    } else if (strcmp(argv[1].str, "enable") == 0) {
+        sm.disable = false;
+    } else {
+        printf("unrecognized subcommand '%s'\n", argv[1].str);
+        goto usage;
+    }
+    return rc;
+}
+
+STATIC_COMMAND_START
+STATIC_COMMAND("sm", "secure monitor control", &cmd_sm)
+STATIC_COMMAND_END(zx);
