@@ -292,12 +292,11 @@ static int __NO_RETURN sm_wait_for_smcall(void *arg __UNUSED)
     uint cpu_num;
     long ret = 0;
 
-    /* TODO: remove time delay after appmgr is implemented. We should guarantee
-     * all timers are triggered and removed from timer queue before return to
-     * normal world during boot process, or UEFI bootloader will get panic due to
-     * secure timer interrupt cannot be handled by UEFI bootloader.
+    /* We should guarantee all TEE interrupts are handled before return to
+     * normal world during boot process, or UEFI bootloader will get panic
+     * due to IRQ exception occurred.
      */
-    thread_sleep_relative(ZX_SEC(10));
+    thread_sleep_relative(ZX_MSEC(500));
 
     LTRACEF("wait for stdcalls, on cpu %u\n", arch_curr_cpu_num());
 
