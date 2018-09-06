@@ -19,7 +19,6 @@
 #include <trace.h>
 
 #include <kernel/thread.h>
-
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_lock.h>
 
@@ -28,8 +27,6 @@
 #include <lib/sm.h>
 #define ENABLE_SMC_TEST 1
 #endif
-
-using fbl::AutoLock;
 
 static fbl::Mutex alloc_lock;
 static SmcDispatcher* smc_disp TA_GUARDED(alloc_lock);
@@ -114,7 +111,7 @@ static long invoke_smc_test(smc32_args_t* args) {
 zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
                                   zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo) {
 #if WITH_LIB_SM
-    AutoLock lock(&alloc_lock);
+    fbl::AutoLock al(&alloc_lock);
 
     if (smc_disp == nullptr) {
         ns_shm_info_t info = {};
@@ -178,7 +175,7 @@ SmcDispatcher::SmcDispatcher(uint32_t options, zx_info_smc_t info)
 }
 
 SmcDispatcher::~SmcDispatcher() {
-    AutoLock lock(&alloc_lock);
+    fbl::AutoLock al(&alloc_lock);
     LTRACEF("free smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
     smc_disp = nullptr;
 }
@@ -190,7 +187,7 @@ zx_info_smc_t SmcDispatcher::GetSmcInfo() {
 zx_status_t SmcDispatcher::NotifyUser(smc32_args_t* args) {
     canary_.Assert();
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     if (can_serve_next_smc) {
         smc_args = args;
@@ -208,7 +205,7 @@ long SmcDispatcher::WaitForResult() {
 
     zx_status_t status = event_wait_deadline(&result_event_, ZX_TIME_INFINITE, true);
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     DEBUG_ASSERT(!can_serve_next_smc);
 
@@ -221,7 +218,7 @@ zx_status_t SmcDispatcher::ReadArgs(smc32_args_t* args) {
 
     if (!args) return ZX_ERR_INVALID_ARGS;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     zx_signals_t signals = GetSignalsStateLocked();
 
@@ -238,7 +235,7 @@ zx_status_t SmcDispatcher::ReadArgs(smc32_args_t* args) {
 zx_status_t SmcDispatcher::SetResult(long result) {
     canary_.Assert();
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     zx_signals_t signals = GetSignalsStateLocked();
 
@@ -263,7 +260,7 @@ zx_status_t SmcDispatcher::WriteNopRequest(uint32_t cpu_num,
     LTRACEF("thread %s, cpu_num %u\n", get_current_thread()->name, cpu_num);
 
     {
-        AutoLock lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
         memcpy(&req_nop_args[cpu_num], args, sizeof(smc32_args_t));
     }
     event_signal(&req_nop_event_[cpu_num], true);
@@ -284,7 +281,7 @@ zx_status_t SmcDispatcher::ReadNopRequest(uint32_t cpu_num,
     if (status != ZX_OK)
         return status;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     memcpy(args, &req_nop_args[cpu_num], sizeof(smc32_args_t));
     return ZX_OK;
 }

@@ -14,7 +14,7 @@
 #include <fbl/mutex.h>
 #include <zircon/syscalls/smc_service.h>
 
-class SmcDispatcher final : public SoloDispatcher {
+class SmcDispatcher final : public SoloDispatcher<SmcDispatcher> {
 public:
     static zx_status_t Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
                               zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo);

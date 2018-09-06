@@ -183,7 +183,7 @@ $(ZIRCON_BOOTIMAGE): \
     $(ADDITIONAL_BOOTDATA_ITEMS)
 	$(call BUILDECHO,generating $@)
 	@$(MKDIR)
-	$(NOECHO)$< -o $@ --complete=$(PROJECT) $(KERNEL_ZBI) \
+	$(NOECHO)$< -o $@ --complete=$(ARCH) $(KERNEL_ZBI) \
 		    $(USER_MANIFEST_GROUPS) $(USER_MANIFEST) \
 		    $(ADDITIONAL_BOOTDATA_ITEMS)
 GENERATED += $(ZIRCON_BOOTIMAGE)

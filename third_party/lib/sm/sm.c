@@ -334,7 +334,7 @@ static void sm_secondary_init(uint level)
 
     snprintf(name, sizeof(name), "irq-ns-switch-%u", cpu_num);
     cpu->nsirqthread = thread_create(name, sm_irq_loop, (void *)(uintptr_t)cpu_num,
-                     HIGHEST_PRIORITY, DEFAULT_STACK_SIZE);
+                     HIGHEST_PRIORITY);
     if (!cpu->nsirqthread) {
         panic("failed to create irq NS switcher thread for cpu %u!\n", cpu_num);
     }
@@ -343,7 +343,7 @@ static void sm_secondary_init(uint level)
 
     snprintf(name, sizeof(name), "idle-ns-switch-%u", cpu_num);
     cpu->nsidlethread = thread_create(name, sm_wait_for_smcall, NULL,
-                      LOWEST_PRIORITY + 1, DEFAULT_STACK_SIZE);
+                      LOWEST_PRIORITY + 1);
     if (!cpu->nsidlethread) {
         panic("failed to create idle NS switcher thread for cpu %u!\n", cpu_num);
     }
@@ -391,7 +391,7 @@ static int __NO_RETURN sm_stdcall_loop(void *arg)
 static void sm_init(uint level)
 {
     sm.stdcallthread = thread_create("sm-stdcall", sm_stdcall_loop, NULL,
-                      LOWEST_PRIORITY + 2, DEFAULT_STACK_SIZE);
+                      LOWEST_PRIORITY + 2);
     if (!sm.stdcallthread) {
         panic("failed to create sm-stdcall thread!\n");
     }

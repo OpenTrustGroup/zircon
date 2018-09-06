@@ -28,7 +28,6 @@
 
 #include "priv.h"
 
-using fbl::AutoLock;
 
 #define LOCAL_TRACE 1
 

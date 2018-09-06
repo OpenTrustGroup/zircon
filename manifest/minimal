@@ -4,7 +4,7 @@
     <project name="zircon"
              path="zircon"
              remote="https://review.gerrithub.io/OpenTrustGroup/zircon"
-             remotebranch="gzos"
+             remotebranch="gzos_dev"
              gerrithost="https://review.gerrithub.io"/>
   </projects>
   <hooks>

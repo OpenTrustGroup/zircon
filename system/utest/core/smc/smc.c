@@ -198,9 +198,9 @@ static bool smc_shm_vmo_write_test(void) {
     size_t vmo_size = smc_info.ns_shm.size;
 
     uintptr_t virt;
-    ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(), 0, shm_vmo_handle, 0, vmo_size,
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_MAP_RANGE,
-                         &virt),
+    ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(),
+                          ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_MAP_RANGE,
+                          0, shm_vmo_handle, 0, vmo_size, &virt),
               ZX_OK, "failed to map shm vmo");
     ASSERT_NE(virt, 0UL, "shm va should not be zero");
 
@@ -231,9 +231,9 @@ static bool smc_shm_vmo_read_test(void) {
     size_t vmo_size = smc_info.ns_shm.size;
 
     uintptr_t virt;
-    ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(), 0, shm_vmo_handle, 0, vmo_size,
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_MAP_RANGE,
-                         &virt),
+    ASSERT_EQ(zx_vmar_map(zx_vmar_root_self(),
+                          ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_MAP_RANGE,
+                          0, shm_vmo_handle, 0, vmo_size, &virt),
               ZX_OK, "failed to map shm vmo");
     ASSERT_NE(virt, 0UL, "shm va should not be zero");
 
