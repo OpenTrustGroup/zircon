@@ -7,7 +7,6 @@
 
 #pragma once
 
-#include <dev/pcie_platform.h>
 #include <lib/cbuf.h>
 #include <sys/types.h>
 #include <zircon/compiler.h>
@@ -37,14 +36,6 @@ void pc_prep_suspend_timer(void);
 void pc_resume_timer(void);
 void pc_resume_debug(void);
 void pc_suspend_debug(void);
-
-zx_status_t x86_alloc_msi_block(uint requested_irqs, bool can_target_64bit,
-                                bool is_msix, pcie_msi_block_t* out_block);
-void x86_free_msi_block(pcie_msi_block_t* block);
-void x86_register_msi_handler(const pcie_msi_block_t* block,
-                              uint msi_id,
-                              int_handler handler,
-                              void* ctx);
 
 typedef void (*enumerate_e820_callback)(uint64_t base, uint64_t size, bool is_mem, void* ctx);
 zx_status_t enumerate_e820(enumerate_e820_callback callback, void* ctx);

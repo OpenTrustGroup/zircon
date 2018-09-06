@@ -9,14 +9,14 @@ $(error $(MODULE) $(MODULE_TYPE) fidl modules must use MODULE_FIDL_DEPS)
 endif
 
 # build static library
-$(MODULE_LIBNAME).a: $(MODULE_FIDL_OBJ)
+$(MODULE_LIBNAME).a: $(MODULE_FIDL_OBJS)
 	@$(MKDIR)
 	$(call BUILDECHO,linking $@)
 	@rm -f -- "$@"
 	$(call BUILDCMD,$(AR),cr $@ $^)
 
 # always build all libraries
-EXTRA_BUILDDEPS += $(MODULE_LIBNAME).a
+EXTRA_BUILDDEPS += $(MODULE_LIBNAME).a make/module-fidl.mk
 GENERATED += $(MODULE_LIBNAME).a
 
 MODULE_RULESMK := $(MODULE_SRCDIR)/rules.mk
@@ -24,9 +24,6 @@ MODULE_RULESMK := $(MODULE_SRCDIR)/rules.mk
 ifeq ($(filter fidl,$(MODULE_EXPORT)),fidl)
 MODULE_PACKAGE += $(sort $(MODULE_PACKAGE) fidl)
 endif
-
-# Export a list of files for dependent libraries to consume.
-MODULE_FIDL_SRCS_$(MODULE) := $(MODULE_SRCS)
 
 ifneq ($(strip $(MODULE_PACKAGE)),)
 

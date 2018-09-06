@@ -11,7 +11,7 @@
 #include <ddk/binding.h>
 #include <ddk/debug.h>
 #include <ddk/device.h>
-#include <ddk/protocol/i2c.h>
+#include <ddk/protocol/i2c-impl.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
 #include <ddk/protocol/platform-device.h>
@@ -254,37 +254,28 @@ static zx_status_t aml_i2c_dev_init(aml_i2c_t* i2c, unsigned index) {
                                   &device->regs_iobuff);
     if (status != ZX_OK) {
         zxlogf(ERROR, "aml_i2c_dev_init: pdev_map_mmio_buffer failed %d\n", status);
-        goto init_fail;
+        return status;
     }
 
     device->virt_regs = (aml_i2c_regs_t*)io_buffer_virt(&device->regs_iobuff);
 
     status = pdev_map_interrupt(&i2c->pdev, index, &device->irq);
     if (status != ZX_OK) {
-        goto init_fail;
+        return status;
     }
 
     status = zx_event_create(0, &device->event);
     if (status != ZX_OK) {
-        goto init_fail;
+        return status;
     }
 
     thrd_t irqthrd;
     thrd_create_with_name(&irqthrd, aml_i2c_irq_thread, device, "i2c_irq_thread");
 
     return ZX_OK;
-
-init_fail:
-    if (device) {
-        io_buffer_release(&device->regs_iobuff);
-        zx_handle_close(device->event);
-        zx_handle_close(device->irq);
-        free(device);
-     }
-    return status;
 }
 
-static size_t aml_i2c_get_bus_count(void* ctx) {
+static uint32_t aml_i2c_get_bus_count(void* ctx) {
     aml_i2c_t* i2c = ctx;
 
     return i2c->dev_count;
@@ -333,7 +324,7 @@ static zx_status_t aml_i2c_transact(void* ctx, uint32_t bus_id, uint16_t address
     return ZX_OK;
 }
 
-static i2c_impl_ops_t i2c_ops = {
+static i2c_impl_protocol_ops_t i2c_ops = {
     .get_bus_count = aml_i2c_get_bus_count,
     .get_max_transfer_size = aml_i2c_get_max_transfer_size,
     .set_bitrate = aml_i2c_set_bitrate,
@@ -419,7 +410,7 @@ static zx_status_t aml_i2c_bind(void* ctx, zx_device_t* parent) {
 
     i2c->i2c.ops = &i2c_ops;
     i2c->i2c.ctx = i2c;
-    pbus_set_protocol(&pbus, ZX_PROTOCOL_I2C_IMPL, &i2c->i2c);
+    pbus_register_protocol(&pbus, ZX_PROTOCOL_I2C_IMPL, &i2c->i2c, NULL, NULL);
 
     return ZX_OK;
 

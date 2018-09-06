@@ -27,11 +27,10 @@ typedef struct zx_port_packet zx_port_packet_t;
 using InterruptBitmap = bitmap::RawBitmapGeneric<bitmap::FixedStorage<kNumInterrupts>>;
 
 class PortDispatcher;
-class VmObject;
 
 class Guest {
 public:
-    static zx_status_t Create(fbl::RefPtr<VmObject> physmem, fbl::unique_ptr<Guest>* out);
+    static zx_status_t Create(fbl::unique_ptr<Guest>* out);
     ~Guest();
     DISALLOW_COPY_ASSIGN_AND_MOVE(Guest);
 
@@ -70,6 +69,7 @@ struct GichState {
     uint32_t num_lrs;
     uint32_t vmcr;
     uint64_t elrsr;
+    uint32_t apr;
     uint64_t lr[64] = {};
 };
 
@@ -108,8 +108,8 @@ public:
 
     zx_status_t Resume(zx_port_packet_t* packet);
     zx_status_t Interrupt(uint32_t interrupt);
-    zx_status_t ReadState(uint32_t kind, void* buffer, size_t len) const;
-    zx_status_t WriteState(uint32_t kind, const void* buffer, size_t len);
+    zx_status_t ReadState(uint32_t kind, void* buf, size_t len) const;
+    zx_status_t WriteState(uint32_t kind, const void* buf, size_t len);
 
 private:
     Guest* guest_;

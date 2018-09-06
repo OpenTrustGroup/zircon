@@ -577,15 +577,25 @@ static bool socket_datagram_no_short_write(void) {
     status = zx_socket_create(ZX_SOCKET_DATAGRAM, &h0, &h1);
     ASSERT_EQ(status, ZX_OK, "");
 
-    // TODO(qsr): Request socket buffer and use (socket_buffer + 1).
-    const size_t buffer_size = 256 * 1024 + 1;
-    char* buffer = malloc(buffer_size);
-    size_t written = 999;
+    size_t tx_buf_size = 0u;
+    status = zx_object_get_property(h0, ZX_PROP_SOCKET_TX_BUF_MAX, &tx_buf_size,
+                                    sizeof(tx_buf_size));
+    EXPECT_EQ(status, ZX_OK, "");
+    EXPECT_GT(tx_buf_size, 0u, "");
+
+    // Pick a size for a huge datagram, and make sure not to overflow.
+    size_t buffer_size = tx_buf_size * 2;
+    EXPECT_GT(buffer_size, 0u, "");
+
+    void* buffer = calloc(buffer_size, 1u);
+    EXPECT_NONNULL(buffer, "");
+
+    size_t written = ~0u;
     status = zx_socket_write(h0, 0u, buffer, buffer_size, &written);
-    EXPECT_EQ(status, ZX_ERR_SHOULD_WAIT, "");
+    EXPECT_EQ(status, ZX_ERR_OUT_OF_RANGE, "");
     // Since the syscall failed, it should not have overwritten this output
     // parameter.
-    EXPECT_EQ(written, 999u, "");
+    EXPECT_EQ(written, ~0u, "");
 
     free(buffer);
     zx_handle_close(h0);
@@ -769,6 +779,9 @@ static bool socket_accept(void) {
     // cannot share a HAS_ACCEPT socket
     status = zx_socket_share(b0, a0);
     EXPECT_EQ(status, ZX_ERR_BAD_STATE, "");
+    zx_handle_close(a1);
+    status = zx_socket_create(ZX_SOCKET_HAS_ACCEPT, &a0, &a1);
+    ASSERT_EQ(status, ZX_OK, "");
 
     // cannot share via a non-HAS_ACCEPT socket
     status = zx_socket_share(b0, c0);
@@ -777,12 +790,27 @@ static bool socket_accept(void) {
     // cannot share a socket via itself (either direction)
     status = zx_socket_share(a0, a0);
     EXPECT_EQ(status, ZX_ERR_BAD_STATE, "");
+    zx_handle_close(a1);
+    status = zx_socket_create(ZX_SOCKET_HAS_ACCEPT, &a0, &a1);
+    ASSERT_EQ(status, ZX_OK, "");
+
     status = zx_socket_share(a0, a1);
     EXPECT_EQ(status, ZX_ERR_BAD_STATE, "");
+    zx_handle_close(a0);
+    status = zx_socket_create(ZX_SOCKET_HAS_ACCEPT, &a0, &a1);
+    ASSERT_EQ(status, ZX_OK, "");
+
     status = zx_socket_share(a1, a0);
     EXPECT_EQ(status, ZX_ERR_BAD_STATE, "");
+    zx_handle_close(a1);
+    status = zx_socket_create(ZX_SOCKET_HAS_ACCEPT, &a0, &a1);
+    ASSERT_EQ(status, ZX_OK, "");
+
     status = zx_socket_share(a1, a1);
     EXPECT_EQ(status, ZX_ERR_BAD_STATE, "");
+    zx_handle_close(a0);
+    status = zx_socket_create(ZX_SOCKET_HAS_ACCEPT, &a0, &a1);
+    ASSERT_EQ(status, ZX_OK, "");
 
     // cannot accept from a non-HAS_ACCEPT socket
     zx_handle_t h;
@@ -824,6 +852,50 @@ static bool socket_accept(void) {
     END_TEST;
 }
 
+bool socket_share_invalid_handle(void) {
+    BEGIN_TEST;
+
+    zx_handle_t socket[2];
+    zx_status_t status = zx_socket_create(0, &socket[0], &socket[1]);
+    EXPECT_EQ(status, ZX_OK, "");
+
+    status = zx_socket_share(socket[0], ZX_HANDLE_INVALID);
+    EXPECT_EQ(status, ZX_ERR_BAD_HANDLE, "");
+
+    zx_handle_close(socket[0]);
+    zx_handle_close(socket[1]);
+
+    END_TEST;
+}
+
+bool socket_share_consumes_on_failure(void) {
+    BEGIN_TEST;
+
+    zx_handle_t socket[2];
+    zx_status_t status = zx_socket_create(0, &socket[0], &socket[1]);
+    EXPECT_EQ(status, ZX_OK, "");
+
+    zx_handle_t eventpair[2];
+    status = zx_eventpair_create(0, &eventpair[0], &eventpair[1]);
+    EXPECT_EQ(status, ZX_OK, "");
+
+    status = zx_socket_share(socket[0], eventpair[0]);
+    EXPECT_EQ(status, ZX_ERR_WRONG_TYPE, "");
+
+    // eventpair[0] should have been closed, which we can detect by
+    // waiting on its peer.
+    zx_signals_t signals;
+    status = zx_object_wait_one(eventpair[1], ZX_EVENTPAIR_PEER_CLOSED, 0u, &signals);
+    EXPECT_EQ(status, ZX_OK, "");
+    EXPECT_EQ(signals & ZX_EVENTPAIR_PEER_CLOSED, ZX_EVENTPAIR_PEER_CLOSED, "");
+
+    zx_handle_close(socket[0]);
+    zx_handle_close(socket[1]);
+    zx_handle_close(eventpair[1]);
+
+    END_TEST;
+}
+
 BEGIN_TEST_CASE(socket_tests)
 RUN_TEST(socket_basic)
 RUN_TEST(socket_signals)
@@ -840,6 +912,8 @@ RUN_TEST(socket_control_plane_absent)
 RUN_TEST(socket_control_plane)
 RUN_TEST(socket_control_plane_shutdown)
 RUN_TEST(socket_accept)
+RUN_TEST(socket_share_invalid_handle)
+RUN_TEST(socket_share_consumes_on_failure)
 END_TEST_CASE(socket_tests)
 
 #ifndef BUILD_COMBINED_TESTS

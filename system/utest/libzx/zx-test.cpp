@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -213,7 +214,7 @@ static bool vmar_test() {
     zx::vmar vmar;
     const size_t size = getpagesize();
     uintptr_t addr;
-    ASSERT_EQ(zx::vmar::root_self().allocate(0u, size, ZX_VM_FLAG_CAN_MAP_READ, &vmar, &addr),
+    ASSERT_EQ(zx::vmar::root_self()->allocate(0u, size, ZX_VM_CAN_MAP_READ, &vmar, &addr),
               ZX_OK);
     ASSERT_EQ(validate_handle(vmar.get()), ZX_OK);
     ASSERT_EQ(vmar.destroy(), ZX_OK);
@@ -245,12 +246,21 @@ static bool port_test() {
 static bool time_test() {
     BEGIN_TEST;
 
+    // time construction
     ASSERT_EQ(zx::time().get(), 0);
     ASSERT_EQ(zx::time::infinite().get(), ZX_TIME_INFINITE);
+    ASSERT_EQ(zx::time(-1).get(), -1);
+    ASSERT_EQ(zx::time(ZX_TIME_INFINITE_PAST).get(), ZX_TIME_INFINITE_PAST);
 
+    // duration construction
     ASSERT_EQ(zx::duration().get(), 0);
     ASSERT_EQ(zx::duration::infinite().get(), ZX_TIME_INFINITE);
+    ASSERT_EQ(zx::duration(-1).get(), -1);
+    ASSERT_EQ(zx::duration(ZX_TIME_INFINITE_PAST).get(), ZX_TIME_INFINITE_PAST);
 
+    // duration to/from nsec, usec, msec, etc.
+    ASSERT_EQ(zx::nsec(-10).get(), ZX_NSEC(-10));
+    ASSERT_EQ(zx::nsec(-10).to_nsecs(), -10);
     ASSERT_EQ(zx::nsec(10).get(), ZX_NSEC(10));
     ASSERT_EQ(zx::nsec(10).to_nsecs(), 10);
     ASSERT_EQ(zx::usec(10).get(), ZX_USEC(10));
@@ -291,6 +301,17 @@ static bool time_test() {
 
     // Just a smoke test
     ASSERT_GE(zx::deadline_after(zx::usec(10)).get(), ZX_USEC(10));
+
+    END_TEST;
+}
+
+static bool time_nanosleep_test() {
+    BEGIN_TEST;
+
+    ASSERT_EQ(zx::nanosleep(zx::time(ZX_TIME_INFINITE_PAST)), ZX_OK);
+    ASSERT_EQ(zx::nanosleep(zx::time(-1)), ZX_OK);
+    ASSERT_EQ(zx::nanosleep(zx::time(0)), ZX_OK);
+    ASSERT_EQ(zx::nanosleep(zx::time(1)), ZX_OK);
 
     END_TEST;
 }
@@ -338,7 +359,7 @@ static bool thread_self_test() {
     zx_handle_t raw = zx_thread_self();
     ASSERT_EQ(validate_handle(raw), ZX_OK);
 
-    EXPECT_TRUE(reference_thing<zx::thread>(zx::thread::self()));
+    EXPECT_TRUE(reference_thing<zx::thread>(*zx::thread::self()));
     EXPECT_EQ(validate_handle(raw), ZX_OK);
 
     // This does not compile:
@@ -356,7 +377,7 @@ static bool thread_suspend_test() {
     BEGIN_TEST;
 
     zx::thread thread;
-    ASSERT_EQ(zx::thread::create(zx::process::self(), "test", 4, 0, &thread), ZX_OK);
+    ASSERT_EQ(zx::thread::create(*zx::process::self(), "test", 4, 0, &thread), ZX_OK);
 
     // Make a little stack and start the thread. Note: stack grows down so pass the high address.
     alignas(16) static uint8_t stack_storage[64];
@@ -379,7 +400,7 @@ static bool process_self_test() {
     zx_handle_t raw = zx_process_self();
     ASSERT_EQ(validate_handle(raw), ZX_OK);
 
-    EXPECT_TRUE(reference_thing<zx::process>(zx::process::self()));
+    EXPECT_TRUE(reference_thing<zx::process>(*zx::process::self()));
     EXPECT_EQ(validate_handle(raw), ZX_OK);
 
     // This does not compile:
@@ -394,7 +415,7 @@ static bool vmar_root_self_test() {
     zx_handle_t raw = zx_vmar_root_self();
     ASSERT_EQ(validate_handle(raw), ZX_OK);
 
-    EXPECT_TRUE(reference_thing<zx::vmar>(zx::vmar::root_self()));
+    EXPECT_TRUE(reference_thing<zx::vmar>(*zx::vmar::root_self()));
     EXPECT_EQ(validate_handle(raw), ZX_OK);
 
     // This does not compile:
@@ -409,7 +430,7 @@ static bool job_default_test() {
     zx_handle_t raw = zx_job_default();
     ASSERT_EQ(validate_handle(raw), ZX_OK);
 
-    EXPECT_TRUE(reference_thing<zx::job>(zx::job::default_job()));
+    EXPECT_TRUE(reference_thing<zx::job>(*zx::job::default_job()));
     EXPECT_EQ(validate_handle(raw), ZX_OK);
 
     // This does not compile:
@@ -424,7 +445,7 @@ static bool takes_any_handle(const zx::handle& handle) {
 
 static bool handle_conversion_test() {
     BEGIN_TEST;
-    EXPECT_TRUE(takes_any_handle(zx::unowned_handle::wrap(zx_thread_self())));
+    EXPECT_TRUE(takes_any_handle(*zx::unowned_handle(zx_thread_self())));
     ASSERT_EQ(validate_handle(zx_thread_self()), ZX_OK);
     END_TEST;
 }
@@ -549,6 +570,50 @@ static bool unowned_test() {
     END_TEST;
 }
 
+static bool get_child_test() {
+    BEGIN_TEST;
+
+    {
+        // Verify handle and job overrides of get_child() can find this process
+        // by KOID.
+        zx_info_handle_basic_t info = {};
+        ASSERT_EQ(zx_object_get_info(zx_process_self(), ZX_INFO_HANDLE_BASIC,
+                                     &info, sizeof(info), nullptr, nullptr),
+              ZX_OK);
+
+        zx::handle as_handle;
+        ASSERT_EQ(zx::job::default_job()->get_child(
+                      info.koid, ZX_RIGHT_SAME_RIGHTS, &as_handle), ZX_OK);
+        ASSERT_EQ(validate_handle(as_handle.get()), ZX_OK);
+
+        zx::process as_process;
+        ASSERT_EQ(zx::job::default_job()->get_child(
+                      info.koid, ZX_RIGHT_SAME_RIGHTS, &as_process), ZX_OK);
+        ASSERT_EQ(validate_handle(as_process.get()), ZX_OK);
+    }
+
+    {
+        // Verify handle and thread overrides of get_child() can find this
+        // thread by KOID.
+        zx_info_handle_basic_t info = {};
+        ASSERT_EQ(zx_object_get_info(zx_thread_self(), ZX_INFO_HANDLE_BASIC,
+                                     &info, sizeof(info), nullptr, nullptr),
+                  ZX_OK);
+
+        zx::handle as_handle;
+        ASSERT_EQ(zx::process::self()->get_child(
+                      info.koid, ZX_RIGHT_SAME_RIGHTS, &as_handle), ZX_OK);
+        ASSERT_EQ(validate_handle(as_handle.get()), ZX_OK);
+
+        zx::thread as_thread;
+        ASSERT_EQ(zx::process::self()->get_child(
+                      info.koid, ZX_RIGHT_SAME_RIGHTS, &as_thread), ZX_OK);
+        ASSERT_EQ(validate_handle(as_thread.get()), ZX_OK);
+    }
+
+    END_TEST;
+}
+
 BEGIN_TEST_CASE(libzx_tests)
 RUN_TEST(handle_invalid_test)
 RUN_TEST(handle_close_test)
@@ -567,6 +632,7 @@ RUN_TEST(eventpair_test)
 RUN_TEST(vmar_test)
 RUN_TEST(port_test)
 RUN_TEST(time_test)
+RUN_TEST(time_nanosleep_test)
 RUN_TEST(ticks_test)
 RUN_TEST(thread_self_test)
 RUN_TEST(thread_suspend_test)
@@ -574,6 +640,7 @@ RUN_TEST(process_self_test)
 RUN_TEST(vmar_root_self_test)
 RUN_TEST(job_default_test)
 RUN_TEST(unowned_test)
+RUN_TEST(get_child_test)
 END_TEST_CASE(libzx_tests)
 
 int main(int argc, char** argv) {

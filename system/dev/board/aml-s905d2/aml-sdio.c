@@ -45,12 +45,13 @@ static const pbus_gpio_t sdio_gpios[] = {
 static aml_sd_emmc_config_t config = {
     //PORTA on s905D2 does not support DMA.
     .supports_dma = false,
+    .min_freq = 400000,
+    .max_freq = 25000000,
 };
 
 static const pbus_metadata_t aml_sd_emmc_metadata[] = {
     {
         .type       = DEVICE_METADATA_PRIVATE,
-        .extra      = 0,
         .data       = &config,
         .len        = sizeof(config),
     }
@@ -84,7 +85,7 @@ zx_status_t aml_sdio_init(aml_bus_t* bus) {
     gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_CMD, S905D2_WIFI_SDIO_CMD_FN);
     gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_WAKE_HOST, S905D2_WIFI_SDIO_WAKE_HOST_FN);
 
-    if ((status = pbus_device_add(&bus->pbus, &sdio_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &sdio_dev)) != ZX_OK) {
         zxlogf(ERROR, "aml_sdio_init could not add sdio_dev: %d\n", status);
         return status;
     }

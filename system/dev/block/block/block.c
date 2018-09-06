@@ -15,7 +15,7 @@
 #include <string.h>
 #include <sys/param.h>
 #include <threads.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 #include <zircon/boot/image.h>
 #include <zircon/device/block.h>
 #include <zircon/process.h>
@@ -31,7 +31,7 @@ typedef struct blkdev {
     zx_device_t* parent;
 
     mtx_t lock;
-    completion_t lock_signal;
+    sync_completion_t lock_signal;
 
     uint32_t threadcount;
 
@@ -48,14 +48,14 @@ typedef struct blkdev {
     mtx_t iolock;
     zx_handle_t iovmo;
     zx_status_t iostatus;
-    completion_t iosignal;
+    sync_completion_t iosignal;
     block_op_t* iobop;
 } blkdev_t;
 
 static int blockserver_thread_serve(blkdev_t* bdev) {
     mtx_lock(&bdev->lock);
     // Signal when the blockserver_thread has successfully acquired the lock.
-    completion_signal(&bdev->lock_signal);
+    sync_completion_signal(&bdev->lock_signal);
 
     BlockServer* bs = bdev->bs;
     if (!bdev->dead && (bs != NULL)) {
@@ -89,7 +89,8 @@ static int blockserver_thread(void* arg) {
     return blockserver_thread_serve((blkdev_t*)arg);
 }
 
-static zx_status_t blkdev_get_fifos(blkdev_t* bdev, void* out_buf, size_t out_len) {
+static zx_status_t blkdev_get_fifos(blkdev_t* bdev, void* out_buf, size_t out_len,
+                                    size_t* out_actual) {
     if (out_len < sizeof(zx_handle_t)) {
         return ZX_ERR_INVALID_ARGS;
     }
@@ -112,13 +113,14 @@ static zx_status_t blkdev_get_fifos(blkdev_t* bdev, void* out_buf, size_t out_le
 
     // Use this completion to ensure the block server doesn't race initializing
     // with a call to teardown.
-    completion_reset(&bdev->lock_signal);
+    sync_completion_reset(&bdev->lock_signal);
 
     thrd_t thread;
     if (thrd_create(&thread, blockserver_thread, bdev) == thrd_success) {
         thrd_detach(thread);
-        completion_wait(&bdev->lock_signal, ZX_TIME_INFINITE);
-        return sizeof(zx_handle_t);
+        sync_completion_wait(&bdev->lock_signal, ZX_TIME_INFINITE);
+        *out_actual = sizeof(zx_handle_t);
+        return ZX_OK;
     }
 
     mtx_lock(&bdev->lock);
@@ -159,51 +161,6 @@ done:
     return status;
 }
 
-static zx_status_t blkdev_alloc_txn(blkdev_t* bdev,
-                                const void* in_buf, size_t in_len,
-                                void* out_buf, size_t out_len, size_t* out_actual) {
-    if ((in_len != 0) || (out_len < sizeof(txnid_t))) {
-        return ZX_ERR_INVALID_ARGS;
-    }
-
-    zx_status_t status;
-    mtx_lock(&bdev->lock);
-    if (bdev->bs == NULL) {
-        status = ZX_ERR_BAD_STATE;
-        goto done;
-    }
-
-    if ((status = blockserver_allocate_txn(bdev->bs, out_buf)) != ZX_OK) {
-        goto done;
-    }
-    *out_actual = sizeof(vmoid_t);
-
-done:
-    mtx_unlock(&bdev->lock);
-    return status;
-}
-
-static zx_status_t blkdev_free_txn(blkdev_t* bdev, const void* in_buf,
-                                   size_t in_len) {
-    if (in_len != sizeof(txnid_t)) {
-        return ZX_ERR_INVALID_ARGS;
-    }
-
-    zx_status_t status;
-    mtx_lock(&bdev->lock);
-    if (bdev->bs == NULL) {
-        status = ZX_ERR_BAD_STATE;
-        goto done;
-    }
-
-    txnid_t txnid = *(txnid_t*)in_buf;
-    blockserver_free_txn(bdev->bs, txnid);
-    status = ZX_OK;
-done:
-    mtx_unlock(&bdev->lock);
-    return status;
-}
-
 static zx_status_t blkdev_fifo_close_locked(blkdev_t* bdev) {
     if (bdev->bs != NULL) {
         blockserver_shutdown(bdev->bs);
@@ -224,13 +181,9 @@ static zx_status_t blkdev_ioctl(void* ctx, uint32_t op, const void* cmd,
     blkdev_t* blkdev = ctx;
     switch (op) {
     case IOCTL_BLOCK_GET_FIFOS:
-        return blkdev_get_fifos(blkdev, reply, max);
+        return blkdev_get_fifos(blkdev, reply, max, out_actual);
     case IOCTL_BLOCK_ATTACH_VMO:
         return blkdev_attach_vmo(blkdev, cmd, cmdlen, reply, max, out_actual);
-    case IOCTL_BLOCK_ALLOC_TXN:
-        return blkdev_alloc_txn(blkdev, cmd, cmdlen, reply, max, out_actual);
-    case IOCTL_BLOCK_FREE_TXN:
-        return blkdev_free_txn(blkdev, cmd, cmdlen);
     case IOCTL_BLOCK_FIFO_CLOSE: {
         mtx_lock(&blkdev->lock);
         zx_status_t status = blkdev_fifo_close_locked(blkdev);
@@ -267,7 +220,7 @@ static zx_status_t blkdev_ioctl(void* ctx, uint32_t op, const void* cmd,
 static void block_completion_cb(block_op_t* bop, zx_status_t status) {
     blkdev_t* bdev = bop->cookie;
     bdev->iostatus = status;
-    completion_signal(&bdev->iosignal);
+    sync_completion_signal(&bdev->iosignal);
 }
 
 // Adapter from read/write to block_op_t
@@ -324,9 +277,9 @@ static zx_status_t blkdev_io(blkdev_t* bdev, void* buf, size_t count,
         bop->completion_cb = block_completion_cb;
         bop->cookie = bdev;
 
-        completion_reset(&bdev->iosignal);
+        sync_completion_reset(&bdev->iosignal);
         bdev->bp.ops->queue(bdev->bp.ctx, bop);
-        completion_wait(&bdev->iosignal, ZX_TIME_INFINITE);
+        sync_completion_wait(&bdev->iosignal, ZX_TIME_INFINITE);
 
         if (bdev->iostatus != ZX_OK) {
             return bdev->iostatus;

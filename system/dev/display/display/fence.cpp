@@ -38,7 +38,7 @@ zx_status_t Fence::OnRefArmed(fbl::RefPtr<FenceReference>&& ref) {
         ready_wait_.set_object(event_.get());
         ready_wait_.set_trigger(ZX_EVENT_SIGNALED);
 
-        zx_status_t status = ready_wait_.Begin(async_);
+        zx_status_t status = ready_wait_.Begin(dispatcher_);
         if (status != ZX_OK) {
             return status;
         }
@@ -48,7 +48,14 @@ zx_status_t Fence::OnRefArmed(fbl::RefPtr<FenceReference>&& ref) {
     return ZX_OK;
 }
 
-void Fence::OnReady(async_t* async, async::WaitBase* self,
+void Fence::OnRefDisarmed(FenceReference* ref) {
+    armed_refs_.erase(*ref);
+    if (armed_refs_.is_empty()) {
+        ready_wait_.Cancel();
+    }
+}
+
+void Fence::OnReady(async_dispatcher_t* dispatcher, async::WaitBase* self,
                     zx_status_t status, const zx_packet_signal_t* signal) {
     ZX_DEBUG_ASSERT(status == ZX_OK && (signal->observed & ZX_EVENT_SIGNALED));
 
@@ -59,28 +66,17 @@ void Fence::OnReady(async_t* async, async::WaitBase* self,
     cb_->OnFenceFired(ref.get());
 
     if (!armed_refs_.is_empty()) {
-        ready_wait_.Begin(async_);
+        ready_wait_.Begin(dispatcher_);
     }
 }
 
-// Fences need to be manually reset because of circular references in fences that are
-// being waited upon. Signal fences could still exist after a fence is reset.
-void Fence::Reset() {
-    // The only time a Fence is destroyed with outstanding armed refs is
-    // when the client is torn down, in which case dropping events is fine.
-    if (!armed_refs_.is_empty()) {
-        ready_wait_.Cancel();
-        armed_refs_.clear();
-    }
-    cur_ref_ = nullptr;
-}
-
-Fence::Fence(FenceCallback* cb, async_t* async, uint64_t fence_id, zx::event&& event)
-        : cb_(cb), async_(async), event_(fbl::move(event)) {
+Fence::Fence(FenceCallback* cb, async_dispatcher_t* dispatcher, uint64_t fence_id, zx::event&& event)
+        : cb_(cb), dispatcher_(dispatcher), event_(fbl::move(event)) {
     id = fence_id;
 }
 
 Fence::~Fence() {
+    ZX_DEBUG_ASSERT(armed_refs_.is_empty());
     ZX_DEBUG_ASSERT(ref_count_ == 0);
 }
 
@@ -88,20 +84,18 @@ zx_status_t FenceReference::StartReadyWait() {
     return fence_->OnRefArmed(fbl::RefPtr<FenceReference>(this));
 }
 
-void FenceReference::SetImmediateRelease(fbl::RefPtr<FenceReference>&& fence1,
-                                         fbl::RefPtr<FenceReference>&& fence2) {
-    release_fence1_ = fbl::move(fence1);
-    release_fence2_ = fbl::move(fence2);
+void FenceReference::ResetReadyWait() {
+    fence_->OnRefDisarmed(this);
+}
+
+void FenceReference::SetImmediateRelease(fbl::RefPtr<FenceReference>&& fence) {
+    release_fence_ = fbl::move(fence);
 }
 
 void FenceReference::OnReady() {
-    if (release_fence1_) {
-        release_fence1_->Signal();
-        release_fence1_ = nullptr;
-    }
-    if (release_fence2_) {
-        release_fence2_->Signal();
-        release_fence2_ = nullptr;
+    if (release_fence_) {
+        release_fence_->Signal();
+        release_fence_ = nullptr;
     }
 }
 

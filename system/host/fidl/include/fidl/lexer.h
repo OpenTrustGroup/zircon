@@ -26,7 +26,7 @@ public:
         : source_file_(source_file), identifier_table_(identifier_table) {
         assert(data()[data().size() - 1] == 0);
         current_ = data().data();
-        token_start_ = current_;
+        previous_end_ = token_start_ = current_;
     }
     Lexer(const Lexer&) = delete;
 
@@ -39,7 +39,7 @@ private:
     constexpr char Peek() const;
     void Skip();
     char Consume();
-    StringView Reset();
+    StringView Reset(Token::Kind kind);
     Token Finish(Token::Kind kind);
 
     void SkipWhitespace();
@@ -49,13 +49,14 @@ private:
     Token LexIdentifier();
     Token LexEscapedIdentifier();
     Token LexStringLiteral();
-    Token LexComment();
+    Token LexCommentOrDocComment();
 
     const SourceFile& source_file_;
     const IdentifierTable* identifier_table_;
 
     const char* current_ = nullptr;
     const char* token_start_ = nullptr;
+    const char* previous_end_ = nullptr;
     size_t token_size_ = 0u;
 };
 

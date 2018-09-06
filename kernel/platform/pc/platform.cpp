@@ -8,6 +8,7 @@
 // https://opensource.org/licenses/MIT
 
 #include "platform_p.h"
+
 #include <arch/mmu.h>
 #include <arch/mp.h>
 #include <arch/ops.h>
@@ -16,11 +17,15 @@
 #include <arch/x86/cpu_topology.h>
 #include <arch/x86/mmu.h>
 #include <assert.h>
+#if defined(WITH_DEV_PCIE)
 #include <dev/pcie_bus_driver.h>
+#endif
 #include <dev/uart.h>
 #include <err.h>
 #include <fbl/alloc_checker.h>
 #include <kernel/cmdline.h>
+#include <lib/debuglog.h>
+#include <libzbi/zbi-cpp.h>
 #include <lk/init.h>
 #include <mexec.h>
 #include <platform.h>
@@ -29,7 +34,6 @@
 #include <platform/pc.h>
 #include <platform/pc/acpi.h>
 #include <platform/pc/bootloader.h>
-#include <platform/pc/memory.h>
 #include <platform/pc/smbios.h>
 #include <string.h>
 #include <trace.h>
@@ -38,8 +42,8 @@
 #include <vm/physmap.h>
 #include <vm/pmm.h>
 #include <vm/vm_aspace.h>
-#include <zbi/zbi-cpp.h>
 #include <zircon/boot/image.h>
+#include <zircon/boot/e820.h>
 #include <zircon/boot/multiboot.h>
 #include <zircon/pixelformat.h>
 #include <zircon/types.h>
@@ -157,7 +161,7 @@ static void process_zbi(zbi_header_t* hdr, uintptr_t phys) {
         return;
     }
 
-    printf("zbi: @ %p (%zu bytes)\n", image.Base(), image.Length());
+    printf("zbi: @ %p (%u bytes)\n", image.Base(), image.Length());
 
     result = image.ForEach(process_zbi_item, nullptr);
     if (result != ZBI_RESULT_OK) {
@@ -586,7 +590,7 @@ zx_status_t platform_mexec_patch_zbi(uint8_t* bootdata, const size_t len) {
                                      kNoZbiFlags, (uint8_t*)&bootloader.uart);
         if (result != ZBI_RESULT_OK) {
             printf("mexec: Failed to append uart data to bootdata. len = %lu, "
-                   "section length = %lu, retcode = %d\n", len, 
+                   "section length = %lu, retcode = %d\n", len,
                    sizeof(bootloader.uart), result);
             return ZX_ERR_INTERNAL;
         }
@@ -643,18 +647,27 @@ static void alloc_pages_greater_than(paddr_t lower_bound, size_t count, paddr_t*
     }
 }
 
-void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
-                    uintptr_t new_bootimage_addr, size_t new_bootimage_len,
-                    uintptr_t entry64_addr) {
+static fbl::RefPtr<VmAspace> mexec_identity_aspace;
+
+// Array of pages that are safe to use for the new kernel's page tables.  These must
+// be after where the new boot image will be placed during mexec.  This array is
+// populated in platform_mexec_prep and used in platform_mexec.
+static paddr_t mexec_safe_pages[kTotalPageTableCount];
+
+void platform_mexec_prep(uintptr_t new_bootimage_addr, size_t new_bootimage_len) {
+    DEBUG_ASSERT(!arch_ints_disabled());
+    DEBUG_ASSERT(mp_get_online_mask() == cpu_num_to_mask(BOOT_CPU_ID));
 
     // A hacky way to handle disabling all PCI devices until we have devhost
     // lifecycles implemented.
     // Leaving PCI running will also leave DMA running which may cause memory
     // corruption after boot.
     // Disabling PCI may cause devices to fail to enumerate after boot.
+#ifdef WITH_DEV_PCIE
     if (cmdline_get_bool("kernel.mexec-pci-shutdown", true)) {
         PcieBusDriver::GetDriver()->DisableBus();
     }
+#endif
 
     // This code only handles one L3 and one L4 page table for now. Fail if
     // there are more L2 page tables than can fit in one L3 page table.
@@ -664,32 +677,46 @@ void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
     static_assert(kNumL4PageTables == 1, "Only 1 L4 page table is supported at this time.");
 
     // Identity map the first 4GiB of RAM
-    fbl::RefPtr<VmAspace> identity_aspace =
+    mexec_identity_aspace =
         VmAspace::Create(VmAspace::TYPE_LOW_KERNEL, "x86-64 mexec 1:1");
-    DEBUG_ASSERT(identity_aspace);
+    DEBUG_ASSERT(mexec_identity_aspace);
 
     const uint perm_flags_rwx = ARCH_MMU_FLAG_PERM_READ |
                                 ARCH_MMU_FLAG_PERM_WRITE |
                                 ARCH_MMU_FLAG_PERM_EXECUTE;
     void* identity_address = 0x0;
     paddr_t pa = 0;
-    zx_status_t result = identity_aspace->AllocPhysical("1:1 mapping", kBytesToIdentityMap,
-                                                        &identity_address, 0, pa,
-                                                        VmAspace::VMM_FLAG_VALLOC_SPECIFIC,
-                                                        perm_flags_rwx);
+    zx_status_t result = mexec_identity_aspace->AllocPhysical("1:1 mapping", kBytesToIdentityMap,
+                                                              &identity_address, 0, pa,
+                                                              VmAspace::VMM_FLAG_VALLOC_SPECIFIC,
+                                                              perm_flags_rwx);
     if (result != ZX_OK) {
         panic("failed to identity map low memory");
     }
 
-    vmm_set_active_aspace(reinterpret_cast<vmm_aspace_t*>(identity_aspace.get()));
-
-    paddr_t safe_pages[kTotalPageTableCount];
     alloc_pages_greater_than(new_bootimage_addr + new_bootimage_len + PAGE_SIZE,
-                             kTotalPageTableCount, safe_pages);
+                             kTotalPageTableCount, mexec_safe_pages);
+}
+
+void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
+                    uintptr_t new_bootimage_addr, size_t new_bootimage_len,
+                    uintptr_t entry64_addr) {
+    DEBUG_ASSERT(arch_ints_disabled());
+    DEBUG_ASSERT(mp_get_online_mask() == cpu_num_to_mask(BOOT_CPU_ID));
+
+    // This code only handles one L3 and one L4 page table for now. Fail if
+    // there are more L2 page tables than can fit in one L3 page table.
+    static_assert(kNumL2PageTables <= NO_OF_PT_ENTRIES,
+                  "Kexec identity map size is too large. Only one L3 PTE is supported at this time.");
+    static_assert(kNumL3PageTables == 1, "Only 1 L3 page table is supported at this time.");
+    static_assert(kNumL4PageTables == 1, "Only 1 L4 page table is supported at this time.");
+    DEBUG_ASSERT(mexec_identity_aspace);
+
+    vmm_set_active_aspace(reinterpret_cast<vmm_aspace_t*>(mexec_identity_aspace.get()));
 
     size_t safe_page_id = 0;
-    volatile pt_entry_t* ptl4 = (pt_entry_t*)paddr_to_physmap(safe_pages[safe_page_id++]);
-    volatile pt_entry_t* ptl3 = (pt_entry_t*)paddr_to_physmap(safe_pages[safe_page_id++]);
+    volatile pt_entry_t* ptl4 = (pt_entry_t*)paddr_to_physmap(mexec_safe_pages[safe_page_id++]);
+    volatile pt_entry_t* ptl3 = (pt_entry_t*)paddr_to_physmap(mexec_safe_pages[safe_page_id++]);
 
     // Initialize these to 0
     for (size_t i = 0; i < NO_OF_PT_ENTRIES; i++) {
@@ -698,8 +725,8 @@ void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
     }
 
     for (size_t i = 0; i < kNumL2PageTables; i++) {
-        ptl3[i] = safe_pages[safe_page_id] | X86_KERNEL_PD_FLAGS;
-        volatile pt_entry_t* ptl2 = (pt_entry_t*)paddr_to_physmap(safe_pages[safe_page_id]);
+        ptl3[i] = mexec_safe_pages[safe_page_id] | X86_KERNEL_PD_FLAGS;
+        volatile pt_entry_t* ptl2 = (pt_entry_t*)paddr_to_physmap(mexec_safe_pages[safe_page_id]);
 
         for (size_t j = 0; j < NO_OF_PT_ENTRIES; j++) {
             ptl2[j] = (2 * MB * (i * NO_OF_PT_ENTRIES + j)) | X86_KERNEL_PD_LP_FLAGS;
@@ -715,11 +742,14 @@ void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
 }
 
 void platform_halt_secondary_cpus(void) {
-    // Migrate this thread to the boot cpu.
-    thread_migrate_to_cpu(BOOT_CPU_ID);
+    // Ensure the current thread is pinned to the boot CPU.
+    DEBUG_ASSERT(get_current_thread()->cpu_affinity == cpu_num_to_mask(BOOT_CPU_ID));
 
-    // Send a shutdown interrupt to all the other cores.
-    apic_send_broadcast_ipi(0x00, DELIVERY_MODE_INIT);
+    // "Unplug" online secondary CPUs before halting them.
+    cpu_mask_t primary = cpu_num_to_mask(BOOT_CPU_ID);
+    cpu_mask_t mask = mp_get_online_mask() & ~primary;
+    zx_status_t result = mp_unplug_cpu_mask(mask);
+    DEBUG_ASSERT(result == ZX_OK);
 }
 
 void platform_early_init(void) {
@@ -730,6 +760,9 @@ void platform_early_init(void) {
     /* extract bootloader data while still accessible */
     /* this includes debug uart config, etc. */
     platform_save_bootloader_data();
+
+    /* is the cmdline option to bypass dlog set ? */
+    dlog_bypass_init();
 
     /* get the debug output working */
     pc_init_debug_early();

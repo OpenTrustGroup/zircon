@@ -16,19 +16,11 @@
 #include <kernel/wait.h>
 #include <list.h>
 #include <sys/types.h>
+#include <vm/kstack.h>
 #include <zircon/compiler.h>
 #include <zircon/types.h>
 
 __BEGIN_CDECLS
-
-// debug-enable runtime checks
-#define THREAD_STACK_BOUNDS_CHECK (LK_DEBUGLEVEL > 2)
-#ifndef THREAD_STACK_PADDING_SIZE
-#define THREAD_STACK_PADDING_SIZE 256
-#endif
-
-#define STACK_DEBUG_BYTE (0x99)
-#define STACK_DEBUG_WORD (0x99999999)
 
 enum thread_state {
     THREAD_INITIAL = 0,
@@ -54,11 +46,9 @@ typedef void (*thread_tls_callback_t)(void* tls_value);
 
 // clang-format off
 #define THREAD_FLAG_DETACHED                 (1 << 0)
-#define THREAD_FLAG_FREE_STACK               (1 << 1)
-#define THREAD_FLAG_FREE_STRUCT              (1 << 2)
-#define THREAD_FLAG_REAL_TIME                (1 << 3)
-#define THREAD_FLAG_IDLE                     (1 << 4)
-#define THREAD_FLAG_DEBUG_STACK_BOUNDS_CHECK (1 << 5)
+#define THREAD_FLAG_FREE_STRUCT              (1 << 1)
+#define THREAD_FLAG_REAL_TIME                (1 << 2)
+#define THREAD_FLAG_IDLE                     (1 << 3)
 
 #define THREAD_SIGNAL_KILL                   (1 << 0)
 #define THREAD_SIGNAL_SUSPEND                (1 << 1)
@@ -77,6 +67,16 @@ typedef void (*thread_tls_callback_t)(void* tls_value);
 #define THREAD_MAX_TLS_ENTRY 2
 
 struct vmm_aspace;
+
+// This is a parallel structure to lockdep::ThreadLockState to work around the
+// fact that this header is included by C code and cannot reference C++ types
+// directly. This structure MUST NOT be touched by code outside of the lockdep
+// implementation and MUST be kept in sync with the C++ counterpart.
+typedef struct lockdep_state {
+    uintptr_t acquired_locks;
+    uint16_t reporting_disabled_count;
+    uint8_t last_result;
+} lockdep_state_t;
 
 typedef struct thread {
     int magic;
@@ -127,6 +127,11 @@ typedef struct thread {
     // number of mutexes we currently hold
     int mutexes_held;
 
+#if WITH_LOCK_DEP
+    // state for runtime lock validation when in thread context
+    lockdep_state_t lock_state;
+#endif
+
     // pointer to the kernel address space this thread is associated with
     struct vmm_aspace* aspace;
 
@@ -145,13 +150,7 @@ typedef struct thread {
     // architecture stuff
     struct arch_thread arch;
 
-    // stack stuff
-    void* stack;
-    size_t stack_size;
-    vaddr_t stack_top;
-#if __has_feature(safe_stack)
-    void* unsafe_stack;
-#endif
+    kstack_t stack;
 
     // entry point
     thread_start_routine entry;
@@ -202,7 +201,7 @@ typedef struct thread {
     char name[THREAD_NAME_LENGTH];
 #if WITH_DEBUG_LINEBUFFER
     // buffering for debug/klog output
-    int linebuffer_pos;
+    size_t linebuffer_pos;
     char linebuffer[THREAD_LINEBUFFER_LENGTH];
 #endif
 } thread_t;
@@ -234,8 +233,9 @@ thread_t* thread_create_idle_thread(uint cpu_num);
 void thread_set_name(const char* name);
 void thread_set_priority(thread_t* t, int priority);
 void thread_set_user_callback(thread_t* t, thread_user_callback_t cb);
-thread_t* thread_create(const char* name, thread_start_routine entry, void* arg, int priority, size_t stack_size);
-thread_t* thread_create_etc(thread_t* t, const char* name, thread_start_routine entry, void* arg, int priority, void* stack, void* unsafe_stack, size_t stack_size, thread_trampoline_routine alt_trampoline);
+thread_t* thread_create(const char* name, thread_start_routine entry, void* arg, int priority);
+thread_t* thread_create_etc(thread_t* t, const char* name, thread_start_routine entry, void* arg,
+                            int priority, thread_trampoline_routine alt_trampoline);
 void thread_resume(thread_t*);
 zx_status_t thread_suspend(thread_t*);
 void thread_signal_policy_exception(void);
@@ -264,6 +264,14 @@ void thread_owner_name(thread_t* t, char out_name[THREAD_NAME_LENGTH]);
 
 // print the backtrace on the current thread
 void thread_print_current_backtrace(void);
+
+// append the backtrace of the current thread to the passed in char pointer up
+// to `len' characters.
+// return the number of chars appended.
+size_t thread_append_current_backtrace(char* out, size_t len);
+
+// print the backtrace on the current thread at the given frame
+void thread_print_current_backtrace_at_frame(void* caller_frame);
 
 // print the backtrace of the passed in thread, if possible
 zx_status_t thread_print_backtrace(thread_t* t);
@@ -331,11 +339,6 @@ void set_current_thread(thread_t*);
 // scheduler lock
 extern spin_lock_t thread_lock;
 
-#define THREAD_LOCK(state)         \
-    spin_lock_saved_state_t state; \
-    spin_lock_irqsave(&thread_lock, state)
-#define THREAD_UNLOCK(state) spin_unlock_irqrestore(&thread_lock, state)
-
 static inline bool thread_lock_held(void) {
     return spin_lock_held(&thread_lock);
 }
@@ -394,7 +397,7 @@ static inline void thread_preempt_disable(void) {
 // thread_preempt_reenable() decrements the preempt_disable counter.  See
 // thread_preempt_disable().
 static inline void thread_preempt_reenable(void) {
-    DEBUG_ASSERT(!arch_in_int_handler());
+    DEBUG_ASSERT(!arch_blocking_disallowed());
     DEBUG_ASSERT(thread_preempt_disable_count() > 0);
 
     thread_t* current_thread = get_current_thread();
@@ -443,7 +446,7 @@ static inline void thread_resched_disable(void) {
 // thread_resched_reenable() decrements the preempt_disable counter.  See
 // thread_resched_disable().
 static inline void thread_resched_reenable(void) {
-    DEBUG_ASSERT(!arch_in_int_handler());
+    DEBUG_ASSERT(!arch_blocking_disallowed());
     DEBUG_ASSERT(thread_resched_disable_count() > 0);
 
     thread_t* current_thread = get_current_thread();
@@ -466,7 +469,7 @@ static inline void thread_resched_reenable(void) {
 // except that it does not need to be called with thread_lock held.
 static inline void thread_preempt_set_pending(void) {
     DEBUG_ASSERT(arch_ints_disabled());
-    DEBUG_ASSERT(arch_in_int_handler());
+    DEBUG_ASSERT(arch_blocking_disallowed());
     thread_t* current_thread = get_current_thread();
     DEBUG_ASSERT(thread_preempt_disable_count() > 0);
 
@@ -478,22 +481,6 @@ __END_CDECLS
 #ifdef __cplusplus
 
 #include <fbl/macros.h>
-
-class AutoThreadLock {
-public:
-    AutoThreadLock() TA_ACQ(thread_lock) {
-        spin_lock_irqsave(&thread_lock, state_);
-    }
-
-    ~AutoThreadLock() TA_REL(thread_lock) {
-        spin_unlock_irqrestore(&thread_lock, state_);
-    }
-
-    DISALLOW_COPY_ASSIGN_AND_MOVE(AutoThreadLock);
-
-private:
-    spin_lock_saved_state_t state_;
-};
 
 // AutoReschedDisable is an RAII helper for disabling rescheduling
 // using thread_resched_disable()/thread_resched_reenable().

@@ -67,6 +67,16 @@ static bool gic_is_valid_interrupt(unsigned int vector, uint32_t flags) {
     return (vector < gic_max_int);
 }
 
+static uint32_t gic_get_base_vector(void) {
+    // ARM Generic Interrupt Controller v3&4 chapter 2.2
+    // INTIDs 0-15 are local CPU interrupts
+    return 16;
+}
+
+static uint32_t gic_get_max_vector(void) {
+    return gic_max_int;
+}
+
 static void gic_wait_for_rwp(uint64_t reg) {
     int count = 1000000;
     while (GICREG(0, reg) & (1 << 31)) {
@@ -138,6 +148,8 @@ static void gic_init_percpu_early(void) {
 static zx_status_t gic_init(void) {
     LTRACE_ENTRY;
 
+    DEBUG_ASSERT(arch_ints_disabled());
+
     uint pidr2 = GICREG(0, GICD_PIDR2);
     uint rev = BITS_SHIFT(pidr2, 7, 4);
     if (rev != GICV3 && rev != GICV4)
@@ -166,7 +178,14 @@ static zx_status_t gic_init(void) {
     GICREG(0, GICD_CTLR) = CTLR_ENALBE_G0 | CTLR_ENABLE_G1NS | CTLR_ARE_S;
     gic_wait_for_rwp(GICD_CTLR);
 
-    // set spi to target cpu 0. must do this after ARE enable
+    // ensure we're running on cpu 0 and that cpu 0 corresponds to affinity 0.0.0.0
+    DEBUG_ASSERT(arch_curr_cpu_num() == 0);
+    DEBUG_ASSERT(arch_cpu_num_to_cpu_id(0u) == 0);  // AFF0
+    DEBUG_ASSERT(arch_cpu_num_to_cluster_id(0u) == 0);  // AFF1
+
+    // TODO(maniscalco): If/when we support AFF2/AFF3, be sure to assert those here.
+
+    // set spi to target cpu 0 (affinity 0.0.0.0). must do this after ARE enable
     uint max_cpu = BITS_SHIFT(typer, 7, 5);
     if (max_cpu > 0) {
         for (i = 32; i < gic_max_int; i++) {
@@ -206,16 +225,20 @@ static zx_status_t arm_gic_sgi(u_int irq, u_int flags, u_int cpu_mask) {
             cpu += 1;
         }
 
+        // Without the RS field set, we can only deal with the first
+        // 16 cpus within a single cluster
+        DEBUG_ASSERT((mask & 0xffff) == mask);
+
         val = ((irq & 0xf) << 24) |
               ((cluster & 0xff) << 16) |
-              (mask & 0xff);
+              (mask & 0xffff);
 
         gic_write_sgi1r(val);
         cluster += 1;
         // Work around
         if (mx8_gpr_virt) {
             uint32_t regVal;
-            // peinding irq32 to wakeup core
+            // pending irq32 to wakeup core
             regVal = *(volatile uint32_t *)(mx8_gpr_virt + 0x4);
             regVal |= (1 << 12);
             *(volatile uint32_t *)(mx8_gpr_virt + 0x4) = regVal;
@@ -374,12 +397,94 @@ static void gic_shutdown(void) {
     GICREG(0, GICD_CTLR) = 0;
 }
 
+// Returns true if any PPIs are enabled on the calling CPU.
+static bool is_ppi_enabled(void) {
+    DEBUG_ASSERT(arch_ints_disabled());
+
+    // PPIs are 16-31.
+    uint32_t mask = 0xffff0000;
+
+    uint cpu_num = arch_curr_cpu_num();
+    uint32_t reg = GICREG(0, GICR_ICENABLER0(cpu_num));
+    if ((reg & mask) != 0) {
+        return true;
+    }
+
+    return false;
+}
+
+// Returns true if any SPIs are enabled on the calling CPU.
+static bool is_spi_enabled(void) {
+    DEBUG_ASSERT(arch_ints_disabled());
+
+    uint cpu_num = arch_curr_cpu_num();
+
+    // TODO(maniscalco): If/when we support AFF2/AFF3, update the mask below.
+    uint aff0 = arch_cpu_num_to_cpu_id(cpu_num);
+    uint aff1 = arch_cpu_num_to_cluster_id(cpu_num);
+    uint64_t aff_mask = (aff1 << 8) + aff0;
+
+    // Check each SPI to see if it's routed to this CPU.
+    for (uint i = 32u; i < gic_max_int; ++i) {
+        if ((GICREG64(0, GICD_IROUTER(i)) & aff_mask) != 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void gic_shutdown_cpu(void) {
+    DEBUG_ASSERT(arch_ints_disabled());
+
+    // Before we shutdown the GIC, make sure we've migrated/disabled any and all peripheral
+    // interrupts targeted at this CPU (PPIs and SPIs).
+    DEBUG_ASSERT(!is_ppi_enabled());
+    DEBUG_ASSERT(!is_spi_enabled());
+    // TODO(maniscalco): If/when we start using LPIs, make sure none are targeted at this CPU.
+
+    // Disable group 1 interrupts at the CPU interface.
+    gic_write_igrpen(0);
+}
+
+static bool gic_msi_is_supported(void) {
+    return false;
+}
+
+static bool gic_msi_supports_masking(void) {
+    return false;
+}
+
+static void gic_msi_mask_unmask(const msi_block_t* block, uint msi_id, bool mask) {
+    PANIC_UNIMPLEMENTED;
+}
+
+static zx_status_t gic_msi_alloc_block(uint requested_irqs,
+                                bool can_target_64bit,
+                                bool is_msix,
+                                msi_block_t* out_block) {
+    PANIC_UNIMPLEMENTED;
+}
+
+static void gic_msi_free_block(msi_block_t* block) {
+    PANIC_UNIMPLEMENTED;
+}
+
+static void gic_msi_register_handler(const msi_block_t* block,
+                                     uint msi_id,
+                                     int_handler handler,
+                                     void* ctx) {
+    PANIC_UNIMPLEMENTED;
+}
+
 static const struct pdev_interrupt_ops gic_ops = {
     .mask = gic_mask_interrupt,
     .unmask = gic_unmask_interrupt,
     .configure = gic_configure_interrupt,
     .get_config = gic_get_interrupt_config,
     .is_valid = gic_is_valid_interrupt,
+    .get_base_vector = gic_get_base_vector,
+    .get_max_vector = gic_get_max_vector,
     .remap = gic_remap_interrupt,
     .send_ipi = gic_send_ipi,
     .init_percpu_early = gic_init_percpu_early,
@@ -387,6 +492,13 @@ static const struct pdev_interrupt_ops gic_ops = {
     .handle_irq = gic_handle_irq,
     .handle_fiq = gic_handle_fiq,
     .shutdown = gic_shutdown,
+    .shutdown_cpu = gic_shutdown_cpu,
+    .msi_is_supported = gic_msi_is_supported,
+    .msi_supports_masking = gic_msi_supports_masking,
+    .msi_mask_unmask = gic_msi_mask_unmask,
+    .msi_alloc_block = gic_msi_alloc_block,
+    .msi_free_block = gic_msi_free_block,
+    .msi_register_handler = gic_msi_register_handler,
 };
 
 static void arm_gic_v3_init(const void* driver_data, uint32_t length) {

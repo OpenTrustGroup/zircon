@@ -26,12 +26,12 @@ const char* TestFsRoot() {
 } // namespace runtests
 
 int main(int argc, char** argv) {
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     if (loop.StartThread() != ZX_OK) {
         fprintf(stderr, "Error: Cannot initialize local memfs loop\n");
         return -1;
     }
-    if (memfs_install_at(loop.async(), runtests::kMemFsRoot) != ZX_OK) {
+    if (memfs_install_at(loop.dispatcher(), runtests::kMemFsRoot) != ZX_OK) {
         fprintf(stderr, "Error: Cannot install local memfs\n");
         return -1;
     }

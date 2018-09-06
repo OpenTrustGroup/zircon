@@ -4,9 +4,6 @@
 
 #include <inttypes.h>
 #include <limits.h>
-#include <zircon/syscalls.h>
-#include <zircon/threads.h>
-#include <unittest/unittest.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +11,11 @@
 #include <threads.h>
 #include <time.h>
 #include <unistd.h>
-
+#include <unittest/unittest.h>
+#include <zircon/syscalls.h>
+#include <zircon/threads.h>
+#include <zircon/time.h>
+#include <zircon/types.h>
 
 static bool test_futex_wait_value_mismatch() {
     BEGIN_TEST;
@@ -42,7 +43,7 @@ static bool test_futex_wait_timeout_elapsed() {
         zx_time_t now = zx_clock_get_monotonic();
         zx_status_t rc = zx_futex_wait(&futex_value, 0, zx_deadline_after(kRelativeDeadline));
         ASSERT_EQ(rc, ZX_ERR_TIMED_OUT, "wait should time out");
-        zx_time_t elapsed = zx_clock_get_monotonic() - now;
+        zx_duration_t elapsed = zx_time_sub_time(zx_clock_get_monotonic(), now);
         if (elapsed < kRelativeDeadline) {
             unittest_printf("\nelapsed %" PRIu64
                             " < kRelativeDeadline: %" PRIu64 "\n",
@@ -62,6 +63,21 @@ static bool test_futex_wait_bad_address() {
     END_TEST;
 }
 
+// Poll until the kernel says that the given thread is blocked on a futex.
+static bool wait_until_blocked_on_some_futex(zx_handle_t thread) {
+    for (;;) {
+        zx_info_thread_t info;
+        ASSERT_EQ(zx_object_get_info(thread, ZX_INFO_THREAD, &info,
+                                     sizeof(info), nullptr, nullptr), ZX_OK);
+        if (info.state == ZX_THREAD_STATE_RUNNING) {
+            zx_nanosleep(zx_deadline_after(ZX_USEC(100)));
+            continue;
+        }
+        ASSERT_EQ(info.state, ZX_THREAD_STATE_BLOCKED_FUTEX);
+        return true;
+    }
+}
+
 // This starts a thread which waits on a futex.  We can do futex_wake()
 // operations and then test whether or not this thread has been woken up.
 class TestThread {
@@ -77,10 +93,12 @@ public:
         }
         // Note that this could fail if futex_wait() gets a spurious wakeup.
         EXPECT_EQ(state_, STATE_ABOUT_TO_WAIT, "wrong state");
-        // This should be long enough for wakeup_test_thread() to enter
-        // futex_wait() and add the thread to the wait queue.
-        struct timespec wait_time = {0, 100 * 1000000 /* nanoseconds */};
-        EXPECT_EQ(nanosleep(&wait_time, NULL), 0, "Error in nanosleep");
+
+        // We should only do this after state_ is STATE_ABOUT_TO_WAIT,
+        // otherwise it could return when the thread has temporarily
+        // blocked on a libc-internal futex.
+        EXPECT_TRUE(wait_until_blocked_on_some_futex(get_thread_handle()));
+
         // This could also fail if futex_wait() gets a spurious wakeup.
         EXPECT_EQ(state_, STATE_ABOUT_TO_WAIT, "wrong state");
     }
@@ -166,13 +184,6 @@ private:
 };
 
 void check_futex_wake(volatile int32_t* futex_addr, int nwake) {
-    // Change *futex_addr just in case our nanosleep() call did not wait
-    // long enough for futex_wait() to enter the wait queue, although that
-    // is unlikely.  This prevents the test from hanging if that happens,
-    // though the test will fail because futex_wait() will not return a
-    // success result.
-    (*futex_addr)++;
-
     zx_status_t rc = zx_futex_wake(const_cast<int32_t*>(futex_addr), nwake);
     EXPECT_EQ(rc, ZX_OK, "error during futex wait");
 }
@@ -455,7 +466,7 @@ static bool test_futex_misaligned() {
 }
 
 static void log(const char* str) {
-    uint64_t now = zx_clock_get_monotonic();
+    zx_time_t now = zx_clock_get_monotonic();
     unittest_printf("[%08" PRIu64 ".%08" PRIu64 "]: %s",
                     now / 1000000000, now % 1000000000, str);
 }

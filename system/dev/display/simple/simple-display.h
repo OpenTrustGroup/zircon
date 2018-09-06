@@ -22,25 +22,29 @@ class SimpleDisplay : public DeviceType,
                       public ddk::DisplayControllerProtocol<SimpleDisplay> {
 public:
     SimpleDisplay(zx_device_t* parent, zx_handle_t vmo,
+                  uintptr_t framebuffer, uint64_t framebuffer_size,
                   uint32_t width, uint32_t height,
                   uint32_t stride, zx_pixel_format_t format);
+    ~SimpleDisplay();
 
     void DdkUnbind();
     void DdkRelease();
     zx_status_t Bind(const char* name, fbl::unique_ptr<SimpleDisplay>* controller_ptr);
 
     void SetDisplayControllerCb(void* cb_ctx, display_controller_cb_t* cb);
-    zx_status_t GetDisplayInfo(uint64_t display_id, display_info_t* info);
     zx_status_t ImportVmoImage(image_t* image, const zx::vmo& vmo, size_t offset);
     void ReleaseImage(image_t* image);
     void CheckConfiguration(const display_config_t** display_config,
-                            uint32_t** layer_cfg_result, uint32_t display_count);
+                            uint32_t* display_cfg_result, uint32_t** layer_cfg_result,
+                            uint32_t display_count);
     void ApplyConfiguration(const display_config_t** display_config, uint32_t display_count);
     uint32_t ComputeLinearStride(uint32_t width, zx_pixel_format_t format);
     zx_status_t AllocateVmo(uint64_t size, zx_handle_t* vmo_out);
 
 private:
     zx::vmo framebuffer_handle_;
+    uintptr_t framebuffer_;
+    uint64_t framebuffer_size_;
     zx_koid_t framebuffer_koid_;
 
     uint32_t width_;

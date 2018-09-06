@@ -24,8 +24,6 @@
 #include "vmexit_priv.h"
 #include "vmx_cpu_state_priv.h"
 
-extern uint8_t _gdt[];
-
 static constexpr uint32_t kInterruptInfoValid = 1u << 31;
 static constexpr uint32_t kInterruptInfoDeliverErrorCode = 1u << 11;
 static constexpr uint32_t kInterruptTypeHardwareException = 3u << 8;
@@ -240,7 +238,7 @@ static uint64_t ept_pointer(paddr_t pml4_address) {
     return
         // Physical address of the PML4 page, page aligned.
         pml4_address |
-        // Use write back memory.
+        // Use write-back memory type for paging structures.
         VMX_MEMORY_TYPE_WRITE_BACK << 0 |
         // Page walk length of 4 (defined as N minus 1).
         3u << 3;
@@ -486,7 +484,7 @@ static zx_status_t vmcs_init(paddr_t vmcs_address, uint16_t vpid, uintptr_t entr
     vmcs.Write(VmcsFieldXX::HOST_FS_BASE, read_msr(X86_MSR_IA32_FS_BASE));
     vmcs.Write(VmcsFieldXX::HOST_GS_BASE, read_msr(X86_MSR_IA32_GS_BASE));
     vmcs.Write(VmcsFieldXX::HOST_TR_BASE, reinterpret_cast<uint64_t>(&percpu->default_tss));
-    vmcs.Write(VmcsFieldXX::HOST_GDTR_BASE, reinterpret_cast<uint64_t>(_gdt));
+    vmcs.Write(VmcsFieldXX::HOST_GDTR_BASE, reinterpret_cast<uint64_t>(gdt_get()));
     vmcs.Write(VmcsFieldXX::HOST_IDTR_BASE, reinterpret_cast<uint64_t>(idt_get_readonly()));
     vmcs.Write(VmcsFieldXX::HOST_IA32_SYSENTER_ESP, 0);
     vmcs.Write(VmcsFieldXX::HOST_IA32_SYSENTER_EIP, 0);
@@ -675,7 +673,7 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
 
     VmxRegion* region = vcpu->vmcs_page_.VirtualAddress<VmxRegion>();
     region->revision_id = vmx_info.revision_id;
-    zx_paddr_t table = gpas->aspace()->arch_aspace().arch_table_phys();
+    zx_paddr_t table = gpas->arch_aspace()->arch_table_phys();
     status = vmcs_init(vcpu->vmcs_page_.PhysicalAddress(), vpid, entry, guest->MsrBitmapsAddress(),
                        table, &vcpu->vmx_state_, &vcpu->host_msr_page_, &vcpu->guest_msr_page_);
     if (status != ZX_OK)
@@ -689,9 +687,10 @@ Vcpu::Vcpu(Guest* guest, uint16_t vpid, const thread_t* thread)
     : guest_(guest), vpid_(vpid), thread_(thread), running_(false), vmx_state_(/* zero-init */) {}
 
 Vcpu::~Vcpu() {
-    if (!vmcs_page_.IsAllocated())
+    if (!vmcs_page_.IsAllocated()) {
         return;
-
+    }
+    timer_cancel(&local_apic_state_.timer);
     // The destructor may be called from a different thread, therefore we must
     // pin the current thread to the same CPU as the VCPU.
     AutoPin pin(vpid_);
@@ -770,10 +769,6 @@ void vmx_exit(VmxState* vmx_state) {
     seg_sel_t selector = TSS_SELECTOR(arch_curr_cpu_num());
     x86_clear_tss_busy(selector);
     x86_ltr(selector);
-
-    // Reload the interrupt descriptor table in order to restore its limit. VMX
-    // always restores it with a limit of 0xffff, which is too large.
-    idt_load(idt_get_readonly());
 }
 
 zx_status_t Vcpu::Interrupt(uint32_t vector) {
@@ -806,14 +801,14 @@ static void register_copy(Out* out, const In& in) {
     out->r15 = in.r15;
 }
 
-zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, size_t len) const {
+zx_status_t Vcpu::ReadState(uint32_t kind, void* buf, size_t len) const {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
     case ZX_VCPU_STATE: {
         if (len != sizeof(zx_vcpu_state_t))
             break;
-        auto state = static_cast<zx_vcpu_state_t*>(buffer);
+        auto state = static_cast<zx_vcpu_state_t*>(buf);
         register_copy(state, vmx_state_.guest_state);
         AutoVmcs vmcs(vmcs_page_.PhysicalAddress());
         state->rsp = vmcs.Read(VmcsFieldXX::GUEST_RSP);
@@ -824,14 +819,14 @@ zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, size_t len) const {
     return ZX_ERR_INVALID_ARGS;
 }
 
-zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, size_t len) {
+zx_status_t Vcpu::WriteState(uint32_t kind, const void* buf, size_t len) {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
     switch (kind) {
     case ZX_VCPU_STATE: {
         if (len != sizeof(zx_vcpu_state_t))
             break;
-        auto state = static_cast<const zx_vcpu_state_t*>(buffer);
+        auto state = static_cast<const zx_vcpu_state_t*>(buf);
         register_copy(&vmx_state_.guest_state, *state);
         AutoVmcs vmcs(vmcs_page_.PhysicalAddress());
         vmcs.Write(VmcsFieldXX::GUEST_RSP, state->rsp);
@@ -846,7 +841,7 @@ zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, size_t len) {
     case ZX_VCPU_IO: {
         if (len != sizeof(zx_vcpu_io_t))
             break;
-        auto io = static_cast<const zx_vcpu_io_t*>(buffer);
+        auto io = static_cast<const zx_vcpu_io_t*>(buf);
         memcpy(&vmx_state_.guest_state.rax, io->data, io->access_size);
         return ZX_OK;
     }

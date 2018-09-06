@@ -26,7 +26,7 @@
 #include <object/virtual_interrupt_dispatcher.h>
 #include <object/iommu_dispatcher.h>
 #include <object/process_dispatcher.h>
-#include <object/resources.h>
+#include <object/resource.h>
 #include <object/vm_object_dispatcher.h>
 #include <zxcpp/new.h>
 
@@ -94,10 +94,11 @@ zx_status_t sys_vmo_create_physical(zx_handle_t hrsrc, uintptr_t paddr, size_t s
                                     user_out_handle* out) {
     LTRACEF("size 0x%zu\n", size);
 
-    // TODO: attempting to create a physical VMO that points to memory should be an error
-
+    // Memory should be subtracted from the PhysicalAspace allocators, so it's
+    // safe to assume that if the caller has access to a resource for this specified
+    // region of MMIO space then it is safe to allow the vmo to be created.
     zx_status_t status;
-    if ((status = validate_resource_mmio(hrsrc, paddr, size)) < 0) {
+    if ((status = validate_resource_mmio(hrsrc, paddr, size)) != ZX_OK) {
         return status;
     }
 
@@ -114,8 +115,9 @@ zx_status_t sys_vmo_create_physical(zx_handle_t hrsrc, uintptr_t paddr, size_t s
     fbl::RefPtr<Dispatcher> dispatcher;
     zx_rights_t rights;
     result = VmObjectDispatcher::Create(fbl::move(vmo), &dispatcher, &rights);
-    if (result != ZX_OK)
+    if (result != ZX_OK) {
         return result;
+    }
 
     // create a handle and attach the dispatcher to it
     return out->make(fbl::move(dispatcher), rights);
@@ -224,10 +226,9 @@ zx_status_t sys_iommu_create(zx_handle_t rsrc_handle, uint32_t type,
 #include <arch/x86/descriptor.h>
 #include <arch/x86/ioport.h>
 
-zx_status_t sys_mmap_device_io(zx_handle_t hrsrc, uint32_t io_addr, uint32_t len) {
-    // TODO(ZX-971): finer grained validation
+zx_status_t sys_ioports_request(zx_handle_t hrsrc, uint16_t io_addr, uint32_t len) {
     zx_status_t status;
-    if ((status = validate_resource(hrsrc, ZX_RSRC_KIND_ROOT)) < 0) {
+    if ((status = validate_resource_ioport(hrsrc, io_addr, len)) != ZX_OK) {
         return status;
     }
 
@@ -236,7 +237,7 @@ zx_status_t sys_mmap_device_io(zx_handle_t hrsrc, uint32_t io_addr, uint32_t len
     return IoBitmap::GetCurrent().SetIoBitmap(io_addr, len, 1);
 }
 #else
-zx_status_t sys_mmap_device_io(zx_handle_t hrsrc, uint32_t io_addr, uint32_t len) {
+zx_status_t sys_ioports_request(zx_handle_t hrsrc, uint16_t io_addr, uint32_t len) {
     // doesn't make sense on non-x86
     return ZX_ERR_NOT_SUPPORTED;
 }
@@ -317,6 +318,7 @@ zx_status_t sys_bti_pin(zx_handle_t bti, uint32_t options, zx_handle_t vmo, uint
     // Convert requested permissions and check against VMO rights
     uint32_t iommu_perms = 0;
     bool compress_results = false;
+    bool contiguous = false;
     if (options & ZX_BTI_PERM_READ) {
         if (!(vmo_rights & ZX_RIGHT_READ)) {
             return ZX_ERR_ACCESS_DENIED;
@@ -338,9 +340,15 @@ zx_status_t sys_bti_pin(zx_handle_t bti, uint32_t options, zx_handle_t vmo, uint
         iommu_perms |= IOMMU_FLAG_PERM_EXECUTE;
         options &= ~ZX_BTI_PERM_EXECUTE;
     }
-    if (options & ZX_BTI_COMPRESS) {
-        compress_results = true;
-        options &= ~ZX_BTI_COMPRESS;
+    if (!((options & ZX_BTI_COMPRESS) && (options & ZX_BTI_CONTIGUOUS))) {
+        if (options & ZX_BTI_COMPRESS) {
+            compress_results = true;
+            options &= ~ZX_BTI_COMPRESS;
+        }
+        if (options & ZX_BTI_CONTIGUOUS && vmo_dispatcher->vmo()->is_contiguous()) {
+            contiguous = true;
+            options &= ~ZX_BTI_CONTIGUOUS;
+        }
     }
     if (options) {
         return ZX_ERR_INVALID_ARGS;
@@ -362,7 +370,7 @@ zx_status_t sys_bti_pin(zx_handle_t bti, uint32_t options, zx_handle_t vmo, uint
     }
 
     status = static_cast<PinnedMemoryTokenDispatcher*>(new_pmt.get())
-            ->EncodeAddrs(compress_results, mapped_addrs.get(), addrs_count);
+            ->EncodeAddrs(compress_results, contiguous, mapped_addrs.get(), addrs_count);
     if (status != ZX_OK) {
         return status;
     }
@@ -416,9 +424,8 @@ zx_status_t sys_interrupt_create(zx_handle_t src_obj, uint32_t src_num,
 
     // resource not required for virtual interrupts
     if (!(options & ZX_INTERRUPT_VIRTUAL)) {
-        // TODO(ZX-971): finer grained validation
         zx_status_t status;
-        if ((status = validate_resource(src_obj, ZX_RSRC_KIND_ROOT)) < 0) {
+        if ((status = validate_resource_irq(src_obj, src_num)) != ZX_OK) {
             return status;
         }
     }

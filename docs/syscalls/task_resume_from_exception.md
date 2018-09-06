@@ -45,6 +45,10 @@ pass **ZX_RESUME_TRY_NEXT** for the options.
 zx_status_t status = zx_task_resume_from_exception(thread, ZX_RESUME_TRY_NEXT);
 ```
 
+## RIGHTS
+
+TODO(ZX-2399)
+
 ## RETURN VALUE
 
 **task_resume_from_exception**() returns **ZX_OK** on success.
@@ -52,14 +56,18 @@ In the event of failure, a negative error value is returned.
 
 ## ERRORS
 
-**ZX_ERR_BAD_HANDLE** *handle* is not a valid handle.
+**ZX_ERR_ACCESS_DENIED** *port* is not the port from which the exception
+report was sent.
 
-**ZX_ERR_WRONG_TYPE** *handle* is not a thread handle.
+**ZX_ERR_BAD_HANDLE** Either *task* or *port* is not a valid handle.
+
+**ZX_ERR_WRONG_TYPE** Either *task* is not a thread handle,
+or *port* is not a port handle.
 
 **ZX_ERR_BAD_STATE**  The task is not in a state where resuming is possible,
 for example, it is dead or there is not an exception to resume from.
 
-**ZX_ERR_INVALID_ARGS** *options* is valid.
+**ZX_ERR_INVALID_ARGS** *options* is not valid.
 
 ## LIMITATIONS
 
@@ -67,4 +75,4 @@ Currently only thread handles are supported.
 
 ## SEE ALSO
 
-[task_bind_exceptino_port](task_bind_exception_port.md),
+[task_bind_exception_port](task_bind_exception_port.md),

@@ -9,10 +9,14 @@ MODULE := $(LOCAL_DIR)
 MODULE_TYPE := userapp
 MODULE_GROUP := misc
 
-MODULE_SRCS += $(LOCAL_DIR)/biotime.c
+MODULE_SRCS += $(LOCAL_DIR)/biotime.cpp
 
 MODULE_STATIC_LIBS := \
-    system/ulib/sync
+    system/ulib/fbl \
+    system/ulib/perftest \
+    system/ulib/sync \
+    system/ulib/zircon-internal \
+    system/ulib/zxcpp \
 
 MODULE_LIBS := \
     system/ulib/fdio \

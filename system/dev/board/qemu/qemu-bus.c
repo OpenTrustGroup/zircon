@@ -21,6 +21,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/assert.h>
 
+#include "qemu-test.h"
 #include "qemu-virt.h"
 
 typedef struct {
@@ -147,14 +148,19 @@ static zx_status_t qemu_bus_bind(void* ctx, zx_device_t* parent) {
         .bti_count = countof(pci_btis),
     };
 
-    status = pbus_device_add(&bus->pbus, &pci_dev, 0);
+    status = pbus_device_add(&bus->pbus, &pci_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "qemu_bus_bind could not add pci_dev: %d\n", status);
     }
 
-    status = pbus_device_add(&bus->pbus, &pl031_dev, 0);
+    status = pbus_device_add(&bus->pbus, &pl031_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "qemu_bus_bind could not add pl031: %d\n", status);
+    }
+
+    status = qemu_test_init(&bus->pbus);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "qemu_bus_bind: qemu_test_init failed: %d\n", status);
     }
 
     return ZX_OK;

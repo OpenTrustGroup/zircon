@@ -14,6 +14,12 @@ bool IsIdentifierBody(char c) {
     return isalnum(c) || c == '_';
 }
 
+// IsIdentifierValid disallows identifiers (escaped, and unescaped) from
+// starting or ending with underscore.
+bool IsIdentifierValid(StringView source_data) {
+    return source_data[0] != '_' && source_data[source_data.size() - 1] != '_';
+}
+
 bool IsNumericLiteralBody(char c) {
     switch (c) {
     case '0':
@@ -67,15 +73,22 @@ char Lexer::Consume() {
     return current;
 }
 
-StringView Lexer::Reset() {
+StringView Lexer::Reset(Token::Kind kind) {
     auto data = StringView(token_start_, token_size_);
+    if (kind != Token::Kind::kComment) {
+        previous_end_ = token_start_ + token_size_;
+    }
     token_start_ = current_;
     token_size_ = 0u;
     return data;
 }
 
 Token Lexer::Finish(Token::Kind kind) {
-    return Token(SourceLocation(Reset(), source_file_), kind);
+    StringView previous(previous_end_, token_start_ - previous_end_);
+    StringView current(token_start_, token_size_);
+    SourceLocation previous_location(previous, source_file_);
+    return Token(previous_location,
+                 SourceLocation(Reset(kind), source_file_), kind);
 }
 
 Token Lexer::LexEndOfStream() {
@@ -91,16 +104,28 @@ Token Lexer::LexNumericLiteral() {
 Token Lexer::LexIdentifier() {
     while (IsIdentifierBody(Peek()))
         Consume();
-    return identifier_table_->MakeIdentifier(Reset(), source_file_, /* escaped */ false);
+    StringView previous(previous_end_, token_start_ - previous_end_);
+    SourceLocation previous_end(previous, source_file_);
+    StringView identifier_data = Reset(Token::Kind::kNotAToken);
+    if (!IsIdentifierValid(identifier_data))
+        return Finish(Token::Kind::kNotAToken);
+    return identifier_table_->MakeIdentifier(
+        previous_end, identifier_data, source_file_, /* escaped */ false);
 }
 
 Token Lexer::LexEscapedIdentifier() {
     // Reset() to drop the initial @ from the identifier.
-    Reset();
+    Reset(Token::Kind::kComment);
 
     while (IsIdentifierBody(Peek()))
         Consume();
-    return identifier_table_->MakeIdentifier(Reset(), source_file_, /* escaped */ true);
+    StringView previous(previous_end_, token_start_ - previous_end_);
+    SourceLocation previous_end(previous, source_file_);
+    StringView identifier_data = Reset(Token::Kind::kNotAToken);
+    if (!IsIdentifierValid(identifier_data))
+        return Finish(Token::Kind::kNotAToken);
+    return identifier_table_->MakeIdentifier(
+        previous_end, identifier_data, source_file_, /* escaped */ true);
 }
 
 Token Lexer::LexStringLiteral() {
@@ -123,10 +148,22 @@ Token Lexer::LexStringLiteral() {
     }
 }
 
-Token Lexer::LexComment() {
+Token Lexer::LexCommentOrDocComment() {
     // Consume the second /.
     assert(Peek() == '/');
     Consume();
+
+    // Check if it's a Doc Comment
+    auto comment_type = Token::Kind::kComment;
+    if (Peek() == '/') {
+        comment_type = Token::Kind::kDocComment;
+        Consume();
+        // Anything with more than 3 slashes is a likely a section
+        // break comment
+        if (Peek() == '/') {
+          comment_type = Token::Kind::kComment;
+        }
+    }
 
     // Lexing a C++-style // comment. Go to the end of the line or
     // file.
@@ -134,7 +171,7 @@ Token Lexer::LexComment() {
         switch (Peek()) {
         case 0:
         case '\n':
-            return Finish(Token::Kind::kComment);
+          return Finish(comment_type);
         default:
             Consume();
             continue;
@@ -250,7 +287,6 @@ Token Lexer::Lex() {
     case 'Y':
     case 'z':
     case 'Z':
-    case '_':
         return LexIdentifier();
 
     case '@':
@@ -263,7 +299,7 @@ Token Lexer::Lex() {
         // Maybe the start of a comment.
         switch (Peek()) {
         case '/':
-            return LexComment();
+            return LexCommentOrDocComment();
         default:
             return Finish(Token::Kind::kNotAToken);
         }

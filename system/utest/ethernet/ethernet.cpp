@@ -34,11 +34,12 @@
 // Delay for data to work through the system. The test will pause this long, so it's best
 // to keep it fairly short. If it's too short, the test will occasionally be flaky,
 // especially on qemu.
-#define PROPAGATE_MSEC (200)
-#define PROPAGATE_TIME (zx::deadline_after(zx::msec(PROPAGATE_MSEC)))
+static constexpr zx::duration kPropagateDuration = zx::msec(200);
+#define PROPAGATE_TIME (zx::deadline_after(kPropagateDuration))
+
 // We expect something to happen prior to timeout, and the test will fail if it doesn't. So
 // wait longer to further reduce the likelihood of test flakiness.
-#define FAIL_TIMEOUT (zx::deadline_after(zx::msec(5 * PROPAGATE_MSEC)))
+#define FAIL_TIMEOUT (zx::deadline_after(kPropagateDuration * 50))
 
 // Because of test flakiness if a previous test case's ethertap device isn't cleaned up, we put a
 // delay at the end of each test to give devmgr time to clean up the ethertap devices.
@@ -165,7 +166,7 @@ public:
 
     void Cleanup() {
         if (mapped_ > 0) {
-            zx::vmar::root_self().unmap(mapped_, vmo_size_);
+            zx::vmar::root_self()->unmap(mapped_, vmo_size_);
         }
         if (fd_ >= 0) {
             close(fd_);
@@ -196,16 +197,16 @@ public:
         bufsize_ = bufsize;
 
         vmo_size_ = 2 * nbufs_ * bufsize_;
-        zx_status_t status = zx::vmo::create(vmo_size_, 0u, &buf_);
+        zx_status_t status = zx::vmo::create(vmo_size_, ZX_VMO_NON_RESIZABLE, &buf_);
         if (status != ZX_OK) {
             fprintf(stderr, "could not create a vmo of size %" PRIu64 ": %s\n", vmo_size_,
                     mxstrerror(status));
             return status;
         }
 
-        status = zx::vmar::root_self().map(0, buf_, 0, vmo_size_,
-                                           ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                                           &mapped_);
+        status = zx::vmar::root_self()->map(0, buf_, 0, vmo_size_,
+                                            ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                                            &mapped_);
         if (status != ZX_OK) {
             fprintf(stderr, "failed to map vmo: %s\n", mxstrerror(status));
             return status;

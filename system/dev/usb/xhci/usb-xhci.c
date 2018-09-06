@@ -129,7 +129,7 @@ static size_t xhci_get_max_transfer_size(void* ctx, uint32_t device_id, uint8_t 
 
 static zx_status_t xhci_cancel_all(void* ctx, uint32_t device_id, uint8_t ep_address) {
     xhci_t* xhci = ctx;
-    return xhci_cancel_transfers(xhci, device_id, ep_address);
+    return xhci_cancel_transfers(xhci, device_id, xhci_endpoint_index(ep_address));
 }
 
 static zx_status_t xhci_get_bti(void* ctx, zx_handle_t* out_handle) {
@@ -413,7 +413,6 @@ static zx_status_t usb_xhci_bind_pci(zx_device_t* parent, pci_protocol_t* pci) {
 
 error_return:
     zx_handle_close(xhci->bti_handle);
-    free(xhci);
     for (uint32_t i = 0; i < num_irq_handles_initialized; i++) {
         zx_handle_close(xhci->irq_handles[i]);
     }
@@ -422,6 +421,7 @@ error_return:
         zx_handle_close(xhci->mmio_handle);
     }
     zx_handle_close(xhci->cfg_handle);
+    free(xhci);
     return status;
 }
 

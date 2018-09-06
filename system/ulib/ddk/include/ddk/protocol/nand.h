@@ -7,30 +7,8 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include <zircon/device/nand.h>
 #include <zircon/types.h>
-#include <zircon/boot/image.h>
-
-// nand_info_t is used to retrieve various parameters describing the geometry of
-// the underlying NAND chip(s). This is retrieved using the query api in
-// nand_protocol_ops.
-typedef struct nand_info nand_info_t;
-
-enum {
-    NAND_CLASS_PARTMAP = 1,   // NAND device contains multiple partitions.
-    NAND_CLASS_FTL = 2,       // NAND device is a FTL partition.
-    NAND_CLASS_BBS = 3,       // NAND device is a bad block skip partition.
-};
-
-struct nand_info {
-    uint32_t page_size;         // Read/write unit size, in bytes.
-    uint32_t pages_per_block;   // Erase block size, in pages.
-    uint32_t num_blocks;        // Device size, in erase blocks.
-    uint32_t ecc_bits;          // Number of ECC bits (correctable bit flips),
-                                // per correction chunk.
-    uint32_t oob_size;          // Available out of band bytes per page.
-    uint32_t nand_class;        // NAND_CLASS_PARTMAP, NAND_CLASS_FTL or NAND_CLASS_RAW.
-    uint8_t partition_guid[ZBI_PARTITION_GUID_LEN]; // partition type GUID from partition map.
-};
 
 // nand_op_t's are submitted for processing via the queue() method of the
 // nand_protocol. Once submitted, the contents of the nand_op_t may be modified
@@ -55,12 +33,6 @@ struct nand_info {
 #define NAND_OP_READ                    0x00000001
 #define NAND_OP_WRITE                   0x00000002
 #define NAND_OP_ERASE                   0x00000003
-
-// These operations are deprecated. Don't use for new code. See ZX-2233.
-#define NAND_OP_READ_DATA               0x00000001
-#define NAND_OP_WRITE_DATA              0x00000002
-#define NAND_OP_READ_OOB                0x00000004
-#define NAND_OP_WRITE_OOB               0x00000005
 
 typedef struct nand_op nand_op_t;
 
@@ -114,21 +86,6 @@ struct nand_op {
             uint32_t corrected_bit_flips;
         } rw;
 
-        struct {
-            // This operation reads or writes OOB data for a single page.
-            uint32_t command;            // Command.
-            zx_handle_t vmo;             // vmo of data to read or write.
-            uint32_t length;             // Transfer length in bytes.
-                                         // (0 is invalid).
-            uint32_t page_num;           // Offset into nand, in pages.
-            uint64_t offset_vmo;         // vmo offset in bytes.
-            // Return value from READ_OOB, max corrected bit flips in any
-            // underlying ECC chunk read in order to access the OOB data. The
-            // caller can compare this value against ecc_bits to decide whether
-            // the nand erase block needs to be recycled.
-            uint32_t corrected_bit_flips;
-        } oob;
-
         // NAND_OP_ERASE.
         struct {
             uint32_t command;            // Command.
@@ -165,8 +122,8 @@ typedef struct nand_protocol_ops {
     // This should only be called before writing any data to the nand, and the
     // returned data should be saved somewhere else, along blocks that become
     // bad after they've been in use.
-    void (*get_bad_block_list)(void* ctx, uint32_t* bad_blocks, uint32_t bad_block_len,
-                               uint32_t* num_bad_blocks);
+    zx_status_t (*get_factory_bad_block_list)(void* ctx, uint32_t* bad_blocks,
+                                              uint32_t bad_block_len, uint32_t* num_bad_blocks);
 } nand_protocol_ops_t;
 
 typedef struct nand_protocol {

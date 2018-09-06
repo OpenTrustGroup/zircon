@@ -146,6 +146,17 @@ typedef struct {
         .int ZBI_ITEM_NO_CRC32;                 \
     .size symbol, . - symbol;                   \
     .type symbol, %object
+#else
+#define ZBI_CONTAINER_HEADER(length) {          \
+    ZBI_TYPE_CONTAINER,                         \
+    (length),                                   \
+    ZBI_CONTAINER_MAGIC,                        \
+    ZBI_FLAG_VERSION,                           \
+    0,                                          \
+    0,                                          \
+    ZBI_ITEM_MAGIC,                             \
+    ZBI_ITEM_NO_CRC32,                          \
+}
 #endif
 
 
@@ -159,8 +170,10 @@ typedef struct {
 // memory.  It then constructs a partial ZBI elsewhere in memory, which has
 // a ZBI_TYPE_CONTAINER header of its own followed by all the other items
 // that were in the booted ZBI plus other items synthesized by the boot
-// loader to describe the machine.  The precise protocol for transferring
-// control to the kernel's entry point varies by machine.
+// loader to describe the machine.  This partial ZBI must be placed at an
+// address (where the container header is found) that is aligned to the
+// machine's page size.  The precise protocol for transferring control to
+// the kernel's entry point varies by machine.
 //
 // On all machines, the kernel requires some amount of scratch memory to be
 // available immediately after the kernel image at boot.  It needs this
@@ -180,7 +193,7 @@ typedef struct {
 //     The processor is in 64-bit mode with direct virtual to physical
 //     mapping covering the physical memory where the kernel and
 //     bootloader-constructed ZBI were loaded, which must be below 4GB.
-//     The %rbx register (or %ebx, since the high 32 bits must be zero)
+//     The %rsi register (or %esi, since the high 32 bits must be zero)
 //     holds the physical address of the bootloader-constructed ZBI.
 //     All other registers are unspecified.
 //
@@ -216,7 +229,8 @@ typedef struct {
     zbi_header_t hdr_file;
     zbi_header_t hdr_kernel;
     zbi_kernel_t data_kernel;
-    uint8_t reserved[/*data_kernel.reserve_memory_size*/];
+    uint8_t contents[/*hdr_kernel.length - sizeof(zbi_kernel_t)*/];
+    // data_kernel.reserve_memory_size bytes in memory are free after contents.
 } zircon_kernel_t;
 #endif
 
@@ -346,13 +360,15 @@ typedef struct {
 } zbi_nvram_t;
 #endif
 
+#define ZBI_BOARD_NAME_LEN 32
+
 // Platform ID Information.
 #define ZBI_TYPE_PLATFORM_ID            (0x44494C50) // PLID
 #ifndef __ASSEMBLER__
 typedef struct {
     uint32_t vid;
     uint32_t pid;
-    char board_name[32];
+    char board_name[ZBI_BOARD_NAME_LEN];
 } zbi_platform_id_t;
 #endif
 

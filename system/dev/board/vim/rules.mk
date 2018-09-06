@@ -19,12 +19,12 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/vim-sdio.c \
     $(LOCAL_DIR)/vim-eth.c \
     $(LOCAL_DIR)/vim-thermal.c \
-    $(LOCAL_DIR)/vim-mailbox.c \
     $(LOCAL_DIR)/vim-display.c \
     $(LOCAL_DIR)/vim-video.c \
     $(LOCAL_DIR)/vim-led2472g.c \
     $(LOCAL_DIR)/vim-rtc.c \
     $(LOCAL_DIR)/vim-canvas.c \
+    $(LOCAL_DIR)/vim-clk.c \
 
 MODULE_STATIC_LIBS := \
     system/ulib/ddk \

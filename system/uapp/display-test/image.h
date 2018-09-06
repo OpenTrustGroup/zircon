@@ -28,13 +28,12 @@
 
 // Indicies into event and event_ids
 #define WAIT_EVENT 0
-#define PRESENT_EVENT 1
-#define SIGNAL_EVENT 2
+#define SIGNAL_EVENT 1
 
 typedef struct image_import {
     uint64_t id;
-    zx_handle_t events[3];
-    uint64_t event_ids[3];
+    zx_handle_t events[2];
+    uint64_t event_ids[2];
 } image_import_t;
 
 class Image {
@@ -51,6 +50,7 @@ public:
     uint32_t stride() { return stride_; }
     zx_pixel_format_t format() { return format_; }
 
+    void GetConfig(fuchsia_display_ImageConfig* config_out);
     bool Import(zx_handle_t dc_handle, image_import_t* import_out);
 
 private:

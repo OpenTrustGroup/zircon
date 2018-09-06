@@ -31,6 +31,9 @@ a single element: if *count* is 1 and **fifo_write**() returns **ZX_OK**,
 
 It is not legal to write zero elements.
 
+## RIGHTS
+
+*handle* must have **ZX_RIGHT_WRITE**.
 
 ## RETURN VALUE
 

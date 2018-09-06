@@ -141,7 +141,7 @@ bool TestDevice::Bind(Volume::Version version, bool fvm) {
 
 bool TestDevice::Rebind() {
     BEGIN_HELPER;
-    ASSERT_TRUE(Disconnect());
+    Disconnect();
 
     ASSERT_OK(ToStatus(ioctl_block_rr_part(ramdisk_.get())));
     zxcrypt_.reset();
@@ -201,7 +201,7 @@ int TestDevice::WakeThread(void* arg) {
     ssize_t res;
     do {
         zx::nanosleep(zx::deadline_after(zx::msec(100)));
-        if (device->wake_deadline_ < zx::clock::get(ZX_CLOCK_MONOTONIC)) {
+        if (device->wake_deadline_ < zx::clock::get_monotonic()) {
             printf("Received %lu of %lu transactions before timing out.\n", counts.received,
                    device->wake_after_);
             return ZX_ERR_TIMED_OUT;
@@ -353,7 +353,7 @@ bool TestDevice::Connect() {
 
     zx_handle_t fifo;
     ASSERT_OK(ToStatus(ioctl_block_get_fifos(zxcrypt_.get(), &fifo)));
-    ASSERT_OK(ToStatus(ioctl_block_alloc_txn(zxcrypt_.get(), &req_.txnid)));
+    req_.group = 0;
     ASSERT_OK(block_fifo_create_client(fifo, &client_));
 
     // Create the vmo and get a transferable handle to give to the block server
@@ -365,10 +365,8 @@ bool TestDevice::Connect() {
     END_HELPER;
 }
 
-bool TestDevice::Disconnect() {
-    BEGIN_HELPER;
+void TestDevice::Disconnect() {
     if (client_) {
-        ASSERT_OK(ToStatus(ioctl_block_free_txn(zxcrypt_.get(), &req_.txnid)));
         memset(&req_, 0, sizeof(req_));
         block_fifo_release_client(client_);
         client_ = nullptr;
@@ -378,7 +376,6 @@ bool TestDevice::Disconnect() {
     block_size_ = 0;
     block_count_ = 0;
     vmo_.reset();
-    END_HELPER;
 }
 
 } // namespace testing

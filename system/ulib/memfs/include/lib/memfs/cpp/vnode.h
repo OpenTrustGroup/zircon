@@ -23,6 +23,7 @@
 #include <fbl/unique_ptr.h>
 #include <fs/remote.h>
 #include <fs/watcher.h>
+#include <lib/zx/vmo.h>
 
 namespace memfs {
 
@@ -84,7 +85,14 @@ private:
                            zxrio_object_info_t* extra) final;
     zx_status_t GetVmo(int flags, zx_handle_t* out) final;
 
-    zx_handle_t vmo_;
+    // Ensure the underlying vmo is filled with zero from:
+    // [start, round_up(end, PAGE_SIZE)).
+    void ZeroTail(size_t start, size_t end);
+
+    zx::vmo vmo_;
+    // Cached length of the vmo.
+    uint64_t vmo_size_;
+    // Logical length of the underlying file.
     zx_off_t length_;
 };
 

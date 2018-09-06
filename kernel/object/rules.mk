@@ -40,7 +40,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/process_dispatcher.cpp \
     $(LOCAL_DIR)/profile_dispatcher.cpp \
     $(LOCAL_DIR)/resource_dispatcher.cpp \
-    $(LOCAL_DIR)/resources.cpp \
+    $(LOCAL_DIR)/resource.cpp \
     $(LOCAL_DIR)/semaphore.cpp \
     $(LOCAL_DIR)/socket_dispatcher.cpp \
     $(LOCAL_DIR)/smc_dispatcher.cpp \
@@ -61,10 +61,12 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/state_tracker_tests.cpp \
 
 MODULE_DEPS := \
-    kernel/lib/hypervisor \
-    kernel/lib/fbl \
-    kernel/lib/oom \
     kernel/dev/interrupt \
     kernel/dev/udisplay \
+    kernel/lib/fbl \
+    kernel/lib/hypervisor \
+    kernel/lib/oom \
+    kernel/lib/pretty \
+    kernel/lib/region-alloc \
 
 include make/module.mk

@@ -63,6 +63,10 @@ static const pbus_irq_t vim_video_irqs[] = {
     },
 };
 
+static const uint32_t vim_video_protocols[] = {
+    ZX_PROTOCOL_AMLOGIC_CANVAS,
+};
+
 static const pbus_dev_t video_dev = {
     .name = "video",
     .vid = PDEV_VID_AMLOGIC,
@@ -74,12 +78,14 @@ static const pbus_dev_t video_dev = {
     .bti_count = countof(vim_video_btis),
     .irqs = vim_video_irqs,
     .irq_count = countof(vim_video_irqs),
+    .protocols = vim_video_protocols,
+    .protocol_count = countof(vim_video_protocols),
 };
 
 
 zx_status_t vim_video_init(vim_bus_t* bus) {
     zx_status_t status;
-    if ((status = pbus_device_add(&bus->pbus, &video_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &video_dev)) != ZX_OK) {
         zxlogf(ERROR, "vim_video_init: pbus_device_add() failed for video: %d\n", status);
         return status;
     }

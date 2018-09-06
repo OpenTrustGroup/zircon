@@ -26,7 +26,7 @@ struct dlog {
     size_t head;
     size_t tail;
 
-    void* data;
+    uint8_t* data;
 
     bool panic;
 
@@ -90,5 +90,14 @@ void dlog_bluescreen_init(void);
 // the bluescreen service to finalize the display of the panic data
 // (for example, creating a qrcode)
 void dlog_bluescreen_halt(void);
+
+// Shutdown the debuglog subsystem.
+//
+// Note: This may block for an extended period of time.
+void dlog_shutdown(void);
+
+void dlog_bypass_init_early(void);
+void dlog_bypass_init(void);
+bool dlog_bypass(void);
 
 __END_CDECLS

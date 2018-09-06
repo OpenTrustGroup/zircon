@@ -50,8 +50,7 @@ zx_status_t aml_usb_init(aml_bus_t* bus) {
     zx_handle_t bti;
 
     // FIXME - move to board hardware header
-    gpio_config(&bus->gpio, S905D2_GPIOH(6), GPIO_DIR_OUT);
-    gpio_write(&bus->gpio, S905D2_GPIOH(6), 1);
+    gpio_config_out(&bus->gpio, S905D2_GPIOH(6), 1);
 
     zx_status_t status = iommu_get_bti(&bus->iommu, 0, BTI_BOARD, &bti);
     if (status != ZX_OK) {
@@ -65,5 +64,5 @@ zx_status_t aml_usb_init(aml_bus_t* bus) {
         return status;
     }
 
-    return pbus_device_add(&bus->pbus, &xhci_dev, 0);
+    return pbus_device_add(&bus->pbus, &xhci_dev);
 }

@@ -36,20 +36,26 @@ public:
     std::ostringstream ProduceServer();
 
     struct Member {
+        flat::Type::Kind kind;
+        flat::Decl::Kind decl_kind;
         std::string type;
         std::string name;
+        std::string element_type;
         std::vector<uint32_t> array_counts;
+        types::Nullability nullability;
     };
 
     struct NamedMessage {
         std::string c_name;
         std::string coded_name;
         const std::vector<flat::Interface::Method::Parameter>& parameters;
+        const TypeShape& typeshape;
     };
 
     struct NamedMethod {
         uint32_t ordinal;
         std::string ordinal_name;
+        std::string identifier;
         std::string c_name;
         std::unique_ptr<NamedMessage> request;
         std::unique_ptr<NamedMessage> response;
@@ -67,6 +73,8 @@ private:
     };
 
     struct NamedInterface {
+        std::string c_name;
+        std::string discoverable_name;
         std::vector<NamedMethod> methods;
     };
 
@@ -86,6 +94,8 @@ private:
 
     void GenerateIntegerDefine(StringView name, types::PrimitiveSubtype subtype, StringView value);
     void GenerateIntegerTypedef(types::PrimitiveSubtype subtype, StringView name);
+    void GeneratePrimitiveDefine(StringView name, types::PrimitiveSubtype subtype, StringView value);
+    void GenerateStringDefine(StringView name, StringView value);
     void GenerateStructTypedef(StringView name);
 
     void GenerateStructDeclaration(StringView name, const std::vector<Member>& members);
@@ -118,6 +128,9 @@ private:
 
     void ProduceInterfaceClientDeclaration(const NamedInterface& named_interface);
     void ProduceInterfaceClientImplementation(const NamedInterface& named_interface);
+
+    void ProduceInterfaceServerDeclaration(const NamedInterface& named_interface);
+    void ProduceInterfaceServerImplementation(const NamedInterface& named_interface);
 
     const flat::Library* library_;
     std::ostringstream file_;

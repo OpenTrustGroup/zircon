@@ -54,6 +54,10 @@ When communicating to an untrusted party over a channel, it is recommended
 that the **channel_read_etc**() form is used and each handle type and rights
 are validated against the expected values.
 
+## RIGHTS
+
+*handle* must have **ZX_RIGHT_READ**.
+
 ## RETURN VALUE
 
 Both forms of read returns **ZX_OK** on success, if *actual_bytes*

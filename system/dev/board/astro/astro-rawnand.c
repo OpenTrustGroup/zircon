@@ -6,6 +6,7 @@
 #include <ddk/device.h>
 #include <ddk/io-buffer.h>
 #include <ddk/metadata.h>
+#include <ddk/metadata/nand.h>
 #include <ddk/protocol/gpio.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
@@ -13,6 +14,7 @@
 #include <soc/aml-s905d2/s905d2-hw.h>
 #include <soc/aml-s905d2/s905d2-gpio.h>
 #include <unistd.h>
+#include <zircon/hw/gpt.h>
 
 #include "astro.h"
 
@@ -40,10 +42,35 @@ static const pbus_bti_t raw_nand_btis[] = {
     },
 };
 
+static const nand_config_t config = {
+    .bad_block_config = {
+        .type = kAmlogicUboot,
+        .aml = {
+            .table_start_block = 20,
+            .table_end_block = 23,
+        },
+    },
+    .extra_partition_config_count = 1,
+    .extra_partition_config = {
+        {
+            .type_guid = GUID_BOOTLOADER_VALUE,
+            .copy_count = 4,
+        },
+    },
+};
+
 static const pbus_metadata_t raw_nand_metadata[] = {
     {
-        .type = DEVICE_METADATA_PARTITION_MAP,
-        .extra = 0,
+        .type = DEVICE_METADATA_PRIVATE,
+        .data = &config,
+        .len = sizeof(config),
+    },
+};
+
+static const pbus_boot_metadata_t raw_nand_boot_metadata[] = {
+    {
+        .zbi_type = DEVICE_METADATA_PARTITION_MAP,
+        .zbi_extra = 0,
     },
 };
 
@@ -60,6 +87,8 @@ static const pbus_dev_t raw_nand_dev = {
     .bti_count = countof(raw_nand_btis),
     .metadata = raw_nand_metadata,
     .metadata_count = countof(raw_nand_metadata),
+    .boot_metadata = raw_nand_boot_metadata,
+    .boot_metadata_count = countof(raw_nand_boot_metadata),
 };
 
 zx_status_t aml_raw_nand_init(aml_bus_t* bus) {
@@ -88,7 +117,7 @@ zx_status_t aml_raw_nand_init(aml_bus_t* bus) {
     if (status != ZX_OK)
         return status;
 
-    status = pbus_device_add(&bus->pbus, &raw_nand_dev, 0);
+    status = pbus_device_add(&bus->pbus, &raw_nand_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: pbus_device_add failed: %d\n",
                __func__, status);

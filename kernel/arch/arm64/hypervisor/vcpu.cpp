@@ -96,6 +96,7 @@ AutoGich::AutoGich(GichState* gich_state)
 
     // Load
     gic_write_gich_vmcr(gich_state_->vmcr);
+    gic_write_gich_apr(gich_state_->apr);
     for (uint32_t i = 0; i < gich_state_->num_lrs; i++) {
         gic_write_gich_lr(i, gich_state->lr[i]);
     }
@@ -107,6 +108,7 @@ AutoGich::~AutoGich() {
     // Save
     gich_state_->vmcr = gic_read_gich_vmcr();
     gich_state_->elrsr = gic_read_gich_elrsr();
+    gich_state_->apr = gic_read_gich_apr();
     for (uint32_t i = 0; i < gich_state_->num_lrs; i++) {
         gich_state_->lr[i] = gic_read_gich_lr(i);
     }
@@ -162,6 +164,7 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
     vcpu->gich_state_.num_lrs = gic_get_num_lrs();
     vcpu->gich_state_.vmcr = gic_default_gich_vmcr();
     vcpu->gich_state_.elrsr = gic_read_gich_elrsr();
+    vcpu->gich_state_.apr = 0;
     vcpu->el2_state_->guest_state.system_state.elr_el2 = entry;
     vcpu->el2_state_->guest_state.system_state.spsr_el2 = kSpsrDaif | kSpsrEl1h;
     uint64_t mpidr = ARM64_READ_SYSREG(mpidr_el1);
@@ -180,6 +183,7 @@ Vcpu::Vcpu(Guest* guest, uint8_t vpid, const thread_t* thread)
 }
 
 Vcpu::~Vcpu() {
+    timer_cancel(&gich_state_.timer);
     __UNUSED zx_status_t status = guest_->FreeVpid(vpid_);
     DEBUG_ASSERT(status == ZX_OK);
 }
@@ -187,7 +191,7 @@ Vcpu::~Vcpu() {
 zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_))
         return ZX_ERR_BAD_STATE;
-    const ArchVmAspace& aspace = guest_->AddressSpace()->aspace()->arch_aspace();
+    const ArchVmAspace& aspace = *guest_->AddressSpace()->arch_aspace();
     zx_paddr_t vttbr = arm64_vttbr(aspace.arch_asid(), aspace.arch_table_phys());
     GuestState* guest_state = &el2_state_->guest_state;
     bool force_virtual_interrupt = false;
@@ -259,28 +263,28 @@ zx_status_t Vcpu::Interrupt(uint32_t vector) {
     return ZX_OK;
 }
 
-zx_status_t Vcpu::ReadState(uint32_t kind, void* buffer, size_t len) const {
+zx_status_t Vcpu::ReadState(uint32_t kind, void* buf, size_t len) const {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_)) {
         return ZX_ERR_BAD_STATE;
     } else if (kind != ZX_VCPU_STATE || len != sizeof(zx_vcpu_state_t)) {
         return ZX_ERR_INVALID_ARGS;
     }
 
-    auto state = static_cast<zx_vcpu_state_t*>(buffer);
+    auto state = static_cast<zx_vcpu_state_t*>(buf);
     memcpy(state->x, el2_state_->guest_state.x, sizeof(uint64_t) * GS_NUM_REGS);
     state->sp = el2_state_->guest_state.system_state.sp_el1;
     state->cpsr = el2_state_->guest_state.system_state.spsr_el2 & kSpsrNzcv;
     return ZX_OK;
 }
 
-zx_status_t Vcpu::WriteState(uint32_t kind, const void* buffer, size_t len) {
+zx_status_t Vcpu::WriteState(uint32_t kind, const void* buf, size_t len) {
     if (!hypervisor::check_pinned_cpu_invariant(vpid_, thread_)) {
         return ZX_ERR_BAD_STATE;
     } else if (kind != ZX_VCPU_STATE || len != sizeof(zx_vcpu_state_t)) {
         return ZX_ERR_INVALID_ARGS;
     }
 
-    auto state = static_cast<const zx_vcpu_state_t*>(buffer);
+    auto state = static_cast<const zx_vcpu_state_t*>(buf);
     memcpy(el2_state_->guest_state.x, state->x, sizeof(uint64_t) * GS_NUM_REGS);
     el2_state_->guest_state.system_state.sp_el1 = state->sp;
     el2_state_->guest_state.system_state.spsr_el2 |= state->cpsr & kSpsrNzcv;

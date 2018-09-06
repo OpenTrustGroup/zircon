@@ -15,6 +15,7 @@
 #include <arch/arm64/hypervisor/gic/gicv2.h>
 #include <dev/interrupt/arm_gicv2_regs.h>
 #include <dev/interrupt/arm_gicv2m.h>
+#include <dev/interrupt/arm_gicv2m_msi.h>
 #include <err.h>
 #include <inttypes.h>
 #include <kernel/stats.h>
@@ -70,6 +71,16 @@ static void suspend_resume_fiq(bool resume_gicc, bool resume_gicd) {
 
 static bool gic_is_valid_interrupt(unsigned int vector, uint32_t flags) {
     return (vector < max_irqs);
+}
+
+static uint32_t gic_get_base_vector(void) {
+    // ARM Generic Interrupt Controller v2 chapter 2.1
+    // INTIDs 0-15 are local CPU interrupts
+    return 16;
+}
+
+static uint32_t gic_get_max_vector(void) {
+    return max_irqs;
 }
 
 #if WITH_LIB_SM
@@ -444,12 +455,57 @@ static void gic_shutdown(void) {
     GICREG(0, GICD_CTLR) = 0;
 }
 
+// Returns true if any PPIs are enabled on the calling CPU.
+static bool is_ppi_enabled(void) {
+    DEBUG_ASSERT(arch_ints_disabled());
+
+    // PPIs are 16-31.
+    uint32_t ppi_mask = 0xffff0000;
+
+    // GICD_ISENABLER0 is banked so it cooresponds to *this* CPU's interface.
+    return (GICREG(0, GICD_ISENABLER(0)) & ppi_mask) != 0;
+}
+
+// Returns true if any SPIs are enabled on the calling CPU.
+static bool is_spi_enabled(void) {
+    DEBUG_ASSERT(arch_ints_disabled());
+
+    // We're going to check four interrupts at a time.  Build a repeated mask for the current CPU.
+    // Each byte in the mask is a CPU bit mask cooresponding to CPU0..CPU7 (lsb..msb).
+    uint cpu_num = arch_curr_cpu_num();
+    DEBUG_ASSERT(cpu_num < 8);
+    uint32_t mask = 0x01010101U << cpu_num;
+
+    for (unsigned int vector = GIC_BASE_SPI; vector < max_irqs; vector += 4) {
+        uint32_t reg = GICREG(0, GICD_ITARGETSR(vector / 4));
+        if (reg & mask) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void gic_shutdown_cpu(void) {
+    DEBUG_ASSERT(arch_ints_disabled());
+
+    // Before we shutdown the GIC, make sure we've migrated/disabled any and all peripheral
+    // interrupts targeted at this CPU (PPIs and SPIs).
+    DEBUG_ASSERT(!is_ppi_enabled());
+    DEBUG_ASSERT(!is_spi_enabled());
+
+    // Turn off interrupts at the CPU interface.
+    GICREG(0, GICC_CTLR) = 0;
+}
+
 static const struct pdev_interrupt_ops gic_ops = {
     .mask = gic_mask_interrupt,
     .unmask = gic_unmask_interrupt,
     .configure = gic_configure_interrupt,
     .get_config = gic_get_interrupt_config,
     .is_valid = gic_is_valid_interrupt,
+    .get_base_vector = gic_get_base_vector,
+    .get_max_vector = gic_get_max_vector,
     .remap = gic_remap_interrupt,
     .send_ipi = gic_send_ipi,
     .init_percpu_early = gic_init_percpu_early,
@@ -457,6 +513,13 @@ static const struct pdev_interrupt_ops gic_ops = {
     .handle_irq = gic_handle_irq,
     .handle_fiq = gic_handle_fiq,
     .shutdown = gic_shutdown,
+    .shutdown_cpu = gic_shutdown_cpu,
+    .msi_is_supported = arm_gicv2m_msi_is_supported,
+    .msi_supports_masking = arm_gicv2m_msi_supports_masking,
+    .msi_mask_unmask = arm_gicv2m_msi_mask_unmask,
+    .msi_alloc_block = arm_gicv2m_msi_alloc_block,
+    .msi_free_block = arm_gicv2m_msi_free_block,
+    .msi_register_handler = arm_gicv2m_msi_register_handler,
 };
 
 static void arm_gic_v2_init(const void* driver_data, uint32_t length) {

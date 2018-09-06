@@ -24,18 +24,18 @@
 
 #pragma GCC visibility pop
 
-#define SHUTDOWN_COMMAND "poweroff"
 #define STACK_VMO_NAME "userboot-child-initial-stack"
 
-static noreturn void do_shutdown(zx_handle_t log, zx_handle_t rroot) {
-    printl(log, "Process exited.  Executing \"" SHUTDOWN_COMMAND "\".");
-    // Gracefully shutdown the secondary CPUs first to ensure they release locks that the primary
-    // may attempt to acquire.
-    //
-    // TODO(maniscalco): Have ZX_SYSTEM_POWERCTL_SHUTDOWN cleanly shutdown the secondary CPUs.
-    zx_system_powerctl(rroot, ZX_SYSTEM_POWERCTL_DISABLE_ALL_CPUS_BUT_PRIMARY, NULL);
-    zx_system_powerctl(rroot, ZX_SYSTEM_POWERCTL_SHUTDOWN, NULL);
-    printl(log, "still here after shutdown!");
+static noreturn void do_powerctl(zx_handle_t log, zx_handle_t rroot, uint32_t reason) {
+    const char* r_str = (reason == ZX_SYSTEM_POWERCTL_SHUTDOWN) ? "poweroff" : "reboot";
+    if (reason == ZX_SYSTEM_POWERCTL_REBOOT) {
+        printl(log, "Waiting 3 seconds...");
+        zx_nanosleep(zx_deadline_after(ZX_SEC(3u)));
+    }
+
+    printl(log, "Process exited.  Executing \"%s\".", r_str);
+    zx_system_powerctl(rroot, reason, NULL);
+    printl(log, "still here after %s!", r_str);
     while (true)
         __builtin_trap();
 }
@@ -74,9 +74,9 @@ static zx_handle_t reserve_low_address_space(zx_handle_t log,
     uintptr_t addr;
     size_t reserve_size =
         (((info.base + info.len) / 2) + PAGE_SIZE - 1) & -PAGE_SIZE;
-    zx_status_t status = zx_vmar_allocate(root_vmar, 0,
-                                          reserve_size - info.base,
-                                          ZX_VM_FLAG_SPECIFIC, &vmar, &addr);
+    zx_status_t status = zx_vmar_allocate(root_vmar, ZX_VM_SPECIFIC,
+                                          0, reserve_size - info.base,
+                                          &vmar, &addr);
     check(log, status,
           "zx_vmar_allocate failed for low address space reservation");
     if (addr != info.base)
@@ -259,9 +259,8 @@ static noreturn void bootstrap(zx_handle_t log, zx_handle_t bootstrap_pipe) {
     zx_object_set_property(stack_vmo, ZX_PROP_NAME,
                            STACK_VMO_NAME, sizeof(STACK_VMO_NAME) - 1);
     zx_vaddr_t stack_base;
-    status = zx_vmar_map(vmar, 0, stack_vmo, 0, stack_size,
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                         &stack_base);
+    status = zx_vmar_map(vmar, ZX_VM_PERM_READ | ZX_VM_PERM_WRITE, 0,
+                         stack_vmo, 0, stack_size, &stack_base);
     check(log, status, "zx_vmar_map failed for child stack");
     uintptr_t sp = compute_initial_stack_pointer(stack_base, stack_size);
     if (stack_vmo_handle_loc != NULL) {
@@ -322,12 +321,16 @@ static noreturn void bootstrap(zx_handle_t log, zx_handle_t bootstrap_pipe) {
     // All done with bootfs!
     bootfs_unmount(vmar_self, log, &bootfs);
 
-    if (o.value[OPTION_SHUTDOWN] != NULL) {
+    if ((o.value[OPTION_SHUTDOWN] != NULL) || (o.value[OPTION_REBOOT] != NULL)) {
         printl(log, "Waiting for %s to exit...", o.value[OPTION_FILENAME]);
         status = zx_object_wait_one(
             proc, ZX_PROCESS_TERMINATED, ZX_TIME_INFINITE, NULL);
         check(log, status, "zx_object_wait_one on process failed");
-        do_shutdown(log, root_resource_handle);
+        if (o.value[OPTION_SHUTDOWN] != NULL) {
+            do_powerctl(log, root_resource_handle, ZX_SYSTEM_POWERCTL_SHUTDOWN);
+        } else if (o.value[OPTION_REBOOT] != NULL) {
+            do_powerctl(log, root_resource_handle, ZX_SYSTEM_POWERCTL_REBOOT);
+        }
     }
 
     // Now we've accomplished our purpose in life, and we can die happy.
@@ -343,7 +346,7 @@ static noreturn void bootstrap(zx_handle_t log, zx_handle_t bootstrap_pipe) {
 // to run in user mode.
 noreturn void _start(void* start_arg) {
     zx_handle_t log = ZX_HANDLE_INVALID;
-    zx_log_create(0, &log);
+    zx_debuglog_create(ZX_HANDLE_INVALID, 0, &log);
     if (log == ZX_HANDLE_INVALID)
         printl(log, "zx_log_create failed, using zx_debug_write instead");
 

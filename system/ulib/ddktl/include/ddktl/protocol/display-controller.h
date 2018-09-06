@@ -18,7 +18,6 @@ class DisplayControllerProtocol : public internal::base_protocol {
     DisplayControllerProtocol() {
         // TODO(stevensd): Add subclass check once API is stabilized
         ops_.set_display_controller_cb = SetDisplayControllerCb;
-        ops_.get_display_info = GetDisplayInfo;
         ops_.import_vmo_image = ImportVmoImage;
         ops_.release_image = ReleaseImage;
         ops_.check_configuration = CheckConfiguration;
@@ -37,12 +36,8 @@ class DisplayControllerProtocol : public internal::base_protocol {
         static_cast<D*>(ctx)->SetDisplayControllerCb(cb_ctx, cb);
     }
 
-    static zx_status_t GetDisplayInfo(void* ctx, uint64_t display_id, display_info_t* info) {
-        return static_cast<D*>(ctx)->GetDisplayInfo(display_id, info);
-    }
-
     static zx_status_t ImportVmoImage(void* ctx, image_t* image, zx_handle_t vmo, size_t offset) {
-        return static_cast<D*>(ctx)->ImportVmoImage(image, zx::unowned_vmo::wrap(vmo), offset);
+        return static_cast<D*>(ctx)->ImportVmoImage(image, *zx::unowned_vmo(vmo), offset);
     }
 
     static void ReleaseImage(void* ctx, image_t* image) {
@@ -50,8 +45,10 @@ class DisplayControllerProtocol : public internal::base_protocol {
     }
 
     static void CheckConfiguration(void* ctx, const display_config_t** display_config,
-                                   uint32_t** layer_cfg_result, uint32_t display_count) {
-        static_cast<D*>(ctx)->CheckConfiguration(display_config, layer_cfg_result, display_count);
+                                   uint32_t* display_cfg_result, uint32_t** layer_cfg_result,
+                                   uint32_t display_count) {
+        static_cast<D*>(ctx)->CheckConfiguration(display_config, display_cfg_result,
+                                                 layer_cfg_result, display_count);
     }
 
     static void ApplyConfiguration(void* ctx, const display_config_t** display_config,

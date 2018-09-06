@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#define HAS_EXTERNAL_BOOTDATA 1
+#define HAS_EXTERNAL_ZBI 1
 #define HAS_DEVICE_TREE 0
 #define USE_DEVICE_TREE_CPU_COUNT 1
 

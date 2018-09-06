@@ -26,6 +26,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/test-dot-dot.c \
     $(LOCAL_DIR)/test-fcntl.cpp \
     $(LOCAL_DIR)/test-link.c \
+    $(LOCAL_DIR)/test-lseek.cpp \
     $(LOCAL_DIR)/test-maxfile.cpp \
     $(LOCAL_DIR)/test-minfs.cpp \
     $(LOCAL_DIR)/test-mmap.cpp \
@@ -35,6 +36,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/test-realpath.cpp \
     $(LOCAL_DIR)/test-rename.c \
     $(LOCAL_DIR)/test-resize.cpp \
+    $(LOCAL_DIR)/test-rw.cpp \
     $(LOCAL_DIR)/test-rw-workers.c \
     $(LOCAL_DIR)/test-sparse.cpp \
     $(LOCAL_DIR)/test-sync.c \
@@ -59,9 +61,11 @@ MODULE_STATIC_LIBS := \
     system/ulib/fbl \
     system/ulib/fvm \
     system/ulib/fs \
+    system/ulib/fzl \
     system/ulib/sync \
     system/ulib/trace \
     system/ulib/zx \
+    system/ulib/zircon-internal \
     system/ulib/zxcpp \
     third_party/ulib/uboringssl \
 

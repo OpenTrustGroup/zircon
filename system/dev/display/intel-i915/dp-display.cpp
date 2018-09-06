@@ -4,7 +4,6 @@
 
 #include <ddk/driver.h>
 #include <endian.h>
-#include <lib/edid/edid.h>
 #include <string.h>
 #include <zircon/assert.h>
 
@@ -21,6 +20,8 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 namespace i915 {
+
+constexpr uint32_t kBitsPerPixel = 24; // kPixelFormat
 
 // Recommended DDI buffer translation programming values
 
@@ -254,45 +255,42 @@ public:
 
 };
 
-bool DpDisplay::SendDpAuxMsg(const DpAuxMessage& request, DpAuxMessage* reply, bool* timeout_result) {
-    *timeout_result = false;
-
-    registers::DdiRegs ddi_regs(ddi());
+zx_status_t DpAux::SendDpAuxMsg(const DpAuxMessage& request, DpAuxMessage* reply) {
+    registers::DdiRegs ddi_regs(ddi_);
     uint32_t data_reg = ddi_regs.DdiAuxData().addr();
 
     // Write the outgoing message to the hardware.
     for (uint32_t offset = 0; offset < request.size; offset += 4) {
         // For some reason intel made these data registers big endian...
         const uint32_t* data = reinterpret_cast<const uint32_t*>(request.data + offset);
-        mmio_space()->Write<uint32_t>(data_reg + offset, htobe32(*data));
+        mmio_space_->Write<uint32_t>(data_reg + offset, htobe32(*data));
     }
 
-    auto status = ddi_regs.DdiAuxControl().ReadFrom(mmio_space());
+    auto status = ddi_regs.DdiAuxControl().ReadFrom(mmio_space_);
     status.set_message_size(request.size);
     // Reset R/W Clear bits
     status.set_done(1);
     status.set_timeout(1);
     status.set_rcv_error(1);
-    // The documentation says to not use setting 0 (400us), so use 1 (600us).
-    status.set_timeout_timer_value(1);
+    // The documentation says to not use setting 0 (400us), so use 3 (1600us).
+    status.set_timeout_timer_value(3);
     // TODO(ZX-1416): Support interrupts
     status.set_interrupt_on_done(1);
     // Send busy starts the transaction
     status.set_send_busy(1);
-    status.WriteTo(mmio_space());
+    status.WriteTo(mmio_space_);
 
     // Poll for the reply message.
     const int kNumTries = 10000;
     for (int tries = 0; tries < kNumTries; ++tries) {
-        auto status = ddi_regs.DdiAuxControl().ReadFrom(mmio_space());
+        auto status = ddi_regs.DdiAuxControl().ReadFrom(mmio_space_);
         if (!status.send_busy()) {
             if (status.timeout()) {
-                *timeout_result = true;
-                return false;
+                return ZX_ERR_TIMED_OUT;
             }
             if (status.rcv_error()) {
-                LOG_TRACE("DP aux: rcv error\n");
-                return false;
+                LOG_SPEW("DP aux: rcv error\n");
+                return ZX_ERR_IO;
             }
             if (!status.done()) {
                 continue;
@@ -301,23 +299,23 @@ bool DpDisplay::SendDpAuxMsg(const DpAuxMessage& request, DpAuxMessage* reply, b
             reply->size = status.message_size();
             if (!reply->size || reply->size > DpAuxMessage::kMaxTotalSize) {
                 LOG_TRACE("DP aux: Invalid reply size %d\n", reply->size);
-                return false;
+                return ZX_ERR_IO;
             }
             // Read the reply message from the hardware.
             for (uint32_t offset = 0; offset < reply->size; offset += 4) {
                 // For some reason intel made these data registers big endian...
                 *reinterpret_cast<uint32_t*>(reply->data + offset) =
-                        be32toh(mmio_space()->Read<uint32_t>(data_reg + offset));
+                        be32toh(mmio_space_->Read<uint32_t>(data_reg + offset));
             }
-            return true;
+            return ZX_OK;
         }
         zx_nanosleep(zx_deadline_after(ZX_USEC(1)));
     }
     LOG_TRACE("DP aux: No reply after %d tries\n", kNumTries);
-    return false;
+    return ZX_ERR_TIMED_OUT;
 }
 
-bool DpDisplay::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage* reply) {
+zx_status_t DpAux::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage* reply) {
     // If the DisplayPort sink device isn't ready to handle an Aux message,
     // it can return an AUX_DEFER reply, which means we should retry the
     // request. The spec added a requirement for >=7 defer retries in v1.3,
@@ -329,25 +327,25 @@ bool DpDisplay::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage*
     // Per table 2-43 in v1.1a, we need to retry >3 times, since some
     // DisplayPort sink devices time out on the first DP aux request
     // but succeed on later requests.
-    const int kMaxTimeouts = 3;
+    const int kMaxTimeouts = 5;
 
     unsigned defers_seen = 0;
     unsigned timeouts_seen = 0;
 
     for (;;) {
-        bool timeout_result;
-        if (!SendDpAuxMsg(request, reply, &timeout_result)) {
-            if (timeout_result) {
+        zx_status_t res = SendDpAuxMsg(request, reply);
+        if (res != ZX_OK) {
+            if (res == ZX_ERR_TIMED_OUT) {
                 if (++timeouts_seen == kMaxTimeouts) {
-                    LOG_TRACE("DP aux: Got too many timeouts (%d)\n", kMaxTimeouts);
-                    return false;
+                    LOG_SPEW("DP aux: Got too many timeouts (%d)\n", kMaxTimeouts);
+                    return ZX_ERR_TIMED_OUT;
                 }
                 // Retry on timeout.
                 continue;
             }
             // We do not retry if sending the raw message failed for
             // an unexpected reason.
-            return false;
+            return ZX_ERR_IO;
         }
 
         uint8_t header_byte = reply->data[0];
@@ -364,105 +362,137 @@ bool DpDisplay::SendDpAuxMsgWithRetry(const DpAuxMessage& request, DpAuxMessage*
         switch (status) {
             case DP_REPLY_AUX_ACK:
                 // The AUX_ACK implies that we got an I2C ACK too.
-                return true;
+                return ZX_OK;
             case DP_REPLY_AUX_DEFER:
                 if (++defers_seen == kMaxDefers) {
                     LOG_TRACE("DP aux: Received too many AUX DEFERs (%d)\n", kMaxDefers);
-                    return false;
+                    return ZX_ERR_TIMED_OUT;
                 }
                 // Go around the loop again to retry.
                 continue;
             case DP_REPLY_AUX_NACK:
                 LOG_TRACE("DP aux: Reply was not an ack (got AUX_NACK)\n");
-                return false;
+                return ZX_ERR_IO_REFUSED;
             case DP_REPLY_I2C_NACK:
                 LOG_TRACE("DP aux: Reply was not an ack (got I2C_NACK)\n");
-                return false;
+                return ZX_ERR_IO_REFUSED;
             case DP_REPLY_I2C_DEFER:
                 // TODO(ZX-1416): Implement handling of I2C_DEFER.
                 LOG_TRACE("DP aux: Received I2C_DEFER (not implemented)\n");
-                return false;
+                return ZX_ERR_NEXT;
             default:
                 // We got a reply that is not defined by the DisplayPort spec.
                 LOG_TRACE("DP aux: Unrecognized reply (header byte: 0x%x)\n", header_byte);
-                return false;
+                return ZX_ERR_IO;
         }
     }
 }
 
-bool DpDisplay::DpAuxRead(uint32_t dp_cmd, uint32_t addr, uint8_t* buf, size_t size) {
+zx_status_t DpAux::DpAuxRead(uint32_t dp_cmd, uint32_t addr, uint8_t* buf, size_t size) {
     while (size > 0) {
         uint32_t chunk_size = static_cast<uint32_t>(MIN(size, DpAuxMessage::kMaxBodySize));
         size_t bytes_read = 0;
-        if (!DpAuxReadChunk(dp_cmd, addr, buf, chunk_size, &bytes_read)) {
-            return false;
+        zx_status_t status = DpAuxReadChunk(dp_cmd, addr, buf, chunk_size, &bytes_read);
+        if (status != ZX_OK) {
+            return status;
         }
         if (bytes_read == 0) {
             // We failed to make progress on the last call.  To avoid the
             // risk of getting an infinite loop from that happening
             // continually, we return.
-            return false;
+            return ZX_ERR_IO;
         }
         buf += bytes_read;
         size -= bytes_read;
     }
-    return true;
+    return ZX_OK;
 }
 
-bool DpDisplay::DpAuxReadChunk(uint32_t dp_cmd, uint32_t addr, uint8_t* buf, uint32_t size_in,
-                               size_t * size_out) {
+zx_status_t DpAux::DpAuxReadChunk(uint32_t dp_cmd, uint32_t addr, uint8_t* buf,
+                                      uint32_t size_in, size_t * size_out) {
     DpAuxMessage msg;
     DpAuxMessage reply;
-    if (!msg.SetDpAuxHeader(addr, dp_cmd, size_in) || !SendDpAuxMsgWithRetry(msg, &reply)) {
-        return false;
+    if (!msg.SetDpAuxHeader(addr, dp_cmd, size_in)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    zx_status_t status = SendDpAuxMsgWithRetry(msg, &reply);
+    if (status != ZX_OK) {
+        return status;
     }
     size_t bytes_read = reply.size - 1;
     if (bytes_read > size_in) {
         LOG_WARN("DP aux read: Reply was larger than requested\n");
-        return false;
+        return ZX_ERR_IO;
     }
     memcpy(buf, &reply.data[1], bytes_read);
     *size_out = bytes_read;
-    return true;
+    return ZX_OK;
 }
 
-bool DpDisplay::DpAuxWrite(uint32_t dp_cmd, uint32_t addr, const uint8_t* buf, size_t size) {
+zx_status_t DpAux::DpAuxWrite(uint32_t dp_cmd, uint32_t addr, const uint8_t* buf, size_t size) {
     // Implement this if it's ever needed
     ZX_ASSERT_MSG(size <= 16, "message too large");
 
     DpAuxMessage msg;
     DpAuxMessage reply;
     if (!msg.SetDpAuxHeader(addr, dp_cmd, static_cast<uint32_t>(size))) {
-        return false;
+        return ZX_ERR_INVALID_ARGS;
     }
     memcpy(&msg.data[4], buf, size);
     msg.size = static_cast<uint32_t>(size + 4);
-    if (!SendDpAuxMsgWithRetry(msg, &reply)) {
-        return false;
+    zx_status_t status = SendDpAuxMsgWithRetry(msg, &reply);
+    if (status != ZX_OK) {
+        return status;
     }
     // TODO(ZX-1416): Handle the case where the hardware did a short write,
     // for which we could send the remaining bytes.
     if (reply.size != 1) {
         LOG_WARN("DP aux write: Unexpected reply size\n");
-        return false;
+        return ZX_ERR_IO;
     }
-    return true;
+    return ZX_OK;
 }
 
-bool DpDisplay::DdcRead(uint8_t segment, uint8_t offset, uint8_t* buf, uint8_t len) {
-    // Ignore failures setting the segment if segment == 0, since it could be the case
-    // that the display doesn't support segments.
-    return (DpAuxWrite(DP_REQUEST_I2C_WRITE, kDdcSegmentI2cAddress, &segment, 1) || segment == 0)
-            && DpAuxWrite(DP_REQUEST_I2C_WRITE, kDdcDataI2cAddress, &offset, 1)
-            && DpAuxRead(DP_REQUEST_I2C_READ, kDdcDataI2cAddress, buf, len);
+zx_status_t DpAux::I2cTransact(uint32_t index, const uint8_t* write_buf, uint8_t write_length,
+                               uint8_t* read_buf, uint8_t read_length) {
+    fbl::AutoLock lock(&lock_);
+    zx_status_t status = ZX_OK;
+    if (write_length) {
+        status = DpAuxWrite(DP_REQUEST_I2C_WRITE, index, write_buf, write_length);
+    }
+    if (status == ZX_OK && read_length) {
+        status = DpAuxRead(DP_REQUEST_I2C_READ, index, read_buf, read_length);
+    }
+    return status;
 }
 
-bool DpDisplay::DpcdRead(uint32_t addr, uint8_t* buf, size_t size) {
-    return DpAuxRead(DP_REQUEST_NATIVE_READ, addr, buf, size);
+bool DpAux::DpcdRead(uint32_t addr, uint8_t* buf, size_t size) {
+    fbl::AutoLock lock(&lock_);
+    constexpr uint32_t kReadAttempts = 3;
+    for (unsigned i = 0; i < kReadAttempts; i++) {
+        if (DpAuxRead(DP_REQUEST_NATIVE_READ, addr, buf, size) == ZX_OK) {
+            return true;
+        }
+        zx_nanosleep(zx_deadline_after(ZX_MSEC(5)));
+    }
+    return false;
+}
+
+bool DpAux::DpcdWrite(uint32_t addr, const uint8_t* buf, size_t size) {
+    fbl::AutoLock lock(&lock_);
+    return DpAuxWrite(DP_REQUEST_NATIVE_WRITE, addr, buf, size) == ZX_OK;
+}
+
+DpAux::DpAux(registers::Ddi ddi) : ddi_(ddi) {
+    ZX_ASSERT(mtx_init(&lock_, mtx_plain) == thrd_success);
 }
 
 bool DpDisplay::DpcdWrite(uint32_t addr, const uint8_t* buf, size_t size) {
-    return DpAuxWrite(DP_REQUEST_NATIVE_WRITE, addr, buf, size);
+    return controller()->DpcdWrite(ddi(), addr, buf, size);
+}
+
+bool DpDisplay::DpcdRead(uint32_t addr, uint8_t* buf, size_t size) {
+    return controller()->DpcdRead(ddi(), addr, buf, size);
 }
 
 // Link training functions
@@ -669,14 +699,15 @@ bool DpDisplay::LinkTrainingStage1(dpcd::TrainingPatternSet* tp_set, dpcd::Train
     dpcd::LaneStatus lane_status[dp_lane_count_];
 
     int poll_count = 0;
+    dpcd::TrainingAuxRdInterval delay;
+    delay.set_reg_value(dpcd_capability(dpcd::DPCD_TRAINING_AUX_RD_INTERVAL));
     for (;;) {
         if (!DpcdRequestLinkTraining(*tp_set, lanes)) {
             return false;
         }
 
-        // Wait 100us before polling the registers for the result of the
-        // first training step, as specified by the DisplayPort spec.
-        zx_nanosleep(zx_deadline_after(ZX_USEC(100)));
+        zx_nanosleep(zx_deadline_after(ZX_USEC(
+                delay.clock_recovery_delay_us(dpcd_capability(dpcd::DPCD_REV)))));
 
         // Did the sink device receive the signal successfully?
         if (!DpcdReadPairedRegs<dpcd::DPCD_LANE0_1_STATUS, dpcd::LaneStatus>(lane_status)) {
@@ -725,15 +756,15 @@ bool DpDisplay::LinkTrainingStage2(dpcd::TrainingPatternSet* tp_set, dpcd::Train
 
     tp_set->set_training_pattern_set(tp_set->kTrainingPattern2);
     int poll_count = 0;
+    dpcd::TrainingAuxRdInterval delay;
+    delay.set_reg_value(dpcd_capability(dpcd::DPCD_TRAINING_AUX_RD_INTERVAL));
     for (;;) {
         // lane0_training and lane1_training can change in the loop
         if (!DpcdRequestLinkTraining(*tp_set, lanes)) {
             return false;
         }
 
-        // Allow 400us for the second training step, as specified by the
-        // DisplayPort spec.
-        zx_nanosleep(zx_deadline_after(ZX_USEC(400)));
+        zx_nanosleep(zx_deadline_after(ZX_USEC(delay.channel_eq_delay_us())));
 
         // Did the sink device receive the signal successfully?
         if (!DpcdReadPairedRegs<dpcd::DPCD_LANE0_1_STATUS, dpcd::LaneStatus>(lane_status)) {
@@ -841,33 +872,25 @@ static registers::Trans select_trans(registers::Ddi ddi, registers::Pipe pipe) {
 
 namespace i915 {
 
-DpDisplay::DpDisplay(Controller* controller, uint64_t id, registers::Ddi ddi, registers::Pipe pipe)
-        : DisplayDevice(controller, id, ddi, select_trans(ddi, pipe), pipe) { }
+DpDisplay::DpDisplay(Controller* controller, uint64_t id, registers::Ddi ddi)
+        : DisplayDevice(controller, id, ddi) { }
 
-bool DpDisplay::QueryDevice(edid::Edid* edid) {
+bool DpDisplay::Query() {
     // For eDP displays, assume that the BIOS has enabled panel power, given
     // that we need to rely on it properly configuring panel power anyway. For
     // general DP displays, the default power state is D0, so we don't have to
     // worry about AUX failures because of power saving mode.
-    const char* edid_err = "Failed to find timing";
-    if (!edid->Init(this, &edid_err)) {
-        LOG_TRACE("dp edid init failed \"%s\"\n", edid_err);
-        return false;
-    }
-    LOG_INFO("Found %s monitor\n", controller()->igd_opregion().IsEdp(ddi()) ? "eDP" : "DP");
 
     if (!DpcdRead(dpcd::DPCD_CAP_START, dpcd_capabilities_, fbl::count_of(dpcd_capabilities_))) {
-        LOG_ERROR("Failed to read dpcd capabilities\n");
+        LOG_TRACE("Failed to read dpcd capabilities\n");
         return false;
     }
 
     dpcd::DownStreamPortPresent dsp;
-    dsp.set_reg_value(dpcd_capabilities_[
-            dpcd::DPCD_DOWN_STREAM_PORT_PRESENT - dpcd::DPCD_CAP_START]);
+    dsp.set_reg_value(dpcd_capability(dpcd::DPCD_DOWN_STREAM_PORT_PRESENT));
     if (dsp.is_branch()) {
         dpcd::DownStreamPortCount count;
-        count.set_reg_value(dpcd_capabilities_[
-                dpcd::DPCD_DOWN_STREAM_PORT_COUNT - dpcd::DPCD_CAP_START]);
+        count.set_reg_value(dpcd_capability(dpcd::DPCD_DOWN_STREAM_PORT_COUNT));
         LOG_SPEW("Found branch with %d ports\n", count.count());
 
         dpcd::SinkCount sink_count;
@@ -884,7 +907,7 @@ bool DpDisplay::QueryDevice(edid::Edid* edid) {
 
     if (controller()->igd_opregion().IsEdp(ddi())) {
         dpcd::EdpConfigCap edp_caps;
-        edp_caps.set_reg_value(dpcd_capabilities_[dpcd::DPCD_EDP_CONFIG]);
+        edp_caps.set_reg_value(dpcd_capability(dpcd::DPCD_EDP_CONFIG));
 
         if (edp_caps.dpcd_display_ctrl_capable() &&
                 !DpcdRead(dpcd::DPCD_EDP_CAP_START, dpcd_edp_capabilities_,
@@ -895,7 +918,7 @@ bool DpDisplay::QueryDevice(edid::Edid* edid) {
     }
 
     dpcd::LaneCount max_lc;
-    max_lc.set_reg_value(dpcd_capabilities_[dpcd::DPCD_MAX_LANE_COUNT - dpcd::DPCD_CAP_START]);
+    max_lc.set_reg_value(dpcd_capability(dpcd::DPCD_MAX_LANE_COUNT));
     dp_lane_count_ = max_lc.lane_count_set();
     if ((ddi() == registers::DDI_A || ddi() == registers::DDI_E) && dp_lane_count_ == 4
             && !registers::DdiRegs(registers::DDI_A).DdiBufControl().ReadFrom(mmio_space())
@@ -905,7 +928,7 @@ bool DpDisplay::QueryDevice(edid::Edid* edid) {
     dp_enhanced_framing_enabled_ = max_lc.enhanced_frame_enabled();
 
     dpcd::LinkBw max_link_bw;
-    max_link_bw.set_reg_value(dpcd_capabilities_[dpcd::DPCD_MAX_LINK_RATE - dpcd::DPCD_CAP_START]);
+    max_link_bw.set_reg_value(dpcd_capability(dpcd::DPCD_MAX_LINK_RATE));
     dp_link_rate_idx_plus1_ = 0;
     dp_link_rate_mhz_ = 0;
     switch (max_link_bw.link_bw()) {
@@ -946,10 +969,12 @@ bool DpDisplay::QueryDevice(edid::Edid* edid) {
         return false;
     }
 
+    LOG_INFO("Found %s monitor\n", controller()->igd_opregion().IsEdp(ddi()) ? "eDP" : "DP");
+
     return true;
 }
 
-bool DpDisplay::ConfigureDdi() {
+bool DpDisplay::InitDdi() {
     bool is_edp = controller()->igd_opregion().IsEdp(ddi());
     if (is_edp) {
         auto panel_ctrl = registers::PanelPowerCtrl::Get().ReadFrom(mmio_space());
@@ -972,7 +997,7 @@ bool DpDisplay::ConfigureDdi() {
         }
     }
 
-    if (dpcd_capabilities_[dpcd::DPCD_REV - dpcd::DPCD_CAP_START] >= 0x11) {
+    if (dpcd_capability(dpcd::DPCD_REV) >= 0x11) {
         // If the device is in a low power state, the first write can fail. It should be ready
         // within 1ms, but try a few extra times to be safe.
         dpcd::SetPower set_pwr;
@@ -987,7 +1012,16 @@ bool DpDisplay::ConfigureDdi() {
         }
     }
 
-    registers::TranscoderRegs trans_regs(trans());
+    dpcd::LaneAlignStatusUpdate status;
+    if (!DpcdRead(dpcd::DPCD_LANE_ALIGN_STATUS_UPDATED, status.reg_value_ptr(), 1)) {
+        LOG_WARN("Failed to read align status on hotplug\n");
+        return false;
+    }
+
+    // If the link is already trained, assume output is working
+    if (status.interlane_align_done()) {
+        return true;
+    }
 
     uint8_t dpll_link_rate;
     if (dp_link_rate_mhz_ == 1620) {
@@ -998,7 +1032,8 @@ bool DpDisplay::ConfigureDdi() {
         ZX_ASSERT(dp_link_rate_mhz_ == 5400);
         dpll_link_rate = registers::DpllControl1::kLinkRate2700Mhz;
     }
-    registers::Dpll dpll = controller()->SelectDpll(is_edp, false /* is_hdmi */, dpll_link_rate);
+    dpll_state_t state = { .is_hdmi = false, .dp_rate = dpll_link_rate };
+    registers::Dpll dpll = controller()->SelectDpll(is_edp, state);
     if (dpll == registers::DPLL_INVALID) {
         return false;
     }
@@ -1047,8 +1082,33 @@ bool DpDisplay::ConfigureDdi() {
         return false;
     }
 
+    return true;
+}
+
+bool DpDisplay::ComputeDpllState(uint32_t pixel_clock_10khz, struct dpll_state* config) {
+    config->is_hdmi = false;
+    if (dp_link_rate_mhz_ == 1620) {
+        config->dp_rate = registers::DpllControl1::kLinkRate810Mhz;
+    } else if (dp_link_rate_mhz_ == 2700) {
+        config->dp_rate = registers::DpllControl1::kLinkRate1350Mhz;
+    } else {
+        ZX_ASSERT(dp_link_rate_mhz_ == 5400);
+        config->dp_rate = registers::DpllControl1::kLinkRate2700Mhz;
+    }
+    return true;
+}
+
+bool DpDisplay::DdiModeset(const display_mode_t& mode,
+                           registers::Pipe pipe, registers::Trans trans) {
+    return true;
+}
+
+bool DpDisplay::PipeConfigPreamble(const display_mode_t& mode,
+                                   registers::Pipe pipe, registers::Trans trans) {
+    registers::TranscoderRegs trans_regs(trans);
+
     // Configure Transcoder Clock Select
-    if (trans() != registers::TRANS_EDP) {
+    if (trans != registers::TRANS_EDP) {
         auto clock_select = trans_regs.ClockSelect().ReadFrom(mmio_space());
         clock_select.set_trans_clock_select(ddi() + 1);
         clock_select.WriteTo(mmio_space());
@@ -1056,7 +1116,7 @@ bool DpDisplay::ConfigureDdi() {
 
     // Pixel clock rate: The rate at which pixels are sent, in pixels per
     // second (Hz), divided by 10000.
-    uint32_t pixel_clock_rate = mode().pixel_clock_10khz;
+    uint32_t pixel_clock_rate = mode.pixel_clock_10khz;
 
     // This is the rate at which bits are sent on a single DisplayPort
     // lane, in raw bits per second, divided by 10000.
@@ -1075,14 +1135,11 @@ bool DpDisplay::ConfigureDdi() {
 
     uint32_t pixel_bit_rate = pixel_clock_rate * bits_per_pixel;
     uint32_t total_link_bit_rate = link_symbol_rate * 8 * dp_lane_count_;
+    ZX_DEBUG_ASSERT(pixel_bit_rate <= total_link_bit_rate); // Should be caught by CheckPixelRate
+
     uint32_t data_m;
     uint32_t data_n;
     CalculateRatio(pixel_bit_rate, total_link_bit_rate, &data_m, &data_n);
-
-    if (pixel_clock_rate > link_symbol_rate || pixel_bit_rate > total_link_bit_rate) {
-        LOG_ERROR("Insufficient link rate for resolution\n");
-        return false;
-    }
 
     auto data_m_reg = trans_regs.DataM().FromValue(0);
     data_m_reg.set_tu_or_vcpayload_size(63); // Size - 1, default TU size is 64
@@ -1101,39 +1158,12 @@ bool DpDisplay::ConfigureDdi() {
     link_n_reg.set_link_n_value(link_n);
     link_n_reg.WriteTo(mmio_space());
 
-    // Configure the rest of the transcoder
-    uint32_t h_active = mode().h_addressable - 1;
-    uint32_t h_sync_start = h_active + mode().h_front_porch;
-    uint32_t h_sync_end = h_sync_start + mode().h_sync_pulse;
-    uint32_t h_total = h_active + mode().h_blanking;
+    return true;
+}
 
-    uint32_t v_active = mode().v_addressable - 1;
-    uint32_t v_sync_start = v_active + mode().v_front_porch;
-    uint32_t v_sync_end = v_sync_start + mode().v_sync_pulse;
-    uint32_t v_total = v_active + mode().v_blanking;
-
-    auto h_total_reg = trans_regs.HTotal().FromValue(0);
-    h_total_reg.set_count_total(h_total);
-    h_total_reg.set_count_active(h_active);
-    h_total_reg.WriteTo(mmio_space());
-    auto v_total_reg = trans_regs.VTotal().FromValue(0);
-    v_total_reg.set_count_total(v_total);
-    v_total_reg.set_count_active(v_active);
-    v_total_reg.WriteTo(mmio_space());
-
-    auto h_sync_reg = trans_regs.HSync().FromValue(0);
-    h_sync_reg.set_sync_start(h_sync_start);
-    h_sync_reg.set_sync_end(h_sync_end);
-    h_sync_reg.WriteTo(mmio_space());
-    auto v_sync_reg = trans_regs.VSync().FromValue(0);
-    v_sync_reg.set_sync_start(v_sync_start);
-    v_sync_reg.set_sync_end(v_sync_end);
-    v_sync_reg.WriteTo(mmio_space());
-
-    // The Intel docs say that H/VBlank should be programmed with the same H/VTotal
-    trans_regs.HBlank().FromValue(h_total_reg.reg_value()).WriteTo(mmio_space());
-    trans_regs.VBlank().FromValue(v_total_reg.reg_value()).WriteTo(mmio_space());
-
+bool DpDisplay::PipeConfigEpilogue(const display_mode_t& mode,
+                                   registers::Pipe pipe, registers::Trans trans) {
+    registers::TranscoderRegs trans_regs(trans);
     auto msa_misc = trans_regs.MsaMisc().FromValue(0);
     msa_misc.set_sync_clock(1);
     msa_misc.set_bits_per_color(msa_misc.k8Bbc); // kPixelFormat
@@ -1145,21 +1175,18 @@ bool DpDisplay::ConfigureDdi() {
     ddi_func.set_ddi_select(ddi());
     ddi_func.set_trans_ddi_mode_select(ddi_func.kModeDisplayPortSst);
     ddi_func.set_bits_per_color(ddi_func.k8bbc); // kPixelFormat
-    ddi_func.set_sync_polarity((!!(mode().mode_flags & MODE_FLAG_VSYNC_POSITIVE)) << 1
-                                | (!!(mode().mode_flags & MODE_FLAG_HSYNC_POSITIVE)));
+    ddi_func.set_sync_polarity((!!(mode.flags & MODE_FLAG_VSYNC_POSITIVE)) << 1
+                                | (!!(mode.flags & MODE_FLAG_HSYNC_POSITIVE)));
     ddi_func.set_port_sync_mode_enable(0);
-    ddi_func.set_edp_input_select(
-            pipe() == registers::PIPE_A ? ddi_func.kPipeA :
-                    (pipe() == registers::PIPE_B ? ddi_func.kPipeB : ddi_func.kPipeC));
     ddi_func.set_dp_vc_payload_allocate(0);
-    ddi_func.set_edp_input_select(pipe() == registers::PIPE_A ? ddi_func.kPipeA :
-            (pipe() == registers::PIPE_B ? ddi_func.kPipeB : ddi_func.kPipeC));
+    ddi_func.set_edp_input_select(pipe == registers::PIPE_A ? ddi_func.kPipeA :
+            (pipe == registers::PIPE_B ? ddi_func.kPipeB : ddi_func.kPipeC));
     ddi_func.set_dp_port_width_selection(dp_lane_count_ - 1);
     ddi_func.WriteTo(mmio_space());
 
     auto trans_conf = trans_regs.Conf().FromValue(0);
     trans_conf.set_transcoder_enable(1);
-    trans_conf.set_interlaced_mode(!!(mode().mode_flags & MODE_FLAG_INTERLACED));
+    trans_conf.set_interlaced_mode(!!(mode.flags & MODE_FLAG_INTERLACED));
     trans_conf.WriteTo(mmio_space());
 
     if (controller()->igd_opregion().IsEdp(ddi())) {
@@ -1167,11 +1194,9 @@ bool DpDisplay::ConfigureDdi() {
         dpcd::EdpGeneralCap1 general_cap;
         dpcd::EdpBacklightCap backlight_cap;
 
-        config_cap.set_reg_value(dpcd_capabilities_[dpcd::DPCD_EDP_CONFIG]);
-        general_cap.set_reg_value(dpcd_edp_capabilities_[
-                dpcd::DPCD_EDP_GENERAL_CAP1 - dpcd::DPCD_EDP_CAP_START]);
-        backlight_cap.set_reg_value(dpcd_edp_capabilities_[
-                dpcd::DPCD_EDP_BACKLIGHT_CAP - dpcd::DPCD_EDP_CAP_START]);
+        config_cap.set_reg_value(dpcd_capability(dpcd::DPCD_EDP_CONFIG));
+        general_cap.set_reg_value(dpcd_edp_capability(dpcd::DPCD_EDP_GENERAL_CAP1));
+        backlight_cap.set_reg_value(dpcd_edp_capability(dpcd::DPCD_EDP_BACKLIGHT_CAP));
 
         backlight_aux_power_ = config_cap.dpcd_display_ctrl_capable()
                 && general_cap.tcon_backlight_adjustment_cap()
@@ -1353,6 +1378,13 @@ void DpDisplay::SetBacklightState(bool power, uint8_t brightness) {
 void DpDisplay::GetBacklightState(bool* power, uint8_t* brightness) {
     *power = IsBacklightOn();
     *brightness = static_cast<uint8_t>(GetBacklightBrightness() * 255);
+}
+
+bool DpDisplay::CheckPixelRate(uint64_t pixel_rate) {
+    uint64_t bit_rate = (dp_link_rate_mhz_ * 1000000lu) * dp_lane_count_;
+    // Multiply by 8/10 because of 8b/10b encoding
+    uint64_t max_pixel_rate = (bit_rate * 8 / 10) / kBitsPerPixel;
+    return pixel_rate <= max_pixel_rate;
 }
 
 } // namespace i915

@@ -9,7 +9,7 @@
 #include <ddk/protocol/intel-hda-codec.h>
 #include <ddk/protocol/intel-hda-dsp.h>
 #include <fbl/mutex.h>
-#include <lib/vmo-utils/vmo_mapper.h>
+#include <lib/fzl/vmo-mapper.h>
 
 #include <limits.h>
 #include <stdint.h>
@@ -58,6 +58,8 @@ public:
 
     zx_status_t DriverBind(zx_device_t* hda_dev) __WARN_UNUSED_RESULT;
     void        DeviceShutdown();
+
+    zx_status_t Suspend(uint32_t flags) override final;
 
 private:
     friend class fbl::RefPtr<IntelAudioDsp>;
@@ -197,7 +199,7 @@ private:
     ihda_dsp_protocol_t ihda_dsp_;
 
     // PCI registers
-    vmo_utils::VmoMapper mapped_regs_;
+    fzl::VmoMapper mapped_regs_;
 
     // A reference to our controller's BTI. This is needed to load firmware to the DSP.
     fbl::RefPtr<RefCountedBti> hda_bti_;

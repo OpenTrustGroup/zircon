@@ -22,41 +22,11 @@ static bool is_allocated_contiguous(size_t size, uint32_t flags) {
 
 static zx_status_t pin_contig_buffer(zx_handle_t bti, zx_handle_t vmo, size_t size,
                                      zx_paddr_t* phys, zx_handle_t* pmt) {
-    zx_info_bti_t info;
-    zx_status_t status = zx_object_get_info(bti, ZX_INFO_BTI, &info, sizeof(info),
-                                            NULL, NULL);
-    if (status != ZX_OK) {
-        return status;
+    uint32_t options = ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE;
+    if (size > PAGE_SIZE) {
+        options |= ZX_BTI_CONTIGUOUS;
     }
-    ZX_DEBUG_ASSERT(info.minimum_contiguity % PAGE_SIZE == 0);
-
-    size_t num_entries = ROUNDUP(size, info.minimum_contiguity) / info.minimum_contiguity;
-    uint32_t options = ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE | ZX_BTI_COMPRESS;
-    // Issue the pin request.  We need to temporarily allocate storage for the
-    // returned list.  If it's too big, allocate on the heap.
-    if (num_entries < 512) {
-        zx_paddr_t addrs[512];
-        status = zx_bti_pin(bti, options, vmo, 0, ROUNDUP(size, PAGE_SIZE), addrs, num_entries,
-                            pmt);
-        if (status == ZX_OK) {
-            *phys = addrs[0];
-        }
-    } else {
-        zx_paddr_t* addrs = malloc(sizeof(*addrs) * num_entries);
-        if (addrs == NULL) {
-            return ZX_ERR_NO_MEMORY;
-        }
-        status = zx_bti_pin(bti, options, vmo, 0, ROUNDUP(size, PAGE_SIZE), addrs, num_entries,
-                            pmt);
-        if (status != ZX_OK) {
-            free(addrs);
-            return status;
-        }
-        *phys = addrs[0];
-        free(addrs);
-    }
-
-    return status;
+    return zx_bti_pin(bti, options, vmo, 0, ROUNDUP(size, PAGE_SIZE), phys, 1, pmt);
 }
 
 static zx_status_t io_buffer_init_common(io_buffer_t* buffer, zx_handle_t bti_handle,
@@ -64,12 +34,12 @@ static zx_status_t io_buffer_init_common(io_buffer_t* buffer, zx_handle_t bti_ha
                                          zx_off_t offset, uint32_t flags) {
     zx_vaddr_t virt;
 
-    uint32_t map_flags = ZX_VM_FLAG_PERM_READ;
+    zx_vm_option_t map_options = ZX_VM_PERM_READ;
     if (flags & IO_BUFFER_RW) {
-        map_flags = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+        map_options = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     }
 
-    zx_status_t status = zx_vmar_map(zx_vmar_root_self(), 0, vmo_handle, 0, size, map_flags, &virt);
+    zx_status_t status = zx_vmar_map(zx_vmar_root_self(), map_options, 0, vmo_handle, 0, size, &virt);
     if (status != ZX_OK) {
         zxlogf(ERROR, "io_buffer: zx_vmar_map failed %d size: %zu\n", status, size);
         zx_handle_close(vmo_handle);
@@ -201,9 +171,9 @@ zx_status_t io_buffer_init_physical(io_buffer_t* buffer, zx_handle_t bti, zx_pad
         return status;
     }
 
-    uint32_t flags = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_MAP_RANGE;
+    zx_vm_option_t options = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_MAP_RANGE;
     zx_vaddr_t virt;
-    status = zx_vmar_map(zx_vmar_root_self(), 0, vmo_handle, 0, size, flags, &virt);
+    status = zx_vmar_map(zx_vmar_root_self(), options, 0, vmo_handle, 0, size, &virt);
     if (status != ZX_OK) {
         zxlogf(ERROR, "io_buffer: zx_vmar_map failed %d size: %zu\n", status, size);
         zx_handle_close(vmo_handle);

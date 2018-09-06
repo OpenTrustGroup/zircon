@@ -14,6 +14,8 @@ LOCAL_INC := $(LOCAL_DIR)/include/lib/memfs
 
 MODULE := $(LOCAL_DIR).cpp
 MODULE_TYPE := userlib
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_NAME := memfs-cpp
 
 MODULE_SRCS := \
@@ -40,6 +42,9 @@ MODULE_LIBS := \
     system/ulib/fdio \
     system/ulib/zircon \
 
+MODULE_FIDL_LIBS := \
+    system/fidl/fuchsia-io \
+
 MODULE_PACKAGE := src
 
 include make/module.mk
@@ -52,6 +57,8 @@ include make/module.mk
 
 MODULE := $(LOCAL_DIR)
 MODULE_TYPE := userlib
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_NAME := memfs
 
 MODULE_SRCS := \
@@ -69,7 +76,6 @@ MODULE_STATIC_LIBS := \
     system/ulib/async \
     system/ulib/fbl \
     system/ulib/trace \
-    system/ulib/trace-engine \
     system/ulib/sync \
     system/ulib/zx \
     system/ulib/zxcpp \
@@ -77,7 +83,11 @@ MODULE_STATIC_LIBS := \
 MODULE_LIBS := \
     system/ulib/c \
     system/ulib/fdio \
+    system/ulib/trace-engine \
     system/ulib/zircon \
+
+MODULE_FIDL_LIBS := \
+    system/fidl/fuchsia-io \
 
 MODULE_SO_NAME := $(MODULE_NAME)
 MODULE_EXPORT := so

@@ -29,23 +29,16 @@ void SimpleDisplay::SetDisplayControllerCb(void* cb_ctx, display_controller_cb_t
     cb_ctx_ = cb_ctx;
     cb_ = cb;
 
-    uint64_t display_id = kDisplayId;
-    cb->on_displays_changed(cb_ctx, &display_id, 1, nullptr, 0);
-}
+    added_display_args_t args = {};
+    args.display_id = kDisplayId;
+    args.edid_present = false;
+    args.panel.params.height = height_;
+    args.panel.params.width = width_;
+    args.panel.params.refresh_rate_e2 = 3000; // Just guess that it's 30fps
+    args.pixel_formats = &format_;
+    args.pixel_format_count = 1;
 
-zx_status_t SimpleDisplay::GetDisplayInfo(uint64_t display_id, display_info_t* info) {
-    if (display_id != kDisplayId) {
-        return ZX_ERR_INVALID_ARGS;
-    }
-
-    info->edid_present = false;
-    info->panel.params.height = height_;
-    info->panel.params.width = width_;
-    info->panel.params.refresh_rate_e2 = 3000; // Just guess that it's 30fps
-    info->pixel_formats = &format_;
-    info->pixel_format_count = 1;
-
-    return ZX_OK;
+    cb->on_displays_changed(cb_ctx, &args, 1, nullptr, 0);
 }
 
 zx_status_t SimpleDisplay::ImportVmoImage(image_t* image, const zx::vmo& vmo, size_t offset) {
@@ -72,8 +65,10 @@ void SimpleDisplay::ReleaseImage(image_t* image) {
 }
 
 void SimpleDisplay::CheckConfiguration(const display_config_t** display_configs,
+                                       uint32_t* display_cfg_result,
                                        uint32_t** layer_cfg_results,
                                        uint32_t display_count) {
+    *display_cfg_result = CONFIG_DISPLAY_OK;
     if (display_count != 1) {
         ZX_DEBUG_ASSERT(display_count == 0);
         return;
@@ -109,7 +104,8 @@ void SimpleDisplay::ApplyConfiguration(const display_config_t** display_config,
     bool has_image = display_count != 0 && display_config[0]->layer_count != 0;
     void* handles[] = { kImageHandle };
     if (cb_) {
-        cb_->on_display_vsync(cb_ctx_, kDisplayId, handles, has_image);
+        cb_->on_display_vsync(cb_ctx_, kDisplayId, zx_clock_get(ZX_CLOCK_MONOTONIC),
+                              handles, has_image);
     }
 }
 
@@ -172,10 +168,16 @@ zx_status_t SimpleDisplay::Bind(const char* name, fbl::unique_ptr<SimpleDisplay>
 }
 
 SimpleDisplay::SimpleDisplay(zx_device_t* parent, zx_handle_t vmo,
+                             uintptr_t framebuffer, uint64_t framebuffer_size,
                              uint32_t width, uint32_t height,
                              uint32_t stride, zx_pixel_format_t format)
         : DeviceType(parent), framebuffer_handle_(vmo),
+          framebuffer_(framebuffer), framebuffer_size_(framebuffer_size),
           width_(width), height_(height), stride_(stride), format_(format) { }
+
+SimpleDisplay::~SimpleDisplay() {
+    zx_vmar_unmap(zx_vmar_root_self(), framebuffer_, framebuffer_size_);
+}
 
 zx_status_t bind_simple_pci_display_bootloader(zx_device_t* dev, const char* name, uint32_t bar) {
     uint32_t format, width, height, stride;
@@ -208,11 +210,11 @@ zx_status_t bind_simple_pci_display(zx_device_t* dev, const char* name, uint32_t
         printf("%s: failed to map pci bar %d: %d\n", name, bar, status);
         return status;
     }
-    zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t) framebuffer, framebuffer_size);
 
     fbl::AllocChecker ac;
-    fbl::unique_ptr<SimpleDisplay> display(
-            new (&ac) SimpleDisplay(dev, framebuffer_handle, width, height, stride, format));
+    fbl::unique_ptr<SimpleDisplay> display(new (&ac) SimpleDisplay(
+            dev, framebuffer_handle, (uintptr_t) framebuffer,
+            framebuffer_size, width, height, stride, format));
     if (!ac.check()) {
         zx_handle_close(framebuffer_handle);
         return ZX_ERR_NO_MEMORY;

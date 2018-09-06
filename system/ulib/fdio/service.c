@@ -10,6 +10,7 @@
 #include <zircon/syscalls.h>
 
 #include "private.h"
+#include "private-remoteio.h"
 #include "unistd.h"
 
 typedef struct {
@@ -29,10 +30,6 @@ static fdio_ops_t zx_svc_ops = {
     .read_at = fdio_default_read_at,
     .write = fdio_default_write,
     .write_at = fdio_default_write_at,
-    .recvfrom = fdio_default_recvfrom,
-    .sendto = fdio_default_sendto,
-    .recvmsg = fdio_default_recvmsg,
-    .sendmsg = fdio_default_sendmsg,
     .seek = fdio_default_seek,
     .misc = fdio_default_misc,
     .close = zxsvc_close,
@@ -42,9 +39,25 @@ static fdio_ops_t zx_svc_ops = {
     .wait_begin = fdio_default_wait_begin,
     .wait_end = fdio_default_wait_end,
     .unwrap = fdio_default_unwrap,
-    .shutdown = fdio_default_shutdown,
     .posix_ioctl = fdio_default_posix_ioctl,
     .get_vmo = fdio_default_get_vmo,
+    .get_token = fdio_default_get_token,
+    .get_attr = fdio_default_get_attr,
+    .set_attr = fdio_default_set_attr,
+    .sync = fdio_default_sync,
+    .readdir = fdio_default_readdir,
+    .rewind = fdio_default_rewind,
+    .unlink = fdio_default_unlink,
+    .truncate = fdio_default_truncate,
+    .rename = fdio_default_rename,
+    .link = fdio_default_link,
+    .get_flags = fdio_default_get_flags,
+    .set_flags = fdio_default_set_flags,
+    .recvfrom = fdio_default_recvfrom,
+    .sendto = fdio_default_sendto,
+    .recvmsg = fdio_default_recvmsg,
+    .sendmsg = fdio_default_sendmsg,
+    .shutdown = fdio_default_shutdown,
 };
 
 fdio_t* fdio_service_create(zx_handle_t h) {
@@ -79,15 +92,24 @@ zx_status_t fdio_get_service_handle(int fd, zx_handle_t* out) {
         mtx_unlock(&fdio_lock);
         zx_status_t r;
         if (io->ops == &zx_svc_ops) {
-            // is a service, extract handle
+            // is an unknown service, extract handle
             zxsvc_t* svc = (zxsvc_t*) io;
             *out = svc->h;
             svc->h = ZX_HANDLE_INVALID;
             r = ZX_OK;
+        } else if (io->ops == &zx_remote_ops) {
+            // is a fuchsia.io.* service, extract handle
+            zxrio_t* rio = (zxrio_t*) io;
+            *out = rio->h;
+            rio->h = ZX_HANDLE_INVALID;
+            zx_handle_close(rio->h2);
+            rio->h2 = ZX_HANDLE_INVALID;
+            r = ZX_OK;
         } else {
-            r = io->ops->close(io);
-            fdio_release(io);
+            r = ZX_ERR_NOT_SUPPORTED;
+            io->ops->close(io);
         }
+        fdio_release(io);
         return r;
     }
 }

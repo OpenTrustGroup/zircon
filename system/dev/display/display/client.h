@@ -52,7 +52,6 @@ private:
 
     // Event ids passed to SetLayerImage which haven't been applied yet.
     uint64_t pending_wait_event_id_;
-    uint64_t pending_present_event_id_;
     uint64_t pending_signal_event_id_;
 
     // The image given to SetLayerImage which hasn't been applied yet.
@@ -62,6 +61,19 @@ private:
     list_node_t waiting_images_ = LIST_INITIAL_VALUE(waiting_images_);
     // The image which has most recently been sent to the display controller impl
     fbl::RefPtr<Image> displayed_image_;
+
+    // Counters used for keeping track of when the layer's images need to be dropped.
+    uint64_t pending_image_config_gen_ = 0;
+    uint64_t current_image_config_gen_ = 0;
+
+    int32_t pending_cursor_x_;
+    int32_t pending_cursor_y_;
+    int32_t current_cursor_x_;
+    int32_t current_cursor_y_;
+
+    // Storage for a color layer's color data bytes.
+    uint8_t pending_color_bytes_[4];
+    uint8_t current_color_bytes_[4];
 
     layer_node_t pending_node_;
     layer_node_t current_node_;
@@ -83,7 +95,7 @@ public:
         return ret;
     }
 
-    uint32_t current_layer_count() const { return current_.layer_count; }
+    uint32_t vsync_layer_count() const { return vsync_layer_count_; }
     const display_config_t* current_config() const { return &current_; }
     const fbl::SinglyLinkedList<layer_node_t*>& get_current_layers() const {
         return current_layers_;
@@ -98,12 +110,10 @@ private:
     fbl::SinglyLinkedList<layer_node_t*> pending_layers_;
     fbl::SinglyLinkedList<layer_node_t*> current_layers_;
 
-    fbl::unique_ptr<zx_pixel_format_t[]> pixel_formats_;
-    uint32_t pixel_format_count_;
+    fbl::Array<zx_pixel_format_t> pixel_formats_;
+    fbl::Array<cursor_info_t> cursor_infos_;
 
-    fbl::unique_ptr<cursor_info_t[]> cursor_infos_;
-    uint32_t cursor_info_count_;
-
+    uint32_t vsync_layer_count_;
     bool display_config_change_ = false;
 
     friend Client;
@@ -117,11 +127,11 @@ class Client : private FenceCallback {
 public:
     Client(Controller* controller, ClientProxy* proxy, bool is_vc);
     ~Client();
-    zx_status_t Init(zx::channel* client_handle);
+    zx_status_t Init(zx_handle_t server_handle);
 
-    void OnDisplaysChanged(uint64_t* displays_added,
+    void OnDisplaysChanged(const uint64_t* displays_added,
                            uint32_t added_count,
-                           uint64_t* displays_removed,
+                           const uint64_t* displays_removed,
                            uint32_t removed_count);
     void SetOwnership(bool is_owner);
     void ApplyConfig();
@@ -131,7 +141,7 @@ public:
 
     void TearDown();
 
-    bool IsValid() { return server_handle_.get() != ZX_HANDLE_INVALID; }
+    bool IsValid() { return server_handle_ != ZX_HANDLE_INVALID; }
 private:
     void HandleImportVmoImage(const fuchsia_display_ControllerImportVmoImageRequest* req,
                               fidl::Builder* resp_builder, const fidl_type_t** resp_table);
@@ -141,8 +151,6 @@ private:
                            fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleReleaseEvent(const fuchsia_display_ControllerReleaseEventRequest* req,
                             fidl::Builder* resp_builder, const fidl_type_t** resp_table);
-    void HandleSetDisplayImage(const fuchsia_display_ControllerSetDisplayImageRequest* req,
-                               fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleCreateLayer(const fuchsia_display_ControllerCreateLayerRequest* req,
                            fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleDestroyLayer(const fuchsia_display_ControllerDestroyLayerRequest* req,
@@ -169,11 +177,16 @@ private:
     void HandleSetLayerCursorPosition(
             const fuchsia_display_ControllerSetLayerCursorPositionRequest* req,
             fidl::Builder* resp_builder, const fidl_type_t** resp_table);
+    void HandleSetLayerColorConfig(
+            const fuchsia_display_ControllerSetLayerColorConfigRequest* req,
+            fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleSetLayerImage(const fuchsia_display_ControllerSetLayerImageRequest* req,
                              fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleCheckConfig(const fuchsia_display_ControllerCheckConfigRequest* req,
                            fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleApplyConfig(const fuchsia_display_ControllerApplyConfigRequest* req,
+                           fidl::Builder* resp_builder, const fidl_type_t** resp_table);
+    void HandleEnableVsync(const fuchsia_display_ControllerEnableVsyncRequest* req,
                            fidl::Builder* resp_builder, const fidl_type_t** resp_table);
     void HandleSetVirtconMode(const fuchsia_display_ControllerSetVirtconModeRequest* req,
                               fidl::Builder* resp_builder, const fidl_type_t** resp_table);
@@ -185,18 +198,16 @@ private:
                            zx_handle_t* handle_out, bool* has_handle_out,
                            const fidl_type_t** resp_table);
 
-    zx_status_t CreateLayer(uint64_t* layer_id);
-
-    // Cleans up layer state associated with image id. If id == INVALID_ID, then
-    // cleans up all image layer state. Return true if a current layer was modified.
-    bool CleanUpImageLayerState(uint64_t id);
+    // Cleans up layer state associated with an image. If image == nullptr, then
+    // cleans up all image state. Return true if a current layer was modified.
+    bool CleanUpImage(Image* image);
 
     Controller* controller_;
     ClientProxy* proxy_;
     bool is_vc_;
     uint64_t console_fb_display_id_ = -1;
 
-    zx::channel server_handle_;
+    zx_handle_t server_handle_;
     uint64_t next_image_id_ = 1; // Only INVALID_ID == 0 is invalid
 
     Image::Map images_;
@@ -217,7 +228,7 @@ private:
     // TODO(stevensd): Delete this when client stop using SetDisplayImage
     uint64_t display_image_layer_ = INVALID_ID;
 
-    void HandleControllerApi(async_t* async, async::WaitBase* self,
+    void HandleControllerApi(async_dispatcher_t* dispatcher, async::WaitBase* self,
                              zx_status_t status, const zx_packet_signal_t* signal);
     async::WaitMethod<Client, &Client::HandleControllerApi> api_wait_{this};
 
@@ -242,18 +253,29 @@ public:
                          void* out_buf, size_t out_len, size_t* actual);
     void DdkRelease();
 
-    zx_status_t OnDisplaysChanged(const uint64_t* displays_added, uint32_t added_count,
-                                  const uint64_t* displays_removed, uint32_t removed_count);
+    // Requires holding controller_->mtx() lock
+    void OnDisplayVsync(uint64_t display_id, zx_time_t timestamp,
+                        uint64_t* image_ids, uint32_t count);
+    void OnDisplaysChanged(const uint64_t* displays_added, uint32_t added_count,
+                           const uint64_t* displays_removed, uint32_t removed_count);
     void SetOwnership(bool is_owner);
     void ReapplyConfig();
 
+    // Requires holding controller_->mtx() lock
+    void EnableVsync(bool enable) {
+        ZX_DEBUG_ASSERT(mtx_trylock(controller_->mtx()) == thrd_busy);
+
+        enable_vsync_ = enable;
+    }
     void OnClientDead();
     void Close();
 private:
     Controller* controller_;
     bool is_vc_;
     Client handler_;
+    bool enable_vsync_ = false;
 
+    zx::channel server_handle_;
     zx::channel client_handle_;
 };
 

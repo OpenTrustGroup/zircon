@@ -13,7 +13,6 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/protocol/usb-function.h>
-#include <ddk/usb-request.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/device/usb-device.h>
@@ -104,7 +103,7 @@ static void ums_queue_csw(usb_ums_t* ums, uint8_t status) {
 
     usb_request_t* req = ums->csw_req;
     ums_csw_t* csw;
-    usb_request_mmap(req, (void **)&csw);
+    usb_function_req_mmap(&ums->function, req, (void **)&csw);
 
     csw->dCSWSignature = htole32(CSW_SIGNATURE);
     csw->dCSWTag = ums->current_cbw.dCBWTag;
@@ -126,7 +125,7 @@ static void ums_continue_transfer(usb_ums_t* ums) {
     req->header.length = length;
 
     if (ums->data_state == DATA_STATE_READ) {
-        usb_request_copyto(req, ums->storage + ums->data_offset, length, 0);
+        usb_function_req_copy_to(&ums->function, req, ums->storage + ums->data_offset, length, 0);
         ums_function_queue_data(ums, req);
     } else if (ums->data_state == DATA_STATE_WRITE) {
         ums_function_queue_data(ums, req);
@@ -159,7 +158,7 @@ static void ums_handle_inquiry(usb_ums_t* ums, ums_cbw_t* cbw) {
 
     usb_request_t* req = ums->data_req;
     uint8_t* buffer;
-    usb_request_mmap(req, (void **)&buffer);
+    usb_function_req_mmap(&ums->function, req, (void **)&buffer);
     memset(buffer, 0, UMS_INQUIRY_TRANSFER_LENGTH);
     req->header.length = UMS_INQUIRY_TRANSFER_LENGTH;
 
@@ -188,7 +187,7 @@ static void ums_handle_request_sense(usb_ums_t* ums, ums_cbw_t* cbw) {
 
     usb_request_t* req = ums->data_req;
     uint8_t* buffer;
-    usb_request_mmap(req, (void **)&buffer);
+    usb_function_req_mmap(&ums->function, req, (void **)&buffer);
     memset(buffer, 0, UMS_REQUEST_SENSE_TRANSFER_LENGTH);
     req->header.length = UMS_REQUEST_SENSE_TRANSFER_LENGTH;
 
@@ -207,7 +206,7 @@ static void ums_handle_read_capacity10(usb_ums_t* ums, ums_cbw_t* cbw) {
 
     usb_request_t* req = ums->data_req;
     scsi_read_capacity_10_t* data;
-    usb_request_mmap(req, (void **)&data);
+    usb_function_req_mmap(&ums->function, req, (void **)&data);
 
     uint64_t lba = BLOCK_COUNT - 1;
     if (lba > UINT32_MAX) {
@@ -227,7 +226,7 @@ static void ums_handle_read_capacity16(usb_ums_t* ums, ums_cbw_t* cbw) {
 
     usb_request_t* req = ums->data_req;
     scsi_read_capacity_16_t* data;
-    usb_request_mmap(req, (void **)&data);
+    usb_function_req_mmap(&ums->function, req, (void **)&data);
     memset(data, 0, sizeof(*data));
 
     data->lba = htobe64(BLOCK_COUNT - 1);
@@ -243,7 +242,7 @@ static void ums_handle_mode_sense6(usb_ums_t* ums, ums_cbw_t* cbw) {
 
     usb_request_t* req = ums->data_req;
     scsi_mode_sense_6_data_t* data;
-    usb_request_mmap(req, (void **)&data);
+    usb_function_req_mmap(&ums->function, req, (void **)&data);
     memset(data, 0, sizeof(*data));
 
     // TODO(voydanoff) fill in data here
@@ -375,7 +374,7 @@ static void ums_cbw_complete(usb_request_t* req, void* cookie) {
 
     if (req->response.status == ZX_OK && req->response.actual == sizeof(ums_cbw_t)) {
         ums_cbw_t* cbw = &ums->current_cbw;
-        usb_request_copyfrom(req, cbw, sizeof(*cbw), 0);
+        usb_function_req_copy_from(&ums->function, req, cbw, sizeof(*cbw), 0);
         ums_handle_cbw(ums, cbw);
     }
 }
@@ -386,7 +385,8 @@ static void ums_data_complete(usb_request_t* req, void* cookie) {
     zxlogf(TRACE, "ums_data_complete %d %ld\n", req->response.status, req->response.actual);
 
     if (ums->data_state == DATA_STATE_WRITE) {
-        usb_request_copyfrom(req, ums->storage + ums->data_offset, req->response.actual, 0);
+        usb_function_req_copy_from(&ums->function, req, ums->storage + ums->data_offset,
+                          req->response.actual, 0);
     } else if (ums->data_state != DATA_STATE_READ) {
         return;
     }
@@ -480,13 +480,13 @@ static void usb_ums_release(void* ctx) {
     zx_handle_close(ums->storage_handle);
 
     if (ums->cbw_req) {
-        usb_request_release(ums->cbw_req);
+        usb_function_req_release(&ums->function, ums->cbw_req);
     }
     if (ums->data_req) {
-        usb_request_release(ums->data_req);
+        usb_function_req_release(&ums->function, ums->data_req);
     }
     if (ums->cbw_req) {
-        usb_request_release(ums->csw_req);
+        usb_function_req_release(&ums->function, ums->csw_req);
     }
     free(ums);
 }
@@ -552,8 +552,8 @@ zx_status_t usb_ums_bind(void* ctx, zx_device_t* parent) {
     if (status != ZX_OK) {
         goto fail;
     }
-    status = zx_vmar_map(zx_vmar_root_self(), 0, ums->storage_handle, 0, STORAGE_SIZE,
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, (zx_vaddr_t *)&ums->storage);
+    status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                         0, ums->storage_handle, 0, STORAGE_SIZE, (zx_vaddr_t *)&ums->storage);
     if (status != ZX_OK) {
         goto fail;
     }

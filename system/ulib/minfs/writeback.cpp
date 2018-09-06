@@ -18,8 +18,8 @@
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
 #include <fs/block-txn.h>
-#include <fs/mapped-vmo.h>
 #include <fs/vfs.h>
+#include <lib/fzl/mapped-vmo.h>
 
 #include "minfs-private.h"
 #include <minfs/writeback.h>
@@ -69,16 +69,19 @@ zx_status_t WriteTxn::Flush(zx_handle_t vmo, vmoid_t vmoid) {
     block_fifo_request_t blk_reqs[requests_.size()];
     const uint32_t kDiskBlocksPerMinfsBlock = kMinfsBlockSize / bc_->BlockSize();
     for (size_t i = 0; i < requests_.size(); i++) {
-        blk_reqs[i].txnid = bc_->TxnId();
+        blk_reqs[i].group = bc_->BlockGroupID();
         blk_reqs[i].vmoid = vmoid;
         blk_reqs[i].opcode = BLOCKIO_WRITE;
         blk_reqs[i].vmo_offset = requests_[i].vmo_offset * kDiskBlocksPerMinfsBlock;
         blk_reqs[i].dev_offset = requests_[i].dev_offset * kDiskBlocksPerMinfsBlock;
-        blk_reqs[i].length = requests_[i].length * kDiskBlocksPerMinfsBlock;
+        // TODO(ZX-2253): Remove this assertion.
+        uint64_t length = requests_[i].length * kDiskBlocksPerMinfsBlock;
+        ZX_ASSERT_MSG(length < UINT32_MAX, "Too many blocks");
+        blk_reqs[i].length = static_cast<uint32_t>(length);
     }
 
     // Actually send the operations to the underlying block device.
-    zx_status_t status = bc_->Txn(blk_reqs, requests_.size());
+    zx_status_t status = bc_->Transaction(blk_reqs, requests_.size());
 
     requests_.reset();
     return status;
@@ -149,7 +152,7 @@ void WritebackWork::PinVnode(fbl::RefPtr<VnodeMinfs> vn) {
 
 #ifdef __Fuchsia__
 
-zx_status_t WritebackBuffer::Create(Bcache* bc, fbl::unique_ptr<fs::MappedVmo> buffer,
+zx_status_t WritebackBuffer::Create(Bcache* bc, fbl::unique_ptr<fzl::MappedVmo> buffer,
                                     fbl::unique_ptr<WritebackBuffer>* out) {
     fbl::unique_ptr<WritebackBuffer> wb(new WritebackBuffer(bc, fbl::move(buffer)));
     if (wb->buffer_->GetSize() % kMinfsBlockSize != 0) {
@@ -172,7 +175,7 @@ zx_status_t WritebackBuffer::Create(Bcache* bc, fbl::unique_ptr<fs::MappedVmo> b
     return ZX_OK;
 }
 
-WritebackBuffer::WritebackBuffer(Bcache* bc, fbl::unique_ptr<fs::MappedVmo> buffer) :
+WritebackBuffer::WritebackBuffer(Bcache* bc, fbl::unique_ptr<fzl::MappedVmo> buffer) :
     bc_(bc), unmounting_(false), buffer_(fbl::move(buffer)),
     cap_(buffer_->GetSize() / kMinfsBlockSize) {}
 
@@ -188,10 +191,10 @@ WritebackBuffer::~WritebackBuffer() {
 
     if (buffer_vmoid_ != VMOID_INVALID) {
         block_fifo_request_t request;
-        request.txnid = bc_->TxnId();
+        request.group = bc_->BlockGroupID();
         request.vmoid = buffer_vmoid_;
         request.opcode = BLOCKIO_CLOSE_VMO;
-        bc_->Txn(&request, 1);
+        bc_->Transaction(&request, 1);
     }
 }
 
@@ -336,7 +339,6 @@ int WritebackBuffer::WritebackThread(void* arg) {
         // Before waiting, we should check if we're unmounting.
         if (b->unmounting_) {
             b->writeback_lock_.Release();
-            b->bc_->FreeTxnId();
             return 0;
         }
         cnd_wait(&b->consumer_cvar_, b->writeback_lock_.GetInternal());

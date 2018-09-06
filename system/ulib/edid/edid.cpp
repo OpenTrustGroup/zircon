@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <lib/edid/edid.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -45,12 +46,35 @@ bool BlockMap::validate() const {
 }
 
 bool CeaEdidTimingExtension::validate() const {
-    return base_validate<CeaEdidTimingExtension>(this);
+    if (!(dtd_start_idx <= sizeof(payload) && base_validate<CeaEdidTimingExtension>(this))) {
+        return false;
+    }
+    size_t offset = 0;
+    size_t dbc_end = dtd_start_idx - offsetof(CeaEdidTimingExtension, payload);
+    while (offset < dbc_end) {
+        const DataBlock* data_block = reinterpret_cast<const DataBlock*>(payload + offset);
+        offset += (1 + data_block->length()); // Length doesn't include the header
+        // Check that the block doesn't run past the end if the dbc
+        if (offset > dbc_end) {
+            return false;
+        }
+    }
+    return true;
 }
 
-bool Edid::Init(EdidDdcSource* edid_source, const char** err_msg) {
+bool Edid::Init(void* ctx, ddc_i2c_transact transact, const char** err_msg) {
+    uint8_t segment_address = 0;
+    uint8_t segment_offset = 0;
+    ddc_i2c_msg_t msgs[3] = {
+        { .is_read = false, .addr = kDdcSegmentI2cAddress, .buf = &segment_address, .length = 1 },
+        { .is_read = false, .addr = kDdcDataI2cAddress, .buf = &segment_offset, .length = 1 },
+        { .is_read = true, .addr = kDdcDataI2cAddress, .buf = nullptr, .length = kBlockSize },
+    };
+
     BaseEdid base_edid;
-    if (!edid_source->DdcRead(0, 0, reinterpret_cast<uint8_t*>(&base_edid), kBlockSize)) {
+    msgs[2].buf = reinterpret_cast<uint8_t*>(&base_edid);
+    // + 1 to skip trying to set the segment for the first block
+    if (!transact(ctx, msgs + 1, 2)) {
         *err_msg = "Failed to read base edid";
         return false;
     } else if (!base_edid.validate()) {
@@ -68,10 +92,11 @@ bool Edid::Init(EdidDdcSource* edid_source, const char** err_msg) {
 
     memcpy(edid_bytes_.get(), reinterpret_cast<void*>(&base_edid), kBlockSize);
     for (uint8_t i = 1; i && i <= base_edid.num_extensions; i++) {
-        uint8_t segment = i / 2;
-        uint8_t segment_offset = i % 2 ? kBlockSize : 0;
-        if (!edid_source->DdcRead(segment, segment_offset,
-                                  edid_bytes_.get() + i * kBlockSize, kBlockSize)) {
+        *msgs[0].buf = i / 2;
+        *msgs[1].buf = i % 2 ? kBlockSize : 0;
+        msgs[2].buf = edid_bytes_.get() + i * kBlockSize;
+        bool include_segment = i % 2;
+        if (!transact(ctx, msgs + include_segment, 3 - include_segment)) {
             *err_msg = "Failed to read full edid";
             return false;
         }
@@ -155,12 +180,6 @@ bool Edid::CheckBlockForHdmiVendorData(uint8_t block_num, bool* is_hdmi) const {
     size_t end = block.dtd_start_idx - offsetof(CeaEdidTimingExtension, payload);
     while (idx < end) {
         const DataBlock* data_block = reinterpret_cast<const DataBlock*>(block.payload + idx);
-        // Compute the start of the next data block, and use that to ensure that the current
-        // block doesn't run past the end of the data block collection.
-        idx = idx + 1 + data_block->length();
-        if (idx > end) {
-            return false;
-        }
         if (data_block->type() == VendorSpecificBlock::kType) {
             // HDMI's 24-bit IEEE registration is 0x000c03 - vendor_number is little endian
             if (data_block->payload.vendor.vendor_number[0] == 0x03
@@ -170,6 +189,7 @@ bool Edid::CheckBlockForHdmiVendorData(uint8_t block_num, bool* is_hdmi) const {
                 return true;
             }
         }
+        idx = idx + 1 + data_block->length();
     }
 
     return true;
@@ -203,16 +223,22 @@ void convert_dtd_to_timing(const DetailedTimingDescriptor& dtd, timing_params* p
     if (dtd.type() != TYPE_DIGITAL_SEPARATE) {
         printf("edid: Ignoring bad timing type %d\n", dtd.type());
     }
-    params->vertical_sync_polarity = dtd.vsync_polarity();
-    params->horizontal_sync_polarity = dtd.hsync_polarity();
-    params->interlaced = dtd.interlaced();
+    params->flags = (dtd.vsync_polarity() ? timing_params::kPositiveVsync : 0)
+            | (dtd.hsync_polarity() ? timing_params::kPositiveHsync : 0)
+            | (dtd.interlaced() ? timing_params::kInterlaced : 0);
+
+    double total_pxls =
+            (params->horizontal_addressable + params->horizontal_blanking) *
+            (params->vertical_addressable + params->vertical_blanking);
+    double pixel_clock_hz = params->pixel_freq_10khz * 1000 * 10;
+    params->vertical_refresh_e2 =
+            static_cast<uint32_t>(round(100 * pixel_clock_hz / total_pxls));
 }
 
 void convert_std_to_timing(const BaseEdid& edid,
                            const StandardTimingDescriptor& std, timing_params* params) {
     // Pick the largest resolution advertised by the display and then use the
     // generalized timing formula to compute the timing parameters.
-    // TODO(ZX-1413): Check standard DMT tables (some standard modes don't conform to GTF)
     // TODO(ZX-1413): Handle secondary GTF and CVT
     // TODO(stevensd): Support interlaced modes and margins
     uint32_t width = std.horizontal_resolution();
@@ -221,6 +247,16 @@ void convert_std_to_timing(const BaseEdid& edid,
 
     if (!width || !height || !v_rate) {
         return;
+    }
+
+    const timing_params_t* dmt_timing = internal::dmt_timings;
+    for (unsigned i = 0; i < internal::dmt_timings_count; i++, dmt_timing++) {
+        if (dmt_timing->horizontal_addressable == width
+                && dmt_timing->vertical_addressable == height
+                && ((dmt_timing->vertical_refresh_e2 + 50) / 100) == v_rate) {
+            *params = *dmt_timing;
+            return;
+        }
     }
 
     // Default values for GFT variables
@@ -243,6 +279,7 @@ void convert_std_to_timing(const BaseEdid& edid,
     uint32_t v_total_lines = height + vsync_bp + kMinPorch;
     double v_field_rate_est = 1000000.0 / (h_period_est * v_total_lines);
     double h_period = (1.0 * h_period_est * v_field_rate_est) / v_rate;
+    double v_field_rate = 1000000.0 / h_period / v_total_lines;
     double ideal_duty_cycle = kCPrime - (kMPrime * h_period_est / 1000);
     uint32_t h_blank_pixels = 2 * kCellGran * round_div(
             h_pixels_rnd * ideal_duty_cycle, (100 - ideal_duty_cycle) * (2 * kCellGran));
@@ -261,9 +298,9 @@ void convert_std_to_timing(const BaseEdid& edid,
     params->vertical_blanking = vsync_bp + kMinPorch;
 
     // TODO(ZX-1413): Set these depending on if we use default/secondary GTF
-    params->vertical_sync_polarity = 1;
-    params->horizontal_sync_polarity= 0;
-    params->interlaced = 0;
+    params->flags = timing_params::kPositiveVsync;
+
+    params->vertical_refresh_e2 = static_cast<uint32_t>(v_field_rate * 100 + .5);
 }
 
 Edid::timing_iterator& Edid::timing_iterator::operator++() {
@@ -284,6 +321,15 @@ Edid::timing_iterator& Edid::timing_iterator::operator++() {
 
 void Edid::timing_iterator::Advance() {
     params_ = {};
+    // The order in which timings are returned is:
+    //   1) Detailed timings in base edid
+    //   2) Timings in CEA data blocks
+    //       - Detailed timings
+    //       - Short Video Descriptors
+    //   3) Standard timings in base edid
+    // TODO: Standart timings in descriptors
+    // TODO: GTF/CVT timings in descriptors/monitor range limits
+    // TODO: Established timings
 
     if (block_idx_ == 0) {
         if (timing_idx_ == 3) {
@@ -314,20 +360,71 @@ void Edid::timing_iterator::Advance() {
         }
 
         timing_idx_++;
-        if (((timing_idx_ + 1) * sizeof(DetailedTimingDescriptor) > kBlockSize)
-                || timing_idx_ >= cea_extn_block.native_format_dtds()) {
-            // Go to the next block if we've consued all of this block's DTDs
-            block_idx_++;
-            timing_idx_ = UINT32_MAX;
-            continue;
+        uint32_t modes_to_skip = timing_idx_;
+        size_t dbc_end = cea_extn_block.dtd_start_idx - offsetof(CeaEdidTimingExtension, payload);
+        size_t offset = dbc_end;
+
+        // First, look at the detailed timing descriptors
+        while (offset + sizeof(DetailedTimingDescriptor)
+                <= sizeof(CeaEdidTimingExtension::payload)) {
+            auto dtd = reinterpret_cast<DetailedTimingDescriptor*>(cea_extn_block.payload + offset);
+            if (dtd->pixel_clock_10khz != 0) {
+                if (modes_to_skip == 0) {
+                    convert_dtd_to_timing(*dtd, &params_);
+                    return;
+                }
+                modes_to_skip--;
+            } else {
+                break;
+            }
+            offset += sizeof(DetailedTimingDescriptor);
         }
 
-        uint8_t offset = static_cast<uint8_t>(cea_extn_block.dtd_start_idx +
-                                              sizeof(DetailedTimingDescriptor) * timing_idx_);
-        uint8_t* data = reinterpret_cast<uint8_t*>(&cea_extn_block);
-        convert_dtd_to_timing(*reinterpret_cast<const DetailedTimingDescriptor*>(data + offset),
-                              &params_);
-        return;
+        // Then look through the data blocks for any short video descriptors
+        offset = 0;
+        while (offset < dbc_end) {
+            auto* dblk = reinterpret_cast<DataBlock*>(cea_extn_block.payload + offset);
+            if (dblk->type() == ShortVideoDescriptor::kType) {
+                for (unsigned i = 0; i < dblk->length(); i++) {
+                    uint32_t idx = dblk->payload.video[i].standard_mode_idx() - 1;
+                    if (idx >= internal::cea_timings_count) {
+                        continue;
+                    }
+                    if (modes_to_skip == 0) {
+                        params_ = internal::cea_timings[idx];
+                        return;
+                    }
+
+                    // For timings with refresh rates that are multiples of 6, there are
+                    // corresponding timings adjusted by a factor of 1000/1001.
+                    uint32_t rounded_refresh =
+                            (internal::cea_timings[idx].vertical_refresh_e2 + 99) / 100;
+                    if (rounded_refresh % 6 == 0) {
+                        if (modes_to_skip == 1) {
+                            params_ = internal::cea_timings[idx];
+                            double clock = params_.pixel_freq_10khz;
+                            double refresh = params_.vertical_refresh_e2;
+                            // 240/480 height entries are already multipled by 1000/1001
+                            double mult = params_.vertical_addressable == 240
+                                    || params_.vertical_addressable == 480
+                                    ? 1.001 : (1000. / 1001.);
+                            params_.pixel_freq_10khz = static_cast<uint32_t>(round(clock * mult));
+                            params_.vertical_refresh_e2 =
+                                    static_cast<uint32_t>(round(refresh * mult));
+                            return;
+                        }
+                        modes_to_skip -= 2;
+                    } else {
+                        modes_to_skip--;
+                    }
+                }
+            }
+            offset += (dblk->length() + 1); // length doesn't include the data block header byte
+        }
+
+        // If all the modes have been processed, go to the next block
+        block_idx_++;
+        timing_idx_ = UINT32_MAX;
     }
 
     if (block_idx_ == (edid_->len_ / kBlockSize)) {
@@ -358,6 +455,21 @@ void Edid::Print(void (*print_fn)(const char* str)) const {
                 i % kBytesPerLine == kBytesPerLine - 1 ? "\n" : " ");
         print_fn(str_buf);
     }
+}
+
+uint16_t Edid::product_code() {
+    return base_edid_.product_code;
+}
+
+void Edid::manufacturer_id(char* c1, char* c2, char* c3) {
+    *c1 = static_cast<uint8_t>(((base_edid_.manufacturer_id1 & 0x7c) >> 2) + 'A' - 1);
+    *c2 = static_cast<uint8_t>((((base_edid_.manufacturer_id1 & 0x03) << 3)
+            | (base_edid_.manufacturer_id2 & 0xe0) >> 5) + 'A' - 1);
+    *c3  = static_cast<uint8_t>(((base_edid_.manufacturer_id2 & 0x1f)) + 'A' - 1);
+}
+
+bool Edid::is_standard_rgb() {
+    return base_edid_.standard_srgb();
 }
 
 } // namespace edid

@@ -18,7 +18,7 @@
 static zx_status_t read_at(fdio_t* io, void* buf, size_t len, off_t offset,
                            size_t* actual_len) {
     zx_status_t status;
-    while ((status = fdio_read_at(io, buf, len, offset)) == ZX_ERR_SHOULD_WAIT) {
+    while ((status = io->ops->read_at(io, buf, len, offset)) == ZX_ERR_SHOULD_WAIT) {
         status = fdio_wait(io, FDIO_EVT_READABLE, ZX_TIME_INFINITE, NULL);
         if (status != ZX_OK) {
             return status;
@@ -38,18 +38,15 @@ static zx_status_t read_file_into_vmo(fdio_t* io, zx_handle_t* out_vmo) {
     zx_handle_t current_vmar_handle = zx_vmar_root_self();
 
     vnattr_t attr;
-    int r = io->ops->misc(io, ZXRIO_STAT, 0, sizeof(attr), &attr, 0);
-    if (r < 0) {
+    zx_status_t status = io->ops->get_attr(io, &attr);
+    if (status != ZX_OK) {
         return ZX_ERR_BAD_HANDLE;
-    }
-    if (r < (int)sizeof(attr)) {
-        return ZX_ERR_IO;
     }
 
     uint64_t size = attr.size;
     uint64_t offset = 0;
 
-    zx_status_t status = zx_vmo_create(size, 0, out_vmo);
+    status = zx_vmo_create(size, 0, out_vmo);
     if (status != ZX_OK) {
         return status;
     }
@@ -79,9 +76,9 @@ static zx_status_t read_file_into_vmo(fdio_t* io, zx_handle_t* out_vmo) {
             size_t chunk = size < MAX_WINDOW ? size : MAX_WINDOW;
             size_t window = (chunk + PAGE_SIZE - 1) & -PAGE_SIZE;
             uintptr_t start = 0;
-            status = zx_vmar_map(
-                current_vmar_handle, 0, *out_vmo, offset, window,
-                ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &start);
+            status = zx_vmar_map(current_vmar_handle, 
+                ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                0, *out_vmo, offset, window, &start);
             if (status != ZX_OK) {
                 zx_handle_close(*out_vmo);
                 return status;

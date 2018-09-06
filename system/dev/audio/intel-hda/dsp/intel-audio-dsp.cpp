@@ -26,11 +26,11 @@ constexpr const char* ADSP_FIRMWARE_PATH = "/boot/lib/firmware/dsp_fw_kbl_v3266.
 
 constexpr uint32_t EXT_MANIFEST_HDR_MAGIC = 0x31454124;
 
-constexpr zx_time_t INTEL_ADSP_TIMEOUT_NSEC              = ZX_MSEC( 50); // 50mS Arbitrary
-constexpr zx_time_t INTEL_ADSP_POLL_NSEC                 = ZX_USEC(500); // 500uS Arbitrary
-constexpr zx_time_t INTEL_ADSP_ROM_INIT_TIMEOUT_NSEC     = ZX_SEC (  1); // 1S Arbitrary
-constexpr zx_time_t INTEL_ADSP_BASE_FW_INIT_TIMEOUT_NSEC = ZX_SEC (  3); // 3S Arbitrary
-constexpr zx_time_t INTEL_ADSP_POLL_FW_NSEC              = ZX_MSEC(  1); //.1mS Arbitrary
+constexpr zx_duration_t INTEL_ADSP_TIMEOUT_NSEC              = ZX_MSEC( 50); // 50mS Arbitrary
+constexpr zx_duration_t INTEL_ADSP_POLL_NSEC                 = ZX_USEC(500); // 500uS Arbitrary
+constexpr zx_duration_t INTEL_ADSP_ROM_INIT_TIMEOUT_NSEC     = ZX_SEC (  1); // 1S Arbitrary
+constexpr zx_duration_t INTEL_ADSP_BASE_FW_INIT_TIMEOUT_NSEC = ZX_SEC (  3); // 3S Arbitrary
+constexpr zx_duration_t INTEL_ADSP_POLL_FW_NSEC              = ZX_MSEC(  1); //.1mS Arbitrary
 }  // anon namespace
 
 struct skl_adspfw_ext_manifest_hdr_t {
@@ -134,7 +134,7 @@ zx_status_t IntelAudioDsp::SetupDspDevice() {
 
     // Map the VMO in, make sure to put it in the same VMAR as the rest of our
     // registers.
-    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     res = mapped_regs_.Map(bar_vmo, 0, bar_size, CPU_MAP_FLAGS);
     if (res != ZX_OK) {
         LOG(ERROR, "Error attempting to map registers (res %d)\n", res);
@@ -295,6 +295,16 @@ void IntelAudioDsp::DeviceShutdown() {
     ipc_.Shutdown();
 
     state_ = State::SHUT_DOWN;
+}
+
+zx_status_t IntelAudioDsp::Suspend(uint32_t flags) {
+    switch (flags & DEVICE_SUSPEND_REASON_MASK) {
+    case DEVICE_SUSPEND_FLAG_POWEROFF:
+        DeviceShutdown();
+        return ZX_OK;
+    default:
+        return ZX_ERR_NOT_SUPPORTED;
+    }
 }
 
 int IntelAudioDsp::InitThread() {
@@ -496,9 +506,9 @@ zx_status_t IntelAudioDsp::LoadFirmware() {
     // of the extended manifest header will guarantee un-alignment.
     // This VMO is mapped once and thrown away after firmware loading, so map it
     // into the root VMAR so we don't need to allocate more space in DriverVmars::registers().
-    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     zx::vmo stripped_vmo;
-    vmo_utils::VmoMapper stripped_fw;
+    fzl::VmoMapper stripped_fw;
     st = stripped_fw.CreateAndMap(fw_size, CPU_MAP_FLAGS, nullptr, &stripped_vmo);
     if (st != ZX_OK) {
         LOG(ERROR, "Error creating DSP firmware VMO (err %d)\n", st);
@@ -515,7 +525,7 @@ zx_status_t IntelAudioDsp::LoadFirmware() {
     // Pin this VMO and grant the controller access to it.  The controller
     // should only need read access to the firmware.
     constexpr uint32_t DSP_MAP_FLAGS = ZX_BTI_PERM_READ;
-    PinnedVmo pinned_fw;
+    fzl::PinnedVmo pinned_fw;
     st = pinned_fw.Pin(stripped_vmo, hda_bti_->initiator(), DSP_MAP_FLAGS);
     if (st != ZX_OK) {
         LOG(ERROR, "Failed to pin pages for DSP firmware (res %d)\n", st);

@@ -37,8 +37,8 @@ public:
         return zx_port_wait(get(), deadline.get(), packet);
     }
 
-    zx_status_t cancel(zx_handle_t source, uint64_t key) const {
-        return zx_port_cancel(get(), source, key);
+    zx_status_t cancel(const object_base& source, uint64_t key) const {
+        return zx_port_cancel(get(), source.get(), key);
     }
 };
 

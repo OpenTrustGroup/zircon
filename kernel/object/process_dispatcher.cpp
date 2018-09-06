@@ -36,8 +36,6 @@
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_lock.h>
 
-using fbl::AutoLock;
-
 #define LOCAL_TRACE 0
 
 static zx_handle_t map_handle_to_value(const Handle* handle, uint32_t mixer) {
@@ -78,7 +76,9 @@ zx_status_t ProcessDispatcher::Create(
 
     // Create a dispatcher for the root VMAR.
     fbl::RefPtr<Dispatcher> new_vmar_dispatcher;
-    result = VmAddressRegionDispatcher::Create(vmar, &new_vmar_dispatcher, root_vmar_rights);
+    result = VmAddressRegionDispatcher::Create(vmar, ARCH_MMU_FLAG_PERM_USER,
+                                               &new_vmar_dispatcher,
+                                               root_vmar_rights);
     if (result != ZX_OK) {
         process->aspace_->Destroy();
         return result;
@@ -130,7 +130,7 @@ void ProcessDispatcher::on_zero_handles() {
     // we never detach from the parent job, so run the shutdown sequence for
     // that case.
     {
-        AutoLock lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
         if (state_ != State::INITIAL) {
             // Use the normal cleanup path instead.
             return;
@@ -152,7 +152,7 @@ zx_status_t ProcessDispatcher::set_name(const char* name, size_t len) {
 zx_status_t ProcessDispatcher::Initialize() {
     LTRACE_ENTRY_OBJ;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     DEBUG_ASSERT(state_ == State::INITIAL);
 
@@ -174,7 +174,7 @@ void ProcessDispatcher::Exit(int64_t retcode) {
     DEBUG_ASSERT(ProcessDispatcher::GetCurrent() == this);
 
     {
-        AutoLock lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
 
         // check that we're in the RUNNING state or we're racing with something
         // else that has already pushed us until the DYING state
@@ -203,7 +203,7 @@ void ProcessDispatcher::Kill() {
     bool became_dead = false;
 
     {
-        AutoLock lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
 
         // we're already dead
         if (state_ == State::DEAD)
@@ -243,7 +243,7 @@ void ProcessDispatcher::KillAllThreadsLocked() {
 zx_status_t ProcessDispatcher::AddThread(ThreadDispatcher* t, bool initial_thread) {
     LTRACE_ENTRY_OBJ;
 
-    AutoLock state_lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     if (initial_thread) {
         if (state_ != State::INITIAL)
@@ -277,7 +277,7 @@ void ProcessDispatcher::RemoveThread(ThreadDispatcher* t) {
 
     {
         // we're going to check for state and possibly transition below
-        AutoLock state_lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
 
         // remove the thread from our list
         DEBUG_ASSERT(t != nullptr);
@@ -300,7 +300,7 @@ zx_koid_t ProcessDispatcher::get_related_koid() const {
 }
 
 ProcessDispatcher::State ProcessDispatcher::state() const {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return state_;
 }
 
@@ -311,7 +311,7 @@ fbl::RefPtr<JobDispatcher> ProcessDispatcher::job() {
 void ProcessDispatcher::SetStateLocked(State s) {
     LTRACEF("process %p: state %u (%s)\n", this, static_cast<unsigned int>(s), StateToString(s));
 
-    DEBUG_ASSERT(get_lock()->IsHeld());
+    DEBUG_ASSERT(get_lock()->lock().IsHeld());
 
     // look for some invalid state transitions
     if (state_ == State::DEAD && s != State::DEAD) {
@@ -343,7 +343,7 @@ void ProcessDispatcher::FinishDeadTransition() {
 
     fbl::DoublyLinkedList<Handle*> to_clean;
     {
-        AutoLock lock(&handle_table_lock_);
+        Guard<fbl::Mutex> guard{&handle_table_lock_};
         for (auto& handle : handles_) {
             handle.set_process_id(0u);
         }
@@ -394,7 +394,8 @@ zx_handle_t ProcessDispatcher::MapHandleToValue(const HandleOwner& handle) const
     return map_handle_to_value(handle.get(), handle_rand_);
 }
 
-Handle* ProcessDispatcher::GetHandleLocked(zx_handle_t handle_value) {
+Handle* ProcessDispatcher::GetHandleLocked(zx_handle_t handle_value,
+                                           bool skip_policy) {
     auto handle = map_value_to_handle(handle_value, handle_rand_);
     if (handle && handle->process_id() == get_koid())
         return handle;
@@ -403,12 +404,13 @@ Handle* ProcessDispatcher::GetHandleLocked(zx_handle_t handle_value) {
     // depending on the job policy.  Note that we don't use the return
     // value from QueryPolicy() here: ZX_POL_ACTION_ALLOW and
     // ZX_POL_ACTION_DENY are equivalent for ZX_POL_BAD_HANDLE.
-    QueryPolicy(ZX_POL_BAD_HANDLE);
+    if (likely(!skip_policy))
+        QueryPolicy(ZX_POL_BAD_HANDLE);
     return nullptr;
 }
 
 void ProcessDispatcher::AddHandle(HandleOwner handle) {
-    AutoLock lock(&handle_table_lock_);
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
     AddHandleLocked(fbl::move(handle));
 }
 
@@ -418,7 +420,7 @@ void ProcessDispatcher::AddHandleLocked(HandleOwner handle) {
 }
 
 HandleOwner ProcessDispatcher::RemoveHandle(zx_handle_t handle_value) {
-    AutoLock lock(&handle_table_lock_);
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
     return RemoveHandleLocked(handle_value);
 }
 
@@ -452,7 +454,7 @@ zx_status_t ProcessDispatcher::RemoveHandles(user_in_ptr<const zx_handle_t> user
             return status;
 
         {
-            AutoLock lock(handle_table_lock());
+            Guard<fbl::Mutex> guard{handle_table_lock()};
             for (size_t ix = 0; ix != chunk_size; ++ix) {
                 if (handles[ix] == ZX_HANDLE_INVALID)
                     continue;
@@ -468,13 +470,8 @@ zx_status_t ProcessDispatcher::RemoveHandles(user_in_ptr<const zx_handle_t> user
     return status;
 }
 
-void ProcessDispatcher::UndoRemoveHandleLocked(zx_handle_t handle_value) {
-    auto handle = map_value_to_handle(handle_value, handle_rand_);
-    AddHandleLocked(HandleOwner(handle));
-}
-
 zx_koid_t ProcessDispatcher::GetKoidForHandle(zx_handle_t handle_value) {
-    AutoLock lock(&handle_table_lock_);
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
     Handle* handle = GetHandleLocked(handle_value);
     if (!handle)
         return ZX_KOID_INVALID;
@@ -484,7 +481,7 @@ zx_koid_t ProcessDispatcher::GetKoidForHandle(zx_handle_t handle_value) {
 zx_status_t ProcessDispatcher::GetDispatcherInternal(zx_handle_t handle_value,
                                                      fbl::RefPtr<Dispatcher>* dispatcher,
                                                      zx_rights_t* rights) {
-    AutoLock lock(&handle_table_lock_);
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
     Handle* handle = GetHandleLocked(handle_value);
     if (!handle)
         return ZX_ERR_BAD_HANDLE;
@@ -499,7 +496,7 @@ zx_status_t ProcessDispatcher::GetDispatcherWithRightsInternal(zx_handle_t handl
                                                                zx_rights_t desired_rights,
                                                                fbl::RefPtr<Dispatcher>* dispatcher_out,
                                                                zx_rights_t* out_rights) {
-    AutoLock lock(&handle_table_lock_);
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
     Handle* handle = GetHandleLocked(handle_value);
     if (!handle)
         return ZX_ERR_BAD_HANDLE;
@@ -519,7 +516,7 @@ zx_status_t ProcessDispatcher::GetInfo(zx_info_process_t* info) {
     State state;
     // retcode_ depends on the state: make sure they're consistent.
     {
-        AutoLock lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
         state = state_;
         info->return_code = retcode_;
         // TODO: Protect with rights if necessary.
@@ -544,7 +541,7 @@ zx_status_t ProcessDispatcher::GetInfo(zx_info_process_t* info) {
 
 zx_status_t ProcessDispatcher::GetStats(zx_info_task_stats_t* stats) {
     DEBUG_ASSERT(stats != nullptr);
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (state_ != State::RUNNING) {
         return ZX_ERR_BAD_STATE;
     }
@@ -563,7 +560,7 @@ zx_status_t ProcessDispatcher::GetStats(zx_info_task_stats_t* stats) {
 zx_status_t ProcessDispatcher::GetAspaceMaps(
     user_out_ptr<zx_info_maps_t> maps, size_t max,
     size_t* actual, size_t* available) {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (state_ != State::RUNNING) {
         return ZX_ERR_BAD_STATE;
     }
@@ -573,7 +570,7 @@ zx_status_t ProcessDispatcher::GetAspaceMaps(
 zx_status_t ProcessDispatcher::GetVmos(
     user_out_ptr<zx_info_vmo_t> vmos, size_t max,
     size_t* actual_out, size_t* available_out) {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (state_ != State::RUNNING) {
         return ZX_ERR_BAD_STATE;
     }
@@ -597,7 +594,7 @@ zx_status_t ProcessDispatcher::GetVmos(
 }
 
 zx_status_t ProcessDispatcher::GetThreads(fbl::Array<zx_koid_t>* out_threads) {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     size_t n = thread_list_.size_slow();
     fbl::Array<zx_koid_t> threads;
     fbl::AllocChecker ac;
@@ -631,16 +628,16 @@ zx_status_t ProcessDispatcher::SetExceptionPort(fbl::RefPtr<ExceptionPort> eport
 
     // Lock |get_lock()| to ensure the process doesn't transition to dead
     // while we're setting the exception handler.
-    AutoLock state_lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (state_ == State::DEAD)
         return ZX_ERR_NOT_FOUND;
     if (debugger) {
         if (debugger_exception_port_)
-            return ZX_ERR_BAD_STATE;
+            return ZX_ERR_ALREADY_BOUND;
         debugger_exception_port_ = eport;
     } else {
         if (exception_port_)
-            return ZX_ERR_BAD_STATE;
+            return ZX_ERR_ALREADY_BOUND;
         exception_port_ = eport;
     }
 
@@ -655,7 +652,7 @@ bool ProcessDispatcher::ResetExceptionPort(bool debugger, bool quietly) {
     // want them to hit another exception and get back into
     // ExceptionHandlerExchange.
     {
-        AutoLock lock(get_lock());
+        Guard<fbl::Mutex> guard{get_lock()};
         if (debugger) {
             debugger_exception_port_.swap(eport);
         } else {
@@ -693,18 +690,18 @@ bool ProcessDispatcher::ResetExceptionPort(bool debugger, bool quietly) {
 }
 
 fbl::RefPtr<ExceptionPort> ProcessDispatcher::exception_port() {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return exception_port_;
 }
 
 fbl::RefPtr<ExceptionPort> ProcessDispatcher::debugger_exception_port() {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return debugger_exception_port_;
 }
 
 void ProcessDispatcher::OnExceptionPortRemoval(
         const fbl::RefPtr<ExceptionPort>& eport) {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     for (auto& thread : thread_list_) {
         thread.OnExceptionPortRemoval(eport);
     }
@@ -713,14 +710,14 @@ void ProcessDispatcher::OnExceptionPortRemoval(
 uint32_t ProcessDispatcher::ThreadCount() const {
     canary_.Assert();
 
-    fbl::AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return static_cast<uint32_t>(thread_list_.size_slow());
 }
 
 size_t ProcessDispatcher::PageCount() const {
     canary_.Assert();
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (state_ != State::RUNNING) {
         return 0;
     }
@@ -759,23 +756,24 @@ fbl::RefPtr<ProcessDispatcher> ProcessDispatcher::LookupProcessById(zx_koid_t ko
 
 fbl::RefPtr<ThreadDispatcher> ProcessDispatcher::LookupThreadById(zx_koid_t koid) {
     LTRACE_ENTRY_OBJ;
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     auto iter = thread_list_.find_if([koid](const ThreadDispatcher& t) { return t.get_koid() == koid; });
     return fbl::WrapRefPtr(iter.CopyPointer());
 }
 
 uintptr_t ProcessDispatcher::get_debug_addr() const {
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return debug_addr_;
 }
 
 zx_status_t ProcessDispatcher::set_debug_addr(uintptr_t addr) {
     if (addr == 0u)
         return ZX_ERR_INVALID_ARGS;
-    AutoLock lock(get_lock());
-    // Only allow the value to be set once: Once ld.so has set it that's it.
-    if (debug_addr_ != 0u)
+    Guard<fbl::Mutex> guard{get_lock()};
+    // Only allow the value to be set to a nonzero or magic debug break once:
+    // Once ld.so has set it that's it.
+    if (!(debug_addr_ == 0u || debug_addr_ == ZX_PROCESS_DEBUG_ADDR_BREAK_ON_SET))
         return ZX_ERR_ACCESS_DENIED;
     debug_addr_ = addr;
     return ZX_OK;
@@ -792,7 +790,7 @@ zx_status_t ProcessDispatcher::QueryPolicy(uint32_t condition) const {
 }
 
 uintptr_t ProcessDispatcher::cache_vdso_code_address() {
-    AutoLock a(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     vdso_code_address_ = aspace_->vdso_code_address();
     return vdso_code_address_;
 }
@@ -812,6 +810,11 @@ const char* StateToString(ProcessDispatcher::State state) {
 }
 
 bool ProcessDispatcher::IsHandleValid(zx_handle_t handle_value) {
-    AutoLock lock(&handle_table_lock_);
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
     return (GetHandleLocked(handle_value) != nullptr);
+}
+
+bool ProcessDispatcher::IsHandleValidNoPolicyCheck(zx_handle_t handle_value) {
+    Guard<fbl::Mutex> guard{&handle_table_lock_};
+    return (GetHandleLocked(handle_value, true) != nullptr);
 }

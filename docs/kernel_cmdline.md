@@ -110,6 +110,15 @@ only "9x16" (the default) and "18x32" (a double-size font) are supported.
 This option (disabled by default) allows the system to use a hardware IOMMU
 if present.
 
+## kernel.bypass-debuglog=\<bool>
+
+When enabled, forces output to the console instead of buffering it. The reason
+we have both a compile switch and a cmdline parameter is to facilitate prints
+in the kernel before cmdline is parsed to be forced to go to the console.
+The compile switch setting overrides the cmdline parameter (if both are present).
+Note that both the compile switch and the cmdline parameter have the side effect
+of disabling irq driven uart Tx.
+
 ## kernel.entropy-mixin=\<hex>
 
 Provides entropy to be mixed into the kernel's CPRNG.
@@ -415,6 +424,14 @@ Note that this option does not work for executables that are linked with
 libraries other than libc and the dynamic linker.
 
 Example: `userboot=bin/core-tests`
+
+## userboot.reboot
+
+If this option is set, userboot will attempt to reboot the machine after
+waiting 3 seconds when the process it launches exits.
+
+*If running with userboot=bin/core-tests in QEMU, this will cause the system to
+continually run tests and reboot.*
 
 ## userboot.shutdown
 

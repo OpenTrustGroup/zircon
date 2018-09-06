@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#include <block-client/client.h>
+#include <block-client/cpp/client.h>
 #include <crypto/bytes.h>
 #include <fbl/algorithm.h>
 #include <fbl/array.h>
@@ -18,15 +18,16 @@
 #include <fs-management/fvm.h>
 #include <fs-management/mount.h>
 #include <fs-management/ramdisk.h>
-#include <fs/mapped-vmo.h>
 #include <fvm/fvm-lz4.h>
 #include <fvm/fvm-sparse.h>
 #include <lib/cksum.h>
+#include <lib/fzl/mapped-vmo.h>
 #include <lib/zx/fifo.h>
 #include <lib/zx/vmo.h>
 #include <zircon/boot/image.h>
 #include <zircon/device/block.h>
 #include <zircon/device/device.h>
+#include <zircon/device/skip-block.h>
 #include <zircon/status.h>
 #include <zircon/syscalls.h>
 #include <zxcrypt/volume.h>
@@ -35,6 +36,7 @@
 #include "fvm/fvm.h"
 #include "pave-lib.h"
 #include "pave-logging.h"
+#include "pave-utils.h"
 
 namespace paver {
 namespace {
@@ -70,15 +72,10 @@ inline fvm::extent_descriptor_t* GetExtent(fvm::partition_descriptor_t* pd, size
 
 // Registers a FIFO
 zx_status_t RegisterFastBlockIo(const fbl::unique_fd& fd, zx_handle_t vmo,
-                                txnid_t* txnid_out, vmoid_t* vmoid_out,
-                                fifo_client_t** client_out) {
+                                vmoid_t* vmoid_out, block_client::Client* client_out) {
     zx::fifo fifo;
     if (ioctl_block_get_fifos(fd.get(), fifo.reset_and_get_address()) < 0) {
         ERROR("Couldn't attach fifo to partition\n");
-        return ZX_ERR_IO;
-    }
-    if (ioctl_block_alloc_txn(fd.get(), txnid_out) < 0) {
-        ERROR("Couldn't allocate transaction\n");
         return ZX_ERR_IO;
     }
     zx::vmo dup;
@@ -92,17 +89,13 @@ zx_status_t RegisterFastBlockIo(const fbl::unique_fd& fd, zx_handle_t vmo,
         ERROR("Couldn't attach VMO\n");
         return ZX_ERR_IO;
     }
-    if (block_fifo_create_client(fifo.release(), client_out) != ZX_OK) {
-        ERROR("Couldn't create block client\n");
-        return ZX_ERR_IO;
-    }
-    return ZX_OK;
+    return block_client::Client::Create(fbl::move(fifo), client_out);
 }
 
 // Stream an FVM partition to disk.
 zx_status_t StreamFvmPartition(fvm::SparseReader* reader, PartitionInfo* part,
-                               fs::MappedVmo* mvmo, fifo_client_t* client, size_t block_size,
-                               block_fifo_request_t* request) {
+                               fzl::MappedVmo* mvmo, const block_client::Client& client,
+                               size_t block_size, block_fifo_request_t* request) {
     size_t slice_size = reader->Image()->slice_size;
     const size_t vmo_cap = mvmo->GetSize();
     for (size_t e = 0; e < part->pd->extent_count; e++) {
@@ -132,12 +125,17 @@ zx_status_t StreamFvmPartition(fvm::SparseReader* reader, PartitionInfo* part,
                 return status;
             }
 
-            request->length = vmo_sz / block_size;
+            uint64_t length = vmo_sz / block_size;
+            if (length > UINT32_MAX) {
+                ERROR("Error writing partition: Too large\n");
+                return ZX_ERR_OUT_OF_RANGE;
+            }
+            request->length = static_cast<uint32_t>(length);
             request->vmo_offset = 0;
             request->dev_offset = offset / block_size;
 
             ssize_t r;
-            if ((r = block_fifo_txn(client, request, 1)) != ZX_OK) {
+            if ((r = client.Transaction(request, 1)) != ZX_OK) {
                 ERROR("Error writing partition data\n");
                 return static_cast<zx_status_t>(r);
             }
@@ -153,12 +151,17 @@ zx_status_t StreamFvmPartition(fvm::SparseReader* reader, PartitionInfo* part,
             memset(mvmo->GetData(), 0, vmo_cap);
         }
         while (bytes_left > 0) {
-            request->length = fbl::min(bytes_left, vmo_cap) / block_size;
+            uint64_t length = fbl::min(bytes_left, vmo_cap) / block_size;
+            if (length > UINT32_MAX) {
+                ERROR("Error writing trailing zeroes: Too large\n");
+                return ZX_ERR_OUT_OF_RANGE;
+            }
+            request->length = static_cast<uint32_t>(length);
             request->vmo_offset = 0;
             request->dev_offset = offset / block_size;
 
             zx_status_t status;
-            if ((status = block_fifo_txn(client, request, 1)) != ZX_OK) {
+            if ((status = client.Transaction(request, 1)) != ZX_OK) {
                 ERROR("Error writing trailing zeroes\n");
                 return status;
             }
@@ -171,8 +174,8 @@ zx_status_t StreamFvmPartition(fvm::SparseReader* reader, PartitionInfo* part,
 }
 
 // Stream a raw (non-FVM) partition to a vmo.
-zx_status_t StreamPayloadToVmo(fs::MappedVmo* mvmo, const fbl::unique_fd& src_fd,
-                               const block_info_t& info, size_t* payload_size) {
+zx_status_t StreamPayloadToVmo(fzl::MappedVmo* mvmo, const fbl::unique_fd& src_fd,
+                               uint32_t block_size_bytes, size_t* payload_size) {
     zx_status_t status;
     ssize_t r;
     size_t vmo_offset = 0;
@@ -194,9 +197,9 @@ zx_status_t StreamPayloadToVmo(fs::MappedVmo* mvmo, const fbl::unique_fd& src_fd
         return static_cast<zx_status_t>(r);
     }
 
-    if (vmo_offset % info.block_size) {
+    if (vmo_offset % block_size_bytes) {
         // We have a partial block to write.
-        const size_t rounded_length = fbl::round_up(vmo_offset, info.block_size);
+        const size_t rounded_length = fbl::round_up(vmo_offset, block_size_bytes);
         memset(&reinterpret_cast<uint8_t*>(mvmo->GetData())[vmo_offset], 0,
                rounded_length - vmo_offset);
         vmo_offset = rounded_length;
@@ -206,35 +209,68 @@ zx_status_t StreamPayloadToVmo(fs::MappedVmo* mvmo, const fbl::unique_fd& src_fd
 }
 
 // Writes a raw (non-FVM) partition to a block device from a VMO.
-zx_status_t WriteVmoToBlock(fs::MappedVmo* mvmo, size_t vmo_size,
-                            const fbl::unique_fd& partition_fd, const block_info_t& info) {
-    ZX_ASSERT(vmo_size % info.block_size == 0);
+zx_status_t WriteVmoToBlock(fzl::MappedVmo* mvmo, size_t vmo_size,
+                            const fbl::unique_fd& partition_fd, uint32_t block_size_bytes) {
+    ZX_ASSERT(vmo_size % block_size_bytes == 0);
 
-    txnid_t txnid;
     vmoid_t vmoid;
-    fifo_client_t* client;
-    zx_status_t status = RegisterFastBlockIo(partition_fd, mvmo->GetVmo(), &txnid, &vmoid, &client);
+    block_client::Client client;
+    zx_status_t status = RegisterFastBlockIo(partition_fd, mvmo->GetVmo(), &vmoid, &client);
     if (status != ZX_OK) {
         ERROR("Cannot register fast block I/O\n");
         return status;
     }
-    const auto closer = fbl::MakeAutoCall([&]() { block_fifo_release_client(client); });
 
     block_fifo_request_t request;
-    request.txnid = txnid;
+    request.group = 0;
     request.vmoid = vmoid;
     request.opcode = BLOCKIO_WRITE;
 
-    request.length = vmo_size / info.block_size;
+    uint64_t length = vmo_size / block_size_bytes;
+    if (length > UINT32_MAX) {
+        ERROR("Error writing partition data: Too large\n");
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+    request.length = static_cast<uint32_t>(length);
     request.vmo_offset = 0;
     request.dev_offset = 0;
 
-    if ((status = block_fifo_txn(client, &request, 1)) != ZX_OK) {
-        ERROR("Error writing partition data: %d\n", status);
+    if ((status = client.Transaction(&request, 1)) != ZX_OK) {
+        ERROR("Error writing partition data: %s\n", zx_status_get_string(status));
         return status;
     }
     return ZX_OK;
 }
+
+// Writes a raw (non-FVM) partition to a skip-block device from a VMO.
+zx_status_t WriteVmoToSkipBlock(fzl::MappedVmo* mvmo, size_t vmo_size,
+                                const fbl::unique_fd& partition_fd, uint32_t block_size_bytes) {
+    ZX_ASSERT(vmo_size % block_size_bytes == 0);
+
+    zx::vmo dup;
+    zx_status_t status;
+    if ((status = zx_handle_duplicate(mvmo->GetVmo(), ZX_RIGHT_SAME_RIGHTS,
+                                      dup.reset_and_get_address())) != ZX_OK) {
+        ERROR("Couldn't duplicate buffer vmo\n");
+        return status;
+    }
+
+    skip_block_rw_operation_t operation = {
+        .vmo = dup.release(),
+        .vmo_offset = 0,
+        .block = 0,
+        .block_count = static_cast<uint32_t>(vmo_size / block_size_bytes),
+    };
+    bool bad_block_grown;
+
+    if ((status = static_cast<zx_status_t>(ioctl_skip_block_write(
+             partition_fd.get(), &operation, &bad_block_grown))) < 0) {
+        ERROR("Error writing partition data: %s\n", zx_status_get_string(status));
+        return status;
+    }
+    return ZX_OK;
+}
+
 // Checks first few bytes of buffer to ensure it is a ZBI.
 // Also validates architecture in kernel header matches the target.
 bool ValidateKernelZbi(const uint8_t* buffer, size_t size, Arch arch) {
@@ -267,8 +303,12 @@ bool ValidateKernelZbi(const uint8_t* buffer, size_t size, Arch arch) {
 }
 
 // Parses a partition and validates that it matches the expected format.
-zx_status_t ValidateKernelPayload(fs::MappedVmo* mvmo, size_t vmo_size, Partition partition_type,
+zx_status_t ValidateKernelPayload(fzl::MappedVmo* mvmo, size_t vmo_size, Partition partition_type,
                                   Arch arch) {
+    // TODO(surajmalhotra): Re-enable this as soon as we have a good way to
+    // determine whether the payload is signed or not. (Might require bootserver
+    // changes).
+#if 0
     const auto* buffer = reinterpret_cast<uint8_t*>(mvmo->GetData());
     switch (partition_type) {
     case Partition::kZirconA:
@@ -285,6 +325,7 @@ zx_status_t ValidateKernelPayload(fs::MappedVmo* mvmo, size_t vmo_size, Partitio
         LOG("Skipping validation as payload is not a ZBI\n");
         break;
     }
+#endif
 
     return ZX_OK;
 }
@@ -327,21 +368,42 @@ fbl::unique_fd FvmPartitionFormat(fbl::unique_fd partition_fd, size_t slice_size
     // reinitializing the FVM image so the rest of the paving
     // process can continue successfully.
     disk_format_t df = detect_disk_format(partition_fd.get());
+    fbl::unique_fd fvm_fd;
     if (df == DISK_FORMAT_FVM) {
-        fbl::unique_fd fvm_fd = TryBindToFvmDriver(partition_fd, zx::sec(3));
+        fvm_fd = TryBindToFvmDriver(partition_fd, zx::sec(3));
         if (fvm_fd) {
             LOG("Found already formatted FVM.\n");
-            return fvm_fd;
+            fvm_info_t info;
+            ssize_t r = ioctl_block_fvm_query(fvm_fd.get(), &info);
+            if (r >= 0) {
+                if (info.slice_size == slice_size) {
+                    return fvm_fd;
+                } else {
+                    ERROR("Mismatched slice size. Reinitializing FVM.\n");
+                }
+            } else {
+                ERROR("Could not query FVM for info. Reinitializing FVM.\n");
+            }
         } else {
-            ERROR("Saw DISK_FORMAT_FVM, but could not bind driver\n");
+            ERROR("Saw DISK_FORMAT_FVM, but could not bind driver. Reinitializing FVM.\n");
         }
     }
+
     ERROR("Initializing partition as FVM\n");
-    zx_status_t status;
-    if ((status = fvm_init(partition_fd.get(), slice_size)) != ZX_OK) {
-        ERROR("Failed to initialize fvm: %d\n", status);
+    zx_status_t status = fvm_init(partition_fd.get(), slice_size);
+    if (status != ZX_OK) {
+        ERROR("Failed to initialize fvm: %s\n", zx_status_get_string(status));
         return fbl::unique_fd();
     }
+
+    if (fvm_fd) {
+        ssize_t r = ioctl_block_rr_part(fvm_fd.get());
+        if (r < 0) {
+            ERROR("Could not rebind FVM: %s\n", zx_status_get_string(static_cast<zx_status_t>(r)));
+            return fbl::unique_fd();
+        }
+    }
+
     return TryBindToFvmDriver(partition_fd, zx::sec(3));
 }
 
@@ -362,8 +424,8 @@ zx_status_t ZxcryptCreate(PartitionInfo* part) {
     // TODO(security): ZX-1130. We need to bind with channel in order to pass a key here.
     // TODO(security): ZX-1864. The created volume must marked as needing key rotation.
     crypto::Secret key;
-    uint8_t *tmp;
-    if((status = key.Allocate(zxcrypt::kZx1130KeyLen, &tmp)) != ZX_OK) {
+    uint8_t* tmp;
+    if ((status = key.Allocate(zxcrypt::kZx1130KeyLen, &tmp)) != ZX_OK) {
         return status;
     }
     memset(tmp, 0, key.len());
@@ -428,25 +490,6 @@ void RecommendWipe(const char* reason) {
     ERROR("-----------------------------------------------------\n");
 }
 
-zx_status_t FvmInitSparseReader(fbl::unique_fd src_fd, fbl::unique_ptr<fvm::SparseReader>* reader) {
-    zx_status_t status;
-    if ((status = fvm::SparseReader::Create(fbl::move(src_fd), reader)) != ZX_OK) {
-        return status;
-    }
-
-    fvm::sparse_image_t* hdr = (*reader)->Image();
-    // Verify the header, then allocate and stream the remaining metadata
-    if (hdr->magic != fvm::kSparseFormatMagic) {
-        ERROR("Bad magic\n");
-        return ZX_ERR_IO;
-    } else if (hdr->version != fvm::kSparseFormatVersion) {
-        ERROR("Unexpected sparse file version\n");
-        return ZX_ERR_IO;
-    }
-
-    return ZX_OK;
-}
-
 // Given an fd representing a "sparse FVM format", fill the FVM with the
 // provided partitions described by |src_fd|.
 //
@@ -454,8 +497,8 @@ zx_status_t FvmInitSparseReader(fbl::unique_fd src_fd, fbl::unique_ptr<fvm::Spar
 // GUID, not the instance GUID.
 zx_status_t FvmStreamPartitions(fbl::unique_fd partition_fd, fbl::unique_fd src_fd) {
     fbl::unique_ptr<fvm::SparseReader> reader;
-    zx_status_t status = FvmInitSparseReader(fbl::move(src_fd), &reader);
-    if (status != ZX_OK) {
+    zx_status_t status;
+    if ((status = fvm::SparseReader::Create(fbl::move(src_fd), &reader)) != ZX_OK) {
         return status;
     }
 
@@ -580,8 +623,10 @@ zx_status_t FvmStreamPartitions(fbl::unique_fd partition_fd, fbl::unique_fd src_
             request.length = ext->slice_count;
             LOG("Extending partition[%zu] at offset %zu by length %zu\n", p, request.offset,
                 request.length);
-            if (ioctl_block_fvm_extend(parts[p].new_part.get(), &request) < 0) {
-                ERROR("Failed to extend partition\n");
+            ssize_t result = ioctl_block_fvm_extend(parts[p].new_part.get(), &request);
+            if (result < 0) {
+                ERROR("Failed to extend partition: %s\n",
+                      zx_status_get_string(static_cast<zx_status_t>(result)));
                 return ZX_ERR_BAD_STATE;
             }
         }
@@ -593,28 +638,25 @@ zx_status_t FvmStreamPartitions(fbl::unique_fd partition_fd, fbl::unique_fd src_
 
     constexpr size_t vmo_size = 1 << 20;
 
-    fbl::unique_ptr<fs::MappedVmo> mvmo;
-    if ((status = fs::MappedVmo::Create(vmo_size, "fvm-stream", &mvmo)) != ZX_OK) {
+    fbl::unique_ptr<fzl::MappedVmo> mvmo;
+    if ((status = fzl::MappedVmo::Create(vmo_size, "fvm-stream", &mvmo)) != ZX_OK) {
         ERROR("Failed to create stream VMO\n");
         return ZX_ERR_NO_MEMORY;
     }
 
     // Now that all partitions are preallocated, begin streaming data to them.
     for (size_t p = 0; p < hdr->partition_count; p++) {
-        txnid_t txnid;
         vmoid_t vmoid;
-        fifo_client_t* client;
+        block_client::Client client;
         zx_status_t status = RegisterFastBlockIo(parts[p].new_part,
-                                                 mvmo->GetVmo(), &txnid,
-                                                 &vmoid, &client);
+                                                 mvmo->GetVmo(), &vmoid, &client);
         if (status != ZX_OK) {
             ERROR("Failed to register fast block IO\n");
             return status;
         }
-        const auto closer = fbl::MakeAutoCall([&]() { block_fifo_release_client(client); });
 
         block_fifo_request_t request;
-        request.txnid = txnid;
+        request.group = 0;
         request.vmoid = vmoid;
         request.opcode = BLOCKIO_WRITE;
 
@@ -626,6 +668,11 @@ zx_status_t FvmStreamPartitions(fbl::unique_fd partition_fd, fbl::unique_fd src_
             ERROR("Failed to stream partition\n");
             return status;
         }
+        if ((status = FlushClient(client)) != ZX_OK) {
+            ERROR("Failed to flush client\n");
+            return status;
+        }
+        LOG("Done flushing partition %zu\n", p);
     }
 
     for (size_t p = 0; p < hdr->partition_count; p++) {
@@ -679,18 +726,20 @@ zx_status_t FvmPave(fbl::unique_ptr<DevicePartitioner> device_partitioner,
     if (status == ZX_OK) {
         LOG("FVM partition already exists\n");
     } else if (status != ZX_ERR_NOT_FOUND) {
+        ERROR("Failure finding FVM partition: %s\n", zx_status_get_string(status));
         return status;
     } else {
+        LOG("Could not find FVM; attempting to add it: %s\n", zx_status_get_string(status));
         status = device_partitioner->AddPartition(Partition::kFuchsiaVolumeManager, &partition_fd);
         if (status != ZX_OK) {
-            ERROR("Failure creating partition: %d\n", status);
+            ERROR("Failure creating partition: %s\n", zx_status_get_string(status));
             return status;
         }
     }
 
     LOG("Streaming partitions...\n");
     if ((status = FvmStreamPartitions(fbl::move(partition_fd), fbl::move(payload_fd))) != ZX_OK) {
-        ERROR("Failed to stream partitions: %d\n", status);
+        ERROR("Failed to stream partitions: %s\n", zx_status_get_string(status));
         return status;
     }
     LOG("Completed successfully\n");
@@ -705,32 +754,33 @@ zx_status_t PartitionPave(fbl::unique_ptr<DevicePartitioner> partitioner,
     fbl::unique_fd partition_fd;
     if ((status = partitioner->FindPartition(partition_type, &partition_fd)) != ZX_OK) {
         if (status != ZX_ERR_NOT_FOUND) {
-            ERROR("Failure looking for partition: %d\n", status);
+            ERROR("Failure looking for partition: %s\n", zx_status_get_string(status));
             return status;
         }
         if ((status = partitioner->AddPartition(partition_type, &partition_fd)) != ZX_OK) {
-            ERROR("Failure creating partition: %d\n", status);
+            ERROR("Failure creating partition: %s\n", zx_status_get_string(status));
             return status;
         }
     } else {
         LOG("Partition already exists\n");
     }
 
-    block_info_t info;
-    if ((status = partitioner->GetBlockInfo(partition_fd, &info)) != ZX_OK) {
-        ERROR("Couldn't get partition block info\n");
+    uint32_t block_size_bytes;
+    if ((status = partitioner->GetBlockSize(partition_fd, &block_size_bytes)) != ZX_OK) {
+        ERROR("Couldn't get partition block size\n");
         return status;
     }
 
-    const size_t vmo_sz = fbl::round_up(1LU << 20, info.block_size);
-    fbl::unique_ptr<fs::MappedVmo> mvmo;
-    if ((status = fs::MappedVmo::Create(vmo_sz, "partition-pave", &mvmo)) != ZX_OK) {
+    const size_t vmo_sz = fbl::round_up(1LU << 20, block_size_bytes);
+    fbl::unique_ptr<fzl::MappedVmo> mvmo;
+    if ((status = fzl::MappedVmo::Create(vmo_sz, "partition-pave", &mvmo)) != ZX_OK) {
         ERROR("Failed to create stream VMO\n");
         return status;
     }
     // The streamed partition size may not line up with the mapped vmo size.
     size_t payload_size = 0;
-    if ((status = StreamPayloadToVmo(mvmo.get(), payload_fd, info, &payload_size)) != ZX_OK) {
+    if ((status = StreamPayloadToVmo(mvmo.get(), payload_fd, block_size_bytes,
+                                     &payload_size)) != ZX_OK) {
         ERROR("Failed to stream partition to VMO\n");
         return status;
     }
@@ -738,7 +788,11 @@ zx_status_t PartitionPave(fbl::unique_ptr<DevicePartitioner> partitioner,
         ERROR("Failed to validate partition\n");
         return status;
     }
-    status = WriteVmoToBlock(mvmo.get(), payload_size, partition_fd, info);
+    if (partitioner->UseSkipBlockInterface()) {
+        status = WriteVmoToSkipBlock(mvmo.get(), payload_size, partition_fd, block_size_bytes);
+    } else {
+        status = WriteVmoToBlock(mvmo.get(), payload_size, partition_fd, block_size_bytes);
+    }
     if (status != ZX_OK) {
         ERROR("Failed to write partition to block\n");
         return status;
@@ -779,6 +833,15 @@ zx_status_t RealMain(Flags flags) {
     const bool is_cros_device = device_partitioner->IsCros();
 
     switch (flags.cmd) {
+    case Command::kInstallBootloader:
+        if (flags.arch == Arch::X64 && !flags.force) {
+            LOG("SKIPPING BOOTLOADER install on x64 device, pass --force if desired.\n");
+            Drain(fbl::move(flags.payload_fd));
+            return ZX_OK;
+        }
+        return PartitionPave(fbl::move(device_partitioner), fbl::move(flags.payload_fd),
+                             Partition::kBootloader, flags.arch);
+
     case Command::kInstallEfi:
         if ((is_cros_device || flags.arch == Arch::ARM64) && !flags.force) {
             LOG("SKIPPING EFI install on ARM64/CROS device, pass --force if desired.\n");

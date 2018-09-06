@@ -31,7 +31,7 @@
 
 class ProcessDispatcher;
 
-class ThreadDispatcher final : public SoloDispatcher {
+class ThreadDispatcher final : public SoloDispatcher<ThreadDispatcher> {
 public:
     // Traits to belong in the parent process's list.
     struct ThreadListTraits {
@@ -279,16 +279,7 @@ private:
     int suspend_count_ = 0;
 
     // Used to protect thread name read/writes
-    mutable SpinLock name_lock_;
-
-    // hold a reference to the mapping and vmar used to wrap the mapping of this
-    // thread's kernel stack
-    fbl::RefPtr<VmMapping> kstack_mapping_;
-    fbl::RefPtr<VmAddressRegion> kstack_vmar_;
-#if __has_feature(safe_stack)
-    fbl::RefPtr<VmMapping> unsafe_kstack_mapping_;
-    fbl::RefPtr<VmAddressRegion> unsafe_kstack_vmar_;
-#endif
+    mutable DECLARE_SPINLOCK(ThreadDispatcher) name_lock_;
 
     // Per-thread structure used while waiting in a ChannelDispatcher::Call.
     // Needed to support the requirements of being able to interrupt a Call

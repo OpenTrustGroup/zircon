@@ -166,6 +166,8 @@ static enum x86_microarch_list get_microarch(struct x86_model_info* info) {
         case 0x8e: /* Kabylake Y/U */
         case 0x9e: /* Kabylake H/S */
             return X86_MICROARCH_INTEL_KABYLAKE;
+        case 0x4d: /* Silvermont */
+            return X86_MICROARCH_INTEL_SILVERMONT;
         }
     } else if (x86_vendor == X86_VENDOR_AMD && info->family == 0xf) {
         switch (info->display_family) { // zen
@@ -322,6 +324,9 @@ void x86_feature_debug(void) {
     case X86_MICROARCH_INTEL_KABYLAKE:
         microarch_string = "Kaby Lake";
         break;
+    case X86_MICROARCH_INTEL_SILVERMONT:
+        microarch_string = "Silvermont";
+        break;
     case X86_MICROARCH_AMD_BULLDOZER:
         microarch_string = "Bulldozer";
         break;
@@ -468,50 +473,74 @@ static uint64_t zen_tsc_freq() {
     return amd_compute_p_state_clock(p0_state);
 }
 
+static void unknown_reboot_system(void) {
+    return;
+}
+
+static void hsw_reboot_system(void) {
+    // 100-Series Chipset Reset Control Register: CPU + SYS Reset
+    outp(0xcf9, 0x06);
+}
+
 // Intel microarches
 static const x86_microarch_config_t kbl_config{
     .get_apic_freq = kbl_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = hsw_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t skl_config{
     .get_apic_freq = kbl_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = hsw_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t bdw_config{
     .get_apic_freq = bdw_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = hsw_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t hsw_config{
     .get_apic_freq = bdw_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = hsw_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t ivb_config{
     .get_apic_freq = bdw_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t snb_config{
     .get_apic_freq = bdw_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t westmere_config{
     .get_apic_freq = default_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = true,
 };
 static const x86_microarch_config_t nehalem_config{
     .get_apic_freq = default_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = true,
+};
+static const x86_microarch_config_t smt_config{
+    .get_apic_freq = default_apic_freq,
+    .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = unknown_reboot_system,
+    .disable_c1e = false,
 };
 static const x86_microarch_config_t intel_default_config{
     .get_apic_freq = default_apic_freq,
     .get_tsc_freq = intel_tsc_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = false,
 };
 
@@ -519,21 +548,25 @@ static const x86_microarch_config_t intel_default_config{
 static const x86_microarch_config_t zen_config{
     .get_apic_freq = bulldozer_apic_freq,
     .get_tsc_freq = zen_tsc_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = false,
 };
 static const x86_microarch_config_t jaguar_config{
     .get_apic_freq = bulldozer_apic_freq,
     .get_tsc_freq = unknown_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = false,
 };
 static const x86_microarch_config_t bulldozer_config{
     .get_apic_freq = bulldozer_apic_freq,
     .get_tsc_freq = unknown_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = false,
 };
 static const x86_microarch_config_t amd_default_config{
     .get_apic_freq = default_apic_freq,
     .get_tsc_freq = unknown_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = false,
 };
 
@@ -541,6 +574,7 @@ static const x86_microarch_config_t amd_default_config{
 static const x86_microarch_config_t unknown_vendor_config{
     .get_apic_freq = unknown_freq,
     .get_tsc_freq = unknown_freq,
+    .reboot_system = unknown_reboot_system,
     .disable_c1e = false,
 };
 
@@ -569,6 +603,9 @@ void select_microarch_config(void) {
         break;
     case X86_MICROARCH_INTEL_KABYLAKE:
         x86_microarch_config = &kbl_config;
+        break;
+    case X86_MICROARCH_INTEL_SILVERMONT:
+        x86_microarch_config = &smt_config;
         break;
     case X86_MICROARCH_AMD_BULLDOZER:
         x86_microarch_config = &bulldozer_config;

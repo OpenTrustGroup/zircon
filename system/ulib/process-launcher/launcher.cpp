@@ -44,11 +44,11 @@ LauncherImpl::LauncherImpl(zx::channel channel)
 
 LauncherImpl::~LauncherImpl() = default;
 
-zx_status_t LauncherImpl::Begin(async_t* async) {
-    return wait_.Begin(async);
+zx_status_t LauncherImpl::Begin(async_dispatcher_t* dispatcher) {
+    return wait_.Begin(dispatcher);
 }
 
-void LauncherImpl::OnHandleReady(async_t* async, async::WaitBase* wait, zx_status_t status,
+void LauncherImpl::OnHandleReady(async_dispatcher_t* dispatcher, async::WaitBase* wait, zx_status_t status,
                                  const zx_packet_signal_t* signal) {
     if (status != ZX_OK) {
         NotifyError(status);
@@ -66,7 +66,7 @@ void LauncherImpl::OnHandleReady(async_t* async, async::WaitBase* wait, zx_statu
                 return;
             }
         }
-        status = wait_.Begin(async);
+        status = wait_.Begin(dispatcher);
         if (status != ZX_OK) {
             NotifyError(status);
         }
@@ -290,6 +290,10 @@ void LauncherImpl::PrepareLaunchpad(const fidl::Message& message, launchpad_t** 
     launchpad_set_environ(lp, environs.get());
     launchpad_set_nametable(lp, nametable.size(), nametable.get());
     launchpad_add_handles(lp, ids_.size(), reinterpret_cast<zx_handle_t*>(handles_.get()), ids_.get());
+    // launchpad_add_handles() took ownership of the handles in handles_.
+    for (auto& handle : handles_) {
+        __UNUSED zx_handle_t old_handle = handle.release();
+    }
 
     *lp_out = lp;
 }

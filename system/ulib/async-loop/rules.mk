@@ -48,10 +48,8 @@ MODULE_PACKAGE_SRCS := $(MODULE_SRCS)
 MODULE_PACKAGE_INCS := $(LOCAL_INC)/cpp/loop.h
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async.cpp \
     system/ulib/async \
     system/ulib/async-loop \
-    system/ulib/fbl \
     system/ulib/zx
 
 MODULE_LIBS := \

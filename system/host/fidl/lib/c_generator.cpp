@@ -11,6 +11,21 @@ namespace fidl {
 
 namespace {
 
+// RAII helper class to reset the iostream to its original flags.
+class IOFlagsGuard {
+public:
+    explicit IOFlagsGuard(std::ostream* stream) :
+        stream_(stream), flags_(stream_->flags()) {
+    }
+    ~IOFlagsGuard() {
+        stream_->setf(flags_);
+    }
+
+private:
+    std::ostream* stream_;
+    std::ios::fmtflags flags_;
+};
+
 // Various string values are looked up or computed in these
 // functions. Nothing else should be dealing in string literals, or
 // computing strings from these or AST values.
@@ -18,7 +33,15 @@ namespace {
 constexpr const char* kIndent = "    ";
 
 CGenerator::Member MessageHeader() {
-    return {"fidl_message_header_t", "hdr", {}};
+    return {
+        flat::Type::Kind::kIdentifier,
+        flat::Decl::Kind::kStruct,
+        "fidl_message_header_t",
+        "hdr",
+        {},
+        {},
+        types::Nullability::kNonnullable,
+    };
 }
 
 // Functions named "Emit..." are called to actually emit to an std::ostream
@@ -61,20 +84,257 @@ void EmitMemberDecl(std::ostream* file, const CGenerator::Member& member) {
     }
 }
 
+void EmitMethodInParamDecl(std::ostream* file, const CGenerator::Member& member) {
+    switch (member.kind) {
+    case flat::Type::Kind::kArray:
+        *file << "const " << member.type << " " << member.name;
+        for (uint32_t array_count : member.array_counts) {
+            *file << "[" << array_count << "]";
+        }
+        break;
+    case flat::Type::Kind::kVector:
+        *file << "const " << member.element_type << "* " << member.name << "_data, "
+              << "size_t " << member.name << "_count";
+        break;
+    case flat::Type::Kind::kString:
+        *file << "const char* " << member.name << "_data, "
+              << "size_t " << member.name << "_size";
+        break;
+    case flat::Type::Kind::kHandle:
+    case flat::Type::Kind::kRequestHandle:
+    case flat::Type::Kind::kPrimitive:
+        *file << member.type << " " << member.name;
+        break;
+    case flat::Type::Kind::kIdentifier:
+        switch (member.decl_kind) {
+        case flat::Decl::Kind::kConst:
+            assert(false && "bad decl kind for member");
+            break;
+        case flat::Decl::Kind::kEnum:
+        case flat::Decl::Kind::kInterface:
+            *file << member.type << " " << member.name;
+            break;
+        case flat::Decl::Kind::kStruct:
+        case flat::Decl::Kind::kUnion:
+            switch (member.nullability) {
+            case types::Nullability::kNullable:
+                *file << "const " << member.type << " " << member.name;
+                break;
+            case types::Nullability::kNonnullable:
+                *file << "const " << member.type << "* " << member.name;
+                break;
+            }
+            break;
+        }
+        break;
+    }
+}
+
+void EmitMethodOutParamDecl(std::ostream* file, const CGenerator::Member& member) {
+    switch (member.kind) {
+    case flat::Type::Kind::kArray:
+        *file << member.type << " out_" << member.name;
+        for (uint32_t array_count : member.array_counts) {
+            *file << "[" << array_count << "]";
+        }
+    case flat::Type::Kind::kVector:
+        *file << member.element_type << "* " << member.name << "_buffer, "
+              << "size_t " << member.name << "_capacity, "
+              << "size_t* out_" << member.name << "_count";
+        break;
+    case flat::Type::Kind::kString:
+        *file << "char* " << member.name << "_buffer, "
+              << "size_t " << member.name << "_capacity, "
+              << "size_t* out_" << member.name << "_size";
+        break;
+    case flat::Type::Kind::kHandle:
+    case flat::Type::Kind::kRequestHandle:
+    case flat::Type::Kind::kPrimitive:
+        *file << member.type << "* out_" << member.name;
+        break;
+    case flat::Type::Kind::kIdentifier:
+        switch (member.decl_kind) {
+        case flat::Decl::Kind::kConst:
+            assert(false && "bad decl kind for member");
+            break;
+        case flat::Decl::Kind::kEnum:
+        case flat::Decl::Kind::kInterface:
+            *file << member.type << "* out_" << member.name;
+            break;
+        case flat::Decl::Kind::kStruct:
+        case flat::Decl::Kind::kUnion:
+            switch (member.nullability) {
+            case types::Nullability::kNullable:
+                *file << member.type << " out_" << member.name;
+                break;
+            case types::Nullability::kNonnullable:
+                *file << member.type << "* out_" << member.name;
+                break;
+            }
+            break;
+        }
+        break;
+    }
+}
+
 void EmitClientMethodDecl(std::ostream* file, StringView method_name,
                           const std::vector<CGenerator::Member>& request,
                           const std::vector<CGenerator::Member>& response) {
     *file << "zx_status_t " << method_name << "(zx_handle_t _channel";
     for (const auto& member : request) {
         *file << ", ";
-        EmitMemberDecl(file, member);
+        EmitMethodInParamDecl(file, member);
     }
     for (auto member : response) {
         *file << ", ";
-        member.name = "out_" + member.name;
-        EmitMemberDecl(file, member);
+        EmitMethodOutParamDecl(file, member);
     }
     *file << ")";
+}
+
+void EmitServerMethodDecl(std::ostream* file, StringView method_name,
+                          const std::vector<CGenerator::Member>& request,
+                          bool has_response) {
+    *file << "zx_status_t (*" << method_name << ")(void* ctx";
+    for (const auto& member : request) {
+        *file << ", ";
+        EmitMethodInParamDecl(file, member);
+    }
+    if (has_response) {
+        *file << ", fidl_txn_t* txn";
+    }
+    *file << ")";
+}
+
+void EmitServerDispatchDecl(std::ostream* file, StringView interface_name) {
+    *file << "zx_status_t " << interface_name
+          << "_dispatch(void* ctx, fidl_txn_t* txn, fidl_msg_t* msg, const "
+          << interface_name << "_ops_t* ops)";
+}
+
+void EmitServerTryDispatchDecl(std::ostream* file, StringView interface_name) {
+    *file << "zx_status_t " << interface_name
+          << "_try_dispatch(void* ctx, fidl_txn_t* txn, fidl_msg_t* msg, const "
+          << interface_name << "_ops_t* ops)";
+}
+
+void EmitServerReplyDecl(std::ostream* file, StringView method_name,
+                         const std::vector<CGenerator::Member>& response) {
+    *file << "zx_status_t " << method_name << "_reply(fidl_txn_t* _txn";
+    for (const auto& member : response) {
+        *file << ", ";
+        EmitMethodInParamDecl(file, member);
+    }
+    *file << ")";
+}
+
+bool IsStoredOutOfLine(const CGenerator::Member& member) {
+    if (member.kind == flat::Type::Kind::kVector ||
+        member.kind == flat::Type::Kind::kString)
+        return true;
+    if (member.kind == flat::Type::Kind::kIdentifier) {
+        return member.nullability == types::Nullability::kNullable &&
+               (member.decl_kind == flat::Decl::Kind::kStruct || member.decl_kind == flat::Decl::Kind::kUnion);
+    }
+    return false;
+}
+
+void EmitMeasureInParams(std::ostream* file,
+                         const std::vector<CGenerator::Member>& params) {
+    for (const auto& member : params) {
+        if (member.kind == flat::Type::Kind::kVector)
+            *file << " + FIDL_ALIGN(sizeof(*" << member.name << "_data) * " << member.name << "_count)";
+        else if (member.kind == flat::Type::Kind::kString)
+            *file << " + FIDL_ALIGN(" << member.name << "_size)";
+        else if (IsStoredOutOfLine(member))
+            *file << " + (" << member.name << " ? sizeof(*" << member.name << ") : 0u)";
+    }
+}
+
+void EmitMeasureOutParams(std::ostream* file,
+                          const std::vector<CGenerator::Member>& params) {
+    for (const auto& member : params) {
+        if (member.kind == flat::Type::Kind::kVector)
+            *file << " + FIDL_ALIGN(sizeof(*" << member.name << "_buffer) * " << member.name << "_capacity)";
+        else if (member.kind == flat::Type::Kind::kString)
+            *file << " + FIDL_ALIGN(" << member.name << "_capacity)";
+        else if (IsStoredOutOfLine(member))
+            *file << " + (out_" << member.name << " ? sizeof(*out_" << member.name << ") : 0u)";
+    }
+}
+
+// This function assumes the |params| are part of a [Layout="Simple"] interface.
+// In particular, simple interfaces don't have nullable structs or nested
+// vectors. The only secondary objects they contain are top-level vectors and
+// strings.
+size_t CountSecondaryObjects(const std::vector<CGenerator::Member>& params) {
+    size_t count = 0u;
+    for (const auto& member : params) {
+        if (IsStoredOutOfLine(member))
+            ++count;
+    }
+    return count;
+}
+
+void EmitLinearizeMessage(std::ostream* file,
+                          StringView receiver,
+                          StringView bytes,
+                          const std::vector<CGenerator::Member>& request) {
+    if (CountSecondaryObjects(request) > 0)
+        *file << kIndent << "uint32_t _next = sizeof(*" << receiver << ");\n";
+    for (const auto& member : request) {
+        const auto& name = member.name;
+        switch (member.kind) {
+        case flat::Type::Kind::kArray:
+            *file << kIndent << "memcpy(" << receiver << "->" << name << ", "
+                  << name << ", sizeof(" << receiver << "->" << name << "));\n";
+            break;
+        case flat::Type::Kind::kVector:
+            *file << kIndent << receiver << "->" << name << ".data = &" << bytes << "[_next];\n";
+            *file << kIndent << receiver << "->" << name << ".count = " << name << "_count;\n";
+            *file << kIndent << "memcpy(" << receiver << "->" << name << ".data, " << name << "_data, sizeof(*" << name << "_data) * " << name << "_count);\n";
+            *file << kIndent << "_next += FIDL_ALIGN(sizeof(*" << name << "_data) * " << name << "_count);\n";
+            break;
+        case flat::Type::Kind::kString:
+            *file << kIndent << receiver << "->" << name << ".data = &" << bytes << "[_next];\n";
+            *file << kIndent << receiver << "->" << name << ".size = " << name << "_size;\n";
+            *file << kIndent << "memcpy(" << receiver << "->" << name << ".data, " << name << "_data, " << name << "_size);\n";
+            *file << kIndent << "_next += FIDL_ALIGN(" << name << "_size);\n";
+            break;
+        case flat::Type::Kind::kHandle:
+        case flat::Type::Kind::kRequestHandle:
+        case flat::Type::Kind::kPrimitive:
+            *file << kIndent << receiver << "->" << name << " = " << name << ";\n";
+            break;
+        case flat::Type::Kind::kIdentifier:
+            switch (member.decl_kind) {
+            case flat::Decl::Kind::kConst:
+                assert(false && "bad decl kind for member");
+                break;
+            case flat::Decl::Kind::kEnum:
+            case flat::Decl::Kind::kInterface:
+                *file << kIndent << receiver << "->" << name << " = " << name << ";\n";
+                break;
+            case flat::Decl::Kind::kStruct:
+            case flat::Decl::Kind::kUnion:
+                switch (member.nullability) {
+                case types::Nullability::kNullable:
+                    *file << kIndent << "if (" << name << ") {\n";
+                    *file << kIndent << kIndent << receiver << "->" << name << " = (void*)&" << bytes << "[_next];\n";
+                    *file << kIndent << kIndent << "memcpy(" << receiver << "->" << name << ", " << name << ", sizeof(*" << name << "));\n";
+                    *file << kIndent << kIndent << "_next += sizeof(*" << name << ");\n";
+                    *file << kIndent << "} else {\n";
+                    *file << kIndent << kIndent << receiver << "->" << name << " = NULL;\n";
+                    *file << kIndent << "}\n";
+                    break;
+                case types::Nullability::kNonnullable:
+                    *file << kIndent << receiver << "->" << name << " = *" << name << ";\n";
+                    break;
+                }
+                break;
+            }
+        }
+    }
 }
 
 // Various computational helper routines.
@@ -163,7 +423,6 @@ void EnumValue(types::PrimitiveSubtype type, const flat::Constant* constant,
         break;
     }
     case types::PrimitiveSubtype::kBool:
-    case types::PrimitiveSubtype::kStatus:
     case types::PrimitiveSubtype::kFloat32:
     case types::PrimitiveSubtype::kFloat64:
         assert(false && "bad primitive type for an enum");
@@ -189,13 +448,42 @@ std::vector<uint32_t> ArrayCounts(const flat::Library* library, const flat::Type
     }
 }
 
-template <typename T, std::string NameType(const flat::Type*) = NameFlatCType>
+flat::Decl::Kind GetDeclKind(const flat::Library* library, const flat::Type* type) {
+    if (type->kind != flat::Type::Kind::kIdentifier)
+        return flat::Decl::Kind::kConst;
+    auto identifier_type = static_cast<const flat::IdentifierType*>(type);
+    auto named_decl = library->LookupDeclByName(identifier_type->name);
+    assert(named_decl && "library must contain declaration");
+    return named_decl->kind;
+}
+
+template <typename T>
 CGenerator::Member CreateMember(const flat::Library* library, const T& decl) {
     std::string name = NameIdentifier(decl.name);
     const flat::Type* type = decl.type.get();
-    auto type_name = NameType(type);
+    auto decl_kind = GetDeclKind(library, type);
+    auto type_name = NameFlatCType(type, decl_kind);
     std::vector<uint32_t> array_counts = ArrayCounts(library, type);
-    return CGenerator::Member{type_name, name, std::move(array_counts)};
+    std::string element_type_name;
+    if (type->kind == flat::Type::Kind::kVector) {
+        auto vector_type = static_cast<const flat::VectorType*>(type);
+        const flat::Type* element_type = vector_type->element_type.get();
+        element_type_name = NameFlatCType(element_type, GetDeclKind(library, element_type));
+    }
+    types::Nullability nullability = types::Nullability::kNonnullable;
+    if (type->kind == flat::Type::Kind::kIdentifier) {
+        auto identifier_type = static_cast<const flat::IdentifierType*>(type);
+        nullability = identifier_type->nullability;
+    }
+    return CGenerator::Member{
+        type->kind,
+        decl_kind,
+        std::move(type_name),
+        std::move(name),
+        std::move(element_type_name),
+        std::move(array_counts),
+        nullability,
+    };
 }
 
 std::vector<CGenerator::Member>
@@ -213,16 +501,17 @@ void GetMethodParameters(const flat::Library* library,
                          const CGenerator::NamedMethod& method_info,
                          std::vector<CGenerator::Member>* request,
                          std::vector<CGenerator::Member>* response) {
-
-    request->reserve(method_info.request->parameters.size());
-    for (const auto& parameter : method_info.request->parameters) {
-        request->push_back(CreateMember(library, parameter));
+    if (request) {
+        request->reserve(method_info.request->parameters.size());
+        for (const auto& parameter : method_info.request->parameters) {
+            request->push_back(CreateMember(library, parameter));
+        }
     }
 
-    if (method_info.response) {
+    if (response && method_info.response) {
         response->reserve(method_info.request->parameters.size());
         for (const auto& parameter : method_info.response->parameters) {
-            response->push_back(CreateMember<flat::Interface::Method::Parameter, NameFlatCOutType>(library, parameter));
+            response->push_back(CreateMember(library, parameter));
         }
     }
 }
@@ -239,8 +528,10 @@ void CGenerator::GeneratePrologues() {
     EmitIncludeHeader(&file_, "<zircon/fidl.h>");
     EmitIncludeHeader(&file_, "<zircon/syscalls/object.h>");
     EmitIncludeHeader(&file_, "<zircon/types.h>");
-    for (const auto& pair : *library_->dependencies_) {
-        if (pair.second.get() == library_)
+    for (auto pair : library_->dependencies()) {
+        if (pair.second == library_)
+            continue;
+        if (pair.second->HasAttribute("Internal"))
             continue;
         EmitIncludeHeader(&file_, "<" + NameLibraryCHeader(pair.first) + ">");
     }
@@ -257,6 +548,36 @@ void CGenerator::GenerateIntegerDefine(StringView name, types::PrimitiveSubtype 
                                        StringView value) {
     std::string literal_macro = NamePrimitiveIntegerCConstantMacro(subtype);
     file_ << "#define " << name << " " << literal_macro << "(" << value << ")\n";
+}
+
+void CGenerator::GeneratePrimitiveDefine(StringView name, types::PrimitiveSubtype subtype,
+                                         StringView value) {
+    switch (subtype) {
+    case types::PrimitiveSubtype::kInt8:
+    case types::PrimitiveSubtype::kInt16:
+    case types::PrimitiveSubtype::kInt32:
+    case types::PrimitiveSubtype::kInt64:
+    case types::PrimitiveSubtype::kUint8:
+    case types::PrimitiveSubtype::kUint16:
+    case types::PrimitiveSubtype::kUint32:
+    case types::PrimitiveSubtype::kUint64: {
+        std::string literal_macro = NamePrimitiveIntegerCConstantMacro(subtype);
+        file_ << "#define " << name << " " << literal_macro << "(" << value << ")\n";
+        break;
+    }
+    case types::PrimitiveSubtype::kBool:
+    case types::PrimitiveSubtype::kFloat32:
+    case types::PrimitiveSubtype::kFloat64: {
+        file_ << "#define " << name << " " << "(" << value << ")\n";
+        break;
+    }
+    default:
+        abort();
+    }
+}
+
+void CGenerator::GenerateStringDefine(StringView name, StringView value) {
+    file_ << "#define " << name << " " << value << "\n";
 }
 
 void CGenerator::GenerateIntegerTypedef(types::PrimitiveSubtype subtype, StringView name) {
@@ -300,7 +621,7 @@ std::map<const flat::Decl*, CGenerator::NamedConst>
 CGenerator::NameConsts(const std::vector<std::unique_ptr<flat::Const>>& const_infos) {
     std::map<const flat::Decl*, NamedConst> named_consts;
     for (const auto& const_info : const_infos) {
-        named_consts.emplace(const_info.get(), NamedConst{"", *const_info});
+        named_consts.emplace(const_info.get(), NamedConst{NameName(const_info->name, "_", "_"), *const_info});
     }
     return named_consts;
 }
@@ -320,18 +641,25 @@ CGenerator::NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& 
     std::map<const flat::Decl*, NamedInterface> named_interfaces;
     for (const auto& interface_info : interface_infos) {
         NamedInterface named_interface;
-        std::string interface_name = NameInterface(*interface_info);
-        for (const auto& method : interface_info->methods) {
+        named_interface.c_name = NameInterface(*interface_info);
+        if (interface_info->HasAttribute("Discoverable")) {
+            named_interface.discoverable_name = NameDiscoverable(*interface_info);
+        }
+        for (const auto& method_pointer : interface_info->all_methods) {
+            assert(method_pointer != nullptr);
+            const auto& method = *method_pointer;
             NamedMethod named_method;
-            std::string method_name = NameMethod(interface_name, method);
+            std::string method_name = NameMethod(named_interface.c_name, method);
             named_method.ordinal = method.ordinal.Value();
             named_method.ordinal_name = NameOrdinal(method_name);
+            named_method.identifier = NameIdentifier(method.name);
             named_method.c_name = method_name;
             if (method.maybe_request != nullptr) {
                 std::string c_name = NameMessage(method_name, types::MessageKind::kRequest);
                 std::string coded_name = NameTable(c_name);
                 named_method.request = std::make_unique<NamedMessage>(NamedMessage{
-                    std::move(c_name), std::move(coded_name), method.maybe_request->parameters});
+                    std::move(c_name), std::move(coded_name),
+                    method.maybe_request->parameters, method.maybe_request->typeshape});
             }
             if (method.maybe_response != nullptr) {
                 if (method.maybe_request == nullptr) {
@@ -340,13 +668,15 @@ CGenerator::NameInterfaces(const std::vector<std::unique_ptr<flat::Interface>>& 
                     std::string coded_name = NameTable(c_name);
                     named_method.response = std::make_unique<NamedMessage>(
                         NamedMessage{std::move(c_name), std::move(coded_name),
-                                     method.maybe_response->parameters});
+                                     method.maybe_response->parameters,
+                                     method.maybe_response->typeshape});
                 } else {
                     std::string c_name = NameMessage(method_name, types::MessageKind::kResponse);
                     std::string coded_name = NameTable(c_name);
                     named_method.response = std::make_unique<NamedMessage>(
                         NamedMessage{std::move(c_name), std::move(coded_name),
-                                     method.maybe_response->parameters});
+                                     method.maybe_response->parameters,
+                                     method.maybe_response->typeshape});
                 }
             }
             named_interface.methods.push_back(std::move(named_method));
@@ -396,9 +726,15 @@ void CGenerator::ProduceEnumForwardDeclaration(const NamedEnum& named_enum) {
 }
 
 void CGenerator::ProduceInterfaceForwardDeclaration(const NamedInterface& named_interface) {
+    if (!named_interface.discoverable_name.empty()) {
+        file_ << "#define " << named_interface.c_name << "_Name \"" << named_interface.discoverable_name << "\"\n";
+    }
     for (const auto& method_info : named_interface.methods) {
-        file_ << "#define " << method_info.ordinal_name << " ((uint32_t)"
-              << method_info.ordinal << ")\n";
+        {
+            IOFlagsGuard reset_flags(&file_);
+            file_ << "#define " << method_info.ordinal_name << " ((uint32_t)0x"
+                  << std::uppercase << std::hex << method_info.ordinal << std::dec << ")\n";
+        }
         if (method_info.request)
             GenerateStructTypedef(method_info.request->c_name);
         if (method_info.response)
@@ -425,8 +761,27 @@ void CGenerator::ProduceInterfaceExternDeclaration(const NamedInterface& named_i
 }
 
 void CGenerator::ProduceConstDeclaration(const NamedConst& named_const) {
-    // TODO(TO-702)
-    static_cast<void>(named_const);
+    const flat::Const& ci = named_const.const_info;
+
+    // Some constants are not literals.  Odd.
+    if (ci.value->kind != flat::Constant::Kind::kLiteral) {
+        return;
+    }
+
+    switch (ci.type->kind) {
+    case flat::Type::Kind::kPrimitive:
+        GeneratePrimitiveDefine(named_const.name,
+                                static_cast<flat::PrimitiveType*>(ci.type.get())->subtype,
+                                static_cast<flat::LiteralConstant*>(ci.value.get())->literal->location().data());
+        break;
+    case flat::Type::Kind::kString:
+        GenerateStringDefine(named_const.name,
+                             static_cast<flat::LiteralConstant*>(ci.value.get())->literal->location().data());
+        break;
+    default:
+        abort();
+    }
+
 
     EmitBlank(&file_);
 }
@@ -504,83 +859,355 @@ void CGenerator::ProduceInterfaceClientImplementation(const NamedInterface& name
         std::vector<Member> request;
         std::vector<Member> response;
         GetMethodParameters(library_, method_info, &request, &response);
+
+        size_t count = CountSecondaryObjects(request);
+        size_t hcount = method_info.request->typeshape.MaxHandles();
+        bool encode = ((count > 0) || (hcount > 0));
+
         EmitClientMethodDecl(&file_, method_info.c_name, request, response);
-        // TODO(FIDL-162): Compute max_wr_handles.
-        uint32_t max_wr_handles = 0;
-
-        file_ << "{\n";
-        file_ << kIndent << method_info.request->c_name << " _request;\n";
-        // TODO(FIDL-162): Allocate message space for input strings.
-        file_ << kIndent << "uint32_t _wr_num_bytes = sizeof(_request);\n";
-        file_ << kIndent << "memset(&_request, 0, _wr_num_bytes);\n";
-        file_ << kIndent << "_request.hdr.ordinal = " << method_info.ordinal << ";\n";
-        for (const auto& member : request) {
-            const auto& name = member.name;
-            file_ << kIndent << "memcpy(&_request." << name << ", &" << name << ", sizeof(_request." << name << ");\n";
-            // TODO(FIDL-162): Copy string data into the request.
-        }
-        StringView wr_handles = "NULL";
-        if (max_wr_handles > 0) {
-            wr_handles = "_wr_handles";
-            file_ << kIndent << "zx_handle_t _wr_handles[" << max_wr_handles << "];\n";
-        }
-        file_ << kIndent << "uint32_t _wr_num_handles = 0u;\n";
-        file_ << kIndent << "zx_status_t _status = fidl_encode(&" << method_info.request->coded_name
-              << ", &_request, _wr_num_bytes, " << wr_handles << ", " << max_wr_handles
-              << ", &_wr_num_handles, NULL);\n";
-        // TODO(FIDL-162): Clean up handles on error.
-        file_ << kIndent << "if (_status != ZX_OK)\n";
-        file_ << kIndent << kIndent << "return _status;\n";
-        if (!method_info.response) {
-            file_ << kIndent << "return zx_channel_write(_channel, 0u, &_request, _wr_num_bytes, "
-                  << wr_handles << ", _wr_num_handles);\n";
+        file_ << " {\n";
+        file_ << kIndent << "uint32_t _wr_num_bytes = sizeof(" << method_info.request->c_name << ")";
+        EmitMeasureInParams(&file_, request);
+        file_ << ";\n";
+        file_ << kIndent << "FIDL_ALIGNDECL char _wr_bytes[_wr_num_bytes];\n";
+        file_ << kIndent << method_info.request->c_name << "* _request = (" << method_info.request->c_name << "*)_wr_bytes;\n";
+        file_ << kIndent << "memset(_wr_bytes, 0, sizeof(_wr_bytes));\n";
+        file_ << kIndent << "_request->hdr.ordinal = " << method_info.ordinal << ";\n";
+        EmitLinearizeMessage(&file_, "_request", "_wr_bytes", request);
+        if (encode) {
+            file_ << kIndent << "zx_handle_t _handles[ZX_CHANNEL_MAX_MSG_HANDLES];\n";
+            file_ << kIndent << "uint32_t _wr_num_handles = 0u;\n";
+            file_ << kIndent << "zx_status_t _status = fidl_encode(&" << method_info.request->coded_name
+                  << ", _wr_bytes, _wr_num_bytes, _handles, ZX_CHANNEL_MAX_MSG_HANDLES"
+                  << ", &_wr_num_handles, NULL);\n";
+            file_ << kIndent << "if (_status != ZX_OK)\n";
+            file_ << kIndent << kIndent << "return _status;\n";
         } else {
-            // TODO(FIDL-162): Compute max_rd_handles.
-            uint32_t max_rd_handles = 0;
-
-            file_ << kIndent << method_info.response->c_name << " _response;\n";
-            // TODO(FIDL-162): Allocate message space for output strings.
-            file_ << kIndent << "uint32_t _rd_num_bytes = sizeof(_request);\n";
-
-            StringView rd_handles = "NULL";
-            if (max_rd_handles > 0) {
-                rd_handles = "_rd_handles";
-                file_ << kIndent << "zx_handle_t _rd_handles[" << max_rd_handles << "];\n";
+            file_ << kIndent << "// OPTIMIZED AWAY fidl_encode() of POD-only request\n";
+        }
+        if (!method_info.response) {
+            if (encode) {
+                file_ << kIndent << "return zx_channel_write(_channel, 0u, _wr_bytes, _wr_num_bytes, _handles, _wr_num_handles);\n";
+            } else {
+                file_ << kIndent << "return zx_channel_write(_channel, 0u, _wr_bytes, _wr_num_bytes, NULL, 0);\n";
             }
-
+        } else {
+            file_ << kIndent << "uint32_t _rd_num_bytes = sizeof(" << method_info.response->c_name << ")";
+            EmitMeasureOutParams(&file_, response);
+            file_ << ";\n";
+            file_ << kIndent << "FIDL_ALIGNDECL char _rd_bytes[_rd_num_bytes];\n";
+            if (!encode) {
+                file_ << kIndent << "zx_handle_t _handles[ZX_CHANNEL_MAX_MSG_HANDLES];\n";
+            }
+            if (!response.empty())
+                file_ << kIndent << method_info.response->c_name << "* _response = (" << method_info.response->c_name << "*)_rd_bytes;\n";
             file_ << kIndent << "zx_channel_call_args_t _args = {\n";
-            file_ << kIndent << kIndent << ".wr_bytes = &_request,\n";
-            file_ << kIndent << kIndent << ".wr_handles = " << wr_handles << ",\n";
-            file_ << kIndent << kIndent << ".rd_bytes = &_response,\n";
-            file_ << kIndent << kIndent << ".rd_handles = " << rd_handles << ",\n";
+            file_ << kIndent << kIndent << ".wr_bytes = _wr_bytes,\n";
+            if (encode) {
+                file_ << kIndent << kIndent << ".wr_handles = _handles,\n";
+            } else {
+                file_ << kIndent << kIndent << ".wr_handles = NULL,\n";
+            }
+            file_ << kIndent << kIndent << ".rd_bytes = _rd_bytes,\n";
+            file_ << kIndent << kIndent << ".rd_handles = _handles,\n";
             file_ << kIndent << kIndent << ".wr_num_bytes = _wr_num_bytes,\n";
-            file_ << kIndent << kIndent << ".wr_num_handles = _wr_num_handles,\n";
+            if (encode) {
+                file_ << kIndent << kIndent << ".wr_num_handles = _wr_num_handles,\n";
+            } else {
+                file_ << kIndent << kIndent << ".wr_num_handles = 0,\n";
+            }
             file_ << kIndent << kIndent << ".rd_num_bytes = _rd_num_bytes,\n";
-            file_ << kIndent << kIndent << ".rd_num_handles = " << max_rd_handles << ",\n";
+            file_ << kIndent << kIndent << ".rd_num_handles = ZX_CHANNEL_MAX_MSG_HANDLES,\n";
             file_ << kIndent << "};\n";
 
             file_ << kIndent << "uint32_t _actual_num_bytes = 0u;\n";
             file_ << kIndent << "uint32_t _actual_num_handles = 0u;\n";
-            file_ << kIndent << "_status = zx_channel_call(_channel, 0u, ZX_TIME_INFINITE, &_args, &_actual_num_bytes, &_actual_num_handles);\n";
-            // TODO(FIDL-162): Clean up handles on error.
+            if (encode) {
+                file_ << kIndent;
+            } else {
+                file_ << kIndent << "zx_status_t ";
+            }
+            file_ << "_status = zx_channel_call(_channel, 0u, ZX_TIME_INFINITE, &_args, &_actual_num_bytes, &_actual_num_handles);\n";
             file_ << kIndent << "if (_status != ZX_OK)\n";
             file_ << kIndent << kIndent << "return _status;\n";
 
-            // TODO(FIDL-162): Do we need to validate the response ordinal or does fidl_decode do that for us?
-            file_ << kIndent << "_status = fidl_decode(&" << method_info.response->coded_name
-                  << ", &_response, _actual_num_bytes, " << wr_handles << ", _actual_num_handles, NULL);\n";
-            // TODO(FIDL-162): Clean up handles on error.
-            file_ << kIndent << "if (_status != ZX_OK)\n";
-            file_ << kIndent << kIndent << "return _status;\n";
+            // We check that we have enough capacity to copy out the parameters
+            // before decoding the message so that we can close the handles
+            // using |_handles| rather than trying to find them in the decoded
+            // message.
+            count = CountSecondaryObjects(response);
+            if (count > 0u) {
+                file_ << kIndent << "if ";
+                if (count > 1u)
+                    file_ << "(";
+                size_t i = 0;
+                for (const auto& member : response) {
+                    if (member.kind == flat::Type::Kind::kVector) {
+                        if (i++ > 0u)
+                            file_ << " || ";
+                        file_ << "(_response->" << member.name << ".count > " << member.name << "_capacity)";
+                    } else if (member.kind == flat::Type::Kind::kString) {
+                        if (i++ > 0u)
+                            file_ << " || ";
+                        file_ << "(_response->" << member.name << ".size > " << member.name << "_capacity)";
+                    } else if (IsStoredOutOfLine(member)) {
+                        if (i++ > 0u)
+                            file_ << " || ";
+                        file_ << "((uintptr_t)_response->" << member.name << " == FIDL_ALLOC_PRESENT && out_" << member.name << " == NULL)";
+                    }
+                }
+                if (count > 1u)
+                    file_ << ")";
+                file_ << " {\n";
+                file_ << kIndent << kIndent << "zx_handle_close_many(_handles, _actual_num_handles);\n";
+                file_ << kIndent << kIndent << "return ZX_ERR_BUFFER_TOO_SMALL;\n";
+                file_ << kIndent << "}\n";
+            }
+
+            hcount = method_info.response->typeshape.MaxHandles();;
+            if ((count == 0) && (hcount == 0)) {
+                file_ << kIndent << "// OPTIMIZED AWAY fidl_decode() of POD-only response\n";
+                file_ << kIndent << "if (_actual_num_handles > 0) {\n";
+                file_ << kIndent << kIndent << "zx_handle_close_many(_handles, _actual_num_handles);\n";
+                file_ << kIndent << kIndent << "return ZX_ERR_INTERNAL;\n"; // WHAT ERROR?
+                file_ << kIndent << "}\n";
+            } else {
+                // TODO(FIDL-162): Validate the response ordinal. C++ bindings also need to do that.
+                file_ << kIndent << "_status = fidl_decode(&" << method_info.response->coded_name
+                      << ", _rd_bytes, _actual_num_bytes, _handles, _actual_num_handles, NULL);\n";
+                file_ << kIndent << "if (_status != ZX_OK)\n";
+                file_ << kIndent << kIndent << "return _status;\n";
+            }
 
             for (const auto& member : response) {
                 const auto& name = member.name;
-                file_ << kIndent << "memcpy(out_" << name << ", &_response." << name << ", sizeof(*out_" << name << ");\n";
-                // TODO(FIDL-162): Copy string data out of the response.
+                switch (member.kind) {
+                case flat::Type::Kind::kArray:
+                    file_ << kIndent << "memcpy(out_" << name << ", _response->" << name << ", sizeof(out_" << name << "));\n";
+                    break;
+                case flat::Type::Kind::kVector:
+                    file_ << kIndent << "memcpy(" << name << "_buffer, _response->" << name << ".data, sizeof(*" << name << "_buffer) * _response->" << name << ".count);\n";
+                    file_ << kIndent << "*out_" << name << "_count = _response->" << name << ".count;\n";
+                    break;
+                case flat::Type::Kind::kString:
+                    file_ << kIndent << "memcpy(" << name << "_buffer, _response->" << name << ".data, _response->" << name << ".size);\n";
+                    file_ << kIndent << "*out_" << name << "_size = _response->" << name << ".size;\n";
+                    break;
+                case flat::Type::Kind::kHandle:
+                case flat::Type::Kind::kRequestHandle:
+                case flat::Type::Kind::kPrimitive:
+                    file_ << kIndent << "*out_" << name << " = _response->" << name << ";\n";
+                    break;
+                case flat::Type::Kind::kIdentifier:
+                    switch (member.decl_kind) {
+                    case flat::Decl::Kind::kConst:
+                        assert(false && "bad decl kind for member");
+                        break;
+                    case flat::Decl::Kind::kEnum:
+                    case flat::Decl::Kind::kInterface:
+                        file_ << kIndent << "*out_" << name << " = _response->" << name << ";\n";
+                        break;
+                    case flat::Decl::Kind::kStruct:
+                    case flat::Decl::Kind::kUnion:
+                        switch (member.nullability) {
+                        case types::Nullability::kNullable:
+                            file_ << kIndent << "if (_response->" << name << ") {\n";
+                            file_ << kIndent << kIndent << "*out_" << name << " = *(_response->" << name << ");\n";
+                            file_ << kIndent << "} else {\n";
+                            // We don't have a great way of signaling that the optional response member
+                            // was not in the message. That means these bindings aren't particularly
+                            // useful when the client needs to extract that bit. The best we can do is
+                            // zero out the value to make sure the client has defined behavior.
+                            //
+                            // In many cases, the response contains other information (e.g., a status code)
+                            // that lets the client do something reasonable.
+                            file_ << kIndent << kIndent << "memset(out_" << name << ", 0, sizeof(*out_" << name << "));\n";
+                            file_ << kIndent << "}\n";
+                            break;
+                        case types::Nullability::kNonnullable:
+                            file_ << kIndent << "*out_" << name << " = _response->" << name << ";\n";
+                            break;
+                        }
+                        break;
+                    }
+                    break;
+                }
             }
 
             file_ << kIndent << "return ZX_OK;\n";
         }
+        file_ << "}\n\n";
+    }
+} // namespace fidl
+
+void CGenerator::ProduceInterfaceServerDeclaration(const NamedInterface& named_interface) {
+    file_ << "typedef struct " << named_interface.c_name << "_ops {\n";
+    for (const auto& method_info : named_interface.methods) {
+        if (!method_info.request)
+            continue;
+        std::vector<Member> request;
+        GetMethodParameters(library_, method_info, &request, nullptr);
+        bool has_response = method_info.response != nullptr;
+        file_ << kIndent;
+        EmitServerMethodDecl(&file_, method_info.identifier, request, has_response);
+        file_ << ";\n";
+    }
+    file_ << "} " << named_interface.c_name << "_ops_t;\n\n";
+
+    EmitServerDispatchDecl(&file_, named_interface.c_name);
+    file_ << ";\n";
+    EmitServerTryDispatchDecl(&file_, named_interface.c_name);
+    file_ << ";\n\n";
+
+    for (const auto& method_info : named_interface.methods) {
+        if (!method_info.request || !method_info.response)
+            continue;
+        std::vector<Member> response;
+        GetMethodParameters(library_, method_info, nullptr, &response);
+        EmitServerReplyDecl(&file_, method_info.c_name, response);
+        file_ << ";\n";
+    }
+
+    EmitBlank(&file_);
+}
+
+void CGenerator::ProduceInterfaceServerImplementation(const NamedInterface& named_interface) {
+    EmitServerTryDispatchDecl(&file_, named_interface.c_name);
+    file_ << " {\n";
+    file_ << kIndent << "if (msg->num_bytes < sizeof(fidl_message_header_t)) {\n";
+    file_ << kIndent << kIndent << "zx_handle_close_many(msg->handles, msg->num_handles);\n";
+    file_ << kIndent << kIndent << "return ZX_ERR_INVALID_ARGS;\n";
+    file_ << kIndent << "}\n";
+    file_ << kIndent << "fidl_message_header_t* hdr = (fidl_message_header_t*)msg->bytes;\n";
+    file_ << kIndent << "zx_status_t status = ZX_OK;\n";
+    file_ << kIndent << "switch (hdr->ordinal) {\n";
+
+    for (const auto& method_info : named_interface.methods) {
+        if (!method_info.request)
+            continue;
+        file_ << kIndent << "case " << method_info.ordinal_name << ": {\n";
+        file_ << kIndent << kIndent << "status = fidl_decode_msg(&" << method_info.request->coded_name << ", msg, NULL);\n";
+        file_ << kIndent << kIndent << "if (status != ZX_OK)\n";
+        file_ << kIndent << kIndent << kIndent << "break;\n";
+        std::vector<Member> request;
+        GetMethodParameters(library_, method_info, &request, nullptr);
+        if (!request.empty())
+            file_ << kIndent << kIndent << method_info.request->c_name << "* request = (" << method_info.request->c_name << "*)msg->bytes;\n";
+        file_ << kIndent << kIndent << "status = (*ops->" << method_info.identifier << ")(ctx";
+        for (const auto& member : request) {
+            switch (member.kind) {
+            case flat::Type::Kind::kArray:
+            case flat::Type::Kind::kHandle:
+            case flat::Type::Kind::kRequestHandle:
+            case flat::Type::Kind::kPrimitive:
+                file_ << ", request->" << member.name;
+                break;
+            case flat::Type::Kind::kVector:
+                file_ << ", (" << member.element_type << "*)request->" << member.name << ".data"
+                      << ", request->" << member.name << ".count";
+                break;
+            case flat::Type::Kind::kString:
+                file_ << ", request->" << member.name << ".data"
+                      << ", request->" << member.name << ".size";
+                break;
+            case flat::Type::Kind::kIdentifier:
+                switch (member.decl_kind) {
+                case flat::Decl::Kind::kConst:
+                    assert(false && "bad decl kind for member");
+                    break;
+                case flat::Decl::Kind::kEnum:
+                case flat::Decl::Kind::kInterface:
+                    file_ << ", request->" << member.name;
+                    break;
+                case flat::Decl::Kind::kStruct:
+                case flat::Decl::Kind::kUnion:
+                    switch (member.nullability) {
+                    case types::Nullability::kNullable:
+                        file_ << ", request->" << member.name;
+                        break;
+                    case types::Nullability::kNonnullable:
+                        file_ << ", &(request->" << member.name << ")";
+                        break;
+                    }
+                    break;
+                }
+            }
+        }
+        if (method_info.response != nullptr)
+            file_ << ", txn";
+        file_ << ");\n";
+        file_ << kIndent << kIndent << "break;\n";
+        file_ << kIndent << "}\n";
+    }
+    file_ << kIndent << "default: {\n";
+    file_ << kIndent << kIndent << "return ZX_ERR_NOT_SUPPORTED;\n";
+    file_ << kIndent << "}\n";
+    file_ << kIndent << "}\n";
+    file_ << kIndent << "if ("
+          << "status != ZX_OK && "
+          << "status != ZX_ERR_STOP && "
+          << "status != ZX_ERR_NEXT && "
+          << "status != ZX_ERR_ASYNC) {\n";
+    file_ << kIndent << kIndent << "return ZX_ERR_INTERNAL;\n";
+    file_ << kIndent << "} else {\n";
+    file_ << kIndent << kIndent << "return status;\n";
+    file_ << kIndent << "}\n";
+    file_ << "}\n\n";
+
+    EmitServerDispatchDecl(&file_, named_interface.c_name);
+    file_ << " {\n";
+    file_ << kIndent << "zx_status_t status = "
+          << named_interface.c_name << "_try_dispatch(ctx, txn, msg, ops);\n";
+    file_ << kIndent << "if (status == ZX_ERR_NOT_SUPPORTED)\n";
+    file_ << kIndent << kIndent << "zx_handle_close_many(msg->handles, msg->num_handles);\n";
+    file_ << kIndent << "return status;\n";
+    file_ << "}\n\n";
+
+    for (const auto& method_info : named_interface.methods) {
+        if (!method_info.request || !method_info.response)
+            continue;
+        std::vector<Member> response;
+        GetMethodParameters(library_, method_info, nullptr, &response);
+
+        size_t hcount = method_info.response->typeshape.MaxHandles();
+        bool encode = ((CountSecondaryObjects(response) > 0) || (hcount > 0));
+
+        EmitServerReplyDecl(&file_, method_info.c_name, response);
+        file_ << " {\n";
+        file_ << kIndent << "uint32_t _wr_num_bytes = sizeof(" << method_info.response->c_name << ")";
+        EmitMeasureInParams(&file_, response);
+        file_ << ";\n";
+        file_ << kIndent << "char _wr_bytes[_wr_num_bytes];\n";
+        file_ << kIndent << method_info.response->c_name << "* _response = (" << method_info.response->c_name << "*)_wr_bytes;\n";
+        file_ << kIndent << "memset(_wr_bytes, 0, sizeof(_wr_bytes));\n";
+        file_ << kIndent << "_response->hdr.ordinal = " << method_info.ordinal << ";\n";
+        EmitLinearizeMessage(&file_, "_response", "_wr_bytes", response);
+        if (encode) {
+            file_ << kIndent << "zx_handle_t _handles[ZX_CHANNEL_MAX_MSG_HANDLES];\n";
+        }
+        file_ << kIndent << "fidl_msg_t _msg = {\n";
+        file_ << kIndent << kIndent << ".bytes = _wr_bytes,\n";
+        if (encode) {
+            file_ << kIndent << kIndent << ".handles = _handles,\n";
+        } else {
+            file_ << kIndent << kIndent << ".handles = NULL,\n";
+        }
+        file_ << kIndent << kIndent << ".num_bytes = _wr_num_bytes,\n";
+        if (encode) {
+            file_ << kIndent << kIndent << ".num_handles = ZX_CHANNEL_MAX_MSG_HANDLES,\n";
+        } else {
+            file_ << kIndent << kIndent << ".num_handles = 0,\n";
+        }
+        file_ << kIndent << "};\n";
+        if (encode) {
+            file_ << kIndent << "zx_status_t _status = fidl_encode_msg(&"
+                  << method_info.response->coded_name << ", &_msg, &_msg.num_handles, NULL);\n";
+            file_ << kIndent << "if (_status != ZX_OK)\n";
+            file_ << kIndent << kIndent << "return _status;\n";
+        } else {
+            file_ << kIndent << "// OPTIMIZED AWAY fidl_encode() of POD-only reply\n";
+        }
+        file_ << kIndent << "return _txn->reply(_txn, &_msg);\n";
         file_ << "}\n\n";
     }
 }
@@ -705,7 +1332,7 @@ std::ostringstream CGenerator::ProduceHeader() {
         }
     }
 
-    file_ << "\n// Simple clients \n\n";
+    file_ << "\n// Simple bindings \n\n";
 
     for (const auto* decl : library_->declaration_order_) {
         switch (decl->kind) {
@@ -721,6 +1348,7 @@ std::ostringstream CGenerator::ProduceHeader() {
             auto iter = named_interfaces.find(decl);
             if (iter != named_interfaces.end()) {
                 ProduceInterfaceClientDeclaration(iter->second);
+                ProduceInterfaceServerDeclaration(iter->second);
             }
             break;
         }
@@ -771,6 +1399,38 @@ std::ostringstream CGenerator::ProduceClient() {
 }
 
 std::ostringstream CGenerator::ProduceServer() {
+    EmitFileComment(&file_);
+    EmitIncludeHeader(&file_, "<lib/fidl/coding.h>");
+    EmitIncludeHeader(&file_, "<string.h>");
+    EmitIncludeHeader(&file_, "<zircon/syscalls.h>");
+    EmitIncludeHeader(&file_, "<" + NameLibraryCHeader(library_->name()) + ">");
+    EmitBlank(&file_);
+
+    std::map<const flat::Decl*, NamedInterface> named_interfaces =
+        NameInterfaces(library_->interface_declarations_);
+
+    for (const auto* decl : library_->declaration_order_) {
+        switch (decl->kind) {
+        case flat::Decl::Kind::kConst:
+        case flat::Decl::Kind::kEnum:
+        case flat::Decl::Kind::kStruct:
+        case flat::Decl::Kind::kUnion:
+            // Only interfaces have client implementations.
+            break;
+        case flat::Decl::Kind::kInterface: {
+            if (!HasSimpleLayout(decl))
+                break;
+            auto iter = named_interfaces.find(decl);
+            if (iter != named_interfaces.end()) {
+                ProduceInterfaceServerImplementation(iter->second);
+            }
+            break;
+        }
+        default:
+            abort();
+        }
+    }
+
     return std::move(file_);
 }
 

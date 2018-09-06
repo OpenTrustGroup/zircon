@@ -7,11 +7,8 @@
 #include <ddk/device.h>
 #include <ddk/io-buffer.h>
 #include <ddk/protocol/gpio.h>
-#include <ddk/protocol/i2c.h>
 #include <ddk/protocol/iommu.h>
 #include <ddk/protocol/platform-bus.h>
-#include <ddk/protocol/serial.h>
-#include <ddk/protocol/usb-mode-switch.h>
 
 // BTI IDs for our devices
 enum {
@@ -30,9 +27,7 @@ typedef struct {
     iommu_protocol_t            iommu;
     gpio_protocol_t             gpio;
     zx_handle_t                 bti_handle;
-    imx8m_t*                    imx8m;
     uint32_t                    soc_pid;
-    usb_mode_switch_protocol_t  usb_mode_switch;
 } imx8mevk_bus_t;
 
 

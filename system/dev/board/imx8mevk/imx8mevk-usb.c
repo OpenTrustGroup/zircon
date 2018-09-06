@@ -7,7 +7,7 @@
 #include <ddk/metadata.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
-#include <soc/imx8m/imx8m.h>
+#include <ddk/protocol/usb-mode-switch.h>
 #include <soc/imx8m/imx8m-hw.h>
 #include <soc/imx8m/imx8m-iomux.h>
 #include <soc/imx8m/imx8m-gpio.h>
@@ -42,7 +42,6 @@ static usb_mode_t usb1_mode = USB_MODE_HOST;
 static const pbus_metadata_t usb1_metadata[] = {
     {
         .type       = DEVICE_METADATA_USB_MODE,
-        .extra      = 0,
         .data       = &usb1_mode,
         .len        = sizeof(usb1_mode),
     }
@@ -89,7 +88,6 @@ static usb_mode_t usb2_mode = USB_MODE_HOST;
 static const pbus_metadata_t usb2_metadata[] = {
     {
         .type       = DEVICE_METADATA_USB_MODE,
-        .extra      = 0,
         .data       = &usb2_mode,
         .len        = sizeof(usb2_mode),
     }
@@ -190,11 +188,11 @@ zx_status_t imx_usb_init(imx8mevk_bus_t* bus) {
     }
     zx_handle_close(bti);
 
-    if ((status = pbus_device_add(&bus->pbus, &usb1_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &usb1_dev)) != ZX_OK) {
         zxlogf(ERROR, "imx_usb_init could not add usb1_dev: %d\n", status);
         return status;
     }
-    if ((status = pbus_device_add(&bus->pbus, &usb2_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &usb2_dev)) != ZX_OK) {
         zxlogf(ERROR, "imx_usb_init could not add usb2_dev: %d\n", status);
         return status;
     }

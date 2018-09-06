@@ -7,10 +7,9 @@
 #include <ddk/device.h>
 #include <ddk/io-buffer.h>
 #include <ddk/protocol/gpio.h>
-#include <ddk/protocol/i2c.h>
 #include <ddk/protocol/iommu.h>
 #include <ddk/protocol/platform-bus.h>
-#include <ddk/protocol/serial.h>
+#include <soc/aml-s905d2/s905d2-gpio.h>
 
 // BTI IDs for our devices
 enum {
@@ -21,14 +20,14 @@ enum {
     BTI_VIDEO,
     BTI_AML_RAW_NAND,
     BTI_SDIO,
+    BTI_CANVAS,
+    BTI_THERMAL,
 };
 
 typedef struct {
+    zx_device_t* parent;
     platform_bus_protocol_t pbus;
     gpio_protocol_t gpio;
-    i2c_protocol_t i2c;
-    serial_impl_protocol_t serial;
-    zx_device_t* parent;
     iommu_protocol_t iommu;
 } aml_bus_t;
 
@@ -54,11 +53,37 @@ enum {
     ASTRO_I2C_3,
 };
 
+// Astro Board Revs
+enum {
+    BOARD_REV_P1            = 0,
+    BOARD_REV_P2            = 1,
+    BOARD_REV_EVT_1         = 2,
+    BOARD_REV_EVT_2         = 3,
+
+    MAX_SUPPORTED_REV, // This must be last entry
+};
+
+// Astro GPIO Pins used for board rev detection
+#define GPIO_HW_ID0             (S905D2_GPIOZ(7))
+#define GPIO_HW_ID1             (S905D2_GPIOZ(8))
+#define GPIO_HW_ID2             (S905D2_GPIOZ(3))
+
 /* Astro I2C Devices */
-#define I2C_BACKLIGHT_ADDR (0x2C)
+#define I2C_BACKLIGHT_ADDR    (0x2C)
+#define I2C_AMBIENTLIGHT_ADDR (0x39)
 // astro-touch.c
 zx_status_t astro_touch_init(aml_bus_t* bus);
 // aml-raw_nand.c
 zx_status_t aml_raw_nand_init(aml_bus_t* bus);
 // astro-sdio.c
 zx_status_t aml_sdio_init(aml_bus_t* bus);
+// astro-canvas.c
+zx_status_t aml_canvas_init(aml_bus_t* bus);
+// astro-light.c
+zx_status_t ams_light_init(aml_bus_t* bus);
+// astro-thermal.c
+zx_status_t aml_thermal_init(aml_bus_t* bus);
+// astro-video.c
+zx_status_t aml_video_init(aml_bus_t* bus);
+// astro-clk.c
+zx_status_t aml_clk_init(aml_bus_t* bus);

@@ -60,6 +60,7 @@ void arch_init(void) {
 
     x86_mmu_init();
 
+    gdt_setup();
     idt_setup_readonly();
 
     x86_perfmon_init();
@@ -195,7 +196,7 @@ __NO_SAFESTACK __NO_RETURN void x86_secondary_entry(volatile int* aps_still_boot
     // Set up the initial unsafe stack pointer.
     x86_write_gs_offset64(
         ZX_TLS_UNSAFE_SP_OFFSET,
-        ROUNDDOWN((uintptr_t)thread->unsafe_stack + thread->stack_size, 16));
+        ROUNDDOWN(thread->stack.unsafe_base + thread->stack.size, 16));
 #endif
 
     x86_init_percpu((uint)cpu_num);

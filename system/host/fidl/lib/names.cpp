@@ -10,10 +10,10 @@ namespace {
 
 const char* NameNullability(types::Nullability nullability) {
     switch (nullability) {
-    case types::Nullability::kNonnullable:
-        return "nonnullable";
     case types::Nullability::kNullable:
         return "nullable";
+    case types::Nullability::kNonnullable:
+        return "nonnullable";
     }
 }
 
@@ -60,8 +60,6 @@ std::string NamePrimitiveCType(types::PrimitiveSubtype subtype) {
         return "uint64_t";
     case types::PrimitiveSubtype::kBool:
         return "bool";
-    case types::PrimitiveSubtype::kStatus:
-        return "zx_status_t";
     case types::PrimitiveSubtype::kFloat32:
         return "float";
     case types::PrimitiveSubtype::kFloat64:
@@ -89,8 +87,6 @@ std::string NamePrimitiveSubtype(types::PrimitiveSubtype subtype) {
         return "uint64";
     case types::PrimitiveSubtype::kBool:
         return "bool";
-    case types::PrimitiveSubtype::kStatus:
-        return "status";
     case types::PrimitiveSubtype::kFloat32:
         return "float32";
     case types::PrimitiveSubtype::kFloat64:
@@ -105,7 +101,6 @@ std::string NamePrimitiveIntegerCConstantMacro(types::PrimitiveSubtype subtype) 
     case types::PrimitiveSubtype::kInt16:
         return "INT16_C";
     case types::PrimitiveSubtype::kInt32:
-    case types::PrimitiveSubtype::kStatus:
         return "INT32_C";
     case types::PrimitiveSubtype::kInt64:
         return "INT64_C";
@@ -254,7 +249,7 @@ std::string NameUnionTag(StringView union_name, const flat::Union::Member& membe
     return std::string(union_name) + "Tag" + NameIdentifier(member.name);
 }
 
-std::string NameFlatCType(const flat::Type* type) {
+std::string NameFlatCType(const flat::Type* type, flat::Decl::Kind decl_kind) {
     for (;;) {
         switch (type->kind) {
         case flat::Type::Kind::kHandle:
@@ -279,47 +274,22 @@ std::string NameFlatCType(const flat::Type* type) {
 
         case flat::Type::Kind::kIdentifier: {
             auto identifier_type = static_cast<const flat::IdentifierType*>(type);
-            std::string name = NameName(identifier_type->name, "_", "_");
-            if (identifier_type->nullability == types::Nullability::kNullable) {
-                name.push_back('*');
+            switch (decl_kind) {
+            case flat::Decl::Kind::kConst:
+            case flat::Decl::Kind::kEnum:
+            case flat::Decl::Kind::kStruct:
+            case flat::Decl::Kind::kUnion: {
+                std::string name = NameName(identifier_type->name, "_", "_");
+                if (identifier_type->nullability == types::Nullability::kNullable) {
+                    name.push_back('*');
+                }
+                return name;
             }
-            return name;
-        }
-        }
-    }
-}
-
-std::string NameFlatCOutType(const flat::Type* type) {
-    for (;;) {
-        switch (type->kind) {
-        case flat::Type::Kind::kHandle:
-        case flat::Type::Kind::kRequestHandle:
-            return "zx_handle_t*";
-
-        case flat::Type::Kind::kVector:
-            return "fidl_vector_t*";
-        case flat::Type::Kind::kString:
-            return "fidl_string_t*";
-
-        case flat::Type::Kind::kPrimitive: {
-            auto primitive_type = static_cast<const flat::PrimitiveType*>(type);
-            return NamePrimitiveCType(primitive_type->subtype) + "*";
-        }
-
-        case flat::Type::Kind::kArray: {
-            auto array_type = static_cast<const flat::ArrayType*>(type);
-            type = array_type->element_type.get();
-            continue;
-        }
-
-        case flat::Type::Kind::kIdentifier: {
-            auto identifier_type = static_cast<const flat::IdentifierType*>(type);
-            std::string name = NameName(identifier_type->name, "_", "_") + "*";
-            if (identifier_type->nullability == types::Nullability::kNullable) {
-                // Cannot make an out type for nullable types.
-                abort();
+            case flat::Decl::Kind::kInterface: {
+                return "zx_handle_t";
             }
-            return name;
+            default: { abort(); }
+            }
         }
         }
     }
@@ -347,6 +317,10 @@ std::string NameLibraryCHeader(const std::vector<StringView>& library_name) {
 
 std::string NameInterface(const flat::Interface& interface) {
     return NameName(interface.name, "_", "_");
+}
+
+std::string NameDiscoverable(const flat::Interface& interface) {
+    return NameName(interface.name, ".", ".");
 }
 
 std::string NameMethod(StringView interface_name, const flat::Interface::Method& method) {

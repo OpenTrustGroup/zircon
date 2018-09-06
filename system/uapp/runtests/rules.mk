@@ -15,7 +15,10 @@ MODULE_SRCS += \
 MODULE_NAME := runtests
 
 MODULE_FIDL_LIBS := \
-    system/fidl/logger
+    system/fidl/fuchsia-logger
+
+MODULE_HEADER_DEPS := \
+    system/ulib/zircon-internal \
 
 # zxcpp required for fbl to work.
 MODULE_STATIC_LIBS := \
@@ -26,6 +29,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/fidl \
     system/ulib/fbl \
     system/ulib/runtests-utils \
+    system/ulib/loader-service \
     system/ulib/zx \
     system/ulib/zxcpp \
 

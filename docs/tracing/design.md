@@ -159,7 +159,7 @@ The trace provider requires an asynchronous dispatcher to operate.
 
 int main(int argc, char** argv) {
   // Create a message loop.
-  async::Loop loop;
+   async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
 
   // Start a thread for the loop to run on.
   // We could instead use async_loop_run() to run on the current thread.
@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
   if (status != ZX_OK) exit(1);
 
   // Create the trace provider.
-  trace::TraceProvider trace_provider(loop.async());
+  trace::TraceProvider trace_provider(loop.dispatcher());
 
   // Do something...
 
@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
   trace_provider_t* trace_provider;
 
   // Create a message loop.
-  status = async_loop_create(NULL, &loop);
+  status = async_loop_create(&kAsyncLoopConfigNoAttachToThread, &loop);
   if (status != ZX_OK) exit(1);
 
   // Start a thread for the loop to run on.
@@ -197,8 +197,8 @@ int main(int argc, char** argv) {
   if (status != ZX_OK) exit(1);
 
   // Create the trace provider.
-  async_t* async = async_loop_get_dispatcher(loop);
-  trace_provider = trace_provider_create(async);
+  async_dispatcher_t* dispatcher = async_loop_get_dispatcher(loop);
+  trace_provider = trace_provider_create(dispatcher);
   if (!trace_provider) exit(1);
 
   // Do something...
@@ -225,12 +225,9 @@ VMO into which they should write their trace records.
 While a trace is running, the trace manager continues watching for newly
 registered trace providers and activates them if needed.
 
-If a trace provider's trace buffer becomes full while a trace is running,
-that trace provider will stop recording events but other trace providers will
-continue to record trace events into their own buffers as usual until the
-trace stops as usual.  This may result in a partially incomplete trace.
-
-TODO(ZX-1107): Improve buffering behavior to support continuous tracing.
+What happens when a trace provider's trace buffer becomes full while a trace
+is running depends on the buffering mode.
+See [Buffering Modes](#Buffering Modes) below.
 
 When tracing finishes, the trace manager asks all of the active trace providers
 to stop tracing then waits a short time for them to acknowledge that they
@@ -240,6 +237,9 @@ The trace manager then reads and validates trace data written into the trace
 buffer VMOs by trace providers and creates a trace archive.  The trace manager
 can often recover partial data even when trace providers terminate abnormally
 as long as they managed to store some data into their trace buffers.
+Note that in streaming mode the trace manager only needs to save the
+currently active rolling buffer.
+See [Buffering Modes](#Buffering Modes) below.
 
 The trace manager delivers the resulting trace archive to its client through
 a socket.  This data is guaranteed to be well-formed according to the
@@ -255,3 +255,113 @@ These are some important invariants of the transport protocol:
 - Trace clients never see the original trace buffers; they receive trace
   archives over a socket from the trace manager.  This protects trace providers
   from manipulation by trace clients.
+
+## Buffering Modes
+
+There are three buffering modes: oneshot, circular, and streaming.
+They specify different behaviors when the trace buffer fills.
+
+Note that in all cases trace provider behavior is independent of each other.
+Other trace providers can continue to record trace events into their own
+buffers as usual until the trace stops, even as one provider's buffer fills.
+This may result in a partially incomplete trace.
+
+### Oneshot
+
+If the buffer becomes full then that trace provider will stop recording events.
+
+### Circular
+
+The trace buffer is effectively divided into three pieces: the "durable" buffer
+and two "rolling" buffers. The durable buffer is for records important enough
+that we don't want to risk dropping them. These include records for thread and
+string references.
+
+Tracing begins by writing to the first rolling buffer. Once one rolling buffer
+fills tracing continues by writing to the other one.
+
+If the durable buffer fills then tracing for the provider stops. Tracing in
+other providers continues as usual.
+
+### Streaming
+
+The trace buffer is effectively divided into three pieces: the "durable" buffer
+and two "rolling" buffers. The durable buffer is for records important enough
+that we don't want to risk dropping them. These include records for thread and
+string references.
+
+Tracing begins by writing to the first rolling buffer. Once one rolling buffer
+fills tracing continues by writing to the other one, if it is available, and
+notifying the trace manager that the buffer is full. If the other rolling
+buffer is not available, then records are dropped until it becomes available.
+The other rolling buffer is unavailable between the point when it filled and
+when the manager reports back that the buffer's contents have been saved.
+
+Whether records get dropped depends on the rate at which records are created
+vs the rate at which the trace manager can save the buffers. This can result
+in a partially incomplete trace, but is less important than perturbing program
+performance by waiting for a buffer to be saved.
+
+If the durable buffer fills then tracing for the provider stops. Tracing in
+other providers continues as usual.
+
+## Trace Manager/Provider FIFO Protocol
+
+Notification of trace provider startup and shutdown is done via a FIFO,
+the handle of which is passed from the trace manager to each trace provider
+as part of the initial "start tracing" request. The form of each message is
+defined in `<trace-provider/provider.h>`. Packets are fixed size with the
+following format:
+
+```cpp
+typedef struct trace_provider_packet {
+    // One of TRACE_PROVIDER_*.
+    uint16_t request;
+
+    // For alignment and future concerns, must be zero.
+    uint16_t reserved;
+
+    // Optional data for the request.
+    // The contents depend on the request.
+    // If unused they must be passed as zero.
+    uint32_t data32;
+    uint64_t data64;
+} trace_provider_packet_t;
+```
+
+### FIFO Packets
+
+The following packets are defined:
+
+**TRACE_PROVIDER_STARTED**
+
+Sent from trace providers to the trace manager.
+Notify the trace manager that the provider has received the "start tracing"
+request and is starting to collect trace data.
+The `data32` field of the packet contains the version number of the FIFO
+protocol that the provider is using. The value is specified by
+**TRACE_PROVIDER_FIFO_PROTOCOL_VERSION** in `<trace-provider/provider.h>`.
+If the trace manager sees a protocol it doesn't understand it will close
+its side of the FIFO and ignore all trace data from the provider.
+
+**TRACE_PROVIDER_SAVE_BUFFER**
+
+Sent from trace providers to the trace manager in streaming mode.
+Notify the trace manager that a buffer is full and needs saving.
+This request is only used in streaming mode.
+The `data32` field contains the "wrap count" which is the number of times
+writing has switched from one buffer to the next. The buffer that needs saving
+is `(data32 & 1)`.
+The `data64` field contains the offset of the end of data written to the
+"durable" buffer.
+
+Only one buffer save request may be sent at a time. The next one cannot be
+sent until **TRACE_PROVIDER_BUFFER_SAVED** is received acknowledging the
+previous request.
+
+**TRACE_PROVIDER_BUFFER_SAVED**
+
+Sent from the trace manager to trace providers in streaming mode.
+Notify the trace provider that the requested buffer has been saved.
+The `data32` and `data64` fields must have the same values from the
+originating **TRACE_PROVIDER_SAVE_BUFFER** request.

@@ -41,6 +41,7 @@
 + [task_bind_exception_port](syscalls/task_bind_exception_port.md) - attach an exception port to a task
 + [task_kill](syscalls/task_kill.md) - cause a task to stop running
 + [task_resume](syscalls/task_resume.md) - cause a suspended task to continue running
++ [task_resume_from_exception](syscalls/task_resume_from_exception.md) - resume a task from a previously caught exception
 + [task_suspend](syscalls/task_suspend.md) - cause a task to be suspended
 
 ## Channels
@@ -83,6 +84,7 @@
 + [vmo_get_size](syscalls/vmo_get_size.md) - obtain the size of a vmo
 + [vmo_set_size](syscalls/vmo_set_size.md) - adjust the size of a vmo
 + [vmo_op_range](syscalls/vmo_op_range.md) - perform an operation on a range of a vmo
++ [vmo_replace_as_executable](syscall/vmo_replace_as_executable.md) - add execute rights to a vmo
 
 ## Virtual Memory Address Regions (VMARs)
 + [vmar_allocate](syscalls/vmar_allocate.md) - create a new child VMAR
@@ -140,10 +142,10 @@
 + [interrupt_create](syscalls/interrupt_create.md) - Create a physical or virtual interrupt object
 + [interrupt_destroy](syscalls/interrupt_destroy.md) - Destroy an interrupt object
 + [interrupt_trigger](syscalls/interrupt_trigger.md) - Trigger a virtual interrupt object
-+ [interrupt_wait](interrupt_wait.md) - Wait on an interrupt object
++ [interrupt_wait](syscalls/interrupt_wait.md) - Wait on an interrupt object
 + [smc_call](syscalls/smc_call.md) - Make an SMC call from user space
 + acpi_uefi_rsdp
-+ mmap_device_io
++ ioports_request
 + framebuffer_set_range
 + vmo_create_contiguous
 + vmo_create_physical

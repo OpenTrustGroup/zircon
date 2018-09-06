@@ -92,7 +92,7 @@ bool ProcessCreateTest(perftest::RepeatState* state) {
         zx::vmar root_vmar;
         static const char kName[] = "perftest-process";
         ZX_ASSERT(zx::process::create(
-                      zx::job::default_job(), kName, sizeof(kName) - 1, 0,
+                      *zx::job::default_job(), kName, sizeof(kName) - 1, 0,
                       &process, &root_vmar) == ZX_OK);
         state->NextStep();
     }
@@ -107,7 +107,7 @@ bool ThreadCreateTest(perftest::RepeatState* state) {
     while (state->KeepRunning()) {
         zx::thread handle;
         static const char kName[] = "perftest-process";
-        ZX_ASSERT(zx::thread::create(zx::process::self(), kName,
+        ZX_ASSERT(zx::thread::create(*zx::process::self(), kName,
                                      sizeof(kName) - 1, 0, &handle) == ZX_OK);
         state->NextStep();
     }

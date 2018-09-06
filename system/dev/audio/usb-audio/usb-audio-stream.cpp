@@ -5,14 +5,15 @@
 #include <audio-proto-utils/format-utils.h>
 #include <ddk/device.h>
 #include <digest/digest.h>
-#include <lib/zx/vmar.h>
 #include <fbl/algorithm.h>
 #include <fbl/auto_call.h>
 #include <fbl/limits.h>
+#include <lib/zx/vmar.h>
 #include <string.h>
 #include <zircon/device/usb.h>
 #include <zircon/hw/usb-audio.h>
 #include <zircon/process.h>
+#include <zircon/time.h>
 #include <zircon/types.h>
 
 #include <dispatcher-pool/dispatcher-thread-pool.h>
@@ -55,7 +56,8 @@ UsbAudioStream::~UsbAudioStream() {
     ZX_DEBUG_ASSERT(allocated_req_cnt_ == free_req_cnt_);
 
     while (!list_is_empty(&free_req_)) {
-        usb_request_release(list_remove_head_type(&free_req_, usb_request_t, node));
+        usb_req_release(&parent_.usb_proto(), list_remove_head_type(&free_req_,
+                                                                    usb_request_t, node));
     }
 }
 
@@ -230,8 +232,8 @@ void UsbAudioStream::ComputePersistentUniqueId() {
 void UsbAudioStream::ReleaseRingBufferLocked() {
     if (ring_buffer_virt_ != nullptr) {
         ZX_DEBUG_ASSERT(ring_buffer_size_ != 0);
-        zx::vmar::root_self().unmap(reinterpret_cast<uintptr_t>(ring_buffer_virt_),
-                                    ring_buffer_size_);
+        zx::vmar::root_self()->unmap(reinterpret_cast<uintptr_t>(ring_buffer_virt_),
+                                     ring_buffer_size_);
         ring_buffer_virt_ = nullptr;
         ring_buffer_size_ = 0;
     }
@@ -792,14 +794,14 @@ zx_status_t UsbAudioStream::OnGetBufferLocked(dispatcher::Channel* channel,
     //
     // TODO(johngro): skip this step when APIs in the USB bus driver exist to
     // DMA directly from the VMO.
-    map_flags = ZX_VM_FLAG_PERM_READ;
+    map_flags = ZX_VM_PERM_READ;
     if (is_input())
-        map_flags |= ZX_VM_FLAG_PERM_WRITE;
+        map_flags |= ZX_VM_PERM_WRITE;
 
-    resp.result = zx::vmar::root_self().map(0, ring_buffer_vmo_,
-                                            0, ring_buffer_size_,
-                                            map_flags,
-                                            reinterpret_cast<uintptr_t*>(&ring_buffer_virt_));
+    resp.result = zx::vmar::root_self()->map(0, ring_buffer_vmo_,
+                                             0, ring_buffer_size_,
+                                             map_flags,
+                                             reinterpret_cast<uintptr_t*>(&ring_buffer_virt_));
     if (resp.result != ZX_OK) {
         LOG(ERROR, "Failed to map ring buffer (size %u, res %d)\n",
             ring_buffer_size_, resp.result);
@@ -1039,7 +1041,7 @@ void UsbAudioStream::RequestComplete(usb_request_t* req) {
                 // Then we can accurately report the start time as the time of
                 // the tick on which we scheduled the first transaction.
                 resp.start.result = ZX_OK;
-                resp.start.start_time = complete_time - ZX_MSEC(1);
+                resp.start.start_time = zx_time_sub_duration(complete_time, ZX_MSEC(1));
                 rb_channel_->Write(&resp.start, sizeof(resp.start));
             }
             {
@@ -1120,11 +1122,12 @@ void UsbAudioStream::QueueRequestLocked() {
         uint32_t amt = fbl::min(avail, todo);
 
         const uint8_t* src = reinterpret_cast<uint8_t*>(ring_buffer_virt_) + ring_buffer_offset_;
-        usb_request_copyto(req, src, amt, 0);
+        usb_req_copy_to(&parent_.usb_proto(), req, src, amt, 0);
         if (amt == avail) {
             ring_buffer_offset_ = todo - amt;
             if (ring_buffer_offset_ > 0) {
-                usb_request_copyto(req, ring_buffer_virt_, ring_buffer_offset_, amt);
+                usb_req_copy_to(&parent_.usb_proto(), req, ring_buffer_virt_, ring_buffer_offset_,
+                                amt);
             }
         } else {
             ring_buffer_offset_ += amt;
@@ -1151,9 +1154,10 @@ void UsbAudioStream::CompleteRequestLocked(usb_request_t* req) {
         uint8_t* dst = reinterpret_cast<uint8_t*>(ring_buffer_virt_) + ring_buffer_offset_;
 
         if (req->response.status == ZX_OK) {
-            usb_request_copyfrom(req, dst, amt, 0);
+            usb_req_copy_from(&parent_.usb_proto(), req, dst, amt, 0);
             if (amt < todo) {
-                usb_request_copyfrom(req, ring_buffer_virt_, todo - amt, amt);
+                usb_req_copy_from(&parent_.usb_proto(), req, ring_buffer_virt_, todo - amt,
+                                  amt);
             }
         } else {
             // TODO(johngro): filling with zeros is only the proper thing to do

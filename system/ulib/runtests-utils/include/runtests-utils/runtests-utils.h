@@ -9,10 +9,14 @@
 
 #include <inttypes.h>
 
+#include <fbl/intrusive_hash_table.h>
+#include <fbl/intrusive_single_list.h>
 #include <fbl/string.h>
 #include <fbl/string_piece.h>
 #include <fbl/unique_ptr.h>
 #include <fbl/vector.h>
+#include <lib/zircon-internal/fnv1hash.h>
+#include <zircon/types.h>
 
 namespace runtests {
 
@@ -24,7 +28,27 @@ enum LaunchStatus {
     FAILED_DURING_IO,
     FAILED_TO_RETURN_CODE,
     FAILED_NONZERO_RETURN_CODE,
+    FAILED_COLLECTING_SINK_DATA,
     FAILED_UNKNOWN,
+};
+
+// Represents a single dumpfile element.
+struct DumpFile {
+    fbl::String name; // Name of the dumpfile.
+    fbl::String file; // File name for the content.
+};
+
+// Represents data published through data sink.
+struct DataSink : public fbl::SinglyLinkedListable<fbl::unique_ptr<DataSink>> {
+    fbl::String name; // Name of the data sink.
+    fbl::Vector<DumpFile> files; // All the sink dumpfiles.
+
+    explicit DataSink(fbl::String name) : name(name) {}
+
+    // Runtimes may publish more than one file with the same data sink name. We use hash table
+    // that's mapping data sink name to the list of file names to store these efficiently.
+    fbl::String GetKey() const { return name; }
+    static size_t GetHash(fbl::String key) { return fnv1a64str(key.c_str()); }
 };
 
 // Represents the result of a single test run.
@@ -32,6 +56,8 @@ struct Result {
     fbl::String name; // argv[0].
     LaunchStatus launch_status;
     int64_t return_code; // Only valid if launch_status == SUCCESS or FAILED_NONZERO_RETURN_CODE.
+    using HashTable = fbl::HashTable<fbl::String, fbl::unique_ptr<DataSink>>;
+    HashTable data_sinks; // Mapping from data sink name to list of files.
     // TODO(ZX-2050): Track duration of test binary.
 
     // Constructor really only needed until we have C++14, which will allow call-sites to use
@@ -44,10 +70,13 @@ struct Result {
 //
 // |argv| is the commandline to use to run the test program; must be
 //   null-terminated.
+// |output_dir| is the output directory for test's data sinks. May be nullptr, in which case
+//   no data sinks will be saved.
 // |output_filename| is the name of the file to which the test binary's output
 //   will be written. May be nullptr, in which case the output will not be
 //   redirected.
 typedef fbl::unique_ptr<Result> (*RunTestFn)(const char* argv[],
+                                             const char* output_dir,
                                              const char* output_filename);
 
 // A means of measuring how long it takes to run tests.
@@ -89,8 +118,8 @@ fbl::String JoinPath(fbl::StringPiece parent, fbl::StringPiece child);
 //
 // Returns 0 on success, else an error code compatible with errno.
 int WriteSummaryJSON(const fbl::Vector<fbl::unique_ptr<Result>>& results,
-                     const fbl::StringPiece output_file_basename,
-                     const fbl::StringPiece syslog_path,
+                     fbl::StringPiece output_file_basename,
+                     fbl::StringPiece syslog_path,
                      FILE* summary_json);
 
 // Resolves a set of globs.
@@ -102,12 +131,10 @@ int WriteSummaryJSON(const fbl::Vector<fbl::unique_ptr<Result>>& results,
 int ResolveGlobs(const fbl::Vector<fbl::String>& globs,
                  fbl::Vector<fbl::String>* resolved);
 
-// Executes all test binaries in a directory (non-recursive).
+// Executes all specified binaries.
 //
 // |run_test| is the function used to invoke the test binaries.
-// |dir_path| is the directory to search.
-// |filter_names| is a list of test names to filter on (i.e. tests whose names
-//   don't match are skipped). May be empty, in which case all tests will be run.
+// |test_paths| are the paths of the binaries to execute.
 // |output_dir| is the output directory for all the tests' output. May be nullptr, in which case
 //   output will not be captured.
 // |output_file_basename| is the basename of the tests' output files. May be nullptr only if
@@ -122,17 +149,34 @@ int ResolveGlobs(const fbl::Vector<fbl::String>& globs,
 // |results| is an output paramater to which run results will be appended.
 //
 // Returns false if any test binary failed, true otherwise.
-bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
-                   const fbl::Vector<fbl::String>& filter_names, const char* output_dir,
-                   const char* output_file_basename, signed char verbosity,
-                   int* num_failed, fbl::Vector<fbl::unique_ptr<Result>>* results);
+bool RunTests(const RunTestFn& RunTest, const fbl::Vector<fbl::String>& test_paths,
+              const char* output_dir, const fbl::StringPiece output_file_basename,
+              signed char verbosity, int* failed_count,
+              fbl::Vector<fbl::unique_ptr<Result>>* results);
 
-// Conditionally runs all tests within given directories, with the option
-// of writing an aggregated summary file.
+// Expands |dir_globs| and searches those directories for files.
+//
+// |dir_globs| are expanded as globs to directory names, and then those directories are searched.
+// |ignore_dir_name| iff not null, any directory with this basename will not be searched.
+// |basename_whitelist| iff not empty, only files that have a basename in this whitelist will be
+//    returned.
+// |test_paths| is an output parameter to which absolute file paths will be appended.
+//
+// Returns 0 on success, else an error code compatible with errno.
+int DiscoverTestsInDirGlobs(const fbl::Vector<fbl::String>& dir_globs, const char* ignore_dir_name,
+                            const fbl::Vector<fbl::String>& basename_whitelist,
+                            fbl::Vector<fbl::String>* test_paths);
+
+// Reads |test_list_file| and appends whatever tests it finds to |test_paths|.
+//
+// Returns 0 on success, else an error code compatible with errno.
+int DiscoverTestsInListFile(FILE* test_list_file, fbl::Vector<fbl::String>* test_paths);
+
+// Discovers and runs tests based on command line arguments.
 //
 // |RunTest|: function to run each test.
 // |argc|: length of |argv|.
-// |argv|: see //system/ulib/runtests-utils/run-all-tests.cpp,
+// |argv|: see //system/ulib/runtests-utils/discover-and-run-tests.cpp,
 //    specifically the 'Usage()' function, for documentation.
 // |default_test_dirs|: directories in which to look for tests if no test
 //    directory globs are specified.
@@ -141,9 +185,9 @@ bool RunTestsInDir(const RunTestFn& run_test, const fbl::StringPiece dir_path,
 //    will be written to a file under that directory and this name.
 //
 // Returns EXIT_SUCCESS if all tests passed; else, returns EXIT_FAILURE.
-int RunAllTests(const RunTestFn& RunTest, int argc, const char* const* argv,
-                const fbl::Vector<fbl::String>& default_test_dirs,
-                Stopwatch* stopwatch, const fbl::StringPiece syslog_file_name);
+int DiscoverAndRunTests(const RunTestFn& RunTest, int argc, const char* const* argv,
+                        const fbl::Vector<fbl::String>& default_test_dirs,
+                        Stopwatch* stopwatch, const fbl::StringPiece syslog_file_name);
 
 } // namespace runtests
 

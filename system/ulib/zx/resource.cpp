@@ -8,15 +8,17 @@
 
 namespace zx {
 
-zx_status_t resource::create(const resource& parent, uint32_t kind, uint64_t low,
-                             uint64_t high, resource* result) {
-    zx_handle_t h;
-    zx_status_t status = zx_resource_create(parent.get(), kind, low, high, &h);
-    if (status < 0) {
-        result->reset(ZX_HANDLE_INVALID);
-    } else {
-        result->reset(h);
-    }
+zx_status_t resource::create(const resource& parent,
+                             uint32_t options,
+                             uint64_t base,
+                             size_t len,
+                             const char* name,
+                             size_t namelen,
+                             resource* result) {
+    resource h;
+    zx_status_t status = zx_resource_create(parent.get(), options, base, len, name, namelen,
+                                            h.reset_and_get_address());
+    result->reset(h.release());
     return status;
 }
 

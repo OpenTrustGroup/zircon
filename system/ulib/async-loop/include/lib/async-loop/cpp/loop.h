@@ -4,14 +4,13 @@
 
 #pragma once
 
-#include <lib/async/default.h>
 #include <lib/async-loop/loop.h>
-#include <fbl/macros.h>
+#include <lib/async/default.h>
+#include <lib/zx/time.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <threads.h>
 #include <zircon/compiler.h>
-#include <lib/zx/time.h>
 
 namespace async {
 
@@ -26,11 +25,15 @@ public:
     // Note that it's ok to run the loop on a different thread from the one
     // upon which it was created.
     //
-    // |config| provides configuration for the message loop.  If null, the behavior
-    // is the same as that of a zero-initialized instance of async_loop_config_t.
+    // |config| provides configuration for the message loop.  Must not be null.
     //
-    // See also |kAsyncLoopConfigMakeDefault|.
-    explicit Loop(const async_loop_config_t* config = nullptr);
+    // See also |kAsyncLoopConfigAttachToThread| and |kAsyncLoopConfigNoAttachToThread|.
+    explicit Loop(const async_loop_config_t* config);
+
+    Loop(const Loop&) = delete;
+    Loop(Loop&&) = delete;
+    Loop& operator=(const Loop&) = delete;
+    Loop& operator=(Loop&&) = delete;
 
     // Destroys the message loop.
     // Implicitly calls |Shutdown()|.
@@ -40,7 +43,7 @@ public:
     async_loop_t* loop() const { return loop_; }
 
     // Gets the loop's asynchronous dispatch interface.
-    async_t* async() const { return async_loop_get_dispatcher(loop_); }
+    async_dispatcher_t* dispatcher() const { return async_loop_get_dispatcher(loop_); }
 
     // Shuts down the message loop, notifies handlers which asked to handle shutdown.
     // The message loop must not currently be running on any threads other than
@@ -113,8 +116,6 @@ public:
 
 private:
     async_loop_t* loop_;
-
-    DISALLOW_COPY_ASSIGN_AND_MOVE(Loop);
 };
 
 } // namespace async

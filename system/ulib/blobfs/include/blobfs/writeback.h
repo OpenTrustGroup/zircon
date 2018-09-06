@@ -19,12 +19,12 @@
 #include <fbl/vector.h>
 
 #include <fs/block-txn.h>
-#include <fs/mapped-vmo.h>
 #include <fs/queue.h>
 #include <fs/vfs.h>
 
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 
+#include <lib/fzl/mapped-vmo.h>
 #include <lib/zx/vmo.h>
 
 #include <blobfs/blobfs.h>
@@ -137,7 +137,7 @@ private:
 class WritebackBuffer {
 public:
     // Calls constructor, return an error if anything goes wrong.
-    static zx_status_t Create(Blobfs* bs, fbl::unique_ptr<fs::MappedVmo> buffer,
+    static zx_status_t Create(Blobfs* bs, fbl::unique_ptr<fzl::MappedVmo> buffer,
                               fbl::unique_ptr<WritebackBuffer>* out);
 
     ~WritebackBuffer();
@@ -155,8 +155,11 @@ public:
     // enqueued, preventing them from closing while the writeback is pending.
     void Enqueue(fbl::unique_ptr<WritebackWork> work) __TA_EXCLUDES(writeback_lock_);
 
+    // Return the capacity of the WritebackBuffer, in blocks.
+    size_t Capacity() const { return cap_; }
+
 private:
-    WritebackBuffer(Blobfs* bs, fbl::unique_ptr<fs::MappedVmo> buffer);
+    WritebackBuffer(Blobfs* bs, fbl::unique_ptr<fzl::MappedVmo> buffer);
 
     // Blocks until |blocks| blocks of data are free for the caller.
     // Returns |ZX_OK| with the lock still held in this case.
@@ -204,7 +207,7 @@ private:
     // writeback buffer and are ready to be sent to disk.
     WorkQueue work_queue_ __TA_GUARDED(writeback_lock_){};
     bool unmounting_ __TA_GUARDED(writeback_lock_){false};
-    fbl::unique_ptr<fs::MappedVmo> buffer_{};
+    fbl::unique_ptr<fzl::MappedVmo> buffer_{};
     vmoid_t buffer_vmoid_ = VMOID_INVALID;
     // The units of all the following are "Blobfs blocks".
     size_t start_ __TA_GUARDED(writeback_lock_){};

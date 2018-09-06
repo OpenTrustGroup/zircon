@@ -9,28 +9,82 @@
 
 #pragma once
 
-#include <zircon/compiler.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+#include <fbl/string.h>
+#include <fbl/vector.h>
+#include <trace-engine/buffer_internal.h>
+#include <trace-reader/records.h>
+#endif
+
+#include <trace-engine/types.h>
 #include <unittest/unittest.h>
+#include <zircon/compiler.h>
+
+#ifdef __cplusplus
+
+// FixtureSquelch is used to filter out elements of a trace record that may
+// vary run to run or even within a run and are not germaine to determining
+// correctness. The canonical example is record timestamps.
+// The term "squelch" derives from radio circuitry used to remove noise.
+struct FixtureSquelch;
+
+// |regex_str| is a regular expression consistenting of one or more
+// subexpressions, the text in the parenthesis of each matching expressions
+// is replaced with '<>'.
+// Best illustration is an example. This example removes decimal numbers,
+// koids, timestamps ("ts"), and lowercase hex numbers.
+// const char regex[] = "([0-9]+/[0-9]+)"
+//   "|koid\\(([0-9]+)\\)"
+//   "|koid: ([0-9]+)"
+//   "|ts: ([0-9]+)"
+//   "|(0x[0-9a-f]+)";
+// So "ts: 123 42 mumble koid(456) foo koid: 789, bar 0xabcd"
+// becomes "ts: <> <> mumble koid(<>) foo koid: <>, bar <>".
+bool fixture_create_squelch(const char* regex_str, FixtureSquelch** out_squelch);
+void fixture_destroy_squelch(FixtureSquelch* squelch);
+fbl::String fixture_squelch(FixtureSquelch* squelch, const char* str);
+
+bool fixture_compare_raw_records(const fbl::Vector<trace::Record>& records,
+                                 size_t start_record, size_t max_num_records,
+                                 const char* expected);
+bool fixture_compare_n_records(size_t max_num_records, const char* expected,
+                               fbl::Vector<trace::Record>* records);
+
+using trace::internal::trace_buffer_header;
+void fixture_snapshot_buffer_header(trace_buffer_header* header);
+
+#endif
 
 __BEGIN_CDECLS
 
-void fixture_set_up(void);
+void fixture_set_up(trace_buffering_mode_t mode, size_t buffer_size);
 void fixture_tear_down(void);
 void fixture_start_tracing(void);
 void fixture_stop_tracing(void);
 void fixture_stop_tracing_hard(void);
 zx_status_t fixture_get_disposition(void);
+bool fixture_wait_buffer_full_notification(void);
+uint32_t fixture_get_buffer_full_wrapped_count(void);
+void fixture_reset_buffer_full_notification(void);
 bool fixture_compare_records(const char* expected);
 
-inline void fixture_scope_cleanup(bool* scope) {
+static inline void fixture_scope_cleanup(bool* scope) {
     fixture_tear_down();
 }
 
-#define BEGIN_TRACE_TEST                                          \
+#define DEFAULT_BUFFER_SIZE_BYTES (1024u * 1024u)
+
+#define BEGIN_TRACE_TEST_ETC(mode, buffer_size)                   \
     BEGIN_TEST;                                                   \
     __attribute__((cleanup(fixture_scope_cleanup))) bool __scope; \
     (void)__scope;                                                \
-    fixture_set_up();
+    fixture_set_up((mode), (buffer_size));
+
+#define BEGIN_TRACE_TEST \
+    BEGIN_TRACE_TEST_ETC(TRACE_BUFFERING_MODE_ONESHOT, \
+                         DEFAULT_BUFFER_SIZE_BYTES)
 
 #define END_TRACE_TEST \
     END_TEST;
@@ -38,14 +92,20 @@ inline void fixture_scope_cleanup(bool* scope) {
 #ifndef NTRACE
 #ifdef __cplusplus
 #define ASSERT_RECORDS(expected_c, expected_cpp) \
-    ASSERT_TRUE(fixture_compare_records(expected_c expected_cpp), "record mismatch");
+    ASSERT_TRUE(fixture_compare_records(expected_c expected_cpp), "record mismatch")
+#define ASSERT_N_RECORDS(max_num_recs, expected_c, expected_cpp, records) \
+    ASSERT_TRUE(fixture_compare_n_records((max_num_recs), expected_c expected_cpp, (records)), "record mismatch")
 #else
 #define ASSERT_RECORDS(expected_c, expected_cpp) \
-    ASSERT_TRUE(fixture_compare_records(expected_c), "record mismatch");
+    ASSERT_TRUE(fixture_compare_records(expected_c), "record mismatch")
 #endif // __cplusplus
 #else
 #define ASSERT_RECORDS(expected_c, expected_cpp) \
-    ASSERT_TRUE(fixture_compare_records(""), "record mismatch");
+    ASSERT_TRUE(fixture_compare_records(""), "record mismatch")
+#ifdef __cplusplus
+#define ASSERT_N_RECORDS(max_num_recs, expected_c, expected_cpp, records) \
+    ASSERT_TRUE(fixture_compare_records((max_num_recs), "", (records)), "record mismatch")
+#endif
 #endif // NTRACE
 
 __END_CDECLS

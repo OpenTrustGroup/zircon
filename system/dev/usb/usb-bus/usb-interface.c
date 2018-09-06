@@ -23,11 +23,11 @@ static int callback_thread(void* arg) {
 
     while (!done) {
         // wait for new usb requests to complete or for signal to exit this thread
-        completion_wait(&intf->callback_thread_completion, ZX_TIME_INFINITE);
+        sync_completion_wait(&intf->callback_thread_completion, ZX_TIME_INFINITE);
 
         mtx_lock(&intf->callback_lock);
 
-        completion_reset(&intf->callback_thread_completion);
+        sync_completion_reset(&intf->callback_thread_completion);
         done = intf->callback_thread_stop;
 
         // copy completed requests to a temp list so we can process them outside of our lock
@@ -57,7 +57,7 @@ static void stop_callback_thread(usb_interface_t* intf) {
     intf->callback_thread_stop = true;
     mtx_unlock(&intf->callback_lock);
 
-    completion_signal(&intf->callback_thread_completion);
+    sync_completion_signal(&intf->callback_thread_completion);
     thrd_join(intf->callback_thread, NULL);
 }
 
@@ -71,7 +71,7 @@ static void request_complete(usb_request_t* req, void* cookie) {
     req->cookie = req->saved_cookie;
     list_add_tail(&intf->completed_reqs, &req->node);
     mtx_unlock(&intf->callback_lock);
-    completion_signal(&intf->callback_thread_completion);
+    sync_completion_signal(&intf->callback_thread_completion);
 }
 
 static void hci_queue(void* ctx, usb_request_t* req) {
@@ -228,8 +228,8 @@ static zx_status_t usb_interface_req_alloc_vmo(void* ctx, usb_request_t** out,
                                                uint64_t length, uint8_t ep_address) {
     usb_interface_t* intf = ctx;
 
-    return usb_request_alloc_vmo(out, intf->device->bus->bti_handle, vmo_handle, vmo_offset, length,
-                                 ep_address);
+    return usb_request_alloc_vmo(out, intf->device->bus->bti_handle, vmo_handle, vmo_offset,
+                                 length, ep_address);
 }
 
 static zx_status_t usb_interface_req_init(void* ctx, usb_request_t* req, zx_handle_t vmo_handle,
@@ -241,8 +241,55 @@ static zx_status_t usb_interface_req_init(void* ctx, usb_request_t* req, zx_hand
                             ep_address);
 }
 
+static ssize_t usb_interface_req_copy_from(void* ctx, usb_request_t* req, void* data,
+                                          size_t length, size_t offset) {
+    return usb_request_copyfrom(req, data, length, offset);
+}
+
+static ssize_t usb_interface_req_copy_to(void* ctx, usb_request_t* req, const void* data,
+                                        size_t length, size_t offset) {
+    return usb_request_copyto(req, data, length, offset);
+}
+
+static zx_status_t usb_interface_req_mmap(void* ctx, usb_request_t* req, void** data) {
+    return usb_request_mmap(req, data);
+}
+
+static zx_status_t usb_interface_req_cacheop(void* ctx, usb_request_t* req, uint32_t op,
+                                             size_t offset, size_t length) {
+    return usb_request_cacheop(req, op, offset, length);
+}
+
+static zx_status_t usb_interface_req_cache_flush(void* ctx, usb_request_t* req,
+                                                 size_t offset, size_t length) {
+    return usb_request_cache_flush(req, offset, length);
+}
+
+static zx_status_t usb_interface_req_cache_flush_invalidate(void* ctx, usb_request_t* req,
+                                                            zx_off_t offset, size_t length) {
+    return usb_request_cache_flush_invalidate(req, offset, length);
+}
+
+static zx_status_t usb_interface_req_physmap(void* ctx, usb_request_t* req) {
+    return usb_request_physmap(req);
+}
+
+static void usb_interface_req_release(void* ctx, usb_request_t* req) {
+    usb_request_release(req);
+}
+
+static void usb_interface_req_complete(void* ctx, usb_request_t* req,
+                                       zx_status_t status, zx_off_t actual) {
+    usb_request_complete(req, status, actual);
+}
+
+static void usb_interface_req_phys_iter_init(void* ctx, phys_iter_t* iter, usb_request_t* req,
+                                             size_t max_length) {
+    usb_request_phys_iter_init(iter, req, max_length);
+}
+
 static void usb_control_complete(usb_request_t* req, void* cookie) {
-    completion_signal((completion_t*)cookie);
+    sync_completion_signal((sync_completion_t*)cookie);
 }
 
 static zx_status_t usb_interface_control(void* ctx, uint8_t request_type, uint8_t request,
@@ -276,7 +323,7 @@ static zx_status_t usb_interface_control(void* ctx, uint8_t request_type, uint8_
         usb_request_copyto(req, data, length, 0);
     }
 
-    completion_t completion = COMPLETION_INIT;
+    sync_completion_t completion = SYNC_COMPLETION_INIT;
 
     req->header.device_id = intf->device_id;
     req->header.length = length;
@@ -285,16 +332,16 @@ static zx_status_t usb_interface_control(void* ctx, uint8_t request_type, uint8_
     // We call this directly instead of via hci_queue, as it's safe to call our
     // own completion callback, and prevents clients getting into odd deadlocks.
     usb_hci_request_queue(&intf->hci, req);
-    zx_status_t status = completion_wait(&completion, timeout);
+    zx_status_t status = sync_completion_wait(&completion, timeout);
 
     if (status == ZX_OK) {
         status = req->response.status;
     } else if (status == ZX_ERR_TIMED_OUT) {
         // cancel transactions and wait for request to be completed
-        completion_reset(&completion);
+        sync_completion_reset(&completion);
         status = usb_hci_cancel_all(&intf->hci, intf->device_id, 0);
         if (status == ZX_OK) {
-            completion_wait(&completion, ZX_TIME_INFINITE);
+            sync_completion_wait(&completion, ZX_TIME_INFINITE);
             status = ZX_ERR_TIMED_OUT;
         }
     }
@@ -455,6 +502,16 @@ static usb_protocol_ops_t _usb_protocol = {
     .req_alloc = usb_interface_req_alloc,
     .req_alloc_vmo = usb_interface_req_alloc_vmo,
     .req_init = usb_interface_req_init,
+    .req_copy_from = usb_interface_req_copy_from,
+    .req_copy_to = usb_interface_req_copy_to,
+    .req_mmap = usb_interface_req_mmap,
+    .req_cacheop = usb_interface_req_cacheop,
+    .req_cache_flush = usb_interface_req_cache_flush,
+    .req_cache_flush_invalidate = usb_interface_req_cache_flush_invalidate,
+    .req_physmap = usb_interface_req_physmap,
+    .req_release = usb_interface_req_release,
+    .req_complete = usb_interface_req_complete,
+    .req_phys_iter_init = usb_interface_req_phys_iter_init,
     .control = usb_interface_control,
     .request_queue = usb_interface_request_queue,
     .get_speed = usb_interface_get_speed,
@@ -480,7 +537,7 @@ zx_status_t usb_device_add_interface(usb_device_t* device,
         return ZX_ERR_NO_MEMORY;
 
     mtx_init(&intf->callback_lock, mtx_plain);
-    completion_reset(&intf->callback_thread_completion);
+    sync_completion_reset(&intf->callback_thread_completion);
     list_initialize(&intf->completed_reqs);
 
     usb_request_pool_init(&intf->free_reqs);
@@ -562,7 +619,7 @@ zx_status_t usb_device_add_interface_association(usb_device_t* device,
         return ZX_ERR_NO_MEMORY;
 
     mtx_init(&intf->callback_lock, mtx_plain);
-    completion_reset(&intf->callback_thread_completion);
+    sync_completion_reset(&intf->callback_thread_completion);
     list_initialize(&intf->completed_reqs);
 
     intf->device = device;

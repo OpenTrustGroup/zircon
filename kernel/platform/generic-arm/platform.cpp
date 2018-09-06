@@ -16,12 +16,15 @@
 #include <arch.h>
 #include <dev/display.h>
 #include <dev/hw_rng.h>
+#include <dev/interrupt.h>
 #include <dev/power.h>
 #include <dev/psci.h>
 #include <dev/uart.h>
 #include <kernel/cmdline.h>
+#include <kernel/dpc.h>
 #include <kernel/spinlock.h>
 #include <lk/init.h>
+#include <object/resource_dispatcher.h>
 #include <vm/kstack.h>
 #include <vm/physmap.h>
 #include <vm/vm.h>
@@ -31,6 +34,7 @@
 
 #include <target.h>
 
+#include <arch/arch_ops.h>
 #include <arch/arm64.h>
 #include <arch/arm64/mmu.h>
 #include <arch/arm64/mp.h>
@@ -49,9 +53,10 @@
 #include <kernel/thread.h>
 #endif
 
+#include <libzbi/zbi-cpp.h>
 #include <pdev/pdev.h>
-#include <zbi/zbi-cpp.h>
 #include <zircon/boot/image.h>
+#include <zircon/rights.h>
 #include <zircon/types.h>
 
 // Defined in start.S.
@@ -125,74 +130,26 @@ void* platform_get_ramdisk(size_t* size) {
 }
 
 void platform_halt_cpu(void) {
-    psci_cpu_off();
-}
-
-// One of these threads is spun up per CPU and calls halt which does not return.
-static int park_cpu_thread(void* arg) {
-    event_t* shutdown_cplt = (event_t*)arg;
-
-    mp_set_curr_cpu_online(false);
-    mp_set_curr_cpu_active(false);
-
-    arch_disable_ints();
-
-    // Let the thread on the boot CPU know that we're just about done shutting down.
-    event_signal(shutdown_cplt, true);
-
-    // This method will not return because the target cpu has halted.
-    platform_halt_cpu();
-
-    panic("control should never reach here");
-    return -1;
+    uint32_t result = psci_cpu_off();
+    // should have never returned
+    panic("psci_cpu_off returned %u\n", result);
 }
 
 void platform_halt_secondary_cpus(void) {
-    // Make sure that the current thread is pinned to the boot cpu.
-    const thread_t* current_thread = get_current_thread();
-    DEBUG_ASSERT(current_thread->cpu_affinity == (1 << BOOT_CPU_ID));
+    // Ensure the current thread is pinned to the boot CPU.
+    DEBUG_ASSERT(get_current_thread()->cpu_affinity == cpu_num_to_mask(BOOT_CPU_ID));
 
-    // Threads responsible for parking the cores.
-    thread_t* park_thread[SMP_MAX_CPUS];
-
-    // These are signalled when the CPU has almost shutdown.
-    event_t shutdown_cplt[SMP_MAX_CPUS];
-
-    for (uint i = 0; i < arch_max_num_cpus(); i++) {
-        // The boot cpu is going to be performing the remainder of the mexec
-        // for us so we don't want to park that one.
-        if (i == BOOT_CPU_ID) {
-            continue;
-        }
-
-        event_init(&shutdown_cplt[i], false, 0);
-
-        char park_thread_name[20];
-        snprintf(park_thread_name, sizeof(park_thread_name), "park %u", i);
-        park_thread[i] = thread_create(park_thread_name, park_cpu_thread,
-                                       (void*)(&shutdown_cplt[i]), DEFAULT_PRIORITY,
-                                       DEFAULT_STACK_SIZE);
-
-        thread_set_cpu_affinity(park_thread[i], cpu_num_to_mask(i));
-        thread_resume(park_thread[i]);
-    }
-
-    // Wait for all CPUs to signal that they're shutting down.
-    for (uint i = 0; i < arch_max_num_cpus(); i++) {
-        if (i == BOOT_CPU_ID) {
-            continue;
-        }
-        event_wait(&shutdown_cplt[i]);
-    }
-
-    // TODO(gkalsi): Wait for the secondaries to shutdown rather than sleeping.
-    //               After the shutdown thread shuts down the core, we never
-    //               hear from it again, so we wait 1 second to allow each
-    //               thread to shut down. This is somewhat of a hack.
-    thread_sleep_relative(ZX_SEC(1));
+    // "Unplug" online secondary CPUs before halting them.
+    cpu_mask_t primary = cpu_num_to_mask(BOOT_CPU_ID);
+    cpu_mask_t mask = mp_get_online_mask() & ~primary;
+    zx_status_t result = mp_unplug_cpu_mask(mask);
+    DEBUG_ASSERT(result == ZX_OK);
 }
 
 static zx_status_t platform_start_cpu(uint cluster, uint cpu) {
+    // Issue memory barrier before starting to ensure previous stores will be visible to new CPU.
+    smp_mb();
+
     uint32_t ret = psci_cpu_on(cluster, cpu, kernel_entry_paddr);
     dprintf(INFO, "Trying to start cpu %u:%u returned: %d\n", cluster, cpu, (int)ret);
     if (ret != 0) {
@@ -205,19 +162,15 @@ static void platform_cpu_init(void) {
     for (uint cluster = 0; cluster < cpu_cluster_count; cluster++) {
         for (uint cpu = 0; cpu < cpu_cluster_cpus[cluster]; cpu++) {
             if (cluster != 0 || cpu != 0) {
-                // allocate a safe and unsafe stack for the cpu's boot stack
-                fbl::RefPtr<VmMapping> kstack_mapping;
-                fbl::RefPtr<VmAddressRegion> kstack_vmar;
-                void* sp;
-                zx_status_t err = vm_allocate_kstack(false, &sp, &kstack_mapping, &kstack_vmar);
+                // allocate a stack for the cpu's boot thread
+                kstack_t stack{};
+                zx_status_t err = vm_allocate_kstack(&stack);
                 ASSERT(err == ZX_OK);
 
+                void* sp = reinterpret_cast<void*>(stack.top);
                 void* unsafe_sp = nullptr;
 #if __has_feature(safe_stack)
-                fbl::RefPtr<VmMapping> unsafe_kstack_mapping;
-                fbl::RefPtr<VmAddressRegion> unsafe_kstack_vmar;
-                err = vm_allocate_kstack(true, &unsafe_sp, &unsafe_kstack_mapping, &unsafe_kstack_vmar);
-                ASSERT(err == ZX_OK);
+                unsafe_sp = reinterpret_cast<void*>(stack.unsafe_base + stack.size);
 #endif
 
                 // set the stack info in the arch layer
@@ -227,21 +180,18 @@ static void platform_cpu_init(void) {
                 err = platform_start_cpu(cluster, cpu);
 
                 if (err != ZX_OK) {
-                    vm_free_kstack(&kstack_mapping, &kstack_vmar);
-#if __has_feature(safe_stack)
-                    vm_free_kstack(&unsafe_kstack_mapping, &unsafe_kstack_vmar);
-#endif
+                    vm_free_kstack(&stack);
                     continue;
                 }
 
-                // the cpu booted, leak the references to our vmar and mappings, since there's
-                // no reason to ever free them
-                __UNUSED auto unused = kstack_mapping.leak_ref();
-                __UNUSED auto unused2 = kstack_vmar.leak_ref();
-#if __has_feature(safe_stack)
-                __UNUSED auto unused3 = unsafe_kstack_mapping.leak_ref();
-                __UNUSED auto unused4 = unsafe_kstack_vmar.leak_ref();
-#endif
+                // the cpu booted
+                //
+                // note, we're leaking the stack because we don't know if the initial thread has
+                // completed yet
+                //
+                // TODO(maniscalco): in a future change, rework the allocation so that it's stored
+                // in the static _init_thread array (arch.cpp) and can be freed when the boot thread
+                // terminates (ZX-2547)
             }
         }
     }
@@ -393,6 +343,9 @@ void platform_early_init(void) {
     // walk the zbi structure and process all the items
     process_zbi(zbi);
 
+    // is the cmdline option to bypass dlog set ?
+    dlog_bypass_init();
+
     // bring up kernel drivers after we have mapped our peripheral ranges
     pdev_init(zbi);
 
@@ -518,12 +471,11 @@ void platform_halt(platform_halt_action suggested_action, platform_halt_reason r
         power_shutdown();
     }
 
-#if WITH_LIB_DEBUGLOG
-    thread_print_current_backtrace();
-    dlog_bluescreen_halt();
-#endif
-
     if (reason == HALT_REASON_SW_PANIC) {
+#if WITH_LIB_DEBUGLOG
+        thread_print_current_backtrace();
+        dlog_bluescreen_halt();
+#endif
         if (!halt_on_panic) {
             power_reboot(REBOOT_NORMAL);
             printf("reboot failed\n");
@@ -633,9 +585,17 @@ zx_status_t platform_mexec_patch_zbi(uint8_t* zbi, const size_t len) {
     return ZX_OK;
 }
 
+void platform_mexec_prep(uintptr_t new_bootimage_addr, size_t new_bootimage_len) {
+    DEBUG_ASSERT(!arch_ints_disabled());
+    DEBUG_ASSERT(mp_get_online_mask() == cpu_num_to_mask(BOOT_CPU_ID));
+}
+
 void platform_mexec(mexec_asm_func mexec_assembly, memmov_ops_t* ops,
                     uintptr_t new_bootimage_addr, size_t new_bootimage_len,
                     uintptr_t entry64_addr) {
+    DEBUG_ASSERT(arch_ints_disabled());
+    DEBUG_ASSERT(mp_get_online_mask() == cpu_num_to_mask(BOOT_CPU_ID));
+
     paddr_t kernel_src_phys = (paddr_t)ops[0].src;
     paddr_t kernel_dst_phys = (paddr_t)ops[0].dst;
 
@@ -659,3 +619,22 @@ bool platform_serial_enabled(void) {
 bool platform_early_console_enabled() {
     return false;
 }
+
+// Initialize Resource system after the heap is initialized.
+static void arm_resource_dispatcher_init_hook(unsigned int rl) {
+    // 64 bit address space for MMIO on ARM64
+    zx_status_t status = ResourceDispatcher::InitializeAllocator(ZX_RSRC_KIND_MMIO, 0,
+                                                                 UINT64_MAX);
+    if (status != ZX_OK) {
+        printf("Resources: Failed to initialize MMIO allocator: %d\n", status);
+    }
+    // Set up IRQs based on values from the GIC
+    status = ResourceDispatcher::InitializeAllocator(ZX_RSRC_KIND_IRQ,
+                                                     interrupt_get_base_vector(),
+                                                     interrupt_get_max_vector());
+    if (status != ZX_OK) {
+        printf("Resources: Failed to initialize IRQ allocator: %d\n", status);
+    }
+}
+
+LK_INIT_HOOK(arm_resource_init, arm_resource_dispatcher_init_hook, LK_INIT_LEVEL_HEAP);

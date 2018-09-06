@@ -9,6 +9,8 @@
 #include <ddktl/device.h>
 #include <ddktl/protocol/empty-protocol.h>
 #include <ddk/protocol/display-controller.h>
+#include <ddk/protocol/i2c-impl.h>
+#include <fbl/array.h>
 #include <fbl/intrusive_double_list.h>
 #include <fbl/intrusive_hash_table.h>
 #include <fbl/unique_ptr.h>
@@ -30,16 +32,22 @@ class DisplayConfig;
 
 class DisplayInfo : public IdMappable<fbl::unique_ptr<DisplayInfo>> {
 public:
-    display_info_t info;
-
+    bool has_edid;
     edid::Edid edid;
+    fbl::Vector<edid::timing_params_t> edid_timings;
+    display_params_t params;
+
+    fbl::Array<uint8_t> edid_data_;
+    fbl::Array<zx_pixel_format_t> pixel_formats_;
+    fbl::Array<cursor_info_t> cursor_infos_;
 
     // A list of all images which have been sent to display driver. For multiple
     // images which are displayed at the same time, images with a lower z-order
     // occur first.
     list_node_t images = LIST_INITIAL_VALUE(images);
-    // The number of layers in the applied configuration.
-    uint32_t layer_count;
+    // The number of layers in the applied configuration which are important for vsync (i.e.
+    // that have images).
+    uint32_t vsync_layer_count;
 
     // Set when a layer change occurs on this display and cleared in vsync
     // when the new layers are all active.
@@ -47,6 +55,9 @@ public:
     // Flag indicating that a new configuration was delayed during a layer change
     // and should be reapplied after the layer change completes.
     bool delayed_apply;
+
+    // True when we're in the process of switching between display clients.
+    bool switching_client = false;
 };
 
 using ControllerParent = ddk::Device<Controller, ddk::Unbindable, ddk::Openable, ddk::OpenAtable>;
@@ -55,15 +66,18 @@ class Controller : public ControllerParent,
 public:
     Controller(zx_device_t* parent);
 
+    static void PopulateDisplayMode(const edid::timing_params_t& params, display_mode_t* mode);
+
     zx_status_t DdkOpen(zx_device_t** dev_out, uint32_t flags);
     zx_status_t DdkOpenAt(zx_device_t** dev_out, const char* path, uint32_t flags);
     void DdkUnbind();
     void DdkRelease();
     zx_status_t Bind(fbl::unique_ptr<display::Controller>* device_ptr);
 
-    void OnDisplaysChanged(uint64_t* displays_added, uint32_t added_count,
+    void OnDisplaysChanged(added_display_args_t* displays_added, uint32_t added_count,
                            uint64_t* displays_removed, uint32_t removed_count);
-    void OnDisplayVsync(uint64_t display_id, void** handles, uint32_t handle_count);
+    void OnDisplayVsync(uint64_t display_id, zx_time_t timestamp,
+                        void** handles, uint32_t handle_count);
     void OnClientDead(ClientProxy* client);
     void SetVcMode(uint8_t mode);
     void ShowActiveDisplay();
@@ -75,15 +89,13 @@ public:
 
     // Calling GetPanelConfig requires holding |mtx()|, and it must be held
     // for as long as |edid| and |params| are retained.
-    bool GetPanelConfig(uint64_t display_id, const edid::Edid** edid,
+    bool GetPanelConfig(uint64_t display_id, const fbl::Vector<edid::timing_params_t>** timings,
                         const display_params_t** params) __TA_NO_THREAD_SAFETY_ANALYSIS;
     // Calling GetSupportedPixelFormats requires holding |mtx()|
-    bool GetSupportedPixelFormats(uint64_t display_id, uint32_t* count_out,
-                                  fbl::unique_ptr<zx_pixel_format_t[]>* fmts_out)
+    bool GetSupportedPixelFormats(uint64_t display_id, fbl::Array<zx_pixel_format_t>* fmts_out)
                                   __TA_NO_THREAD_SAFETY_ANALYSIS;
     // Calling GetCursorInfo requires holding |mtx()|
-    bool GetCursorInfo(uint64_t display_id, uint32_t* count_out,
-                       fbl::unique_ptr<cursor_info_t[]>* cursor_info_out)
+    bool GetCursorInfo(uint64_t display_id, fbl::Array<cursor_info_t>* cursor_info_out)
                        __TA_NO_THREAD_SAFETY_ANALYSIS;
 
     display_controller_protocol_ops_t* ops() { return ops_.ops; }
@@ -93,6 +105,7 @@ public:
     mtx_t* mtx() { return &mtx_; }
 private:
     void HandleClientOwnershipChanges() __TA_REQUIRES(mtx_);
+    bool PopulateDisplayTimings(DisplayInfo* info) __TA_EXCLUDES(mtx_);
 
     // mtx_ is a global lock on state shared among clients.
     mtx_t mtx_;
@@ -102,13 +115,17 @@ private:
     uint32_t applied_stamp_ = UINT32_MAX;
 
     ClientProxy* vc_client_ __TA_GUARDED(mtx_) = nullptr;
+    bool vc_ready_ __TA_GUARDED(mtx_) ;
     ClientProxy* primary_client_ __TA_GUARDED(mtx_) = nullptr;
+    bool primary_ready_ __TA_GUARDED(mtx_) ;
     uint8_t vc_mode_ __TA_GUARDED(mtx_) = fuchsia_display_VirtconMode_INACTIVE;
     ClientProxy* active_client_ __TA_GUARDED(mtx_) = nullptr;
 
     async::Loop loop_;
     thrd_t loop_thread_;
     display_controller_protocol_t ops_;
+    i2c_impl_protocol_t i2c_ops_;
+    bool has_i2c_ops_;
 };
 
 } // namespace display

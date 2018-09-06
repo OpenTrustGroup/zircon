@@ -28,6 +28,7 @@
 #include <vm/physmap.h>
 #include <vm/pmm.h>
 #include <zircon/syscalls/hypervisor.h>
+#include <zircon/time.h>
 #include <zircon/types.h>
 
 #include "pvclock_priv.h"
@@ -210,10 +211,14 @@ static zx_status_t handle_cpuid(const ExitInfo& exit_info, AutoVmcs* vmcs,
             guest_state->rcx &= ~(1u << X86_FEATURE_PDCM.bit);
             // Disable MONITOR/MWAIT.
             guest_state->rcx &= ~(1u << X86_FEATURE_MON.bit);
+            // Disable THERM_INTERRUPT and THERM_STATUS MSRs
+            guest_state->rcx &= ~(1u << X86_FEATURE_TM2.bit);
             // Enable the SEP (SYSENTER support).
             guest_state->rdx |= 1u << X86_FEATURE_SEP.bit;
             // Disable the Thermal Monitor bit.
             guest_state->rdx &= ~(1u << X86_FEATURE_TM.bit);
+            // Disable the THERM_CONTROL_MSR bit.
+            guest_state->rdx &= ~(1u << X86_FEATURE_ACPI.bit);
             break;
         case X86_CPUID_TOPOLOGY:
             guest_state->rdx = vmcs->Read(VmcsField16::VPID) - 1;
@@ -234,8 +239,14 @@ static zx_status_t handle_cpuid(const ExitInfo& exit_info, AutoVmcs* vmcs,
             guest_state->rcx &= ~(1u << X86_FEATURE_PERF_BIAS.bit);
             // Disable the hardware coordination feedback bit.
             guest_state->rcx &= ~(1u << X86_FEATURE_HW_FEEDBACK.bit);
-            // Disable HWP MSRs.
             guest_state->rax &= ~(
+                // Disable Digital Thermal Sensor
+                1u << X86_FEATURE_DTS.bit |
+                // Disable Package Thermal Status MSR.
+                1u << X86_FEATURE_PTM.bit |
+                // Disable THERM_STATUS MSR bits 10/11 & THERM_INTERRUPT MSR bit 24
+                1u << X86_FEATURE_PTM.bit |
+                // Disable HWP MSRs.
                 1u << X86_FEATURE_HWP.bit |
                 1u << X86_FEATURE_HWP_NOT.bit |
                 1u << X86_FEATURE_HWP_ACT.bit |
@@ -525,6 +536,8 @@ static zx_status_t handle_rdmsr(const ExitInfo& exit_info, AutoVmcs* vmcs,
         guest_state->rax = read_msr(X86_MSR_IA32_MISC_ENABLE) & kMiscEnableFastStrings;
         guest_state->rdx = 0;
         return ZX_OK;
+    case X86_MSR_DRAM_ENERGY_STATUS:
+    case X86_MSR_DRAM_POWER_LIMIT:
     // From Volume 3, Section 28.2.6.2: The MTRRs have no effect on the memory
     // type used for an access to a guest-physical address.
     case X86_MSR_IA32_MTRRCAP:
@@ -542,6 +555,14 @@ static zx_status_t handle_rdmsr(const ExitInfo& exit_info, AutoVmcs* vmcs,
     case X86_MSR_IA32_MCG_CAP:
     case X86_MSR_IA32_MCG_STATUS:
     case X86_MSR_IA32_TEMPERATURE_TARGET:
+    case X86_MSR_PKG_ENERGY_STATUS:
+    case X86_MSR_PLATFORM_ENERGY_COUNTER:
+    case X86_MSR_PLATFORM_POWER_LIMIT:
+    case X86_MSR_PP0_ENERGY_STATUS:
+    case X86_MSR_PP0_POWER_LIMIT:
+    case X86_MSR_PP1_ENERGY_STATUS:
+    case X86_MSR_PP1_POWER_LIMIT:
+    case X86_MSR_RAPL_POWER_UNIT:
         next_rip(exit_info, vmcs);
         guest_state->rax = 0;
         guest_state->rdx = 0;
@@ -562,10 +583,11 @@ zx_time_t lvt_deadline(LocalApicState* local_apic_state) {
     uint32_t shift = BITS_SHIFT(local_apic_state->lvt_divide_config, 1, 0) |
                      (BIT_SHIFT(local_apic_state->lvt_divide_config, 3) << 2);
     uint32_t divisor_shift = (shift + 1) & 7;
-    return current_time() + ticks_to_nanos(local_apic_state->lvt_initial_count << divisor_shift);
+    zx_duration_t duration = ticks_to_nanos(local_apic_state->lvt_initial_count << divisor_shift);
+    return zx_time_add_duration(current_time(), duration);
 }
 
-static void update_timer(LocalApicState* local_apic_state, uint64_t deadline);
+static void update_timer(LocalApicState* local_apic_state, zx_time_t deadline);
 
 static void deadline_callback(timer_t* timer, zx_time_t now, void* arg) {
     LocalApicState* local_apic_state = static_cast<LocalApicState*>(arg);
@@ -586,14 +608,14 @@ static void update_timer(LocalApicState* local_apic_state, zx_time_t deadline) {
     }
 }
 
-static uint32_t ipi_target_mask(const InterruptCommandRegister& icr, uint16_t self) {
+static uint64_t ipi_target_mask(const InterruptCommandRegister& icr, uint16_t self) {
     switch (icr.destination_shorthand) {
     case InterruptDestinationShorthand::NO_SHORTHAND:
         return 1u << icr.destination;
     case InterruptDestinationShorthand::SELF:
         return 1u << (self - 1);
     case InterruptDestinationShorthand::ALL_INCLUDING_SELF:
-        return UINT32_MAX;
+        return UINT64_MAX;
     case InterruptDestinationShorthand::ALL_EXCLUDING_SELF:
         return ~(1u << (self - 1));
     }
@@ -746,8 +768,12 @@ static zx_status_t handle_wrmsr(const ExitInfo& exit_info, AutoVmcs* vmcs, Guest
     case X86_MSR_IA32_MTRR_FIX4K_C0000... X86_MSR_IA32_MTRR_FIX4K_F8000:
     case X86_MSR_IA32_MTRR_PHYSBASE0... X86_MSR_IA32_MTRR_PHYSMASK9:
     case X86_MSR_IA32_BIOS_SIGN_ID:
-    // From AMD64 Volume 2, Section 6.1.1: CSTAR is unused, but Linux likes to set
-    // a null handler, even when not in compatibility mode. Just ignore it.
+    case X86_MSR_DRAM_POWER_LIMIT:
+    case X86_MSR_PP0_POWER_LIMIT:
+    case X86_MSR_PP1_POWER_LIMIT:
+    case X86_MSR_PLATFORM_POWER_LIMIT:
+    // From AMD64 Volume 2, Section 6.1.1: CSTAR is unused, but Linux likes to
+    // set a null handler, even when not in compatibility mode. Just ignore it.
     case X86_MSR_IA32_CSTAR:
         next_rip(exit_info, vmcs);
         return ZX_OK;
@@ -917,8 +943,8 @@ static zx_status_t handle_ept_violation(const ExitInfo& exit_info, AutoVmcs* vmc
     // By default, we mark EPT PTEs as RWX. This is so we can avoid faulting
     // again if the guest requests additional permissions, and so that we can
     // avoid use of INVEPT.
-    uint pf_flags = VMM_PF_FLAG_HW_FAULT | VMM_PF_FLAG_WRITE | VMM_PF_FLAG_INSTRUCTION;
-    status = vmm_guest_page_fault_handler(guest_paddr, pf_flags, gpas->aspace());
+    constexpr uint pf_flags = VMM_PF_FLAG_HW_FAULT | VMM_PF_FLAG_WRITE | VMM_PF_FLAG_INSTRUCTION;
+    status = gpas->PageFault(guest_paddr, pf_flags);
     if (status != ZX_OK) {
         dprintf(CRITICAL, "Unhandled EPT violation %#lx\n",
                 exit_info.guest_physical_address);
@@ -966,62 +992,82 @@ zx_status_t vmexit_handler(AutoVmcs* vmcs, GuestState* guest_state,
                            LocalApicState* local_apic_state, PvClockState* pvclock,
                            hypervisor::GuestPhysicalAddressSpace* gpas, hypervisor::TrapMap* traps,
                            zx_port_packet_t* packet) {
+    zx_status_t status;
     ExitInfo exit_info(*vmcs);
     switch (exit_info.exit_reason) {
     case ExitReason::EXTERNAL_INTERRUPT:
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_EXTERNAL_INTERRUPT);
-        return handle_external_interrupt(vmcs, local_apic_state);
+        status = handle_external_interrupt(vmcs, local_apic_state);
+        break;
     case ExitReason::INTERRUPT_WINDOW:
         LTRACEF("handling interrupt window\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_INTERRUPT_WINDOW);
-        return handle_interrupt_window(vmcs, local_apic_state);
+        status = handle_interrupt_window(vmcs, local_apic_state);
+        break;
     case ExitReason::CPUID:
         LTRACEF("handling CPUID\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_CPUID);
-        return handle_cpuid(exit_info, vmcs, guest_state);
+        status = handle_cpuid(exit_info, vmcs, guest_state);
+        break;
     case ExitReason::HLT:
         LTRACEF("handling HLT\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_HLT);
-        return handle_hlt(exit_info, vmcs, local_apic_state);
+        status = handle_hlt(exit_info, vmcs, local_apic_state);
+        break;
     case ExitReason::CONTROL_REGISTER_ACCESS:
         LTRACEF("handling control-register access\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_CONTROL_REGISTER_ACCESS);
-        return handle_control_register_access(exit_info, vmcs, guest_state);
+        status = handle_control_register_access(exit_info, vmcs, guest_state);
+        break;
     case ExitReason::IO_INSTRUCTION:
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_IO_INSTRUCTION);
-        return handle_io_instruction(exit_info, vmcs, guest_state, traps, packet);
+        status = handle_io_instruction(exit_info, vmcs, guest_state, traps, packet);
+        break;
     case ExitReason::RDMSR:
         LTRACEF("handling RDMSR %#lx\n\n", guest_state->rcx);
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_RDMSR);
-        return handle_rdmsr(exit_info, vmcs, guest_state, local_apic_state);
+        status = handle_rdmsr(exit_info, vmcs, guest_state, local_apic_state);
+        break;
     case ExitReason::WRMSR:
         LTRACEF("handling WRMSR %#lx\n\n", guest_state->rcx);
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_WRMSR);
-        return handle_wrmsr(exit_info, vmcs, guest_state, local_apic_state, pvclock, gpas, packet);
+        status = handle_wrmsr(exit_info, vmcs, guest_state, local_apic_state, pvclock, gpas, packet);
+        break;
     case ExitReason::ENTRY_FAILURE_GUEST_STATE:
     case ExitReason::ENTRY_FAILURE_MSR_LOADING:
         LTRACEF("handling VM entry failure\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_VM_ENTRY_FAILURE);
-        return ZX_ERR_BAD_STATE;
+        status = ZX_ERR_BAD_STATE;
+        break;
     case ExitReason::EPT_VIOLATION:
         LTRACEF("handling EPT violation\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_EPT_VIOLATION);
-        return handle_ept_violation(exit_info, vmcs, gpas, traps, packet);
+        status = handle_ept_violation(exit_info, vmcs, gpas, traps, packet);
+        break;
     case ExitReason::XSETBV:
         LTRACEF("handling XSETBV\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_XSETBV);
-        return handle_xsetbv(exit_info, vmcs, guest_state);
+        status = handle_xsetbv(exit_info, vmcs, guest_state);
+        break;
     case ExitReason::PAUSE:
         LTRACEF("handling PAUSE\n\n");
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_PAUSE);
-        return handle_pause(exit_info, vmcs);
+        status = handle_pause(exit_info, vmcs);
+        break;
     // Currently all exceptions except NMI delivered to guest directly. NMI causes vmexit
     // and handled by host via IDT as any other interrupt/exception.
     case ExitReason::EXCEPTION:
     default:
-        dprintf(CRITICAL, "Unhandled VM exit %u (%s)\n", static_cast<uint32_t>(exit_info.exit_reason),
-                exit_reason_name(exit_info.exit_reason));
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_UNKNOWN);
-        return ZX_ERR_NOT_SUPPORTED;
+        status = ZX_ERR_NOT_SUPPORTED;
+        break;
     }
+    if (status != ZX_OK && status != ZX_ERR_NEXT && status != ZX_ERR_CANCELED) {
+        dprintf(CRITICAL, "VM exit handler for %u (%s) at RIP %lx returned %d\n",
+                static_cast<uint32_t>(exit_info.exit_reason),
+                exit_reason_name(exit_info.exit_reason),
+                exit_info.guest_rip,
+                status);
+    }
+    return status;
 }

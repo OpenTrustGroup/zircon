@@ -28,7 +28,7 @@
 
 class JobDispatcher;
 
-class ProcessDispatcher final : public SoloDispatcher {
+class ProcessDispatcher final : public SoloDispatcher<ProcessDispatcher> {
 public:
     static zx_status_t Create(
         fbl::RefPtr<JobDispatcher> job, fbl::StringPiece name, uint32_t flags,
@@ -84,8 +84,10 @@ public:
     zx_handle_t MapHandleToValue(const HandleOwner& handle) const;
 
     // Maps a handle value into a Handle as long we can verify that
-    // it belongs to this process.
-    Handle* GetHandleLocked(zx_handle_t handle_value) TA_REQ(handle_table_lock_);
+    // it belongs to this process. Use |skip_policy = true| for testing that
+    // a handle is valid without potentially triggering a job policy exception.
+    Handle* GetHandleLocked(
+        zx_handle_t handle_value, bool skip_policy = false) TA_REQ(handle_table_lock_);
 
     // Adds |handle| to this process handle list. The handle->process_id() is
     // set to this process id().
@@ -102,11 +104,6 @@ public:
     // returns ZX_ERR_BAD_HANDLE if any were not.
     zx_status_t RemoveHandles(user_in_ptr<const zx_handle_t> user_handles,
                               size_t num_handles);
-
-    // Puts back the |handle_value| which has not yet been given to another process
-    // back into this process.
-    void UndoRemoveHandleLocked(zx_handle_t handle_value) TA_REQ(handle_table_lock_);
-
 
     // Get the dispatcher corresponding to this handle value.
     template <typename T>
@@ -163,6 +160,7 @@ public:
     zx_koid_t GetKoidForHandle(zx_handle_t handle_value);
 
     bool IsHandleValid(zx_handle_t handle_value);
+    bool IsHandleValidNoPolicyCheck(zx_handle_t handle_value);
 
     // Calls the provided
     // |zx_status_t func(zx_handle_t, zx_rights_t, fbl::RefPtr<Dispatcher>)|
@@ -170,7 +168,7 @@ public:
     // returning the error value.
     template <typename T>
     zx_status_t ForEachHandle(T func) const {
-        fbl::AutoLock lock(&handle_table_lock_);
+        Guard<fbl::Mutex> guard{&handle_table_lock_};
         for (const auto& handle : handles_) {
             const Dispatcher* dispatcher = handle.dispatcher().get();
             zx_status_t s = func(MapHandleToValue(&handle), handle.rights(),
@@ -183,7 +181,9 @@ public:
     }
 
     // accessors
-    fbl::Mutex* handle_table_lock() TA_RET_CAP(handle_table_lock_) { return &handle_table_lock_; }
+    Lock<fbl::Mutex>* handle_table_lock() TA_RET_CAP(handle_table_lock_) {
+        return &handle_table_lock_;
+    }
     FutexContext* futex_context() { return &futex_context_; }
     State state() const;
     fbl::RefPtr<VmAspace> aspace() { return aspace_; }
@@ -315,7 +315,7 @@ private:
     fbl::RefPtr<VmAspace> aspace_;
 
     // our list of handles
-    mutable fbl::Mutex handle_table_lock_; // protects |handles_|.
+    mutable DECLARE_MUTEX(ProcessDispatcher) handle_table_lock_; // protects |handles_|.
     fbl::DoublyLinkedList<Handle*> handles_ TA_GUARDED(handle_table_lock_);
 
     FutexContext futex_context_;

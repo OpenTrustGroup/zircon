@@ -45,7 +45,6 @@
 #include <arch/x86/mmu.h>
 #include <arch/x86/perf_mon.h>
 #include <assert.h>
-#include <dev/pci_common.h>
 #include <err.h>
 #include <fbl/algorithm.h>
 #include <fbl/alloc_checker.h>
@@ -66,7 +65,7 @@
 #include <lib/pci/pio.h>
 #include <zircon/device/cpu-trace/cpu-perf.h>
 #include <zircon/device/cpu-trace/intel-pm.h>
-#include <zircon/ktrace.h>
+#include <lib/zircon-internal/ktrace.h>
 #include <zircon/mtrace.h>
 #include <zircon/thread_annotations.h>
 #include <zxcpp/new.h>
@@ -75,6 +74,11 @@
 #include <trace.h>
 
 #define LOCAL_TRACE 0
+
+// TODO(cja): Sort out headers so the kernel can include these sorts of definitions
+// without needing DDK access
+#define PCI_CONFIG_VENDOR_ID        0x00
+#define PCI_CONFIG_DEVICE_ID        0x02
 
 // There's only a few misc events, and they're non-homogenous,
 // so handle them directly.
@@ -1701,7 +1705,7 @@ zx_status_t x86_ipm_fini() {
 
     return ZX_OK;
 }
-
+
 // Interrupt handling.
 
 // Helper function so that there is only one place where we enable/disable
@@ -1718,7 +1722,7 @@ static bool pmi_interrupt_handler(x86_iframe_t *frame, PerfmonState* state) {
 
     // On x86 zx_ticks_get uses rdtsc.
     zx_time_t now = rdtsc();
-    LTRACEF("cpu %u: now %" PRIu64 ", sp %p\n", cpu, now, __GET_FRAME());
+    LTRACEF("cpu %u: now %" PRIi64 ", sp %p\n", cpu, now, __GET_FRAME());
 
     // Rather than continually checking if we have enough space, just
     // conservatively check for the maximum amount we'll need.
@@ -1728,7 +1732,7 @@ static bool pmi_interrupt_handler(x86_iframe_t *frame, PerfmonState* state) {
                             state->num_used_misc) *
                            kMaxEventRecordSize);
     if (reinterpret_cast<char*>(data->buffer_next) + space_needed > data->buffer_end) {
-        TRACEF("cpu %u: @%" PRIu64 " pmi buffer full\n", cpu, now);
+        TRACEF("cpu %u: @%" PRIi64 " pmi buffer full\n", cpu, now);
         data->buffer_start->flags |= CPUPERF_BUFFER_FLAG_FULL;
         return false;
     }
@@ -1927,7 +1931,7 @@ void apic_pmi_interrupt_handler(x86_iframe_t *frame) TA_NO_THREAD_SAFETY_ANALYSI
     // TODO(dje): We may want this anyway. If we want to be able to handle
     // page faults inside this handler we'll need to turn interrupts back
     // on. At the moment we can't do this as we don't handle recursive PMIs.
-    arch_set_in_int_handler(false);
+    arch_set_blocking_disallowed(false);
     arch_enable_ints();
 #endif
 
@@ -1935,7 +1939,7 @@ void apic_pmi_interrupt_handler(x86_iframe_t *frame) TA_NO_THREAD_SAFETY_ANALYSI
 
 #if 0
     arch_disable_ints();
-    arch_set_in_int_handler(true);
+    arch_set_blocking_disallowed(true);
 #endif
 
     // This is done here instead of in the caller so that we have full control

@@ -8,13 +8,14 @@
 #include <unistd.h>
 
 #include <ddk/protocol/block.h>
+#include <fbl/array.h>
+#include <fbl/atomic.h>
 #include <fbl/auto_call.h>
 #include <fbl/auto_lock.h>
-#include <fbl/array.h>
 #include <fbl/limits.h>
 #include <fbl/new.h>
-#include <fs/mapped-vmo.h>
-#include <sync/completion.h>
+#include <lib/fzl/mapped-vmo.h>
+#include <lib/sync/completion.h>
 #include <zircon/compiler.h>
 #include <zircon/device/block.h>
 #include <zircon/syscalls.h>
@@ -107,7 +108,7 @@ zx_status_t VPartitionManager::AddPartition(fbl::unique_ptr<VPartition> vp) cons
 struct VpmIoCookie {
     fbl::atomic<size_t> num_txns;
     fbl::atomic<zx_status_t> status;
-    completion_t signal;
+    sync_completion_t signal;
 };
 
 static void IoCallback(block_op_t* op, zx_status_t status) {
@@ -116,18 +117,22 @@ static void IoCallback(block_op_t* op, zx_status_t status) {
         c->status.store(status);
     }
     if (c->num_txns.fetch_sub(1) - 1 == 0) {
-        completion_signal(&c->signal);
+        sync_completion_signal(&c->signal);
     }
 }
 
 zx_status_t VPartitionManager::DoIoLocked(zx_handle_t vmo, size_t off,
                                           size_t len, uint32_t command) {
-    size_t block_size = info_.block_size;
-    size_t max_transfer = info_.max_transfer_size / block_size;
+    const size_t block_size = info_.block_size;
+    const size_t max_transfer = info_.max_transfer_size / block_size;
     size_t len_remaining = len / block_size;
     size_t vmo_offset = 0;
     size_t dev_offset = off / block_size;
-    size_t num_txns = fbl::round_up(len_remaining, max_transfer) / max_transfer;
+    const size_t num_data_txns = fbl::round_up(len_remaining, max_transfer) / max_transfer;
+
+    // Add a "FLUSH" operation to write requests.
+    const bool flushing = command == BLOCK_OP_WRITE;
+    const size_t num_txns = num_data_txns + (flushing ? 1 : 0);
 
     fbl::AllocChecker ac;
     fbl::Array<uint8_t> buffer(new (&ac) uint8_t[block_op_size_ * num_txns],
@@ -140,13 +145,14 @@ zx_status_t VPartitionManager::DoIoLocked(zx_handle_t vmo, size_t off,
     VpmIoCookie cookie;
     cookie.num_txns.store(num_txns);
     cookie.status.store(ZX_OK);
-    completion_reset(&cookie.signal);
+    sync_completion_reset(&cookie.signal);
 
-    for (size_t i = 0; i < num_txns; i++) {
+    for (size_t i = 0; i < num_data_txns; i++) {
         size_t length = fbl::min(len_remaining, max_transfer);
         len_remaining -= length;
 
         block_op_t* bop = reinterpret_cast<block_op_t*>(buffer.get() + (block_op_size_ * i));
+
         bop->command = command;
         bop->rw.vmo = vmo;
         bop->rw.length = static_cast<uint32_t>(length);
@@ -157,14 +163,24 @@ zx_status_t VPartitionManager::DoIoLocked(zx_handle_t vmo, size_t off,
         bop->cookie = &cookie;
         memset(buffer.get() + (block_op_size_ * i) + sizeof(block_op_t), 0,
                block_op_size_ - sizeof(block_op_t));
-        bp_.ops->queue(bp_.ctx, bop);
-
         vmo_offset += length;
         dev_offset += length;
+
+        bp_.ops->queue(bp_.ctx, bop);
+    }
+
+    if (flushing) {
+        block_op_t* bop = reinterpret_cast<block_op_t*>(buffer.get() +
+                                                        (block_op_size_ * num_data_txns));
+        memset(bop, 0, sizeof(*bop));
+        bop->command = BLOCKIO_FLUSH;
+        bop->completion_cb = IoCallback;
+        bop->cookie = &cookie;
+        bp_.ops->queue(bp_.ctx, bop);
     }
 
     ZX_DEBUG_ASSERT(len_remaining == 0);
-    completion_wait(&cookie.signal, ZX_TIME_INFINITE);
+    sync_completion_wait(&cookie.signal, ZX_TIME_INFINITE);
     return static_cast<zx_status_t>(cookie.status.load());
 }
 
@@ -226,9 +242,9 @@ zx_status_t VPartitionManager::Load() {
 
     metadata_size_ = fvm::MetadataSize(DiskSize(), SliceSize());
     // Now that the slice size is known, read the rest of the metadata
-    auto make_metadata_vmo = [&](size_t offset, fbl::unique_ptr<fs::MappedVmo>* out) {
-        fbl::unique_ptr<fs::MappedVmo> mvmo;
-        zx_status_t status = fs::MappedVmo::Create(MetadataSize(), "fvm-meta", &mvmo);
+    auto make_metadata_vmo = [&](size_t offset, fbl::unique_ptr<fzl::MappedVmo>* out) {
+        fbl::unique_ptr<fzl::MappedVmo> mvmo;
+        zx_status_t status = fzl::MappedVmo::Create(MetadataSize(), "fvm-meta", &mvmo);
         if (status != ZX_OK) {
             return status;
         }
@@ -243,12 +259,12 @@ zx_status_t VPartitionManager::Load() {
         return ZX_OK;
     };
 
-    fbl::unique_ptr<fs::MappedVmo> mvmo;
+    fbl::unique_ptr<fzl::MappedVmo> mvmo;
     if ((status = make_metadata_vmo(0, &mvmo)) != ZX_OK) {
         fprintf(stderr, "fvm: Failed to load metadata vmo: %d\n", status);
         return status;
     }
-    fbl::unique_ptr<fs::MappedVmo> mvmo_backup;
+    fbl::unique_ptr<fzl::MappedVmo> mvmo_backup;
     if ((status = make_metadata_vmo(MetadataSize(), &mvmo_backup)) != ZX_OK) {
         fprintf(stderr, "fvm: Failed to load backup metadata vmo: %d\n", status);
         return status;
@@ -333,6 +349,7 @@ zx_status_t VPartitionManager::WriteFvmLocked() {
     status = DoIoLocked(metadata_->GetVmo(), BackupOffsetLocked(),
                         MetadataSize(), BLOCK_OP_WRITE);
     if (status != ZX_OK) {
+        fprintf(stderr, "FVM: Failed to write metadata\n");
         return status;
     }
 
@@ -597,6 +614,12 @@ zx_status_t VPartitionManager::DdkIoctl(uint32_t op, const void* cmd,
         }
         const upgrade_req_t* req = static_cast<const upgrade_req_t*>(cmd);
         return Upgrade(req->old_guid, req->new_guid);
+    }
+    case IOCTL_BLOCK_RR_PART: {
+        // RR Part is defined manually here, because the FVM Partition
+        // manager does not implement the block device protocol (even
+        // though it does have block devices as children).
+        return device_rebind(parent());
     }
     default:
         return ZX_ERR_NOT_SUPPORTED;
@@ -920,7 +943,7 @@ static void multi_txn_completion(block_op_t* txn, zx_status_t status) {
     if (last_txn) {
         delete state;
     }
-    free(txn);
+    delete[] txn;
 }
 
 void VPartition::BlockQueue(block_op_t* txn) {
@@ -995,13 +1018,9 @@ void VPartition::BlockQueue(block_op_t* txn) {
     }
 
     // Harder case: Noncontiguous slices
-    constexpr size_t kMaxSlices = 32;
-    block_op_t* txns[kMaxSlices];
     const size_t txn_count = vslice_end - vslice_start + 1;
-    if (kMaxSlices < txn_count) {
-        txn->completion_cb(txn, ZX_ERR_OUT_OF_RANGE);
-        return;
-    }
+    fbl::Vector<block_op_t*> txns;
+    txns.reserve(txn_count);
 
     fbl::AllocChecker ac;
     fbl::unique_ptr<multi_txn_state_t> state(new (&ac) multi_txn_state_t(txn_count, txn));
@@ -1029,10 +1048,10 @@ void VPartition::BlockQueue(block_op_t* txn) {
         ZX_DEBUG_ASSERT(length <= blocks_per_slice);
         ZX_DEBUG_ASSERT(length <= length_remaining);
 
-        txns[i] = static_cast<block_op_t*>(calloc(1, mgr_->BlockOpSize()));
+        txns.push_back(reinterpret_cast<block_op_t*>(new uint8_t[mgr_->BlockOpSize()]));
         if (txns[i] == nullptr) {
             while (i-- > 0) {
-                free(txns[i]);
+                delete[] txns[i];
             }
             txn->completion_cb(txn, ZX_ERR_NO_MEMORY);
             return;

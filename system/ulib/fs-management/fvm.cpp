@@ -15,13 +15,13 @@
 #include <fbl/type_support.h>
 #include <fbl/unique_fd.h>
 #include <fbl/unique_ptr.h>
-#include <fs/mapped-vmo.h>
 #include <fs-management/fvm.h>
 #include <fvm/fvm.h>
 #include <lib/fdio/limits.h>
 #include <lib/fdio/util.h>
 #include <lib/fdio/vfs.h>
 #include <lib/fdio/watcher.h>
+#include <lib/fzl/mapped-vmo.h>
 #include <fs/client.h>
 #include <zircon/compiler.h>
 #include <zircon/device/block.h>
@@ -85,8 +85,8 @@ zx_status_t fvm_init(int fd, size_t slice_size) {
     size_t disk_size = block_info.block_count * block_info.block_size;
     size_t metadata_size = fvm::MetadataSize(disk_size, slice_size);
 
-    fbl::unique_ptr<fs::MappedVmo> mvmo;
-    zx_status_t status = fs::MappedVmo::Create(metadata_size * 2, "fvm-meta", &mvmo);
+    fbl::unique_ptr<fzl::MappedVmo> mvmo;
+    zx_status_t status = fzl::MappedVmo::Create(metadata_size * 2, "fvm-meta", &mvmo);
     if (status != ZX_OK) {
         return status;
     }
@@ -169,11 +169,13 @@ zx_status_t fvm_overwrite(const char* path, size_t slice_size) {
 
     // Write to primary copy.
     if (write(fd, buf.get(), metadata_size) != static_cast<ssize_t>(metadata_size)) {
+        fprintf(stderr, "fvm_overwrite: Failed to write metadata\n");
         return -1;
     }
 
     // Write to backup copy
     if (write(fd, buf.get(), metadata_size) != static_cast<ssize_t>(metadata_size)) {
+        fprintf(stderr, "fvm_overwrite: Failed to write metadata (secondary)\n");
        return -1;
     }
 

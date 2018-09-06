@@ -65,14 +65,16 @@ struct trace_handler_ops {
     // |buffer_bytes_written| is number of bytes which were written to the trace buffer.
     //
     // Called on an asynchronous dispatch thread.
-    void (*trace_stopped)(trace_handler_t* handler, async_t* async,
+    void (*trace_stopped)(trace_handler_t* handler, async_dispatcher_t* dispatcher,
                           zx_status_t disposition, size_t buffer_bytes_written);
 
     // Called by the trace engine after an attempt to allocate space
     // for a new record has failed because the buffer is full.
     //
     // Called by instrumentation on any thread.  Must be thread-safe.
-    void (*buffer_overflow)(trace_handler_t* handler);
+    void (*notify_buffer_full)(trace_handler_t* handler,
+                               uint32_t wrapped_count,
+                               uint64_t durable_data_end);
 };
 
 // Asynchronously starts the trace engine.
@@ -104,10 +106,11 @@ struct trace_handler_ops {
 //
 // Better yet, don't shut down the trace engine's asynchronous dispatcher unless
 // the process is already about to exit.
-zx_status_t trace_start_engine(async_t* async,
-                               trace_handler_t* handler,
-                               void* buffer,
-                               size_t buffer_num_bytes);
+__EXPORT zx_status_t trace_start_engine(async_dispatcher_t* dispatcher,
+                                        trace_handler_t* handler,
+                                        trace_buffering_mode_t buffering_mode,
+                                        void* buffer,
+                                        size_t buffer_num_bytes);
 
 // Asynchronously stops the trace engine.
 //
@@ -121,6 +124,16 @@ zx_status_t trace_start_engine(async_t* async,
 // Returns |ZX_ERR_BAD_STATE| if current state is |TRACE_STOPPED|.
 //
 // This function is thread-safe.
-zx_status_t trace_stop_engine(zx_status_t disposition);
+__EXPORT zx_status_t trace_stop_engine(zx_status_t disposition);
+
+// Asynchronously notifies the engine that buffers up to |wrapped_count|
+// have been saved.
+//
+// Returns |ZX_OK| if the current state is |TRACE_STARTED| or |TRACE_STOPPING|.
+// Returns |ZX_ERR_BAD_STATE| if current state is |TRACE_STOPPED|.
+//
+// This function is thread-safe.
+__EXPORT zx_status_t trace_engine_mark_buffer_saved(uint32_t wrapped_count,
+                                                    uint64_t durable_data_end);
 
 __END_CDECLS

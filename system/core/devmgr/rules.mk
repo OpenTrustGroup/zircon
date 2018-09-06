@@ -26,13 +26,16 @@ MODULE_SRCS += \
 # can be linked dynamically.  But it doesn't support any means to look
 # up other shared libraries, so everything else must be linked statically.
 
-# We can avoid this dependency if crashsvc connects directly to the analyzer.
+# We can avoid the fuchsia.crash dependency if crashsvc connects directly to the
+# analyzer.
 MODULE_FIDL_LIBS := \
-    system/fidl/crash
+    system/fidl/fuchsia-crash \
+    system/fidl/fuchsia-io \
 
 # ddk is needed only for ddk/device.h
 MODULE_HEADER_DEPS := \
-    system/ulib/ddk
+    system/ulib/ddk \
+    system/ulib/zircon-internal
 
 MODULE_STATIC_LIBS := \
     system/ulib/fidl \
@@ -86,6 +89,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/trace \
     system/ulib/zx \
     system/ulib/zxcpp \
+    third_party/ulib/cksum \
     third_party/ulib/lz4 \
 
 MODULE_LIBS := \
@@ -96,6 +100,9 @@ MODULE_LIBS := \
     system/ulib/trace-engine \
     system/ulib/zircon \
     system/ulib/c
+
+MODULE_FIDL_LIBS := \
+    system/fidl/fuchsia-io \
 
 include make/module.mk
 

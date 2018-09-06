@@ -4,12 +4,12 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
+#include <dev/interrupt.h>
 #include <object/interrupt_dispatcher.h>
-#include <zircon/syscalls/port.h>
 #include <object/port_dispatcher.h>
 #include <object/process_dispatcher.h>
-#include <dev/interrupt.h>
 #include <platform.h>
+#include <zircon/syscalls/port.h>
 
 InterruptDispatcher::InterruptDispatcher()
     : timestamp_(0), state_(InterruptState::IDLE) {
@@ -19,7 +19,7 @@ InterruptDispatcher::InterruptDispatcher()
 zx_status_t InterruptDispatcher::WaitForInterrupt(zx_time_t* out_timestamp) {
     while (true) {
         {
-            AutoSpinLock guard(&spinlock_);
+            Guard<SpinLock, IrqSave> guard{&spinlock_};
             if (port_dispatcher_) {
                 return ZX_ERR_BAD_STATE;
             }
@@ -51,7 +51,7 @@ zx_status_t InterruptDispatcher::WaitForInterrupt(zx_time_t* out_timestamp) {
                 // The event_wait call was interrupted and we need to retry
                 // but before we retry we will set the interrupt state
                 // back to IDLE if we are still in the WAITING state
-                AutoSpinLock guard(&spinlock_);
+                Guard<SpinLock, IrqSave> guard{&spinlock_};
                 if (state_ == InterruptState::WAITING) {
                     state_ = InterruptState::IDLE;
                 }
@@ -81,7 +81,12 @@ zx_status_t InterruptDispatcher::Trigger(zx_time_t timestamp) {
         return ZX_ERR_BAD_STATE;
     */
 
-    AutoSpinLock guard(&spinlock_);
+    // Using AutoReschedDisable is necessary for correctness to prevent
+    // context-switching to the woken thread while holding spinlock_.
+    AutoReschedDisable resched_disable;
+    resched_disable.Disable();
+    Guard<SpinLock, IrqSave> guard{&spinlock_};
+
     // only record timestamp if this is the first signal since we started waiting
     if (!timestamp_) {
         timestamp_ = timestamp;
@@ -106,7 +111,7 @@ zx_status_t InterruptDispatcher::Trigger(zx_time_t timestamp) {
 }
 
 void InterruptDispatcher::InterruptHandler() {
-    AutoSpinLock guard(&spinlock_);
+    Guard<SpinLock, IrqSave> guard{&spinlock_};
 
     // only record timestamp if this is the first IRQ since we started waiting
     if (!timestamp_) {
@@ -128,7 +133,7 @@ void InterruptDispatcher::InterruptHandler() {
 }
 
 zx_status_t InterruptDispatcher::Destroy() {
-    AutoSpinLock guard(&spinlock_);
+    Guard<SpinLock, IrqSave> guard{&spinlock_};
 
     MaskInterrupt();
     UnregisterInterruptHandler();
@@ -155,7 +160,7 @@ zx_status_t InterruptDispatcher::Destroy() {
 
 zx_status_t InterruptDispatcher::Bind(fbl::RefPtr<PortDispatcher> port_dispatcher,
                                       fbl::RefPtr<InterruptDispatcher> interrupt, uint64_t key) {
-    AutoSpinLock guard(&spinlock_);
+    Guard<SpinLock, IrqSave> guard{&spinlock_};
     if (state_ == InterruptState::DESTROYED) {
         return ZX_ERR_CANCELED;
     }
@@ -172,7 +177,7 @@ zx_status_t InterruptDispatcher::Bind(fbl::RefPtr<PortDispatcher> port_dispatche
 }
 
 zx_status_t InterruptDispatcher::Ack() {
-    AutoSpinLock guard(&spinlock_);
+    Guard<SpinLock, IrqSave> guard{&spinlock_};
     if (port_dispatcher_ == nullptr) {
         return ZX_ERR_BAD_STATE;
     }

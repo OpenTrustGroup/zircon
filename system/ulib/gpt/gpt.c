@@ -98,20 +98,15 @@ static void print_array(gpt_partition_t** a, int c) {
     }
 }
 
-static void partition_init(gpt_partition_t* part, const char* name, uint8_t* type, uint8_t* guid,
-                           uint64_t first, uint64_t last, uint64_t flags) {
+static void partition_init(gpt_partition_t* part, const char* name, const
+                           uint8_t* type, const uint8_t* guid, uint64_t first,
+                           uint64_t last, uint64_t flags) {
     memcpy(part->type, type, sizeof(part->type));
     memcpy(part->guid, guid, sizeof(part->guid));
     part->first = first;
     part->last = last;
     part->flags = flags;
     cstring_to_utf16((uint16_t*)part->name, name, sizeof(part->name) / sizeof(uint16_t));
-}
-
-static uint32_t GPT_RESERVED = 16 * 1024;
-
-uint32_t gpt_device_get_size_blocks(uint32_t block_sz) {
-    return ((uint32_t) howmany(GPT_RESERVED, block_sz)) + 2;
 }
 
 void print_table(gpt_device_t* device) {
@@ -451,8 +446,9 @@ int gpt_device_range(gpt_device_t* dev, uint64_t* block_start, uint64_t* block_e
     return 0;
 }
 
-int gpt_partition_add(gpt_device_t* dev, const char* name, uint8_t* type, uint8_t* guid,
-                      uint64_t offset, uint64_t blocks, uint64_t flags) {
+int gpt_partition_add(gpt_device_t* dev, const char* name, const uint8_t* type,
+                      const uint8_t* guid, uint64_t offset, uint64_t blocks,
+                      uint64_t flags) {
     gpt_priv_t* priv = get_priv(dev);
 
     if (!dev->valid) {
@@ -622,20 +618,23 @@ int gpt_device_read_gpt(int fd, gpt_device_t** gpt_out) {
 }
 
 static int compare(const void *ls, const void *rs) {
-    if ((*(gpt_partition_t **)ls)->first > (*(gpt_partition_t **)rs)->first) {
-        return 1;
-    } else if ((*(gpt_partition_t **)ls)->first < (*(gpt_partition_t **)rs)->first) {
-        return -1;
-    } else {
+    const gpt_partition_t* l = *(gpt_partition_t**)ls;
+    const gpt_partition_t* r = *(gpt_partition_t**)rs;
+    if (l == NULL && r == NULL) {
         return 0;
     }
+
+    if (l == NULL) {
+        return 1;
+    }
+
+    if (r == NULL) {
+        return -1;
+    }
+
+    return l->first - r->first;
 }
 
-void gpt_sort_partitions(gpt_partition_t** in, gpt_partition_t** sorted_out,
-                         uint16_t count) {
-
-    for (uint16_t idx = 0; idx < count; idx++) {
-        sorted_out[idx] = in[idx];
-    }
-    qsort(sorted_out, count, sizeof(gpt_partition_t*), compare);
+void gpt_sort_partitions(gpt_partition_t** base, size_t count) {
+    qsort(base, count, sizeof(gpt_partition_t*), compare);
 }

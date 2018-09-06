@@ -435,7 +435,9 @@ void TablesGenerator::CompileFields(const flat::Decl* decl) {
         coded::InterfaceType* coded_interface =
             static_cast<coded::InterfaceType*>(named_coded_types_[&decl->name].get());
         size_t i = 0;
-        for (const auto& method : interface_decl->methods) {
+        for (const auto& method_pointer : interface_decl->all_methods) {
+            assert(method_pointer != nullptr);
+            const auto& method = *method_pointer;
             auto CompileMessage = [&](const flat::Interface::Method::Message& message) -> void {
                 std::unique_ptr<coded::MessageType>& coded_message = coded_interface->messages[i++];
                 std::vector<coded::Field>& request_fields = coded_message->fields;
@@ -515,15 +517,20 @@ void TablesGenerator::Compile(const flat::Decl* decl) {
     case flat::Decl::Kind::kInterface: {
         auto interface_decl = static_cast<const flat::Interface*>(decl);
         std::string interface_name = NameInterface(*interface_decl);
+        std::string interface_qname = NameName(interface_decl->name, ".", "/");
         std::vector<std::unique_ptr<coded::MessageType>> interface_messages;
-        for (const auto& method : interface_decl->methods) {
+        for (const auto& method_pointer : interface_decl->all_methods) {
+            assert(method_pointer != nullptr);
+            const auto& method = *method_pointer;
             std::string method_name = NameMethod(interface_name, method);
+            std::string method_qname = NameMethod(interface_qname, method);
             auto CreateMessage = [&](const flat::Interface::Method::Message& message,
                                      types::MessageKind kind) -> void {
                 std::string message_name = NameMessage(method_name, kind);
+                std::string message_qname = NameMessage(method_qname, kind);
                 interface_messages.push_back(std::make_unique<coded::MessageType>(
                     std::move(message_name), std::vector<coded::Field>(), message.typeshape.Size(),
-                    message_name));
+                    std::move(message_qname)));
             };
             if (method.maybe_request) {
                 CreateMessage(*method.maybe_request, types::MessageKind::kRequest);

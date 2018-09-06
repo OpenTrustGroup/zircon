@@ -30,6 +30,8 @@ struct pdev_interrupt_ops {
                               enum interrupt_trigger_mode* tm,
                               enum interrupt_polarity* pol);
     bool (*is_valid)(unsigned int vector, uint32_t flags);
+    uint32_t (*get_base_vector)(void);
+    uint32_t (*get_max_vector)(void);
     unsigned int (*remap)(unsigned int vector);
     zx_status_t (*send_ipi)(cpu_mask_t target, mp_ipi_t ipi);
     void (*init_percpu_early)(void);
@@ -37,6 +39,19 @@ struct pdev_interrupt_ops {
     void (*handle_irq)(iframe* frame);
     void (*handle_fiq)(iframe* frame);
     void (*shutdown)(void);
+    void (*shutdown_cpu)(void);
+    bool (*msi_is_supported)(void);
+    bool (*msi_supports_masking)(void);
+    void (*msi_mask_unmask)(const msi_block_t* block, uint msi_id, bool mask);
+    zx_status_t (*msi_alloc_block)(uint requested_irqs,
+                                   bool can_target_64bit,
+                                   bool is_msix,
+                                   msi_block_t* out_block);
+    void (*msi_free_block)(msi_block_t* block);
+    void (*msi_register_handler)(const msi_block_t* block,
+                                 uint msi_id,
+                                 int_handler handler,
+                                 void *ctx);
 };
 
 void pdev_register_interrupts(const struct pdev_interrupt_ops* ops);

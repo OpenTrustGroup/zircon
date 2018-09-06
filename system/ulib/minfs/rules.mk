@@ -33,6 +33,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/block-client \
     system/ulib/trace \
     system/ulib/zx \
+    system/ulib/zircon-internal \
     system/ulib/zxcpp \
     system/ulib/fbl \
     system/ulib/sync \
@@ -44,6 +45,9 @@ MODULE_LIBS := \
     system/ulib/fdio \
     system/ulib/trace-engine \
     system/ulib/zircon \
+
+MODULE_FIDL_LIBS := \
+    system/fidl/fuchsia-io \
 
 include make/module.mk
 
@@ -62,6 +66,7 @@ MODULE_HOST_COMPILEFLAGS := \
     -Isystem/ulib/fdio/include \
     -Isystem/ulib/fbl/include \
     -Isystem/ulib/fs/include \
+    -Isystem/ulib/fzl/include \
 
 # host minfs lib
 
@@ -72,6 +77,8 @@ MODULE_TYPE := hostlib
 MODULE_SRCS := $(MODULE_HOST_SRCS)
 
 MODULE_COMPILEFLAGS := $(MODULE_HOST_COMPILEFLAGS)
+
+MODULE_HEADER_DEPS += system/ulib/zircon-internal
 
 MODULE_HOST_LIBS := \
     system/ulib/fbl.hostlib

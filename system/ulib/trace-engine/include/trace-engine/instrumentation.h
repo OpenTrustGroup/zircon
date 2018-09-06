@@ -40,7 +40,7 @@ __BEGIN_CDECLS
 // Useful for generating unique correlation ids for async and flow events.
 //
 // This function is thread-safe and lock-free.
-uint64_t trace_generate_nonce(void);
+__EXPORT uint64_t trace_generate_nonce(void);
 
 // Describes the state of the trace engine.
 typedef enum {
@@ -57,12 +57,12 @@ typedef enum {
 // Gets the current state of the trace engine.
 //
 // This function is thread-safe.
-trace_state_t trace_state(void);
+__EXPORT trace_state_t trace_state(void);
 
 // Returns true if tracing is enabled (started or stopping but not stopped).
 //
 // This function is thread-safe and lock-free.
-inline bool trace_is_enabled(void) {
+static inline bool trace_is_enabled(void) {
     return trace_state() != TRACE_STOPPED;
 }
 
@@ -75,7 +75,7 @@ inline bool trace_is_enabled(void) {
 // |category_literal| must be a null-terminated static string constant.
 //
 // This function is thread-safe.
-bool trace_is_category_enabled(const char* category_literal);
+__EXPORT bool trace_is_category_enabled(const char* category_literal);
 
 // Acquires a reference to the trace engine's context.
 // Must be balanced by a call to |trace_release_context()| when the result is non-NULL.
@@ -86,12 +86,15 @@ bool trace_is_category_enabled(const char* category_literal);
 // have been released, therefore it is important for clients to promptly
 // release their reference to the trace context once they have finished
 // writing records into the trace buffer.
+// It is also important to release the context promptly to maintain proper
+// operation in streaming mode: The buffer can't be saved until all writers
+// have released their context.
 //
 // Returns a valid trace context if tracing is enabled.
 // Returns NULL otherwise.
 //
 // This function is thread-safe, fail-fast, and lock-free.
-trace_context_t* trace_acquire_context(void);
+__EXPORT trace_context_t* trace_acquire_context(void);
 
 // Acquires a reference to the trace engine's context, only if the specified
 // category is enabled.  Must be balanced by a call to |trace_release_context()|
@@ -103,6 +106,9 @@ trace_context_t* trace_acquire_context(void);
 // have been released, therefore it is important for clients to promptly
 // release their reference to the trace context once they have finished
 // writing records into the trace buffer.
+// It is also important to release the context promptly to maintain proper
+// operation in streaming mode: The buffer can't be saved until all writers
+// have released their context.
 //
 // This function is equivalent to calling |trace_acquire_context()| to acquire
 // the engine's context, then calling |trace_context_register_category_literal()|
@@ -118,7 +124,7 @@ trace_context_t* trace_acquire_context(void);
 // Returns NULL otherwise.
 //
 // This function is thread-safe.
-trace_context_t* trace_acquire_context_for_category(const char* category_literal,
+__EXPORT trace_context_t* trace_acquire_context_for_category(const char* category_literal,
                                                     trace_string_ref_t* out_ref);
 
 // Releases a reference to the trace engine's context.
@@ -128,7 +134,36 @@ trace_context_t* trace_acquire_context_for_category(const char* category_literal
 // |context| must be a valid trace context reference.
 //
 // This function is thread-safe, never-fail, and lock-free.
-void trace_release_context(trace_context_t* context);
+__EXPORT void trace_release_context(trace_context_t* context);
+
+// Acquires a reference to the trace engine's context, for prolonged use.
+// This cannot be used to acquire the context for the purposes of writing to
+// the trace buffer. Instead, this is intended for uses like the ktrace
+// provider where it wishes to hold a copy of the context for the duration of
+// the trace.
+// Must be balanced by a call to |trace_release_prolonged_context()| when the
+// result is non-NULL.
+//
+// This function is optimized to return quickly when tracing is not enabled.
+//
+// Trace engine shutdown is deferred until all references to the trace context
+// have been released, therefore it is important for clients to promptly
+// release their reference to the trace context once they have finished with
+// it.
+//
+// Returns a valid trace context if tracing is enabled.
+// Returns NULL otherwise.
+//
+// This function is thread-safe, fail-fast, and lock-free.
+__EXPORT trace_prolonged_context_t* trace_acquire_prolonged_context(void);
+
+// Releases a reference to the trace engine's prolonged context.
+// Must balance a prior successful call to |trace_acquire_prolonged_context()|.
+//
+// |context| must be a valid trace context reference.
+//
+// This function is thread-safe, never-fail, and lock-free.
+__EXPORT void trace_release_prolonged_context(trace_prolonged_context_t* context);
 
 // Registers an event handle which the trace engine will signal when the
 // trace state or set of enabled categories changes.
@@ -156,18 +191,18 @@ void trace_release_context(trace_context_t* context);
 //
 // Returns |ZX_OK| if successful.
 // Returns |ZX_ERR_INVALID_ARGS| if the event was already registered.
-zx_status_t trace_register_observer(zx_handle_t event);
+__EXPORT zx_status_t trace_register_observer(zx_handle_t event);
 
 // Unregisters the observer event handle previously registered with
 // |trace_register_observer|.
 //
 // Returns |ZX_OK| if successful.
 // Returns |ZX_ERR_NOT_FOUND| if the event was not previously registered.
-zx_status_t trace_unregister_observer(zx_handle_t event);
+__EXPORT zx_status_t trace_unregister_observer(zx_handle_t event);
 
 // Callback to notify the engine that the observer has finished processing
 // all state changes.
-void trace_notify_observer_updated(zx_handle_t event);
+__EXPORT void trace_notify_observer_updated(zx_handle_t event);
 
 __END_CDECLS
 
@@ -233,6 +268,57 @@ private:
     trace_context_t* context_;
 
     DISALLOW_COPY_AND_ASSIGN_ALLOW_MOVE(TraceContext);
+};
+
+// Holds and retains ownership of a prolonged trace context.
+// Releases the context automatically when destroyed.
+class TraceProlongedContext final {
+public:
+    TraceProlongedContext()
+        : context_(nullptr) {}
+
+    TraceProlongedContext(trace_prolonged_context_t* context)
+        : context_(context) {}
+
+    TraceProlongedContext(TraceProlongedContext&& other)
+        : context_(other.context_) {
+        other.context_ = nullptr;
+    }
+
+    ~TraceProlongedContext() {
+        Release();
+    }
+
+    // Gets the trace context, or null if there is none.
+    trace_prolonged_context_t* get() const { return context_; }
+
+    // Returns true if the holder contains a valid context.
+    explicit operator bool() const { return context_ != nullptr; }
+
+    // Acquires a reference to the trace engine's context.
+    static TraceProlongedContext Acquire() {
+        return TraceProlongedContext(trace_acquire_prolonged_context());
+    }
+
+    // Releases the trace context.
+    void Release() {
+        if (context_) {
+            trace_release_prolonged_context(context_);
+            context_ = nullptr;
+        }
+    }
+
+    TraceProlongedContext& operator=(TraceProlongedContext&& other) {
+        Release();
+        context_ = other.context_;
+        other.context_ = nullptr;
+        return *this;
+    }
+
+private:
+    trace_prolonged_context_t* context_;
+
+    DISALLOW_COPY_AND_ASSIGN_ALLOW_MOVE(TraceProlongedContext);
 };
 
 } // namespace trace

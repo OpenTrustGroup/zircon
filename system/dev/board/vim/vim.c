@@ -38,10 +38,19 @@ static zx_protocol_device_t vim_bus_device_protocol = {
     .release = vim_bus_release,
 };
 
+// TODO(rjascani): Remove this when not needed for testing any longer
+static const pbus_dev_t tee_dev = {
+    .name = "tee",
+    .vid = PDEV_VID_GENERIC,
+    .pid = PDEV_PID_GENERIC,
+    .did = PDEV_DID_OPTEE,
+};
+
 static int vim_start_thread(void* arg) {
     vim_bus_t* bus = arg;
     zx_status_t status;
 
+    // Start protocol drivers before adding platform devices.
     if ((status = vim_gpio_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_gpio_init failed: %d\n", status);
         goto fail;
@@ -50,6 +59,16 @@ static int vim_start_thread(void* arg) {
         zxlogf(ERROR, "vim_i2c_init failed: %d\n", status);
         goto fail;
     }
+    if ((status = vim_clk_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim_clk_init failed: %d\n", status);
+        goto fail;
+    }
+    if ((status = vim2_canvas_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "vim2_canvas_init failed: %d\n", status);
+        goto fail;
+    }
+
+    // Start platform devices.
     if ((status = vim_uart_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_uart_init failed: %d\n", status);
         goto fail;
@@ -74,11 +93,6 @@ static int vim_start_thread(void* arg) {
         goto fail;
     }
 
-    if ((status = vim2_mailbox_init(bus)) != ZX_OK) {
-        zxlogf(ERROR, "vim2_mailbox_init failed: %d\n", status);
-        goto fail;
-    }
-
     if ((status = vim2_thermal_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim2_thermal_init failed: %d\n", status);
         goto fail;
@@ -99,6 +113,12 @@ static int vim_start_thread(void* arg) {
         goto fail;
     }
 
+    // TODO(rjascani): Remove this when not needed for testing any longer
+    if ((status = pbus_device_add(&bus->pbus, &tee_dev)) != ZX_OK) {
+        zxlogf(ERROR, "vim_start_thread, could not add tee_dev: %d\n", status);
+        goto fail;
+    }
+
     if ((status = vim_eth_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_eth_init failed: %d\n", status);
         goto fail;
@@ -106,11 +126,6 @@ static int vim_start_thread(void* arg) {
 
     if ((status = vim_rtc_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "vim_rtc_init failed: %d\n", status);
-        goto fail;
-    }
-
-    if ((status = vim2_canvas_init(bus)) != ZX_OK) {
-        zxlogf(ERROR, "vim2_canvas_init failed: %d\n", status);
         goto fail;
     }
 
@@ -132,7 +147,12 @@ static zx_status_t vim_bus_bind(void* ctx, zx_device_t* parent) {
         goto fail;
     }
 
-    // get default BTI from the dummy IOMMU implementation in the platform bus
+    // Set dummy board revision to facilitate testing of platform device get_board_info support.
+    pbus_board_info_t info;
+    info.board_revision = 1234;
+    pbus_set_board_info(&bus->pbus, &info);
+
+    // Get default BTI from the dummy IOMMU implementation in the platform bus.
     status = device_get_protocol(parent, ZX_PROTOCOL_IOMMU, &bus->iommu);
     if (status != ZX_OK) {
         zxlogf(ERROR, "vim_bus_bind: could not get ZX_PROTOCOL_IOMMU\n");

@@ -40,7 +40,7 @@ public:
     int64_t DurationInMsecs() override { return (Now() - start_time_).to_msecs(); }
 
 private:
-    zx::time Now() const { return zx::clock::get(ZX_CLOCK_MONOTONIC); }
+    zx::time Now() const { return zx::clock::get_monotonic(); }
 
     zx::time start_time_;
 };
@@ -90,6 +90,6 @@ int main(int argc, char** argv) {
     }
 
     FuchsiaStopwatch stopwatch;
-    return runtests::RunAllTests(&runtests::FuchsiaRunTest, argc, argv,
-                                 default_test_dirs, &stopwatch, kSyslogFileName);
+    return runtests::DiscoverAndRunTests(&runtests::FuchsiaRunTest, argc, argv, default_test_dirs,
+                                         &stopwatch, kSyslogFileName);
 }

@@ -9,10 +9,13 @@
 #include <threads.h>
 
 #include <ddk/protocol/nand.h>
+#include <ddktl/device.h>
+#include <ddktl/protocol/nand.h>
 #include <fbl/macros.h>
 #include <fbl/mutex.h>
 #include <lib/zx/vmo.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
+#include <zircon/device/ram-nand.h>
 #include <zircon/listnode.h>
 #include <zircon/thread_annotations.h>
 #include <zircon/types.h>
@@ -40,28 +43,34 @@ struct NandParams : public nand_info_t {
     }
 };
 
+class NandDevice;
+using DeviceType = ddk::Device<NandDevice, ddk::GetSizable, ddk::Unbindable, ddk::Ioctlable>;
+
 // Provides the bulk of the functionality for a ram-backed NAND device.
-class NandDevice {
+class NandDevice : public DeviceType, public ddk::NandProtocol<NandDevice> {
   public:
-    explicit NandDevice(const NandParams& params);
+    explicit NandDevice(const NandParams& params, zx_device_t* parent = nullptr);
     ~NandDevice();
+
+    zx_status_t Bind(const ram_nand_info_t& info);
+    void DdkRelease() { delete this; }
 
     // Performs the object initialization, returning the required data to create
     // an actual device (to call device_add()). The provided callback will be
     // called when this device must be removed from the system.
-    zx_status_t Init(char name[NAME_MAX]);
+    zx_status_t Init(char name[NAME_MAX], zx::vmo vmo);
 
     // Device protocol implementation.
-    uint64_t GetSize() const { return params_.GetSize(); }
-    void Unbind();
-    zx_status_t Ioctl(uint32_t op, const void* in_buf, size_t in_len,
-                      void* out_buf, size_t out_len, size_t* out_actual);
+    zx_off_t DdkGetSize() { return params_.GetSize(); }
+    void DdkUnbind();
+    zx_status_t DdkIoctl(uint32_t op, const void* in_buf, size_t in_len,
+                         void* out_buf, size_t out_len, size_t* out_actual);
 
     // NAND protocol implementation.
     void Query(nand_info_t* info_out, size_t* nand_op_size_out);
     void Queue(nand_op_t* operation);
-    void GetBadBlockList(uint32_t* bad_blocks, uint32_t bad_block_len,
-                         uint32_t* num_bad_blocks);
+    zx_status_t GetFactoryBadBlockList(uint32_t* bad_blocks, uint32_t bad_block_len,
+                                       uint32_t* num_bad_blocks);
 
   private:
     void Kill();
@@ -87,7 +96,7 @@ class NandDevice {
 
     bool thread_created_ = false;
 
-    completion_t wake_signal_;
+    sync_completion_t wake_signal_;
     thrd_t worker_;
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(NandDevice);

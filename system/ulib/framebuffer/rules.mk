@@ -16,10 +16,8 @@ MODULE_STATIC_LIBS := system/ulib/fidl
 
 MODULE_LIBS := system/ulib/zircon system/ulib/fdio system/ulib/c
 
-MODULE_FIDL_LIBS := system/fidl/display
+MODULE_FIDL_LIBS := system/fidl/fuchsia-display
 
-MODULE_SO_NAME := $(MODULE_NAME)
-MODULE_EXPORT := so
-MODULE_PACKAGE := shared
+MODULE_PACKAGE := static
 
 include make/module.mk

@@ -103,6 +103,7 @@ zx_status_t suspend_thread(void* raw_arg) {
 
 zx_status_t x86_set_pkg_pl1(const zx_system_powerctl_arg_t* arg) {
     if ((x86_microarch != X86_MICROARCH_INTEL_SANDY_BRIDGE) &&
+        (x86_microarch != X86_MICROARCH_INTEL_SILVERMONT) &&
         (x86_microarch != X86_MICROARCH_INTEL_BROADWELL) &&
         (x86_microarch != X86_MICROARCH_INTEL_HASWELL) &&
         (x86_microarch != X86_MICROARCH_INTEL_SKYLAKE) &&
@@ -171,7 +172,7 @@ zx_status_t acpi_transition_s_state(const zx_system_powerctl_arg_t* arg) {
         // explanation).
         thread_t* t = thread_create("suspend-thread", suspend_thread,
                                     const_cast<zx_system_powerctl_arg_t*>(arg),
-                                    HIGHEST_PRIORITY, DEFAULT_STACK_SIZE);
+                                    HIGHEST_PRIORITY);
         if (!t) {
             return ZX_ERR_NO_MEMORY;
         }

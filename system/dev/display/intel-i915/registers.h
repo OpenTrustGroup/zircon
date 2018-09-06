@@ -163,10 +163,19 @@ public:
 class CdClockCtl : public hwreg::RegisterBase<CdClockCtl, uint32_t> {
 public:
     DEF_FIELD(27, 26, cd_freq_select);
+    static constexpr uint32_t kFreqSelect4XX = 0;
+    static constexpr uint32_t kFreqSelect540 = 1;
     static constexpr uint32_t kFreqSelect3XX = 2;
+    static constexpr uint32_t kFreqSelect6XX = 3;
 
     DEF_FIELD(10, 0, cd_freq_decimal);
+    static constexpr uint32_t kFreqDecimal30857 = 0b01001100111;
     static constexpr uint32_t kFreqDecimal3375 = 0b01010100001;
+    static constexpr uint32_t kFreqDecimal432 = 0b01101011110;
+    static constexpr uint32_t kFreqDecimal450 = 0b01110000010;
+    static constexpr uint32_t kFreqDecimal540 = 0b10000110110;
+    static constexpr uint32_t kFreqDecimal61714 = 0b10011010000;
+    static constexpr uint32_t kFreqDecimal675 = 0b10101000100;
 
     static auto Get() { return hwreg::RegisterAddr<CdClockCtl>(0x46000); }
 

@@ -11,6 +11,7 @@
 #include <arch/ops.h>
 #include <assert.h>
 #include <debug.h>
+#include <dev/interrupt.h>
 #include <err.h>
 #include <fbl/algorithm.h>
 #include <inttypes.h>
@@ -25,6 +26,7 @@
 #include <kernel/timer.h>
 #include <lk/init.h>
 #include <platform.h>
+#include <platform/timer.h>
 #include <stdlib.h>
 #include <trace.h>
 #include <zircon/types.h>
@@ -105,7 +107,7 @@ static void mp_sync_task(void* raw_context) {
  *
  * Interrupts must be disabled if calling with MP_IPI_TARGET_ALL_BUT_LOCAL as target
  *
- * The callback in |task| will always be called with |arch_in_int_handler()|
+ * The callback in |task| will always be called with |arch_blocking_disallowed()|
  * set to true.
  */
 void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, void* context) {
@@ -166,10 +168,10 @@ void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, 
     DEBUG_ASSERT(status == ZX_OK);
 
     if (targetting_self) {
-        bool previous_in_int_handler = arch_in_int_handler();
-        arch_set_in_int_handler(true);
+        bool previous_blocking_disallowed = arch_blocking_disallowed();
+        arch_set_blocking_disallowed(true);
         mp_sync_task(&sync_context);
-        arch_set_in_int_handler(previous_in_int_handler);
+        arch_set_blocking_disallowed(previous_blocking_disallowed);
     }
     smp_mb();
 
@@ -194,10 +196,10 @@ void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, 
             // Optimistically check if our task list has work without the lock.
             // mp_mbx_generic_irq will take the lock and check again.
             if (!list_is_empty(&mp.ipi_task_list[local_cpu])) {
-                bool previous_in_int_handler = arch_in_int_handler();
-                arch_set_in_int_handler(true);
+                bool previous_blocking_disallowed = arch_blocking_disallowed();
+                arch_set_blocking_disallowed(true);
                 mp_mbx_generic_irq();
-                arch_set_in_int_handler(previous_in_int_handler);
+                arch_set_blocking_disallowed(previous_blocking_disallowed);
                 continue;
             }
         }
@@ -237,10 +239,18 @@ static void mp_unplug_trampoline(void) {
     // should be quick), then this CPU may execute the task.
     mp_set_curr_cpu_online(false);
 
-    spin_unlock(&thread_lock);
-
     // do *not* enable interrupts, we want this CPU to never receive another
     // interrupt
+    spin_unlock(&thread_lock);
+
+    // Stop and then shutdown this CPU's platform timer.
+    platform_stop_timer();
+    platform_shutdown_timer();
+
+    // Shutdown the interrupt controller for this CPU.  On some platforms (arm64 with GIC) receiving
+    // an interrupt at a powered off CPU can result in implementation defined behavior (including
+    // resetting the whole system).
+    shutdown_interrupts_curr_cpu();
 
     // flush all of our caches
     arch_flush_state_and_halt(unplug_done);
@@ -303,7 +313,6 @@ static zx_status_t mp_unplug_cpu_mask_single_locked(cpu_num_t cpu_id) {
         NULL,
         &unplug_done,
         HIGHEST_PRIORITY,
-        NULL, NULL, 4096,
         mp_unplug_trampoline);
     if (t == NULL) {
         return ZX_ERR_NO_MEMORY;

@@ -23,7 +23,7 @@
 #include <object/handle.h>
 #include <object/log_dispatcher.h>
 #include <object/process_dispatcher.h>
-#include <object/resources.h>
+#include <object/resource.h>
 #include <object/thread_dispatcher.h>
 
 #include <fbl/alloc_checker.h>
@@ -42,9 +42,9 @@ constexpr size_t kMaxCPRNGDraw = ZX_CPRNG_DRAW_MAX_LEN;
 constexpr size_t kMaxCPRNGSeed = ZX_CPRNG_ADD_ENTROPY_MAX_LEN;
 
 zx_status_t sys_nanosleep(zx_time_t deadline) {
-    LTRACEF("nseconds %" PRIu64 "\n", deadline);
+    LTRACEF("nseconds %" PRIi64 "\n", deadline);
 
-    if (deadline == 0ull) {
+    if (deadline <= 0) {
         thread_yield();
         return ZX_OK;
     }
@@ -140,7 +140,7 @@ zx_status_t sys_event_create(uint32_t options, user_out_handle* event_out) {
 zx_status_t sys_eventpair_create(uint32_t options,
                                  user_out_handle* out0,
                                  user_out_handle* out1) {
-    if (options != 0u)  // No options defined/supported yet.
+    if (options != 0u) // No options defined/supported yet.
         return ZX_ERR_NOT_SUPPORTED;
 
     auto up = ProcessDispatcher::GetCurrent();
@@ -160,8 +160,17 @@ zx_status_t sys_eventpair_create(uint32_t options,
     return result;
 }
 
-zx_status_t sys_log_create(uint32_t options, user_out_handle* out) {
+zx_status_t sys_debuglog_create(zx_handle_t rsrc, uint32_t options,
+                                user_out_handle* out) {
     LTRACEF("options 0x%x\n", options);
+
+    // TODO(ZX-2184) Require a non-INVALID handle.
+    if (rsrc != ZX_HANDLE_INVALID) {
+        // TODO(ZX-971): finer grained validation
+        zx_status_t status = validate_resource(rsrc, ZX_RSRC_KIND_ROOT);
+        if (status != ZX_OK)
+            return status;
+    }
 
     // create a Log dispatcher
     fbl::RefPtr<Dispatcher> dispatcher;
@@ -178,16 +187,6 @@ zx_status_t sys_log_create(uint32_t options, user_out_handle* out) {
 
     // create a handle and attach the dispatcher to it
     return out->make(fbl::move(dispatcher), rights);
-}
-
-zx_status_t sys_debuglog_create(zx_handle_t rsrc, uint32_t options,
-                                user_out_handle* out) {
-    // TODO(ZX-971): finer grained validation
-    zx_status_t status = validate_resource(rsrc, ZX_RSRC_KIND_ROOT);
-    if (status != ZX_OK)
-        return status;
-
-    return sys_log_create(options, out);
 }
 
 zx_status_t sys_debuglog_write(zx_handle_t log_handle, uint32_t options,
@@ -247,7 +246,7 @@ zx_status_t sys_log_read(zx_handle_t log_handle, uint32_t len, user_out_ptr<void
     return sys_debuglog_read(log_handle, options, ptr, len);
 }
 
-zx_status_t sys_cprng_draw_new(user_out_ptr<void> buffer, size_t len) {
+zx_status_t sys_cprng_draw_once(user_out_ptr<void> buffer, size_t len) {
     if (len > kMaxCPRNGDraw)
         return ZX_ERR_INVALID_ARGS;
 
@@ -262,10 +261,6 @@ zx_status_t sys_cprng_draw_new(user_out_ptr<void> buffer, size_t len) {
     if (buffer.copy_array_to_user(kernel_buf, len) != ZX_OK)
         return ZX_ERR_INVALID_ARGS;
     return ZX_OK;
-}
-
-zx_status_t sys_cprng_draw_once(user_out_ptr<void> buffer, size_t len) {
-    return sys_cprng_draw_new(buffer, len);
 }
 
 zx_status_t sys_cprng_add_entropy(user_in_ptr<const void> buffer, size_t len) {

@@ -52,11 +52,13 @@ documentation generation system.
 `file` is the starting symbol.
 
 ```
-file = library-header , using-list , declaration-list ;
+file = library-header , ( using-list ) , declaration-list ;
 
-library-header = "library" , compound-identifier , ";" ;
+library-header = ( attribute-list ) , "library" , compound-identifier , ";" ;
 
-using-list = ( using )* ;
+using-list = ( using | using-declaration )* ;
+
+using-declaration = "using" , IDENTIFIER ,  "=" , primitive-type , ";" ;
 
 declaration-list = ( declaration , ";" )* ;
 
@@ -87,9 +89,9 @@ interface-method = ordinal , ":" , interface-parameters
 interface-parameters = IDENTIFIER , parameter-list , ( "->" , parameter-list )
                      | "->" , IDENTIFIER , parameter-list
 
-parameter-list = "(" , parameters , ")" ;
+parameter-list = "(" , ( parameters ) , ")" ;
 
-parameters = parameter | parameter , "," , parameter-list ;
+parameters = parameter | parameter , "," , parameters ;
 
 parameter = type , IDENTIFIER ;
 
@@ -103,7 +105,7 @@ union-field = type , IDENTIFIER ;
 
 attribute-list = "[" , attributes, "]" ;
 
-attributes = attribute | attribute , "," , attribute ;
+attributes = attribute | attribute , "," , attributes ;
 
 attribute = IDENTIFIER , ( "=", STRING-LITERAL ) ;
 
@@ -126,7 +128,7 @@ handle-subtype = "process" | "thread" | "vmo" | "channel" | "event" | "port" |
 
 request-type = "request" , "<" , compound-identifier , ">" , ( "?" ) ;
 
-primitive-type = integer-type | "status" | "bool" | "float32" | "float64" ;
+primitive-type = integer-type | "bool" | "float32" | "float64" ;
 
 integer-type = "int8" | "int16" | "int32" | "int64" |
                "uint8" | "uint16" | "uint32" | "uint64" ;

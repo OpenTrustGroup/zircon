@@ -52,12 +52,6 @@ If *options* is *ZX_VMO_CLONE_COPY_ON_WRITE* the following rights are added:
 
 - **ZX_RIGHT_WRITE**
 
-*TEMPORARY* The following rights are added:
-
-- **ZX_RIGHT_EXECUTE**
-
-- **ZX_RIGHT_MAP**
-
 ## NOTES
 
 Cloning a VMO causes the existing (source) VMO **ZX_VMO_ZERO_CHILDREN** signal
@@ -79,6 +73,10 @@ ways:
   (or zero-filled if no such page exists).
 - If the **vmo_op_range**() LOOKUP mode is used, the parent's pages will be visible
   where the clone has not modified them.
+
+## RIGHTS
+
+TODO(ZX-2399)
 
 ## RETURN VALUE
 

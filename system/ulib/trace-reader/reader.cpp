@@ -4,6 +4,8 @@
 
 #include <trace-reader/reader.h>
 
+#include <inttypes.h>
+
 #include <fbl/string_printf.h>
 #include <trace-engine/fields.h>
 
@@ -13,6 +15,8 @@ TraceReader::TraceReader(RecordConsumer record_consumer,
                          ErrorHandler error_handler)
     : record_consumer_(fbl::move(record_consumer)),
       error_handler_(fbl::move(error_handler)) {
+    // Provider ids begin at 1. We don't have a provider yet but we want to
+    // set the current provider. So set it to non-existent provider 0.
     RegisterProvider(0u, "");
 }
 
@@ -544,6 +548,7 @@ void TraceReader::SetCurrentProvider(ProviderId id) {
         current_provider_ = &*it;
         return;
     }
+    ReportError(fbl::StringPrintf("Registering non-existent provider %u\n", id));
     RegisterProvider(id, "");
 }
 
@@ -618,7 +623,8 @@ bool TraceReader::DecodeThreadRef(Chunk& chunk,
 
     auto it = current_provider_->thread_table.find(thread_ref);
     if (it == current_provider_->thread_table.end()) {
-        ReportError("Thread ref not in table");
+        ReportError(fbl::StringPrintf("Thread ref 0x%x not in table",
+                                      thread_ref));
         return false;
     }
     *out_process_thread = it->process_thread;
@@ -631,10 +637,10 @@ void TraceReader::ReportError(fbl::String error) const {
 }
 
 Chunk::Chunk()
-    : current_(nullptr), end_(nullptr) {}
+    : begin_(nullptr), current_(nullptr), end_(nullptr) {}
 
 Chunk::Chunk(const uint64_t* begin, size_t num_words)
-    : current_(begin), end_(current_ + num_words) {}
+    : begin_(begin), current_(begin), end_(begin_ + num_words) {}
 
 bool Chunk::ReadUint64(uint64_t* out_value) {
     if (current_ < end_) {

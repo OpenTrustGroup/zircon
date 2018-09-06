@@ -22,16 +22,16 @@ namespace {
 bool test_memfs_null() {
     BEGIN_TEST;
 
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     ASSERT_EQ(loop.StartThread(), ZX_OK);
     memfs_filesystem_t* vfs;
     zx_handle_t root;
 
-    ASSERT_EQ(memfs_create_filesystem(loop.async(), &vfs, &root), ZX_OK);
+    ASSERT_EQ(memfs_create_filesystem(loop.dispatcher(), &vfs, &root), ZX_OK);
     ASSERT_EQ(zx_handle_close(root), ZX_OK);
-    completion_t unmounted;
+    sync_completion_t unmounted;
     memfs_free_filesystem(vfs, &unmounted);
-    ASSERT_EQ(completion_wait(&unmounted, ZX_SEC(3)), ZX_OK);
+    ASSERT_EQ(sync_completion_wait(&unmounted, ZX_SEC(3)), ZX_OK);
 
     END_TEST;
 }
@@ -39,13 +39,13 @@ bool test_memfs_null() {
 bool test_memfs_basic() {
     BEGIN_TEST;
 
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     ASSERT_EQ(loop.StartThread(), ZX_OK);
 
     // Create a memfs filesystem, acquire a file descriptor
     memfs_filesystem_t* vfs;
     zx_handle_t root;
-    ASSERT_EQ(memfs_create_filesystem(loop.async(), &vfs, &root), ZX_OK);
+    ASSERT_EQ(memfs_create_filesystem(loop.dispatcher(), &vfs, &root), ZX_OK);
     uint32_t type = PA_FDIO_REMOTE;
     int fd;
     ASSERT_EQ(fdio_create_fd(&root, &type, 1, &fd), ZX_OK);
@@ -74,9 +74,9 @@ bool test_memfs_basic() {
     ASSERT_NULL(readdir(d));
 
     ASSERT_EQ(closedir(d), 0);
-    completion_t unmounted;
+    sync_completion_t unmounted;
     memfs_free_filesystem(vfs, &unmounted);
-    ASSERT_EQ(completion_wait(&unmounted, ZX_SEC(3)), ZX_OK);
+    ASSERT_EQ(sync_completion_wait(&unmounted, ZX_SEC(3)), ZX_OK);
 
     END_TEST;
 }
@@ -84,10 +84,10 @@ bool test_memfs_basic() {
 bool test_memfs_install() {
     BEGIN_TEST;
 
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     ASSERT_EQ(loop.StartThread(), ZX_OK);
 
-    ASSERT_EQ(memfs_install_at(loop.async(), "/mytmp"), ZX_OK);
+    ASSERT_EQ(memfs_install_at(loop.dispatcher(), "/mytmp"), ZX_OK);
     int fd = open("/mytmp", O_DIRECTORY | O_RDONLY);
     ASSERT_GE(fd, 0);
 
@@ -116,7 +116,7 @@ bool test_memfs_install() {
 
     ASSERT_EQ(closedir(d), 0);
 
-    ASSERT_EQ(memfs_install_at(loop.async(), "/mytmp"), ZX_ERR_ALREADY_EXISTS);
+    ASSERT_EQ(memfs_install_at(loop.dispatcher(), "/mytmp"), ZX_ERR_ALREADY_EXISTS);
 
     loop.Shutdown();
 
@@ -128,13 +128,13 @@ bool test_memfs_install() {
 bool test_memfs_close_during_access() {
     BEGIN_TEST;
 
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     ASSERT_EQ(loop.StartThread(), ZX_OK);
 
     // Create a memfs filesystem, acquire a file descriptor
     memfs_filesystem_t* vfs;
     zx_handle_t root;
-    ASSERT_EQ(memfs_create_filesystem(loop.async(), &vfs, &root), ZX_OK);
+    ASSERT_EQ(memfs_create_filesystem(loop.dispatcher(), &vfs, &root), ZX_OK);
     uint32_t type = PA_FDIO_REMOTE;
     int fd;
     ASSERT_EQ(fdio_create_fd(&root, &type, 1, &fd), ZX_OK);
@@ -146,7 +146,7 @@ bool test_memfs_close_during_access() {
 
     struct thread_args {
         DIR* d;
-        completion_t spinning{};
+        sync_completion_t spinning{};
     } args {
         .d = d,
     };
@@ -163,15 +163,15 @@ bool test_memfs_close_during_access() {
             if ((fd = openat(dirfd(d), "foo", O_RDWR)) < 0) {
                 return errno == EPIPE ? 0 : -1;
             }
-            completion_signal(&args->spinning);
+            sync_completion_signal(&args->spinning);
         }
     }, &args), thrd_success);
 
-    ASSERT_EQ(completion_wait(&args.spinning, ZX_SEC(3)), ZX_OK);
+    ASSERT_EQ(sync_completion_wait(&args.spinning, ZX_SEC(3)), ZX_OK);
 
-    completion_t unmounted;
+    sync_completion_t unmounted;
     memfs_free_filesystem(vfs, &unmounted);
-    ASSERT_EQ(completion_wait(&unmounted, ZX_SEC(3)), ZX_OK);
+    ASSERT_EQ(sync_completion_wait(&unmounted, ZX_SEC(3)), ZX_OK);
 
     int result;
     ASSERT_EQ(thrd_join(worker, &result), thrd_success);

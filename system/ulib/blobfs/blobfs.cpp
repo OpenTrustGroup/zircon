@@ -119,7 +119,7 @@ zx_status_t CheckFvmConsistency(const blobfs_info_t* info, int block_fd) {
 zx_status_t EnqueuePaginated(fbl::unique_ptr<WritebackWork>* work, Blobfs* blobfs, VnodeBlob* vn,
                              zx_handle_t vmo, uint64_t relative_block, uint64_t absolute_block,
                              uint64_t nblocks) {
-    const size_t kMaxChunkBlocks = (3 * kWriteBufferBlocks) / 4;
+    const size_t kMaxChunkBlocks = (3 * blobfs->WritebackCapacity()) / 4;
     uint64_t delta_blocks = fbl::min(nblocks, kMaxChunkBlocks);
     while (nblocks > 0) {
         (*work)->Enqueue(vmo, relative_block, absolute_block, delta_blocks);
@@ -192,7 +192,7 @@ zx_status_t VnodeBlob::InitVmos() {
         FS_TRACE_ERROR("Multiplication overflow");
         return ZX_ERR_OUT_OF_RANGE;
     }
-    if ((status = fs::MappedVmo::Create(vmo_size, "blob", &blob_)) != ZX_OK) {
+    if ((status = fzl::MappedVmo::Create(vmo_size, "blob", &blob_)) != ZX_OK) {
         FS_TRACE_ERROR("Failed to initialize vmo; error: %d\n", status);
         return status;
     }
@@ -226,14 +226,14 @@ zx_status_t VnodeBlob::InitCompressed() {
     uint64_t start = inode_.start_block + DataStartBlock(blobfs_->info_);
     uint64_t merkle_blocks = MerkleTreeBlocks(inode_);
 
-    fbl::unique_ptr<fs::MappedVmo> compressed_blob;
+    fbl::unique_ptr<fzl::MappedVmo> compressed_blob;
     size_t compressed_blocks = (inode_.num_blocks - merkle_blocks);
     size_t compressed_size;
     if (mul_overflow(compressed_blocks, kBlobfsBlockSize, &compressed_size)) {
         FS_TRACE_ERROR("Multiplication overflow\n");
         return ZX_ERR_OUT_OF_RANGE;
     }
-    zx_status_t status = fs::MappedVmo::Create(compressed_size, "compressed-blob",
+    zx_status_t status = fzl::MappedVmo::Create(compressed_size, "compressed-blob",
                                                &compressed_blob);
     if (status != ZX_OK) {
         FS_TRACE_ERROR("Failed to initialized compressed vmo; error: %d\n", status);
@@ -368,7 +368,7 @@ zx_status_t VnodeBlob::SpaceAllocate(uint64_t size_data) {
     }
 
     // Open VMOs, so we can begin writing after allocate succeeds.
-    if ((status = fs::MappedVmo::Create(inode_.num_blocks * kBlobfsBlockSize, "blob", &blob_))
+    if ((status = fzl::MappedVmo::Create(inode_.num_blocks * kBlobfsBlockSize, "blob", &blob_))
         != ZX_OK) {
         goto fail;
     }
@@ -384,7 +384,7 @@ zx_status_t VnodeBlob::SpaceAllocate(uint64_t size_data) {
     write_info_ = fbl::make_unique<WritebackInfo>();
     if (inode_.blob_size >= kCompressionMinBytesSaved) {
         size_t max = write_info_->compressor.BufferMax(inode_.blob_size);
-        status = fs::MappedVmo::Create(max, "compressed-blob", &write_info_->compressed_blob);
+        status = fzl::MappedVmo::Create(max, "compressed-blob", &write_info_->compressed_blob);
         if (status != ZX_OK) {
             return status;
         }
@@ -627,13 +627,13 @@ zx_status_t VnodeBlob::CloneVmo(zx_rights_t rights, zx_handle_t* out) {
         //
         // We'll release it when no client-held VMOs are in use.
         clone_ref_ = fbl::RefPtr<VnodeBlob>(this);
-        clone_watcher_.Begin(blobfs_->async());
+        clone_watcher_.Begin(blobfs_->dispatcher());
     }
 
     return ZX_OK;
 }
 
-void VnodeBlob::HandleNoClones(async_t* async, async::WaitBase* wait,
+void VnodeBlob::HandleNoClones(async_dispatcher_t* dispatcher, async::WaitBase* wait,
                                zx_status_t status, const zx_packet_signal_t* signal) {
     ZX_DEBUG_ASSERT(status == ZX_OK);
     ZX_DEBUG_ASSERT((signal->observed & ZX_VMO_ZERO_CHILDREN) != 0);
@@ -813,17 +813,26 @@ void Blobfs::FreeBlocks(WritebackWork* wb, size_t num_blocks, size_t block_index
     ZX_DEBUG_ASSERT(status == ZX_OK);
 }
 
-zx_status_t Blobfs::FindNode(size_t start, size_t end, size_t* node_index_out) {
-    for (size_t i = start; i < end; ++i) {
+zx_status_t Blobfs::FindNode(size_t* node_index_out) {
+    for (size_t i = free_node_lower_bound_; i < info_.inode_count; ++i) {
         if (GetNode(i)->start_block == kStartBlockFree) {
             // Found a free node. Mark it as reserved so no one else can allocate it.
             if (!reserved_nodes_.Get(i, i + 1, nullptr)) {
                 reserved_nodes_.Set(i, i + 1);
                 *node_index_out = i;
+
+                // We don't know where the next free node is but we know that there
+                // are no free nodes until index i.
+                free_node_lower_bound_ = i + 1;
                 return ZX_OK;
             }
         }
     }
+
+    // There are no free nodes available. Setting free_node_lower_bound_ to
+    // inodes_count will help to fail fast for next allocation. This will
+    // also help to find nodes if nodes are added.
+    free_node_lower_bound_ = info_.inode_count;
 
     return ZX_ERR_OUT_OF_RANGE;
 }
@@ -832,17 +841,16 @@ zx_status_t Blobfs::FindNode(size_t start, size_t end, size_t* node_index_out) {
 zx_status_t Blobfs::ReserveNode(size_t* node_index_out) {
     TRACE_DURATION("blobfs", "Blobfs::ReserveNode");
     zx_status_t status;
-    if ((status = FindNode(0, info_.inode_count, node_index_out)) == ZX_OK) {
+    if ((status = FindNode(node_index_out)) == ZX_OK) {
         return ZX_OK;
     }
 
     // If we didn't find any free inodes, try adding more via FVM.
-    size_t old_inode_count = info_.inode_count;
     if (AddInodes() != ZX_OK) {
         return ZX_ERR_NO_SPACE;
     }
 
-    if ((status = FindNode(old_inode_count, info_.inode_count, node_index_out)) == ZX_OK) {
+    if ((status = FindNode(node_index_out)) == ZX_OK) {
         return ZX_OK;
     }
 
@@ -882,18 +890,19 @@ void Blobfs::FreeNode(WritebackWork* wb, size_t node_index) {
         WriteInfo(wb);
     }
 
+    // We update lower bound if the freed node is the smallest free node.
+    if (free_node_lower_bound_ > node_index) {
+        free_node_lower_bound_ = node_index;
+    }
     zx_status_t status = reserved_nodes_.Clear(node_index, node_index + 1);
     ZX_DEBUG_ASSERT(status == ZX_OK);
 }
 
 zx_status_t Blobfs::InitializeWriteback() {
     zx_status_t status;
-    fbl::unique_ptr<fs::MappedVmo> buffer;
-    constexpr size_t kWriteBufferSize = 64 * (1LU << 20);
-    static_assert(kWriteBufferSize % kBlobfsBlockSize == 0,
-                  "Buffer Size must be a multiple of the Blobfs Block Size");
-    if ((status = fs::MappedVmo::Create(kWriteBufferSize, "blobfs-writeback",
-                                        &buffer)) != ZX_OK) {
+    fbl::unique_ptr<fzl::MappedVmo> buffer;
+    if ((status = fzl::MappedVmo::Create(WriteBufferSize(), "blobfs-writeback",
+                                         &buffer)) != ZX_OK) {
         return status;
     }
     if ((status = WritebackBuffer::Create(this, fbl::move(buffer), &writeback_)) != ZX_OK) {
@@ -926,7 +935,7 @@ void Blobfs::Shutdown(fs::Vfs::ShutdownCallback cb) {
 
         // 2b) Flush all pending work to blobfs to the underlying storage.
         Sync([this, cb = fbl::move(cb)](zx_status_t status) mutable {
-            async::PostTask(async(), [this, cb = fbl::move(cb)]() mutable {
+            async::PostTask(dispatcher(), [this, cb = fbl::move(cb)]() mutable {
                 // 3) Ensure the underlying disk has also flushed.
                 fsync(blockfd_.get());
 
@@ -1156,10 +1165,10 @@ zx_status_t Blobfs::AttachVmo(zx_handle_t vmo, vmoid_t* out) {
 
 zx_status_t Blobfs::DetachVmo(vmoid_t vmoid) {
     block_fifo_request_t request;
-    request.txnid = TxnId();
+    request.group = BlockGroupID();
     request.vmoid = vmoid;
     request.opcode = BLOCKIO_CLOSE_VMO;
-    return Txn(&request, 1);
+    return Transaction(&request, 1);
 }
 
 zx_status_t Blobfs::AddInodes() {
@@ -1361,10 +1370,8 @@ Blobfs::~Blobfs() {
     ZX_ASSERT(open_hash_.is_empty());
     closed_hash_.clear();
 
-    if (fifo_client_ != nullptr) {
-        FreeTxnId();
+    if (blockfd_) {
         ioctl_block_fifo_close(Fd());
-        block_fifo_release_client(fifo_client_);
     }
 }
 
@@ -1380,21 +1387,18 @@ zx_status_t Blobfs::Create(fbl::unique_fd fd, const blobfs_info_t* info,
     fbl::AllocChecker ac;
     auto fs = fbl::unique_ptr<Blobfs>(new Blobfs(fbl::move(fd), info));
 
-    zx_handle_t fifo;
+    zx::fifo fifo;
     ssize_t r;
     if ((r = ioctl_block_get_info(fs->Fd(), &fs->block_info_)) < 0) {
         return static_cast<zx_status_t>(r);
     } else if (kBlobfsBlockSize % fs->block_info_.block_size != 0) {
         return ZX_ERR_IO;
-    } else if ((r = ioctl_block_get_fifos(fs->Fd(), &fifo)) < 0) {
+    } else if ((r = ioctl_block_get_fifos(fs->Fd(), fifo.reset_and_get_address())) < 0) {
         fprintf(stderr, "Failed to mount blobfs: Someone else is using the block device\n");
         return static_cast<zx_status_t>(r);
-    } else if (fs->TxnId() == TXNID_INVALID) {
-        zx_handle_close(fifo);
-        return static_cast<zx_status_t>(ZX_ERR_NO_RESOURCES);
-    } else if ((status = block_fifo_create_client(fifo, &fs->fifo_client_)) != ZX_OK) {
-        fs->FreeTxnId();
-        zx_handle_close(fifo);
+    }
+
+    if ((status = block_client::Client::Create(fbl::move(fifo), &fs->fifo_client_)) != ZX_OK) {
         return status;
     }
 
@@ -1410,7 +1414,7 @@ zx_status_t Blobfs::Create(fbl::unique_fd fd, const blobfs_info_t* info,
     size_t nodemap_size = kBlobfsInodeSize * fs->info_.inode_count;
     ZX_DEBUG_ASSERT(fbl::round_up(nodemap_size, kBlobfsBlockSize) == nodemap_size);
     ZX_DEBUG_ASSERT(nodemap_size / kBlobfsBlockSize == NodeMapBlocks(fs->info_));
-    if ((status = fs::MappedVmo::Create(nodemap_size, "nodemap", &fs->node_map_)) != ZX_OK) {
+    if ((status = fzl::MappedVmo::Create(nodemap_size, "nodemap", &fs->node_map_)) != ZX_OK) {
         return status;
     } else if ((status = fs->AttachVmo(fs->block_map_.StorageUnsafe()->GetVmo(),
                                        &fs->block_map_vmoid_)) != ZX_OK) {
@@ -1421,7 +1425,7 @@ zx_status_t Blobfs::Create(fbl::unique_fd fd, const blobfs_info_t* info,
     } else if ((status = fs->LoadBitmaps()) < 0) {
         fprintf(stderr, "blobfs: Failed to load bitmaps: %d\n", status);
         return status;
-    } else if ((status = fs::MappedVmo::Create(kBlobfsBlockSize, "blobfs-superblock",
+    } else if ((status = fzl::MappedVmo::Create(kBlobfsBlockSize, "blobfs-superblock",
                                                &fs->info_vmo_)) != ZX_OK) {
         fprintf(stderr, "blobfs: Failed to create info vmo: %d\n", status);
         return status;
@@ -1570,7 +1574,7 @@ zx_status_t blobfs_create(fbl::unique_ptr<Blobfs>* out, fbl::unique_fd blockfd) 
     return ZX_OK;
 }
 
-zx_status_t blobfs_mount(async_t* async, fbl::unique_fd blockfd,
+zx_status_t blobfs_mount(async_dispatcher_t* dispatcher, fbl::unique_fd blockfd,
                          const blob_options_t* options, zx::channel root,
                          fbl::Closure on_unmount) {
     zx_status_t status;
@@ -1584,7 +1588,7 @@ zx_status_t blobfs_mount(async_t* async, fbl::unique_fd blockfd,
         return status;
     }
 
-    fs->SetAsync(async);
+    fs->SetDispatcher(dispatcher);
     fs->SetReadonly(options->readonly);
     if (options->metrics) {
         fs->CollectMetrics();

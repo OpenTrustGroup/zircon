@@ -56,6 +56,7 @@ struct TestCaseResults {
     fbl::String label;
     fbl::String unit;
     fbl::Vector<double> values;
+    uint64_t bytes_processed_per_run = 0;
 };
 
 // This represents the results for a set of test cases.
@@ -73,6 +74,11 @@ public:
 
     // A caller may check for errors using ferror().
     void WriteJSON(FILE* out_file) const;
+
+    // Writes the data to a file, in JSON format.  Returns whether this was
+    // successful; prints an error to stderr if this was not successful.
+    bool WriteJSONFile(const char* output_filename) const;
+
     void PrintSummaryStatistics(FILE* out_file) const;
 
 private:

@@ -36,7 +36,6 @@ enum struct HandleSubtype {
 
 enum struct PrimitiveSubtype {
     kBool,
-    kStatus,
     kInt8,
     kInt16,
     kInt32,

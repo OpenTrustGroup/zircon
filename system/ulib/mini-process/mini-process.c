@@ -34,7 +34,8 @@ static zx_status_t write_ctx_message(
         .channel_create = get_syscall_addr(&zx_channel_create, vdso_base),
         .channel_read = get_syscall_addr(&zx_channel_read, vdso_base),
         .channel_write = get_syscall_addr(&zx_channel_write, vdso_base),
-        .process_exit = get_syscall_addr(&zx_process_exit, vdso_base)
+        .process_exit = get_syscall_addr(&zx_process_exit, vdso_base),
+        .object_get_info = get_syscall_addr(&zx_object_get_info, vdso_base)
     };
     return zx_channel_write(channel, 0u, &ctx, sizeof(ctx), &transferred_handle, 1u);
 }
@@ -63,8 +64,8 @@ zx_status_t start_mini_process_etc(zx_handle_t process, zx_handle_t thread,
         goto exit;
 
     zx_vaddr_t stack_base;
-    uint32_t perms = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_PERM_EXECUTE;
-    status = zx_vmar_map(vmar, 0, stack_vmo, 0, stack_size, perms, &stack_base);
+    zx_vm_option_t perms = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_PERM_EXECUTE;
+    status = zx_vmar_map(vmar, perms, 0, stack_vmo, 0, stack_size, &stack_base);
     if (status != ZX_OK)
         goto exit;
 

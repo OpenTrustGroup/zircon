@@ -1,0 +1,43 @@
+// Copyright 2018 The Fuchsia Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+library fidl.test.spaceship;
+
+using zx;
+
+[Layout = "Simple"]
+interface AstrometricsListener {
+    1: OnNova();
+};
+
+enum Alert {
+    GREEN = 1;
+    YELLOW = 2;
+    RED = 3;
+};
+
+struct FuelLevel {
+    uint32 reaction_mass;
+};
+
+struct ZxTypes {
+    zx.status a;
+    zx.time b;
+    zx.duration c;
+    zx.koid d;
+    zx.vaddr e;
+    zx.paddr f;
+    zx.paddr32 g;
+    zx.off h;
+};
+
+[Layout = "Simple"]
+interface SpaceShip {
+    1: AdjustHeading(vector<uint32>:64 stars) -> (int8 result);
+    2: ScanForLifeforms() -> (vector<uint32>:64 lifesigns);
+    3: SetAstrometricsListener(AstrometricsListener listener);
+    4: SetDefenseCondition(Alert alert);
+    5: GetFuelRemaining(handle<eventpair>? cancel) -> (zx.status status, FuelLevel? level);
+    6: AddFuelTank(FuelLevel? level) -> (uint32 consumed);
+};

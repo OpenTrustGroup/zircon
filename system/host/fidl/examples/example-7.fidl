@@ -4,10 +4,8 @@
 
 library fidl.examples.example7;
 
-using pkg;
-
 // ¡🇷🇸🇷
 
 interface Hello {
-  1: Say(string req) -> (string response);
+    1: Say(string req) -> (string response);
 };

@@ -33,7 +33,7 @@ zx_status_t VideoBuffer::Create(zx::vmo&& vmo,
     }
 
     void* virt;
-    uint32_t flags =  ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    uint32_t flags =  ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     status = zx::vmar::root_self().map(0u, vmo,
                                        0u, size,
                                        flags, reinterpret_cast<uintptr_t*>(&virt));

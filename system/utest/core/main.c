@@ -92,7 +92,7 @@ int isatty(int fd) {
 }
 
 int main(int argc, char** argv) {
-    if (zx_log_create(0, &log_handle) < 0) {
+    if (zx_debuglog_create(ZX_HANDLE_INVALID, 0, &log_handle) < 0) {
         return -2;
     }
     zx_debuglog_write(log_handle, 0, "TEST", 4);
@@ -102,5 +102,15 @@ int main(int argc, char** argv) {
         fprintf(stderr, "core-tests must be invoked by userboot (e.g. userboot=bin/core-tests).\n");
         return -1;
     }
-    return unittest_run_all_tests(argc, argv) ? 0 : -1;
+    const bool success = unittest_run_all_tests(argc, argv);
+    if (!success) {
+        return EXIT_FAILURE;
+    }
+
+    // The continuous integration infrastructure looks for this string in the output. This exact
+    // string is matched in the recipe code. They need to be kept in sync. This random value was
+    // chosen because it's unlikely to be produced by other code paths.
+    fprintf(stderr, "core-tests succeeded RZMm59f7zOSs6aZUIXZR\n");
+
+    return EXIT_SUCCESS;
 }

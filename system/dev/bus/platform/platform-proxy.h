@@ -4,138 +4,87 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <ddk/device.h>
-#include <ddk/protocol/gpio.h>
-#include <ddk/protocol/mailbox.h>
-#include <ddk/protocol/scpi.h>
-#include <ddk/protocol/i2c.h>
-#include <ddk/protocol/usb-mode-switch.h>
-#include <ddk/protocol/canvas.h>
+#include <ddk/protocol/platform-proxy.h>
+#include <ddktl/device.h>
+#include <fbl/intrusive_wavl_tree.h>
+#include <fbl/ref_counted.h>
+#include <fbl/ref_ptr.h>
+#include <fbl/unique_ptr.h>
+#include <fbl/vector.h>
+#include <lib/zx/channel.h>
 
-// maximum transfer size we can proxy.
-#define PDEV_I2C_MAX_TRANSFER_SIZE 4096
+#include "platform-proxy-device.h"
+#include "proxy-protocol.h"
 
-// RPC ops
-enum {
-    // ZX_PROTOCOL_PLATFORM_DEV
-    PDEV_GET_MMIO = 1,
-    PDEV_GET_INTERRUPT,
-    PDEV_GET_BTI,
-    PDEV_GET_DEVICE_INFO,
+namespace platform_bus {
 
-    // ZX_PROTOCOL_USB_MODE_SWITCH
-    PDEV_UMS_SET_MODE,
+class ProxyDevice;
 
-    // ZX_PROTOCOL_GPIO
-    PDEV_GPIO_CONFIG,
-    PDEV_GPIO_SET_ALT_FUNCTION,
-    PDEV_GPIO_READ,
-    PDEV_GPIO_WRITE,
-    PDEV_GPIO_GET_INTERRUPT,
-    PDEV_GPIO_RELEASE_INTERRUPT,
-    PDEV_GPIO_SET_POLARITY,
+class PlatformProxy;
+using PlatformProxyType = ddk::Device<PlatformProxy>;
 
-    // ZX_PROTOCOL_I2C
-    PDEV_I2C_GET_MAX_TRANSFER,
-    PDEV_I2C_TRANSACT,
+// This is the main class for the proxy side platform bus driver.
+// It handles RPC communication with the main platform bus driver in the root devhost.
+// It also manages a collection of protocol clients for vendor or SOC-specific protocols.
+// In the case where these protocols exist, this class loads the protocol client drivers
+// before starting the platform device driver.
+class PlatformProxy : public PlatformProxyType, public fbl::RefCounted<PlatformProxy> {
+public:
+    static zx_status_t Create(zx_device_t* parent, zx_handle_t rpc_channel);
 
-    // ZX_PROTOCOL_CLK
-    PDEV_CLK_ENABLE,
-    PDEV_CLK_DISABLE,
+    // Device protocol implementation.
+    void DdkRelease();
 
-    // ZX_PROTOCOL_MAILBOX
-    PDEV_MAILBOX_SEND_CMD,
+    zx_status_t Rpc(uint32_t device_id, platform_proxy_req_t* req, uint32_t req_length,
+                    platform_proxy_rsp_t* resp, uint32_t resp_length,
+                    zx_handle_t* in_handles, uint32_t in_handle_count,
+                    zx_handle_t* out_handles, uint32_t out_handle_count,
+                    uint32_t* out_actual);
 
-    // ZX_PROTOCOL_SCPI
-    PDEV_SCPI_GET_SENSOR,
-    PDEV_SCPI_GET_SENSOR_VALUE,
-    PDEV_SCPI_GET_DVFS_INFO,
-    PDEV_SCPI_GET_DVFS_IDX,
-    PDEV_SCPI_SET_DVFS_IDX,
+    inline zx_status_t Rpc(uint32_t device_id, platform_proxy_req_t* req, uint32_t req_length,
+                           platform_proxy_rsp_t* resp, uint32_t resp_length) {
+        return Rpc(device_id, req, req_length, resp, resp_length, nullptr, 0, nullptr, 0, nullptr);
+    }
 
-    // ZX_PROTOCOL_CANVAS
-    PDEV_CANVAS_CONFIG,
-    PDEV_CANCAS_FREE,
+    zx_status_t GetProtocol(uint32_t proto_id, void* out);
+    zx_status_t RegisterProtocol(uint32_t proto_id, const void* protocol);
+    void UnregisterProtocol(uint32_t proto_id);
+    zx_status_t Proxy(platform_proxy_args_t* args);
+
+private:
+    // This class is a wrapper for a protocol added via platform_proxy_register_protocol().
+    // It also is the element type for the protocols_ WAVL tree.
+    class PlatformProtocol : public fbl::WAVLTreeContainable<fbl::unique_ptr<PlatformProtocol>> {
+    public:
+        PlatformProtocol(uint32_t proto_id, const ddk::AnyProtocol* protocol)
+            : proto_id_(proto_id), protocol_(*protocol) {}
+
+        inline uint32_t GetKey() const { return proto_id_; }
+        inline void GetProtocol(void* out) const { memcpy(out, &protocol_, sizeof(protocol_)); }
+
+    private:
+        const uint32_t proto_id_;
+        ddk::AnyProtocol protocol_;
+    };
+
+    friend class fbl::RefPtr<PlatformProxy>;
+    friend class fbl::internal::MakeRefCountedHelper<PlatformProxy>;
+
+    explicit PlatformProxy(zx_device_t* parent, zx_handle_t rpc_channel)
+        :  PlatformProxyType(parent), rpc_channel_(rpc_channel) {}
+
+    DISALLOW_COPY_ASSIGN_AND_MOVE(PlatformProxy);
+
+    zx_status_t Init(zx_device_t* parent);
+
+    const zx::channel rpc_channel_;
+    fbl::WAVLTree<uint32_t, fbl::unique_ptr<PlatformProtocol>> protocols_;
+    uint32_t protocol_count_;
 };
 
-// context for canvas
-typedef struct {
-    canvas_info_t info;
-    size_t offset;
-} pdev_canvas_ctx_t;
+} // namespace platform_bus
 
-// context for mailbox
-typedef struct {
-    mailbox_channel_t channel;
-    mailbox_data_buf_t mdata;
-} pdev_mailbox_ctx_t;
-
-// context for scpi
-typedef struct {
-    union {
-        uint32_t sensor_id;
-        uint8_t power_domain;
-    };
-    union {
-        uint32_t sensor_value;
-        uint16_t idx;
-    };
-    union {
-        scpi_opp_t opps;
-        char name[20];
-    };
-} pdev_scpi_ctx_t;
-
-// context for i2c_transact
-typedef struct {
-    size_t write_length;
-    size_t read_length;
-    i2c_complete_cb complete_cb;
-    void* cookie;
-} pdev_i2c_txn_ctx_t;
-
-typedef struct {
-    size_t size;
-    uint32_t align_log2;
-    uint32_t cache_policy;
-} pdev_config_vmo_t;
-
-typedef struct pdev_req {
-    zx_txid_t txid;
-    uint32_t op;
-    uint32_t index;
-    union {
-        usb_mode_t usb_mode;
-        uint32_t gpio_flags;
-        uint32_t gpio_alt_function;
-        uint8_t gpio_value;
-        uint8_t canvas_idx;
-        pdev_i2c_txn_ctx_t i2c_txn;
-        uint32_t i2c_bitrate;
-        uint32_t flags;
-        pdev_mailbox_ctx_t mailbox;
-        pdev_scpi_ctx_t scpi;
-        pdev_canvas_ctx_t canvas;
-    };
-} pdev_req_t;
-
-typedef struct {
-    zx_txid_t txid;
-    zx_status_t status;
-    union {
-        usb_mode_t usb_mode;
-        uint8_t gpio_value;
-        uint8_t canvas_idx;
-        pdev_i2c_txn_ctx_t i2c_txn;
-        size_t i2c_max_transfer;
-        struct {
-            zx_off_t offset;
-            size_t length;
-            zx_paddr_t paddr;
-        } mmio;
-        pdev_device_info_t info;
-        pdev_mailbox_ctx_t mailbox;
-        pdev_scpi_ctx_t scpi;
-    };
-} pdev_resp_t;
+__BEGIN_CDECLS
+zx_status_t platform_proxy_create(void* ctx, zx_device_t* parent, const char* name,
+                                  const char* args, zx_handle_t rpc_channel);
+__END_CDECLS

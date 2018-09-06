@@ -4,19 +4,26 @@
 
 #include <lib/zx/job.h>
 
+#include <lib/zx/process.h>
 #include <zircon/syscalls.h>
 
 namespace zx {
 
-zx_status_t job::create(zx_handle_t parent_job, uint32_t flags, job* result) {
-    zx_handle_t h;
-    zx_status_t status = zx_job_create(parent_job, flags, &h);
-    if (status < 0) {
-        result->reset(ZX_HANDLE_INVALID);
-    } else {
-        result->reset(h);
-    }
+zx_status_t job::create(const job& parent, uint32_t flags, job* result) {
+    // Allow for aliasing of the same container to |result| and |parent|.
+    job h;
+    zx_status_t status =
+        zx_job_create(parent.get(), flags, h.reset_and_get_address());
+    result->reset(h.release());
     return status;
+}
+
+zx_status_t job::get_child(uint64_t koid, zx_rights_t rights,
+                           process* result) const {
+    // Assume |result| and |this| are distinct containers, due to strict
+    // aliasing.
+    return zx_object_get_child(
+        value_, koid, rights, result->reset_and_get_address());
 }
 
 } // namespace zx

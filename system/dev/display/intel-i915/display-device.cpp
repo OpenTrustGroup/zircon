@@ -101,19 +101,25 @@ uint32_t float_to_i915_csc_coefficient(float f) {
     return res.reg_value();
 }
 
+uint32_t encode_pipe_color_component(uint8_t component) {
+    // Convert to unsigned .10 fixed point format
+    return component << 2;
+}
+
 } // namespace
 
 namespace i915 {
 
-DisplayDevice::DisplayDevice(Controller* controller, uint64_t id,
-                             registers::Ddi ddi, registers::Trans trans, registers::Pipe pipe)
-        : controller_(controller), id_(id), ddi_(ddi), trans_(trans), pipe_(pipe) {}
+DisplayDevice::DisplayDevice(Controller* controller, uint64_t id, registers::Ddi ddi)
+        : controller_(controller), id_(id), ddi_(ddi) {}
 
 DisplayDevice::~DisplayDevice() {
+    if (pipe_) {
+        pipe_->Reset();
+        pipe_->Detach();
+    }
     if (inited_) {
-        ResetPipe();
-        ResetTrans();
-        ResetDdi();
+        controller_->ResetDdi(ddi());
     }
     if (display_ref_) {
         fbl::AutoLock lock(&display_ref_->mtx);
@@ -126,55 +132,12 @@ hwreg::RegisterIo* DisplayDevice::mmio_space() const {
     return controller_->mmio_space();
 }
 
-void DisplayDevice::ResetPipe() {
-    controller_->ResetPipe(pipe_);
-}
-
-bool DisplayDevice::ResetTrans() {
-    return controller_->ResetTrans(trans_);
-}
-
-bool DisplayDevice::ResetDdi() {
-    return controller_->ResetDdi(ddi_);
-}
-
 bool DisplayDevice::Init() {
     ddi_power_ = controller_->power()->GetDdiPowerWellRef(ddi_);
-    pipe_power_ = controller_->power()->GetPipePowerWellRef(pipe_);
 
-    if (!QueryDevice(&edid_)) {
+    if (!InitDdi()) {
         return false;
     }
-
-
-    auto preferred_timing = edid_.begin();
-    if (!(preferred_timing != edid_.end())) {
-        return false;
-    }
-
-    info_.pixel_clock_10khz = (*preferred_timing).pixel_freq_10khz;
-    info_.h_addressable = (*preferred_timing).horizontal_addressable;
-    info_.h_front_porch = (*preferred_timing).horizontal_front_porch;
-    info_.h_sync_pulse = (*preferred_timing).horizontal_sync_pulse;
-    info_.h_blanking = (*preferred_timing).horizontal_blanking;
-    info_.v_addressable = (*preferred_timing).vertical_addressable;
-    info_.v_front_porch = (*preferred_timing).vertical_front_porch;
-    info_.v_sync_pulse = (*preferred_timing).vertical_sync_pulse;
-    info_.v_blanking = (*preferred_timing).vertical_blanking;
-    info_.mode_flags = ((*preferred_timing).vertical_sync_pulse ? MODE_FLAG_VSYNC_POSITIVE : 0)
-            | ((*preferred_timing).horizontal_sync_pulse ? MODE_FLAG_HSYNC_POSITIVE : 0)
-            | ((*preferred_timing).interlaced ? MODE_FLAG_INTERLACED : 0);
-
-    ResetPipe();
-    if (!ResetTrans() || !ResetDdi()) {
-        return false;
-    }
-
-    if (!ConfigureDdi()) {
-        return false;
-    }
-
-    controller_->interrupts()->EnablePipeVsync(pipe_, true);
 
     inited_ = true;
 
@@ -213,255 +176,92 @@ bool DisplayDevice::Init() {
 }
 
 bool DisplayDevice::Resume() {
-    if (!ConfigureDdi()) {
+    if (!DdiModeset(info_, pipe_->pipe(), pipe_->transcoder())) {
         return false;
     }
-
-    controller_->interrupts()->EnablePipeVsync(pipe_, true);
-
+    if (pipe_) {
+        pipe_->Resume();
+    }
     return true;
 }
 
-void DisplayDevice::ApplyConfiguration(const display_config_t* config) {
-    if (config == nullptr) {
-        ResetPipe();
-        return;
-    }
-
-    if (memcmp(&config->mode, &info_, sizeof(display_mode_t)) != 0) {
-        ResetPipe();
-        ResetTrans();
-        ResetDdi();
-
-        info_ = config->mode;
-
-        ConfigureDdi();
-    }
-
-    registers::PipeRegs pipe_regs(pipe());
-
-    auto pipe_size = pipe_regs.PipeSourceSize().FromValue(0);
-    pipe_size.set_horizontal_source_size(info_.h_addressable - 1);
-    pipe_size.set_vertical_source_size(info_.v_addressable - 1);
-    pipe_size.WriteTo(mmio_space());
-
-    if (config->cc_flags) {
-        float zero_offset[3] = {};
-        SetColorConversionOffsets(true, config->cc_flags & COLOR_CONVERSION_PREOFFSET ?
-                config->cc_preoffsets : zero_offset);
-        SetColorConversionOffsets(false, config->cc_flags & COLOR_CONVERSION_POSTOFFSET ?
-                config->cc_postoffsets : zero_offset);
-
-        float identity[3][3] = {
-            { 1, 0, 0, },
-            { 0, 1, 0, },
-            { 0, 0, 1, },
-        };
-        for (uint32_t i = 0; i < 3; i++) {
-            for (uint32_t j = 0; j < 3; j++) {
-                float val = config->cc_flags & COLOR_CONVERSION_COEFFICIENTS ?
-                        config->cc_coefficients[i][j] : identity[i][j];
-
-                auto reg = pipe_regs.CscCoeff(i, j).ReadFrom(mmio_space());
-                reg.coefficient(i, j).set( float_to_i915_csc_coefficient(val));
-                reg.WriteTo(mmio_space());
-            }
-        }
-
-        // CSC registers are double buffered on CscMode
-        pipe_regs.CscMode().ReadFrom(mmio_space()).WriteTo(mmio_space());
-    }
-
-    for (unsigned i = 0; i < 3; i++) {
-        primary_layer_t* primary = nullptr;
-        for (unsigned j = 0; j < config->layer_count; j++) {
-            layer_t* layer = config->layers[j];
-            if (layer->type == LAYER_PRIMARY && layer->z_index == i) {
-                primary = &layer->cfg.primary;
-                break;
-            }
-        }
-        ConfigurePrimaryPlane(i, primary, !!config->cc_flags);
-    }
-    cursor_layer_t* cursor = nullptr;
-    if (config->layer_count && config->layers[config->layer_count - 1]->type == LAYER_CURSOR) {
-        cursor = &config->layers[config->layer_count - 1]->cfg.cursor;
-    }
-    ConfigureCursorPlane(cursor, !!config->cc_flags);
+void DisplayDevice::LoadActiveMode() {
+    pipe_->LoadActiveMode(&info_);
 }
 
-void DisplayDevice::ConfigurePrimaryPlane(uint32_t plane_num,
-                                          const primary_layer_t* primary, bool enable_csc) {
-    registers::PipeRegs pipe_regs(pipe());
-
-    auto plane_ctrl = pipe_regs.PlaneControl(plane_num).ReadFrom(controller_->mmio_space());
-    if (primary == nullptr) {
-        plane_ctrl.set_plane_enable(0).WriteTo(mmio_space());
-        pipe_regs.PlaneSurface(plane_num).FromValue(0).WriteTo(mmio_space());
-        return;
+bool DisplayDevice::AttachPipe(Pipe* pipe) {
+    if (pipe == pipe_) {
+        return false;
     }
 
-    const image_t* image = &primary->image;
-
-    const fbl::unique_ptr<GttRegion>& region = controller_->GetGttRegion(image->handle);
-    region->SetRotation(primary->transform_mode, *image);
-
-    uint32_t plane_width;
-    uint32_t plane_height;
-    uint32_t stride;
-    uint32_t x_offset;
-    uint32_t y_offset;
-    if (primary->transform_mode == FRAME_TRANSFORM_IDENTITY
-            || primary->transform_mode == FRAME_TRANSFORM_ROT_180) {
-        plane_width = primary->src_frame.width;
-        plane_height = primary->src_frame.height;
-        stride = width_in_tiles(image->type, image->width, image->pixel_format);
-        x_offset = primary->src_frame.x_pos;
-        y_offset = primary->src_frame.y_pos;
-    } else {
-        uint32_t tile_height = height_in_tiles(image->type, image->height, image->pixel_format);
-        uint32_t tile_px_height = get_tile_px_height(image->type, image->pixel_format);
-        uint32_t total_height = tile_height * tile_px_height;
-
-        plane_width = primary->src_frame.height;
-        plane_height = primary->src_frame.width;
-        stride = tile_height;
-        x_offset = total_height - primary->src_frame.y_pos - primary->src_frame.height;
-        y_offset = primary->src_frame.x_pos;
+    if (pipe_) {
+        pipe_->Reset();
+        pipe_->Detach();
     }
+    if (pipe) {
+        pipe->AttachToDisplay(id_, controller()->igd_opregion().IsEdp(ddi()));
 
-    auto plane_size = pipe_regs.PlaneSurfaceSize(plane_num).FromValue(0);
-    plane_size.set_width_minus_1(plane_width - 1);
-    plane_size.set_height_minus_1(plane_height - 1);
-    plane_size.WriteTo(mmio_space());
-
-    auto plane_pos = pipe_regs.PlanePosition(plane_num).FromValue(0);
-    plane_pos.set_x_pos(primary->dest_frame.x_pos);
-    plane_pos.set_y_pos(primary->dest_frame.y_pos);
-    plane_pos.WriteTo(mmio_space());
-
-    auto plane_offset = pipe_regs.PlaneOffset(plane_num).FromValue(0);
-    plane_offset.set_start_x(x_offset);
-    plane_offset.set_start_y(y_offset);
-    plane_offset.WriteTo(mmio_space());
-
-    auto stride_reg = pipe_regs.PlaneSurfaceStride(plane_num).FromValue(0);
-    stride_reg.set_stride(stride);
-    stride_reg.WriteTo(controller_->mmio_space());
-
-    auto plane_key_mask = pipe_regs.PlaneKeyMask(plane_num).FromValue(0);
-    if (primary->alpha_mode != ALPHA_DISABLE && !isnan(primary->alpha_layer_val)) {
-        plane_key_mask.set_plane_alpha_enable(1);
-
-        uint8_t alpha = static_cast<uint8_t>(round(primary->alpha_layer_val * 255));
-
-        auto plane_key_max = pipe_regs.PlaneKeyMax(plane_num).FromValue(0);
-        plane_key_max.set_plane_alpha_value(alpha);
-        plane_key_max.WriteTo(mmio_space());
+        if (info_.h_addressable) {
+            PipeConfigPreamble(info_, pipe->pipe(), pipe->transcoder());
+            pipe->ApplyModeConfig(info_);
+            PipeConfigEpilogue(info_, pipe->pipe(), pipe->transcoder());
+        }
     }
-    plane_key_mask.WriteTo(mmio_space());
-    if (primary->alpha_mode == ALPHA_DISABLE
-            || primary->image.pixel_format == ZX_PIXEL_FORMAT_RGB_x888) {
-        plane_ctrl.set_alpha_mode(plane_ctrl.kAlphaDisable);
-    } else if (primary->alpha_mode == ALPHA_PREMULTIPLIED) {
-        plane_ctrl.set_alpha_mode(plane_ctrl.kAlphaPreMultiply);
-    } else {
-        ZX_ASSERT(primary->alpha_mode == ALPHA_HW_MULTIPLY);
-        plane_ctrl.set_alpha_mode(plane_ctrl.kAlphaHwMultiply);
-    }
-
-    plane_ctrl.set_plane_enable(1);
-    plane_ctrl.set_pipe_csc_enable(enable_csc);
-    plane_ctrl.set_source_pixel_format(plane_ctrl.kFormatRgb8888);
-    if (primary->image.type == IMAGE_TYPE_SIMPLE) {
-        plane_ctrl.set_tiled_surface(plane_ctrl.kLinear);
-    } else if (primary->image.type == IMAGE_TYPE_X_TILED) {
-        plane_ctrl.set_tiled_surface(plane_ctrl.kTilingX);
-    } else if (primary->image.type == IMAGE_TYPE_Y_LEGACY_TILED) {
-        plane_ctrl.set_tiled_surface(plane_ctrl.kTilingYLegacy);
-    } else {
-        ZX_ASSERT(primary->image.type == IMAGE_TYPE_YF_TILED);
-        plane_ctrl.set_tiled_surface(plane_ctrl.kTilingYF);
-    }
-    if (primary->transform_mode == FRAME_TRANSFORM_IDENTITY) {
-        plane_ctrl.set_plane_rotation(plane_ctrl.kIdentity);
-    } else if (primary->transform_mode == FRAME_TRANSFORM_ROT_90) {
-        plane_ctrl.set_plane_rotation(plane_ctrl.k90deg);
-    } else if (primary->transform_mode == FRAME_TRANSFORM_ROT_180) {
-        plane_ctrl.set_plane_rotation(plane_ctrl.k180deg);
-    } else {
-        ZX_ASSERT(primary->transform_mode == FRAME_TRANSFORM_ROT_270);
-        plane_ctrl.set_plane_rotation(plane_ctrl.k270deg);
-    }
-    plane_ctrl.WriteTo(controller_->mmio_space());
-
-    uint32_t base_address = static_cast<uint32_t>(region->base());
-
-    auto plane_surface = pipe_regs.PlaneSurface(plane_num).ReadFrom(controller_->mmio_space());
-    plane_surface.set_surface_base_addr(base_address >> plane_surface.kRShiftCount);
-    plane_surface.WriteTo(controller_->mmio_space());
+    pipe_ = pipe;
+    return true;
 }
 
-void DisplayDevice::ConfigureCursorPlane(const cursor_layer_t* cursor, bool enable_csc) {
-    registers::PipeRegs pipe_regs(pipe());
-
-    auto cursor_ctrl = pipe_regs.CursorCtrl().ReadFrom(controller_->mmio_space());
-    // The hardware requires that the cursor has at least one pixel on the display,
-    // so disable the plane if there is no overlap.
-    if (cursor == nullptr) {
-        cursor_ctrl.set_mode_select(cursor_ctrl.kDisabled).WriteTo(mmio_space());
-        pipe_regs.CursorBase().FromValue(0).WriteTo(mmio_space());
-        return;
+bool DisplayDevice::CheckNeedsModeset(const display_mode_t* mode) {
+    if (memcmp(&mode->h_addressable, &info_.h_addressable,
+               sizeof(display_mode_t) - offsetof(display_mode_t, h_addressable))) {
+        // Modeset is necessary if display params other than the clock frequency differ
+        return true;
     }
 
-    if (cursor->image.width == 64) {
-        cursor_ctrl.set_mode_select(cursor_ctrl.kArgb64x64);
-    } else if (cursor->image.width == 128) {
-        cursor_ctrl.set_mode_select(cursor_ctrl.kArgb128x128);
-    } else if (cursor->image.width == 256) {
-        cursor_ctrl.set_mode_select(cursor_ctrl.kArgb256x256);
-    } else {
-        // The configuration was not properly validated
+    if (mode->pixel_clock_10khz == info_.pixel_clock_10khz) {
+        // Modeset is necessary not necessary if all display params are the same
+        return false;
+    }
+
+    // Check to see if the hardware was already configured properly. The is primarily to
+    // prevent unnecessary modesetting at startup. The extra work this adds to regular
+    // modesetting is negligible.
+    auto dpll_ctrl2 = registers::DpllControl2::Get().ReadFrom(mmio_space());
+    const dpll_state_t* current_state = nullptr;
+    if (!dpll_ctrl2.ddi_clock_off(ddi()).get()) {
+        current_state = controller_->GetDpllState(
+                static_cast<registers::Dpll>(dpll_ctrl2.ddi_clock_select(ddi()).get()));
+    }
+
+    if (current_state == nullptr) {
+        // Modeset is necessary if the ddi doesn't have a clock
+        return true;
+    }
+
+    dpll_state_t new_state;
+    if (!ComputeDpllState(mode->pixel_clock_10khz, &new_state)) {
+        // ComputeDpllState should be validated in the display's CheckDisplayMode
         ZX_ASSERT(false);
     }
-    cursor_ctrl.set_pipe_csc_enable(enable_csc);
-    cursor_ctrl.WriteTo(mmio_space());
 
-    auto cursor_pos = pipe_regs.CursorPos().FromValue(0);
-    if (cursor->x_pos < 0) {
-        cursor_pos.set_x_sign(1);
-        cursor_pos.set_x_pos(-cursor->x_pos);
-    } else {
-        cursor_pos.set_x_pos(cursor->x_pos);
-    }
-    if (cursor->y_pos < 0) {
-        cursor_pos.set_y_sign(1);
-        cursor_pos.set_y_pos(-cursor->y_pos);
-    } else {
-        cursor_pos.set_y_pos(cursor->y_pos);
-    }
-    cursor_pos.WriteTo(mmio_space());
-
-    uint32_t base_address =
-            static_cast<uint32_t>(reinterpret_cast<uint64_t>(cursor->image.handle));
-    auto cursor_base = pipe_regs.CursorBase().ReadFrom(controller_->mmio_space());
-    cursor_base.set_cursor_base(base_address >> cursor_base.kPageShift);
-    cursor_base.WriteTo(controller_->mmio_space());
+    // Modesetting is necessary if the states are not equal
+    return !Controller::CompareDpllStates(*current_state, new_state);
 }
 
-void DisplayDevice::SetColorConversionOffsets(bool preoffsets, const float vals[3]) {
-    registers::PipeRegs pipe_regs(pipe());
+void DisplayDevice::ApplyConfiguration(const display_config_t* config) {
+    ZX_ASSERT(config);
 
-    for (uint32_t i = 0; i < 3; i++) {
-        float offset = vals[i];
-        auto offset_reg = pipe_regs.CscOffset(preoffsets, i).FromValue(0);
-        if (offset < 0) {
-            offset_reg.set_sign(1);
-            offset *= -1;
-        }
-        offset_reg.set_magnitude(float_to_i915_csc_offset(offset));
-        offset_reg.WriteTo(mmio_space());
+    if (CheckNeedsModeset(&config->mode)) {
+        info_ = config->mode;
+
+        DdiModeset(info_, pipe_->pipe(), pipe_->transcoder());
+
+        PipeConfigPreamble(info_, pipe_->pipe(), pipe_->transcoder());
+        pipe_->ApplyModeConfig(info_);
+        PipeConfigEpilogue(info_, pipe_->pipe(), pipe_->transcoder());
     }
+
+    pipe_->ApplyConfiguration(config);
 }
 
 } // namespace i915

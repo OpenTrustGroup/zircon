@@ -8,7 +8,7 @@
 #include <ddk/device.h>
 #include <ddk/protocol/block.h>
 #include <ddk/protocol/usb.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 #include <zircon/device/block.h>
 #include <zircon/listnode.h>
 
@@ -38,6 +38,7 @@ typedef struct {
     uint8_t max_lun;            // index of last logical unit
     size_t max_transfer;        // maximum transfer size reported by usb_get_max_transfer_size()
 
+    uint8_t interface_number;
     uint8_t bulk_in_addr;
     uint8_t bulk_out_addr;
     size_t bulk_in_max_packet;
@@ -55,7 +56,7 @@ typedef struct {
     // list of queued transactions
     list_node_t queued_txns;
 
-    completion_t txn_completion;    // signals ums_worker_thread when new txns are available
+    sync_completion_t txn_completion;    // signals ums_worker_thread when new txns are available
                                     // and when device is dead
     mtx_t txn_lock;                 // protects queued_txns, txn_completion and dead
 

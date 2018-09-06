@@ -7,10 +7,8 @@
 #include <ddk/device.h>
 #include <ddk/io-buffer.h>
 #include <ddk/protocol/gpio.h>
-#include <ddk/protocol/i2c.h>
 #include <ddk/protocol/iommu.h>
 #include <ddk/protocol/platform-bus.h>
-#include <ddk/protocol/serial.h>
 
 // BTI IDs for our devices
 enum {
@@ -19,6 +17,7 @@ enum {
     BTI_MALI,
     BTI_DISPLAY,
     BTI_VIDEO,
+    BTI_AUDIO,
     BTI_EMMC,
     BTI_SDIO,
     BTI_CANVAS,
@@ -27,8 +26,6 @@ enum {
 typedef struct {
     platform_bus_protocol_t pbus;
     gpio_protocol_t gpio;
-    i2c_protocol_t i2c;
-    serial_impl_protocol_t serial;
     zx_device_t* parent;
     iommu_protocol_t iommu;
 } vim_bus_t;
@@ -60,9 +57,6 @@ zx_status_t vim_eth_init(vim_bus_t* bus);
 // vim-fanctl.c
 zx_status_t vim2_thermal_init(vim_bus_t* bus);
 
-// vim-mailbox.c
-zx_status_t vim2_mailbox_init(vim_bus_t* bus);
-
 // vim-display.c
 zx_status_t vim_display_init(vim_bus_t* bus);
 
@@ -77,3 +71,6 @@ zx_status_t vim_rtc_init(vim_bus_t* bus);
 
 // vim-canvas.c
 zx_status_t vim2_canvas_init(vim_bus_t* bus);
+
+// vim-clk.c
+zx_status_t vim_clk_init(vim_bus_t* bus);

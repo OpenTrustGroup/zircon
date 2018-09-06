@@ -40,6 +40,10 @@ static pbus_mmio_t vim_display_mmios[] = {
         .base =     S912_CBUS_REG_BASE,
         .length =   S912_CBUS_REG_LENGTH,
     },
+    {
+        .base =     S912_AUDOUT_BASE,
+        .length =   S912_AUDOUT_LEN,
+    },
 };
 
 const pbus_gpio_t vim_display_gpios[] = {
@@ -61,6 +65,14 @@ static const pbus_bti_t vim_display_btis[] = {
         .iommu_index = 0,
         .bti_id = BTI_DISPLAY,
     },
+    {
+        .iommu_index = 0,
+        .bti_id = BTI_AUDIO,
+    },
+};
+
+static const uint32_t vim_display_protocols[] = {
+    ZX_PROTOCOL_AMLOGIC_CANVAS,
 };
 
 static const pbus_dev_t display_dev = {
@@ -76,11 +88,19 @@ static const pbus_dev_t display_dev = {
     .irq_count = countof(vim_display_irqs),
     .btis = vim_display_btis,
     .bti_count = countof(vim_display_btis),
+    .protocols = vim_display_protocols,
+    .protocol_count = countof(vim_display_protocols),
 };
 
 zx_status_t vim_display_init(vim_bus_t* bus) {
     zx_status_t status;
-    if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
+
+    // enable this #if 0 in order to enable the SPDIF out pin for VIM2 (GPIO H4, pad M22)
+#if 0
+    gpio_set_alt_function(&bus->gpio, S912_SPDIF_H4, S912_SPDIF_H4_OUT_FN);
+#endif
+
+    if ((status = pbus_device_add(&bus->pbus, &display_dev)) != ZX_OK) {
         zxlogf(ERROR, "vim_display_init: pbus_device_add() failed for display: %d\n", status);
         return status;
     }

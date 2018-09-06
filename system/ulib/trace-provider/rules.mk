@@ -7,11 +7,13 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
+MODULE_COMPILEFLAGS += -fvisibility=hidden
 
 MODULE_SRCS = \
     $(LOCAL_DIR)/handler_impl.cpp \
     $(LOCAL_DIR)/provider_impl.cpp \
-    $(LOCAL_DIR)/trace_provider.fidl.cpp \
+    $(LOCAL_DIR)/trace_provider.fidl.client.cpp \
+    $(LOCAL_DIR)/trace_provider.fidl.tables.cpp \
     $(LOCAL_DIR)/trace_provider.fidl.h \
 
 MODULE_STATIC_LIBS := \
@@ -19,6 +21,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/async.cpp \
     system/ulib/async \
     system/ulib/zx \
+    system/ulib/zircon-internal \
     system/ulib/fbl \
 
 MODULE_LIBS := \

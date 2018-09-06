@@ -16,8 +16,9 @@
 #include <ddk/driver.h>
 #include <ddk/protocol/platform-defs.h>
 #include <ddk/protocol/platform-device.h>
-#include <ddk/protocol/canvas.h>
+#include <ddk/protocol/platform-proxy.h>
 #include <zircon/pixelformat.h>
+
 #include "aml-canvas.h"
 
 static void aml_canvas_release(void* ctx) {
@@ -43,14 +44,14 @@ static zx_status_t aml_canvas_config(void* ctx, zx_handle_t vmo,
     }
 
     uint32_t size = ROUNDUP((info->stride_bytes * info->height) +
-                            (offset & (PAGE_SIZE - 1)), PAGE_SIZE);
-    uint32_t num_pages = size / PAGE_SIZE;
+                                (offset & (PAGE_SIZE - 1)),
+                            PAGE_SIZE);
     uint32_t index;
-    zx_paddr_t paddr[num_pages];
+    zx_paddr_t paddr;
     mtx_lock(&canvas->lock);
 
     uint32_t height = info->height;
-    uint32_t width  = info->stride_bytes;
+    uint32_t width = info->stride_bytes;
 
     if (!IS_ALIGNED(height, 8) || !IS_ALIGNED(width, 8)) {
         CANVAS_ERROR("Height or width is not aligned\n");
@@ -71,27 +72,16 @@ static zx_status_t aml_canvas_config(void* ctx, zx_handle_t vmo,
         goto fail;
     }
 
-    status = zx_bti_pin(canvas->bti, ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE,
+    status = zx_bti_pin(canvas->bti, ZX_BTI_PERM_READ | ZX_BTI_PERM_WRITE | ZX_BTI_CONTIGUOUS,
                         vmo, offset & ~(PAGE_SIZE - 1), size,
-                        paddr, num_pages,
+                        &paddr, 1,
                         &canvas->pmt_handle[index]);
     if (status != ZX_OK) {
         CANVAS_ERROR("zx_bti_pin failed %d \n", status);
         goto fail;
     }
 
-    // check if all pages are contiguous
-    for (uint32_t i = 0; i < num_pages - 1; i++) {
-        if (paddr[i] + PAGE_SIZE != paddr[i + 1]) {
-            CANVAS_ERROR("Pages are not contiguous\n");
-            zx_handle_close(canvas->pmt_handle[index]);
-            canvas->pmt_handle[index] = ZX_HANDLE_INVALID;
-            status = ZX_ERR_INVALID_ARGS;
-            goto fail;
-        }
-    }
-
-    if (!IS_ALIGNED(paddr[0], 8)) {
+    if (!IS_ALIGNED(paddr, 8)) {
         CANVAS_ERROR("Physical address is not aligned\n");
         status = ZX_ERR_INVALID_ARGS;
         zx_handle_close(canvas->pmt_handle[index]);
@@ -100,7 +90,7 @@ static zx_status_t aml_canvas_config(void* ctx, zx_handle_t vmo,
         goto fail;
     }
 
-    zx_paddr_t start_addr = paddr[0] + (offset & (PAGE_SIZE - 1));
+    zx_paddr_t start_addr = paddr + (offset & (PAGE_SIZE - 1));
 
     // set framebuffer address in DMC, read/modify/write
     uint32_t value = ((start_addr >> 3) & DMC_CAV_ADDR_LMASK) |
@@ -113,7 +103,7 @@ static zx_status_t aml_canvas_config(void* ctx, zx_handle_t vmo,
             ((info->wrap & DMC_CAV_XWRAP) ? DMC_CAV_XWRAP : 0) |
             ((info->wrap & DMC_CAV_YWRAP) ? DMC_CAV_YWRAP : 0) |
             ((info->endianness & DMC_CAV_ENDIANNESS_MASK) << DMC_CAV_ENDIANNESS_BIT);
-    WRITE32_DMC_REG(DMC_CAV_LUT_DATAH,value);
+    WRITE32_DMC_REG(DMC_CAV_LUT_DATAH, value);
 
     WRITE32_DMC_REG(DMC_CAV_LUT_ADDR, DMC_CAV_LUT_ADDR_WR_EN | index);
 
@@ -138,12 +128,11 @@ static zx_status_t aml_canvas_free(void* ctx, uint8_t canvas_idx) {
     return ZX_OK;
 }
 
-static void aml_canvas_init(aml_canvas_t* canvas)
-{
+static void aml_canvas_init(aml_canvas_t* canvas) {
     WRITE32_DMC_REG(DMC_CAV_LUT_DATAL, 0);
     WRITE32_DMC_REG(DMC_CAV_LUT_DATAH, 0);
 
-    for (int index=0; index<NUM_CANVAS_ENTRIES; index++) {
+    for (int index = 0; index < NUM_CANVAS_ENTRIES; index++) {
         WRITE32_DMC_REG(DMC_CAV_LUT_ADDR, DMC_CAV_LUT_ADDR_WR_EN | index);
         READ32_DMC_REG(DMC_CAV_LUT_DATAH);
     }
@@ -157,32 +146,61 @@ static void aml_canvas_unbind(void* ctx) {
 static zx_protocol_device_t aml_canvas_device_protocol = {
     .version = DEVICE_OPS_VERSION,
     .release = aml_canvas_release,
-    .unbind  = aml_canvas_unbind,
+    .unbind = aml_canvas_unbind,
 };
 
 static canvas_protocol_ops_t canvas_ops = {
     .config = aml_canvas_config,
-    .free   = aml_canvas_free,
+    .free = aml_canvas_free,
 };
+
+static zx_status_t aml_canvas_proxy_cb(platform_proxy_args_t* args, void* cookie) {
+    if (args->req->proto_id != ZX_PROTOCOL_AMLOGIC_CANVAS) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    if (args->req_size < sizeof(rpc_canvas_rsp_t)) {
+        return ZX_ERR_BUFFER_TOO_SMALL;
+    }
+
+    rpc_canvas_req_t* req = (rpc_canvas_req_t*)args->req;
+    rpc_canvas_rsp_t* resp = (rpc_canvas_rsp_t*)args->resp;
+    args->resp_actual_size = sizeof(*resp);
+    args->resp_actual_handles = 0;
+
+    switch (req->header.op) {
+    case CANVAS_CONFIG: {
+        resp->header.status = aml_canvas_config(cookie, args->req_handles[0], req->offset,
+                                                &req->info, &resp->idx);
+        break;
+    }
+    case CANVAS_FREE: {
+        resp->header.status = aml_canvas_free(cookie, req->idx);
+        break;
+    }
+    default:
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return ZX_OK;
+}
 
 static zx_status_t aml_canvas_bind(void* ctx, zx_device_t* parent) {
     zx_status_t status = ZX_OK;
 
-    aml_canvas_t *canvas = calloc(1, sizeof(aml_canvas_t));
+    aml_canvas_t* canvas = calloc(1, sizeof(aml_canvas_t));
     if (!canvas) {
         return ZX_ERR_NO_MEMORY;
     }
 
     // Get device protocol
     status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_DEV, &canvas->pdev);
-    if (status !=  ZX_OK) {
+    if (status != ZX_OK) {
         CANVAS_ERROR("Could not get parent protocol\n");
         goto fail;
     }
 
     platform_bus_protocol_t pbus;
     if ((status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_BUS, &pbus)) != ZX_OK) {
-        CANVAS_ERROR("ZX_PROTOCOL_PLATFORM_BUS not available %d \n",status);
+        CANVAS_ERROR("ZX_PROTOCOL_PLATFORM_BUS not available %d \n", status);
         goto fail;
     }
 
@@ -198,7 +216,7 @@ static zx_status_t aml_canvas_bind(void* ctx, zx_device_t* parent) {
                                   ZX_CACHE_POLICY_UNCACHED_DEVICE,
                                   &canvas->dmc_regs);
     if (status != ZX_OK) {
-        CANVAS_ERROR("Could not map DMC registers %d\n",status);
+        CANVAS_ERROR("Could not map DMC registers %d\n", status);
         goto fail;
     }
 
@@ -212,7 +230,7 @@ static zx_status_t aml_canvas_bind(void* ctx, zx_device_t* parent) {
         .name = "aml-canvas",
         .ctx = canvas,
         .ops = &aml_canvas_device_protocol,
-        .proto_id = ZX_PROTOCOL_CANVAS,
+        .proto_id = ZX_PROTOCOL_AMLOGIC_CANVAS,
     };
 
     status = device_add(parent, &args, &canvas->zxdev);
@@ -223,8 +241,9 @@ static zx_status_t aml_canvas_bind(void* ctx, zx_device_t* parent) {
     canvas->canvas.ops = &canvas_ops;
     canvas->canvas.ctx = canvas;
 
-    // Set the canvas protocol on the platform bus
-    pbus_set_protocol(&pbus, ZX_PROTOCOL_CANVAS, &canvas->canvas);
+    // Register the canvas protocol with the platform bus
+    pbus_register_protocol(&pbus, ZX_PROTOCOL_AMLOGIC_CANVAS, &canvas->canvas, aml_canvas_proxy_cb,
+                           canvas);
     return ZX_OK;
 fail:
     aml_canvas_release(canvas);
@@ -232,8 +251,8 @@ fail:
 }
 
 static zx_driver_ops_t aml_canvas_driver_ops = {
-    .version    = DRIVER_OPS_VERSION,
-    .bind       = aml_canvas_bind,
+    .version = DRIVER_OPS_VERSION,
+    .bind = aml_canvas_bind,
 };
 
 ZIRCON_DRIVER_BEGIN(aml_canvas, aml_canvas_driver_ops, "zircon", "0.1", 4)

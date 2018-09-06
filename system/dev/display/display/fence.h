@@ -29,7 +29,7 @@ public:
 // imported/released (i.e. can be released while still in use).
 class Fence : public fbl::RefCounted<Fence>, public IdMappable<fbl::RefPtr<Fence>> {
 public:
-    Fence(FenceCallback* cb, async_t* async, uint64_t id, zx::event&& event);
+    Fence(FenceCallback* cb, async_dispatcher_t* dispatcher, uint64_t id, zx::event&& event);
     ~Fence();
 
     // Creates a new FenceReference when an event is imported.
@@ -43,12 +43,11 @@ public:
     // Gets the fence reference for the current import. An individual fence reference cannot
     // be used for multiple things simultaniously.
     fbl::RefPtr<FenceReference> GetReference();
-
-    void Reset();
 private:
     void Signal();
     void OnRefDied();
     zx_status_t OnRefArmed(fbl::RefPtr<FenceReference>&& ref);
+    void OnRefDisarmed(FenceReference* ref);
 
     // The fence reference corresponding to the current event import.
     fbl::RefPtr<FenceReference> cur_ref_;
@@ -57,12 +56,12 @@ private:
     // signaled, the signal will be cleared and the first fence ref will be marked ready.
     fbl::DoublyLinkedList<fbl::RefPtr<FenceReference>> armed_refs_;
 
-    void OnReady(async_t* async, async::WaitBase* self,
+    void OnReady(async_dispatcher_t* dispatcher, async::WaitBase* self,
                  zx_status_t status, const zx_packet_signal_t* signal);
     async::WaitMethod<Fence, &Fence::OnReady> ready_wait_{this};
 
     FenceCallback* cb_;
-    async_t* async_;
+    async_dispatcher_t* dispatcher_;
     zx::event event_;
     int ref_count_ = 0;
 
@@ -80,16 +79,15 @@ public:
     void Signal();
 
     zx_status_t StartReadyWait();
-    // Sets the fences which will be signaled immedately when this fence is ready.
-    void SetImmediateRelease(fbl::RefPtr<FenceReference>&& fence1,
-                             fbl::RefPtr<FenceReference>&& fence2);
+    void ResetReadyWait();
+    // Sets the fence which will be signaled immedately when this fence is ready.
+    void SetImmediateRelease(fbl::RefPtr<FenceReference>&& fence);
 
     void OnReady();
 private:
     fbl::RefPtr<Fence> fence_;
 
-    fbl::RefPtr<FenceReference> release_fence1_;
-    fbl::RefPtr<FenceReference> release_fence2_;
+    fbl::RefPtr<FenceReference> release_fence_;
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(FenceReference);
 };

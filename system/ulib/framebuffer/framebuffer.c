@@ -41,7 +41,7 @@ static bool in_single_buffer_mode;
 
 static zx_status_t set_layer_config(int32_t layer_id, uint32_t width, uint32_t height,
                                     zx_pixel_format_t format, int32_t type) {
-    fuchsia_display_ControllerSetLayerPrimaryConfigRequest layer_cfg_msg;
+    fuchsia_display_ControllerSetLayerPrimaryConfigRequest layer_cfg_msg = {};
     layer_cfg_msg.hdr.ordinal = fuchsia_display_ControllerSetLayerPrimaryConfigOrdinal;
     layer_cfg_msg.layer_id = layer_id;
     layer_cfg_msg.image_config.width = width;
@@ -79,31 +79,39 @@ zx_status_t fb_bind(bool single_buffer, const char** err_msg_out) {
         goto err;
     }
 
-    zx_handle_t observed;
-    uint32_t signals = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
-    if ((status = zx_object_wait_one(dc_handle,
-                                     signals, ZX_TIME_INFINITE, &observed)) != ZX_OK) {
-        *err_msg_out = "Failed waiting for display";
-        goto err;
-    }
-    if (observed & ZX_CHANNEL_PEER_CLOSED) {
-        *err_msg_out = "Display controller connection closed";
-        status = ZX_ERR_PEER_CLOSED;
-        goto err;
-    }
-
     uint8_t bytes[ZX_CHANNEL_MAX_MSG_BYTES];
     uint32_t actual_bytes, actual_handles;
-    if ((status = zx_channel_read(dc_handle, 0, bytes, NULL, ZX_CHANNEL_MAX_MSG_BYTES, 0,
-                                  &actual_bytes, &actual_handles)) != ZX_OK) {
-        *err_msg_out = "Reading display addded callback failed";
-        goto err;
-    }
+    bool has_display = false;
+    do {
+        zx_handle_t observed;
+        uint32_t signals = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
+        if ((status = zx_object_wait_one(dc_handle,
+                                         signals, ZX_TIME_INFINITE, &observed)) != ZX_OK) {
+            *err_msg_out = "Failed waiting for display";
+            goto err;
+        }
+        if (observed & ZX_CHANNEL_PEER_CLOSED) {
+            *err_msg_out = "Display controller connection closed";
+            status = ZX_ERR_PEER_CLOSED;
+            goto err;
+        }
 
-    if ((status = fidl_decode(&fuchsia_display_ControllerDisplaysChangedEventTable,
-                              bytes, actual_bytes, NULL, 0, err_msg_out)) != ZX_OK) {
-        goto err;
-    }
+        if ((status = zx_channel_read(dc_handle, 0, bytes, NULL, ZX_CHANNEL_MAX_MSG_BYTES, 0,
+                                      &actual_bytes, &actual_handles)) != ZX_OK
+                || actual_bytes < sizeof(fidl_message_header_t)) {
+            *err_msg_out = "Reading display addded callback failed";
+            goto err;
+        }
+
+        fidl_message_header_t* hdr = (fidl_message_header_t*) bytes;
+        if (hdr->ordinal == fuchsia_display_ControllerDisplaysChangedOrdinal) {
+            if ((status = fidl_decode(&fuchsia_display_ControllerDisplaysChangedEventTable,
+                                      bytes, actual_bytes, NULL, 0, err_msg_out)) != ZX_OK) {
+                goto err;
+            }
+            has_display = true;
+        }
+    } while (!has_display);
 
     // We're guaranteed that added contains at least one display, since we haven't
     // been notified of any displays to remove.
@@ -234,7 +242,7 @@ zx_status_t fb_bind(bool single_buffer, const char** err_msg_out) {
             goto err;
         }
 
-        if ((status = fb_present_image(image_id, -1, -1, -1)) != ZX_OK) {
+        if ((status = fb_present_image(image_id, INVALID_ID, INVALID_ID, INVALID_ID)) != ZX_OK) {
             *err_msg_out = "Failed to present single_buffer mode framebuffer";
             goto err;
         }
@@ -308,7 +316,7 @@ zx_status_t fb_import_image(zx_handle_t handle, uint32_t type, uint64_t *id_out)
         type_set = true;
     }
 
-    fuchsia_display_ControllerImportVmoImageRequest import_msg;
+    fuchsia_display_ControllerImportVmoImageRequest import_msg = {};
     import_msg.hdr.ordinal = fuchsia_display_ControllerImportVmoImageOrdinal;
     import_msg.hdr.txid = txid++;
     import_msg.image_config.height = height;
@@ -376,8 +384,13 @@ void fb_release_event(uint64_t id) {
     zx_channel_write(dc_handle, 0, &release_evt_msg, sizeof(release_evt_msg), NULL, 0);
 }
 
+zx_status_t fb_present_image2(uint64_t image_id, uint64_t wait_event_id, uint64_t signal_event_id) {
+    return fb_present_image(image_id, wait_event_id, INVALID_ID, signal_event_id);
+}
+
 zx_status_t fb_present_image(uint64_t image_id, uint64_t wait_event_id,
                              uint64_t present_event_id, uint64_t signal_event_id) {
+    ZX_ASSERT(present_event_id == INVALID_ID);
     ZX_ASSERT(inited && !in_single_buffer_mode);
     zx_status_t status;
 
@@ -387,7 +400,6 @@ zx_status_t fb_present_image(uint64_t image_id, uint64_t wait_event_id,
     set_msg.layer_id = layer_id;
     set_msg.image_id = image_id;
     set_msg.wait_event_id = wait_event_id;
-    set_msg.present_event_id = present_event_id;
     set_msg.signal_event_id = signal_event_id;
     if ((status = zx_channel_write(dc_handle, 0, &set_msg, sizeof(set_msg), NULL, 0)) != ZX_OK) {
         return status;
@@ -425,5 +437,67 @@ zx_status_t fb_alloc_image_buffer(zx_handle_t* vmo_out) {
         }
         return status;
     }
+    return ZX_OK;
+}
+
+zx_status_t fb_enable_vsync(bool enable) {
+    fuchsia_display_ControllerEnableVsyncRequest enable_vsync;
+    enable_vsync.hdr.ordinal = fuchsia_display_ControllerEnableVsyncOrdinal;
+    enable_vsync.enable = enable;
+    zx_status_t status;
+    if ((status = zx_channel_write(dc_handle, 0, &enable_vsync, sizeof(enable_vsync),
+                                   NULL, 0)) != ZX_OK) {
+        return status;
+    }
+    return ZX_OK;
+}
+
+zx_status_t fb_wait_for_vsync(zx_time_t* timestamp, uint64_t* image_id) {
+    zx_status_t status;
+
+    zx_handle_t observed;
+    uint32_t signals = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
+    if ((status = zx_object_wait_one(dc_handle, signals, ZX_TIME_INFINITE,
+                                     &observed)) != ZX_OK) {
+        return status;
+    }
+    if (observed & ZX_CHANNEL_PEER_CLOSED) {
+        return ZX_ERR_PEER_CLOSED;
+    }
+
+    uint8_t bytes[ZX_CHANNEL_MAX_MSG_BYTES];
+    uint32_t actual_bytes, actual_handles;
+    if ((status = zx_channel_read(dc_handle, 0, bytes, NULL, ZX_CHANNEL_MAX_MSG_BYTES, 0,
+                                  &actual_bytes, &actual_handles)) != ZX_OK) {
+        return ZX_ERR_STOP;
+    }
+
+    if (actual_bytes < sizeof(fidl_message_header_t)) {
+        return ZX_ERR_INTERNAL;
+    }
+
+    fidl_message_header_t* header = (fidl_message_header_t*) bytes;
+
+    switch (header->ordinal) {
+    case fuchsia_display_ControllerDisplaysChangedOrdinal:
+        return ZX_ERR_STOP;
+    case fuchsia_display_ControllerClientOwnershipChangeOrdinal:
+        return ZX_ERR_NEXT;
+    case fuchsia_display_ControllerVsyncOrdinal:
+        break;
+    default:
+        return ZX_ERR_STOP;
+    }
+
+    const char* err_msg;
+    if ((status = fidl_decode(&fuchsia_display_ControllerVsyncEventTable,
+                              bytes, actual_bytes, NULL, 0, &err_msg)) != ZX_OK) {
+        return ZX_ERR_STOP;
+    }
+
+    fuchsia_display_ControllerVsyncEvent* vsync =
+        (fuchsia_display_ControllerVsyncEvent*) bytes;
+    *timestamp = vsync->timestamp;
+    *image_id = vsync->images.count ? *((uint64_t*)vsync->images.data) : FB_INVALID_ID;
     return ZX_OK;
 }

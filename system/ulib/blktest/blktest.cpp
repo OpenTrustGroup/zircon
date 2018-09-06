@@ -22,12 +22,11 @@
 #include <fbl/array.h>
 #include <fbl/limits.h>
 #include <fbl/unique_ptr.h>
+#include <fbl/unique_fd.h>
 #include <pretty/hexdump.h>
 #include <unittest/unittest.h>
 
 #include <blktest/blktest.h>
-
-#define RAMCTL_PATH "/dev/misc/ramctl"
 
 namespace tests {
 
@@ -49,59 +48,67 @@ static int get_testdev(uint64_t* blk_size, uint64_t* blk_count) {
 }
 
 static bool blkdev_test_simple(void) {
-    uint64_t blk_size, blk_count;
-    uint8_t buf[PAGE_SIZE];
-    uint8_t out[PAGE_SIZE];
-
     BEGIN_TEST;
-    int fd = get_testdev(&blk_size, &blk_count);
-    memset(buf, 'a', sizeof(buf));
-    memset(out, 0, sizeof(out));
 
-    // Write a page and a half
-    ASSERT_EQ(write(fd, buf, sizeof(buf)), (ssize_t) sizeof(buf), "");
-    ASSERT_EQ(write(fd, buf, sizeof(buf) / 2), (ssize_t) (sizeof(buf) / 2), "");
+    uint64_t blk_size, blk_count;
+    fbl::unique_fd fd(get_testdev(&blk_size, &blk_count));
+    int64_t buffer_size = blk_size * 2;
+
+    fbl::AllocChecker checker;
+    fbl::unique_ptr<uint8_t[]> buf(new (&checker) uint8_t[buffer_size]);
+    ASSERT_TRUE(checker.check());
+    fbl::unique_ptr<uint8_t[]> out(new (&checker) uint8_t[buffer_size]);
+    ASSERT_TRUE(checker.check());
+
+    memset(buf.get(), 'a', sizeof(buf));
+    memset(out.get(), 0, sizeof(out));
+
+    // Write three blocks.
+    ASSERT_EQ(write(fd.get(), buf.get(), buffer_size), buffer_size);
+    ASSERT_EQ(write(fd.get(), buf.get(), buffer_size / 2), buffer_size / 2);
 
     // Seek to the start of the device and read the contents
-    ASSERT_EQ(lseek(fd, 0, SEEK_SET), 0, "");
-    ASSERT_EQ(read(fd, out, sizeof(out)), (ssize_t) sizeof(out), "");
-    ASSERT_EQ(memcmp(out, buf, sizeof(out)), 0, "");
+    ASSERT_EQ(lseek(fd.get(), 0, SEEK_SET), 0, "");
+    ASSERT_EQ(read(fd.get(), out.get(), buffer_size), buffer_size);
+    ASSERT_EQ(memcmp(out.get(), buf.get(), buffer_size), 0);
+    ASSERT_EQ(read(fd.get(), out.get(), buffer_size / 2), buffer_size / 2);
+    ASSERT_EQ(memcmp(out.get(), buf.get(), buffer_size / 2), 0);
 
-    close(fd);
     END_TEST;
 }
 
 bool blkdev_test_bad_requests(void) {
-    uint64_t blk_size, blk_count;
-    uint8_t buf[PAGE_SIZE];
-
     BEGIN_TEST;
-    int fd = get_testdev(&blk_size, &blk_count);
-    memset(buf, 'a', sizeof(buf));
-    ASSERT_LE(blk_size, PAGE_SIZE, "Block size is too big");
+
+    uint64_t blk_size, blk_count;
+    fbl::unique_fd fd(get_testdev(&blk_size, &blk_count));
+
+    fbl::AllocChecker checker;
+    fbl::unique_ptr<uint8_t[]> buf(new (&checker) uint8_t[blk_size * 4]);
+    ASSERT_TRUE(checker.check());
+    memset(buf.get(), 'a', blk_size * 4);
 
     // Read / write non-multiples of the block size
-    ASSERT_EQ(write(fd, buf, blk_size - 1), -1, "");
-    ASSERT_EQ(write(fd, buf, blk_size / 2), -1, "");
-    ASSERT_EQ(write(fd, buf, blk_size * 2 - 1), -1, "");
-    ASSERT_EQ(read(fd, buf, blk_size - 1), -1, "");
-    ASSERT_EQ(read(fd, buf, blk_size / 2), -1, "");
-    ASSERT_EQ(read(fd, buf, blk_size * 2 - 1), -1, "");
+    ASSERT_EQ(write(fd.get(), buf.get(), blk_size - 1), -1);
+    ASSERT_EQ(write(fd.get(), buf.get(), blk_size / 2), -1);
+    ASSERT_EQ(write(fd.get(), buf.get(), blk_size * 2 - 1), -1);
+    ASSERT_EQ(read(fd.get(), buf.get(), blk_size - 1), -1);
+    ASSERT_EQ(read(fd.get(), buf.get(), blk_size / 2), -1);
+    ASSERT_EQ(read(fd.get(), buf.get(), blk_size * 2 - 1), -1);
 
     // Read / write from unaligned offset
-    ASSERT_EQ(lseek(fd, 1, SEEK_SET), 1, "");
-    ASSERT_EQ(write(fd, buf, blk_size), -1, "");
-    ASSERT_EQ(errno, EINVAL, "");
-    ASSERT_EQ(read(fd, buf, blk_size), -1, "");
-    ASSERT_EQ(errno, EINVAL, "");
+    ASSERT_EQ(lseek(fd.get(), 1, SEEK_SET), 1);
+    ASSERT_EQ(write(fd.get(), buf.get(), blk_size), -1);
+    ASSERT_EQ(errno, EINVAL);
+    ASSERT_EQ(read(fd.get(), buf.get(), blk_size), -1);
+    ASSERT_EQ(errno, EINVAL);
 
     // Read / write from beyond end of device
     off_t dev_size = blk_size * blk_count;
-    ASSERT_EQ(lseek(fd, dev_size, SEEK_SET), dev_size, "");
-    ASSERT_EQ(write(fd, buf, blk_size), -1, "");
-    ASSERT_EQ(read(fd, buf, blk_size), -1, "");
+    ASSERT_EQ(lseek(fd.get(), dev_size, SEEK_SET), dev_size);
+    ASSERT_EQ(write(fd.get(), buf.get(), blk_size), -1);
+    ASSERT_EQ(read(fd.get(), buf.get(), blk_size), -1);
 
-    close(fd);
     END_TEST;
 }
 
@@ -164,13 +171,10 @@ bool blkdev_test_fifo_basic(void) {
     zx_handle_t fifo;
     ssize_t expected = sizeof(fifo);
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
     // Create an arbitrary VMO, fill it with some stuff
-    //uint64_t vmo_size = blk_size * 3;
-    uint64_t vmo_size = PAGE_SIZE * 3;
+    const uint64_t vmo_size = blk_size * 3;
     zx_handle_t vmo;
     ASSERT_EQ(zx_vmo_create(vmo_size, 0, &vmo), ZX_OK, "Failed to create VMO");
     fbl::AllocChecker ac;
@@ -191,14 +195,14 @@ bool blkdev_test_fifo_basic(void) {
     // Batch write the VMO to the blkdev
     // Split it into two requests, spread across the disk
     block_fifo_request_t requests[2];
-    requests[0].txnid      = txnid;
+    requests[0].group      = group;
     requests[0].vmoid      = vmoid;
     requests[0].opcode     = BLOCKIO_WRITE;
     requests[0].length     = 1;
     requests[0].vmo_offset = 0;
     requests[0].dev_offset = 0;
 
-    requests[1].txnid      = txnid;
+    requests[1].group      = group;
     requests[1].vmoid      = vmoid;
     requests[1].opcode     = BLOCKIO_WRITE;
     requests[1].length     = 2;
@@ -239,9 +243,7 @@ bool blkdev_test_fifo_whole_disk(void) {
     zx_handle_t fifo;
     ssize_t expected = sizeof(fifo);
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
     // Create an arbitrary VMO, fill it with some stuff
     uint64_t vmo_size = blk_size * blk_count;
@@ -264,10 +266,10 @@ bool blkdev_test_fifo_whole_disk(void) {
 
     // Batch write the VMO to the blkdev
     block_fifo_request_t request;
-    request.txnid      = txnid;
+    request.group      = group;
     request.vmoid      = vmoid;
     request.opcode     = BLOCKIO_WRITE;
-    request.length     = blk_count;
+    request.length     = static_cast<uint32_t>(blk_count);
     request.vmo_offset = 0;
     request.dev_offset = 0;
 
@@ -329,14 +331,14 @@ bool create_vmo_helper(int fd, test_vmo_object_t* obj, size_t kBlockSize) {
 // i = 0 will write vmo block 0, 1, 2, 3... to dev block 0, 10, 20, 30...
 // i = 1 will write vmo block 0, 1, 2, 3... to dev block 1, 11, 21, 31...
 bool write_striped_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, size_t i, size_t objs,
-                              txnid_t txnid, size_t kBlockSize) {
+                              groupid_t group, size_t kBlockSize) {
     // Make a separate request for each block
     size_t blocks = obj->vmo_size / kBlockSize;
     fbl::AllocChecker ac;
     fbl::Array<block_fifo_request_t> requests(new (&ac) block_fifo_request_t[blocks], blocks);
     ASSERT_TRUE(ac.check(), "");
     for (size_t b = 0; b < blocks; b++) {
-        requests[b].txnid      = txnid;
+        requests[b].group      = group;
         requests[b].vmoid      = obj->vmoid;
         requests[b].opcode     = BLOCKIO_WRITE;
         requests[b].length     = 1;
@@ -350,7 +352,7 @@ bool write_striped_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, siz
 
 // Verifies the result from "write_striped_vmo_helper"
 bool read_striped_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, size_t i, size_t objs,
-                             txnid_t txnid, size_t kBlockSize) {
+                             groupid_t group, size_t kBlockSize) {
     // First, empty out the VMO
     fbl::AllocChecker ac;
     fbl::unique_ptr<uint8_t[]> out(new (&ac) uint8_t[obj->vmo_size]());
@@ -363,7 +365,7 @@ bool read_striped_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, size
     fbl::Array<block_fifo_request_t> requests(new (&ac) block_fifo_request_t[blocks], blocks);
     ASSERT_TRUE(ac.check(), "");
     for (size_t b = 0; b < blocks; b++) {
-        requests[b].txnid      = txnid;
+        requests[b].group      = group;
         requests[b].vmoid      = obj->vmoid;
         requests[b].opcode     = BLOCKIO_READ;
         requests[b].length     = 1;
@@ -383,9 +385,9 @@ bool read_striped_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, size
 }
 
 // Tears down an object created by "create_vmo_helper".
-bool close_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, txnid_t txnid) {
+bool close_vmo_helper(fifo_client_t* client, test_vmo_object_t* obj, groupid_t group) {
     block_fifo_request_t request;
-    request.txnid = txnid;
+    request.group = group;
     request.vmoid = obj->vmoid;
     request.opcode = BLOCKIO_CLOSE_VMO;
     ASSERT_EQ(block_fifo_txn(client, &request, 1), ZX_OK, "");
@@ -401,9 +403,7 @@ bool blkdev_test_fifo_multiple_vmo(void) {
     zx_handle_t fifo;
     ssize_t expected = sizeof(fifo);
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
-    txnid_t txnid;
-    expected = sizeof(txnid);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
     fifo_client_t* client;
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
 
@@ -416,15 +416,15 @@ bool blkdev_test_fifo_multiple_vmo(void) {
     }
 
     for (size_t i = 0; i < objs.size(); i++) {
-        ASSERT_TRUE(write_striped_vmo_helper(client, &objs[i], i, objs.size(), txnid, blk_size), "");
+        ASSERT_TRUE(write_striped_vmo_helper(client, &objs[i], i, objs.size(), group, blk_size), "");
     }
 
     for (size_t i = 0; i < objs.size(); i++) {
-        ASSERT_TRUE(read_striped_vmo_helper(client, &objs[i], i, objs.size(), txnid, blk_size), "");
+        ASSERT_TRUE(read_striped_vmo_helper(client, &objs[i], i, objs.size(), group, blk_size), "");
     }
 
     for (size_t i = 0; i < objs.size(); i++) {
-        ASSERT_TRUE(close_vmo_helper(client, &objs[i], txnid), "");
+        ASSERT_TRUE(close_vmo_helper(client, &objs[i], group), "");
     }
 
     block_fifo_release_client(client);
@@ -439,6 +439,7 @@ typedef struct {
     size_t objs;
     int fd;
     fifo_client_t* client;
+    groupid_t group;
     size_t kBlockSize;
 } test_thread_arg_t;
 
@@ -449,17 +450,13 @@ int fifo_vmo_thread(void* arg) {
     size_t objs = fifoarg->objs;
     int fd = fifoarg->fd;
     fifo_client_t* client = fifoarg->client;
+    groupid_t group = fifoarg->group;
     size_t kBlockSize = fifoarg->kBlockSize;
 
-    // Each thread should create it's own txnid
-    txnid_t txnid;
-    ssize_t expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
-
     ASSERT_TRUE(create_vmo_helper(fd, obj, kBlockSize), "");
-    ASSERT_TRUE(write_striped_vmo_helper(client, obj, i, objs, txnid, kBlockSize), "");
-    ASSERT_TRUE(read_striped_vmo_helper(client, obj, i, objs, txnid, kBlockSize), "");
-    ASSERT_TRUE(close_vmo_helper(client, obj, txnid), "");
+    ASSERT_TRUE(write_striped_vmo_helper(client, obj, i, objs, group, kBlockSize), "");
+    ASSERT_TRUE(read_striped_vmo_helper(client, obj, i, objs, group, kBlockSize), "");
+    ASSERT_TRUE(close_vmo_helper(client, obj, group), "");
     return 0;
 }
 
@@ -475,7 +472,7 @@ bool blkdev_test_fifo_multiple_vmo_multithreaded(void) {
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
 
     // Create multiple VMOs
-    size_t num_threads = 10;
+    size_t num_threads = MAX_TXN_GROUP_COUNT;
     fbl::AllocChecker ac;
     fbl::Array<test_vmo_object_t> objs(new (&ac) test_vmo_object_t[num_threads](), num_threads);
     ASSERT_TRUE(ac.check(), "");
@@ -495,6 +492,7 @@ bool blkdev_test_fifo_multiple_vmo_multithreaded(void) {
         thread_args[i].objs = objs.size();
         thread_args[i].fd = fd;
         thread_args[i].client = client;
+        thread_args[i].group = static_cast<groupid_t>(i);
         thread_args[i].kBlockSize = kBlockSize;
         ASSERT_EQ(thrd_create(&threads[i], fifo_vmo_thread, &thread_args[i]),
                   thrd_success, "");
@@ -526,9 +524,7 @@ bool blkdev_test_fifo_unclean_shutdown(void) {
               "Expected fifo to already be bound");
     fifo_client_t* client;
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
     // Create multiple VMOs
     fbl::AllocChecker ac;
@@ -543,7 +539,7 @@ bool blkdev_test_fifo_unclean_shutdown(void) {
 
     // Attempting to batch any operations to the fifo should fail
     block_fifo_request_t request;
-    request.txnid = txnid;
+    request.group = group;
     request.vmoid = objs[0].vmoid;
     request.opcode = BLOCKIO_CLOSE_VMO;
     ASSERT_NE(block_fifo_txn(client, &request, 1), ZX_OK,
@@ -559,20 +555,18 @@ bool blkdev_test_fifo_unclean_shutdown(void) {
     expected = sizeof(fifo);
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    expected = sizeof(txnid);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
 
     for (size_t i = 0; i < objs.size(); i++) {
         ASSERT_TRUE(create_vmo_helper(fd, &objs[i], kBlockSize), "");
     }
     for (size_t i = 0; i < objs.size(); i++) {
-        ASSERT_TRUE(write_striped_vmo_helper(client, &objs[i], i, objs.size(), txnid, kBlockSize), "");
+        ASSERT_TRUE(write_striped_vmo_helper(client, &objs[i], i, objs.size(), group, kBlockSize), "");
     }
     for (size_t i = 0; i < objs.size(); i++) {
-        ASSERT_TRUE(read_striped_vmo_helper(client, &objs[i], i, objs.size(), txnid, kBlockSize), "");
+        ASSERT_TRUE(read_striped_vmo_helper(client, &objs[i], i, objs.size(), group, kBlockSize), "");
     }
     for (size_t i = 0; i < objs.size(); i++) {
-        ASSERT_TRUE(close_vmo_helper(client, &objs[i], txnid), "");
+        ASSERT_TRUE(close_vmo_helper(client, &objs[i], group), "");
     }
 
     block_fifo_release_client(client);
@@ -594,9 +588,7 @@ bool blkdev_test_fifo_bad_client_vmoid(void) {
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
     fifo_client_t* client;
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
     // Create a vmo
     test_vmo_object_t obj;
@@ -604,48 +596,13 @@ bool blkdev_test_fifo_bad_client_vmoid(void) {
 
     // Bad request: Writing to the wrong vmoid
     block_fifo_request_t request;
-    request.txnid      = txnid;
+    request.group      = group;
     request.vmoid      = static_cast<vmoid_t>(obj.vmoid + 5);
     request.opcode     = BLOCKIO_WRITE;
     request.length     = 1;
     request.vmo_offset = 0;
     request.dev_offset = 0;
     ASSERT_EQ(block_fifo_txn(client, &request, 1), ZX_ERR_IO, "Expected IO error with bad vmoid");
-
-    ASSERT_EQ(ioctl_block_free_txn(fd, &txnid), ZX_OK, "Failed to free txn");
-    block_fifo_release_client(client);
-    ASSERT_EQ(ioctl_block_fifo_close(fd), ZX_OK, "Failed to close fifo");
-    close(fd);
-    END_TEST;
-}
-
-bool blkdev_test_fifo_bad_client_txnid(void) {
-    // Try to flex the server's error handling by sending 'malicious' client requests.
-    BEGIN_TEST;
-    // Set up the blkdev
-    uint64_t kBlockSize, blk_count;
-    int fd = get_testdev(&kBlockSize, &blk_count);
-
-    // Create a connection to the blkdev
-    zx_handle_t fifo;
-    ssize_t expected = sizeof(fifo);
-    ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
-    fifo_client_t* client;
-    ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-
-    // Create a vmo
-    test_vmo_object_t obj;
-    ASSERT_TRUE(create_vmo_helper(fd, &obj, kBlockSize), "");
-
-    // Bad request: Invalid txnid (not allocated)
-    block_fifo_request_t request;
-    request.txnid      = static_cast<txnid_t>(5);
-    request.vmoid      = static_cast<vmoid_t>(obj.vmoid);
-    request.opcode     = BLOCKIO_WRITE;
-    request.length     = 1;
-    request.vmo_offset = 0;
-    request.dev_offset = 0;
-    ASSERT_EQ(block_fifo_txn(client, &request, 1), ZX_ERR_IO, "Expected IO error with bad txnid");
 
     block_fifo_release_client(client);
     ASSERT_EQ(ioctl_block_fifo_close(fd), ZX_OK, "Failed to close fifo");
@@ -666,9 +623,7 @@ bool blkdev_test_fifo_bad_client_unaligned_request(void) {
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
     fifo_client_t* client;
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
     // Create a vmo of at least size "kBlockSize * 2", since we'll
     // be reading "kBlockSize" bytes from an offset below, and we want it
@@ -677,7 +632,7 @@ bool blkdev_test_fifo_bad_client_unaligned_request(void) {
     ASSERT_TRUE(create_vmo_helper(fd, &obj, kBlockSize * 2), "");
 
     block_fifo_request_t request;
-    request.txnid      = txnid;
+    request.group      = group;
     request.vmoid      = static_cast<vmoid_t>(obj.vmoid);
     request.opcode     = BLOCKIO_WRITE;
 
@@ -706,9 +661,7 @@ bool blkdev_test_fifo_bad_client_overflow(void) {
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
     fifo_client_t* client;
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
     // Create a vmo of at least size "kBlockSize * 2", since we'll
     // be reading "kBlockSize" bytes from an offset below, and we want it
@@ -717,7 +670,7 @@ bool blkdev_test_fifo_bad_client_overflow(void) {
     ASSERT_TRUE(create_vmo_helper(fd, &obj, kBlockSize * 2), "");
 
     block_fifo_request_t request;
-    request.txnid      = txnid;
+    request.group      = group;
     request.vmoid      = static_cast<vmoid_t>(obj.vmoid);
     request.opcode     = BLOCKIO_WRITE;
 
@@ -770,16 +723,13 @@ bool blkdev_test_fifo_bad_client_bad_vmo(void) {
     ASSERT_EQ(ioctl_block_get_fifos(fd, &fifo), expected, "Failed to get FIFO");
     fifo_client_t* client;
     ASSERT_EQ(block_fifo_create_client(fifo, &client), ZX_OK, "");
-    txnid_t txnid;
-    expected = sizeof(txnid_t);
-    ASSERT_EQ(ioctl_block_alloc_txn(fd, &txnid), expected, "Failed to allocate txn");
+    groupid_t group = 0;
 
-    ASSERT_TRUE(PAGE_SIZE % kBlockSize == 0);
-    ASSERT_TRUE(PAGE_SIZE >= kBlockSize);
-
-    // Create a vmo of one page.
+    // Create a vmo of one block.
+    //
+    // The underlying VMO may be rounded up to the nearest PAGE_SIZE.
     test_vmo_object_t obj;
-    obj.vmo_size = PAGE_SIZE;
+    obj.vmo_size = kBlockSize;
     ASSERT_EQ(zx_vmo_create(obj.vmo_size, 0, &obj.vmo), ZX_OK,
               "Failed to create vmo");
     fbl::AllocChecker ac;
@@ -795,12 +745,16 @@ bool blkdev_test_fifo_bad_client_bad_vmo(void) {
     ASSERT_EQ(ioctl_block_attach_vmo(fd, &xfer_vmo, &obj.vmoid), expected,
               "Failed to attach vmo");
 
-    // Send a request to write to write more than 1 page -- even though that's larger than the VMO
+    // Send a request to write to write multiple blocks -- enough that
+    // the request is larger than the VMO.
+    const uint64_t length = 1 + (fbl::round_up(obj.vmo_size,
+                                               static_cast<uint64_t>(PAGE_SIZE))
+                                 / kBlockSize);
     block_fifo_request_t request;
-    request.txnid      = txnid;
+    request.group      = group;
     request.vmoid      = static_cast<vmoid_t>(obj.vmoid);
     request.opcode     = BLOCKIO_WRITE;
-    request.length     = PAGE_SIZE / kBlockSize + 1;
+    request.length     = static_cast<uint32_t>(length);
     request.vmo_offset = 0;
     request.dev_offset = 0;
     ASSERT_EQ(block_fifo_txn(client, &request, 1), ZX_ERR_OUT_OF_RANGE, "");
@@ -828,7 +782,6 @@ RUN_TEST(blkdev_test_fifo_multiple_vmo_multithreaded)
 // TODO(smklein): Test ops across different vmos
 RUN_TEST(blkdev_test_fifo_unclean_shutdown)
 RUN_TEST(blkdev_test_fifo_bad_client_vmoid)
-RUN_TEST(blkdev_test_fifo_bad_client_txnid)
 RUN_TEST(blkdev_test_fifo_bad_client_unaligned_request)
 RUN_TEST(blkdev_test_fifo_bad_client_overflow)
 RUN_TEST(blkdev_test_fifo_bad_client_bad_vmo)

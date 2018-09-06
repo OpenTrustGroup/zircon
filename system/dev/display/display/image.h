@@ -34,14 +34,12 @@ public:
     // Marks the image as not in use. Should only be called before PrepareFences.
     void DiscardAcquire();
     // Called to set this image's fences and prepare the image to be displayed.
-    void PrepareFences(fbl::RefPtr<FenceReference>&& wait, fbl::RefPtr<FenceReference>&& present,
+    void PrepareFences(fbl::RefPtr<FenceReference>&& wait,
                        fbl::RefPtr<FenceReference>&& signal);
     // Called to immedately retire the image if StartPresent hasn't been called yet.
     void EarlyRetire();
     // Called when the image is passed to the display hardware.
     void StartPresent();
-    // Called on vsync when the image is presented.
-    void OnPresent();
     // Called when another image is presented after this one.
     void StartRetire();
     // Called on vsync after StartRetire has been called.
@@ -50,9 +48,20 @@ public:
     // Called on all waiting images when any fence fires.
     void OnFenceReady(FenceReference* fence);
 
+    // Called to reset fences when client releases the image. Releasing fences
+    // is independent of the rest of the image lifecycle.
+    void ResetFences();
+
     bool IsReady() const { return wait_fence_ == nullptr; }
 
     bool HasSameConfig(const image_t& config) const {
+        for (uint32_t i = 0; i < countof(info_.planes); i++) {
+            if (info_.planes[i].bytes_per_row != config.planes[i].bytes_per_row ||
+                info_.planes[i].byte_offset != config.planes[i].byte_offset) {
+                return false;
+            }
+        }
+
         return info_.width == config.width
                 && info_.height == config.height
                 && info_.pixel_format == config.pixel_format
@@ -77,7 +86,6 @@ private:
     uint32_t z_index_;
 
     fbl::RefPtr<FenceReference> wait_fence_ = nullptr;
-    fbl::RefPtr<FenceReference> present_fence_ = nullptr;
     fbl::RefPtr<FenceReference> signal_fence_ = nullptr;
     // See comment in ::OnRetire for why this is necessary
     fbl::RefPtr<FenceReference> armed_signal_fence_ = nullptr;

@@ -64,7 +64,7 @@ zx_status_t AcpiCrOsEcMotionDevice::ConsumeFifoLocked() {
         if (data.sensor_num >= sensors_.size() || !sensors_[data.sensor_num].valid) {
             continue;
         }
-        if (data.flags != 0) {
+        if (data.flags & (MOTIONSENSE_SENSOR_FLAG_TIMESTAMP | MOTIONSENSE_SENSOR_FLAG_FLUSH)) {
             // This is a special packet, not a report.
             continue;
         }
@@ -230,7 +230,6 @@ zx_status_t AcpiCrOsEcMotionDevice::HidBusGetProtocol(uint8_t* protocol) {
 zx_status_t AcpiCrOsEcMotionDevice::HidBusSetProtocol(uint8_t protocol) {
     return ZX_OK;
 }
-
 
 void AcpiCrOsEcMotionDevice::DdkRelease() {
     zxlogf(INFO, "acpi-cros-ec-motion: release\n");
@@ -599,13 +598,15 @@ constexpr uint8_t kHidDescriptorGroupEpilogue[] = {
 #define SENSOR_PREAMBLE HID_REPORT_ID(0), HID_PHYSICAL_MIN32(0), HID_PHYSICAL_MAX32(0)
 
 // Patch a descriptor that begins with SENSOR_PREAMBLE
-void PatchDescriptor(uint8_t* desc, uint8_t report_id, int32_t phys_min, int32_t phys_max) {
+void PatchDescriptor(uint8_t* desc, size_t len, uint8_t report_id, int32_t phys_min,
+                     int32_t phys_max) {
     const uint8_t data[] = {
         HID_REPORT_ID(report_id),
         HID_PHYSICAL_MIN32(phys_min),
         HID_PHYSICAL_MAX32(phys_max),
     };
     static_assert(sizeof(data) == 12, "");
+    ZX_DEBUG_ASSERT(len >= sizeof(data));
     memcpy(desc, data, sizeof(data));
 }
 
@@ -743,8 +744,10 @@ zx_status_t AcpiCrOsEcMotionDevice::BuildHidDescriptor() {
             continue;
         }
 
-        loc_group_present[sensor.loc] = true;
-        total_size += kHidDescSensorBlock[sensor.type].len;
+        if (kHidDescSensorBlock[sensor.type].len > 0) {
+            loc_group_present[sensor.loc] = true;
+            total_size += kHidDescSensorBlock[sensor.type].len;
+        }
     }
 
     for (size_t i = 0; i < fbl::count_of(loc_group_present); ++i) {
@@ -779,12 +782,15 @@ zx_status_t AcpiCrOsEcMotionDevice::BuildHidDescriptor() {
 
             const HidDescSensorBlock& ref_block = kHidDescSensorBlock[sensor.type];
 
-            memcpy(p, ref_block.block, ref_block.len);
-            PatchDescriptor(p, i, static_cast<int32_t>(sensor.phys_min),
-                            static_cast<int32_t>(sensor.phys_max));
+            if (ref_block.len > 0) {
+                memcpy(p, ref_block.block, ref_block.len);
+                PatchDescriptor(p, len, i,
+                                static_cast<int32_t>(sensor.phys_min),
+                                static_cast<int32_t>(sensor.phys_max));
 
-            p += ref_block.len;
-            len -= ref_block.len;
+                p += ref_block.len;
+                len -= ref_block.len;
+            }
         }
 
         memcpy(p, kHidDescriptorGroupEpilogue, sizeof(kHidDescriptorGroupEpilogue));

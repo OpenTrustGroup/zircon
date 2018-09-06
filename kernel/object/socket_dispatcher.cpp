@@ -24,8 +24,6 @@
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_lock.h>
 
-using fbl::AutoLock;
-
 #define LOCAL_TRACE 0
 
 // static
@@ -129,7 +127,7 @@ zx_status_t SocketDispatcher::Shutdown(uint32_t how) TA_NO_THREAD_SAFETY_ANALYSI
     const bool shutdown_read = how & ZX_SOCKET_SHUTDOWN_READ;
     const bool shutdown_write = how & ZX_SOCKET_SHUTDOWN_WRITE;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     zx_signals_t signals = GetSignalsStateLocked();
     // If we're already shut down in the requested way, return immediately.
@@ -194,7 +192,7 @@ zx_status_t SocketDispatcher::Write(user_in_ptr<const void> src, size_t len,
 
     LTRACE_ENTRY;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     if (!peer_)
         return ZX_ERR_PEER_CLOSED;
@@ -225,7 +223,7 @@ zx_status_t SocketDispatcher::WriteControl(user_in_ptr<const void> src, size_t l
     if (len > ControlMsg::kSize)
         return ZX_ERR_OUT_OF_RANGE;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (!peer_)
         return ZX_ERR_PEER_CLOSED;
 
@@ -288,7 +286,7 @@ zx_status_t SocketDispatcher::Read(user_out_ptr<void> dst, size_t len,
 
     LTRACE_ENTRY;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     // Just query for bytes outstanding.
     if (!dst && len == 0) {
@@ -335,7 +333,7 @@ zx_status_t SocketDispatcher::ReadControl(user_out_ptr<void> dst, size_t len,
         return ZX_ERR_BAD_STATE;
     }
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     if (control_msg_len_ == 0)
         return ZX_ERR_SHOULD_WAIT;
@@ -357,14 +355,14 @@ zx_status_t SocketDispatcher::CheckShareable(SocketDispatcher* to_send) {
     // We disallow sharing of sockets that support sharing themselves
     // and disallow sharing either end of the socket we're going to
     // share on, thus preventing loops, etc.
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if ((to_send->flags_ & ZX_SOCKET_HAS_ACCEPT) ||
         (to_send == this) || (to_send == peer_.get()))
         return ZX_ERR_BAD_STATE;
     return ZX_OK;
 }
 
-zx_status_t SocketDispatcher::Share(Handle* h) TA_NO_THREAD_SAFETY_ANALYSIS {
+zx_status_t SocketDispatcher::Share(HandleOwner h) TA_NO_THREAD_SAFETY_ANALYSIS {
     canary_.Assert();
 
     LTRACE_ENTRY;
@@ -372,20 +370,20 @@ zx_status_t SocketDispatcher::Share(Handle* h) TA_NO_THREAD_SAFETY_ANALYSIS {
     if (!(flags_ & ZX_SOCKET_HAS_ACCEPT))
         return ZX_ERR_NOT_SUPPORTED;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     if (!peer_)
         return ZX_ERR_PEER_CLOSED;
 
-    return peer_->ShareSelfLocked(h);
+    return peer_->ShareSelfLocked(fbl::move(h));
 }
 
-zx_status_t SocketDispatcher::ShareSelfLocked(Handle* h) TA_NO_THREAD_SAFETY_ANALYSIS {
+zx_status_t SocketDispatcher::ShareSelfLocked(HandleOwner h) TA_NO_THREAD_SAFETY_ANALYSIS {
     canary_.Assert();
 
     if (accept_queue_)
         return ZX_ERR_SHOULD_WAIT;
 
-    accept_queue_.reset(h);
+    accept_queue_ = fbl::move(h);
 
     UpdateStateLocked(0, ZX_SOCKET_ACCEPT);
     if (peer_)
@@ -400,7 +398,7 @@ zx_status_t SocketDispatcher::Accept(HandleOwner* h) TA_NO_THREAD_SAFETY_ANALYSI
     if (!(flags_ & ZX_SOCKET_HAS_ACCEPT))
         return ZX_ERR_NOT_SUPPORTED;
 
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     if (!accept_queue_)
         return ZX_ERR_SHOULD_WAIT;
@@ -416,27 +414,29 @@ zx_status_t SocketDispatcher::Accept(HandleOwner* h) TA_NO_THREAD_SAFETY_ANALYSI
 
 size_t SocketDispatcher::ReceiveBufferMax() const {
     canary_.Assert();
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return data_.max_size();
 }
 
 size_t SocketDispatcher::ReceiveBufferSize() const {
     canary_.Assert();
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return data_.size();
 }
 
-// NOTE(abdulla): To access peer_ we must take get_lock(), to access peer_->data
-// we must take peer_->get_lock(). These two locks are aliases of one another,
-// however thread-safety analysis can not see that, so we must disable analysis.
+// NOTE(abdulla): peer_ is protected by get_lock() while peer_->data_
+// is protected by peer_->get_lock(). These two locks are aliases of
+// one another so must only acquire one of them. Thread-safety
+// analysis does not know they are the same lock so we must disable
+// analysis.
 size_t SocketDispatcher::TransmitBufferMax() const TA_NO_THREAD_SAFETY_ANALYSIS {
     canary_.Assert();
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return peer_ ? peer_->data_.max_size() : 0;
 }
 
 size_t SocketDispatcher::TransmitBufferSize() const TA_NO_THREAD_SAFETY_ANALYSIS {
     canary_.Assert();
-    AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
     return peer_ ? peer_->data_.size() : 0;
 }

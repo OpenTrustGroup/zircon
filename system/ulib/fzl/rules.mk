@@ -9,9 +9,17 @@ MODULE := $(LOCAL_DIR)
 MODULE_TYPE := userlib
 
 MODULE_SRCS += \
+    $(LOCAL_DIR)/mapped-vmo.cpp \
+    $(LOCAL_DIR)/memory-probe.cpp \
+    $(LOCAL_DIR)/pinned-vmo.cpp \
     $(LOCAL_DIR)/time.cpp \
+    $(LOCAL_DIR)/vmar-manager.cpp \
+    $(LOCAL_DIR)/vmo-mapper.cpp \
+    $(LOCAL_DIR)/vmo-pool.cpp \
 
-MODULE_LIBS := system/ulib/zx
+MODULE_STATIC_LIBS := \
+    system/ulib/fbl \
+    system/ulib/zx \
 
 MODULE_PACKAGE := src
 

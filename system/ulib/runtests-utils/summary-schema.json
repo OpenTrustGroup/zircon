@@ -14,10 +14,9 @@
             "properties": {
                 "syslog_file": { "type": "string" }
             },
-            "required": [ "syslog_file" ]
         }
     },
-    "required": [ "tests", "outputs"],
+    "required": ["tests"],
 
     "definitions": {
         "test": {
@@ -28,6 +27,20 @@
                 "result": {
                     "type": "string",
                     "enum": ["PASS", "FAIL"]
+                },
+                "koid": { "type": "integer" },
+                "data_sinks": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "dump_file": { "type": "string" }
+                            },
+                            "required": [ "dump_file" ]
+                        }
+                    }
                 }
             },
             "required": [ "name", "output_file", "result" ]

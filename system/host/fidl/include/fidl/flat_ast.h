@@ -150,6 +150,10 @@ struct Decl {
 
     bool HasAttribute(fidl::StringView name) const;
     fidl::StringView GetAttribute(fidl::StringView name) const;
+    std::string GetName() const;
+
+    bool compiling = false;
+    bool compiled = false;
 };
 
 struct Type {
@@ -265,7 +269,6 @@ struct PrimitiveType : public Type {
             return 2u;
 
         case types::PrimitiveSubtype::kFloat32:
-        case types::PrimitiveSubtype::kStatus:
         case types::PrimitiveSubtype::kInt32:
         case types::PrimitiveSubtype::kUint32:
             return 4u;
@@ -341,6 +344,14 @@ inline bool Type::operator<(const Type& other) const {
     }
 }
 
+struct Using {
+    Using(Name name, std::unique_ptr<PrimitiveType> type)
+        : name(std::move(name)), type(std::move(type)) {}
+
+    const Name name;
+    const std::unique_ptr<PrimitiveType> type;
+};
+
 struct Const : public Decl {
     Const(std::unique_ptr<raw::AttributeList> attributes, Name name, std::unique_ptr<Type> type,
           std::unique_ptr<Constant> value)
@@ -352,10 +363,11 @@ struct Const : public Decl {
 
 struct Enum : public Decl {
     struct Member {
-        Member(SourceLocation name, std::unique_ptr<Constant> value)
-            : name(name), value(std::move(value)) {}
+        Member(SourceLocation name, std::unique_ptr<Constant> value, std::unique_ptr<raw::AttributeList> attributes)
+            : name(name), value(std::move(value)), attributes(std::move(attributes)) {}
         SourceLocation name;
         std::unique_ptr<Constant> value;
+        std::unique_ptr<raw::AttributeList> attributes;
     };
 
     Enum(std::unique_ptr<raw::AttributeList> attributes, Name name, types::PrimitiveSubtype type,
@@ -391,13 +403,15 @@ struct Interface : public Decl {
         Method(Method&&) = default;
         Method& operator=(Method&&) = default;
 
-        Method(Ordinal ordinal, SourceLocation name, std::unique_ptr<Message> maybe_request,
+        Method(std::unique_ptr<raw::AttributeList> attributes,
+               Ordinal ordinal, SourceLocation name, std::unique_ptr<Message> maybe_request,
                std::unique_ptr<Message> maybe_response)
-            : ordinal(std::move(ordinal)), name(std::move(name)),
+            : attributes(std::move(attributes)), ordinal(std::move(ordinal)), name(std::move(name)),
               maybe_request(std::move(maybe_request)), maybe_response(std::move(maybe_response)) {
             assert(this->maybe_request != nullptr || this->maybe_response != nullptr);
         }
 
+        std::unique_ptr<raw::AttributeList> attributes;
         Ordinal ordinal;
         SourceLocation name;
         std::unique_ptr<Message> maybe_request;
@@ -405,22 +419,29 @@ struct Interface : public Decl {
     };
 
     Interface(std::unique_ptr<raw::AttributeList> attributes, Name name,
-              std::vector<Method> methods)
+              std::vector<Name> superinterfaces, std::vector<Method> methods)
         : Decl(Kind::kInterface, std::move(attributes), std::move(name)),
-          methods(std::move(methods)) {}
+          superinterfaces(std::move(superinterfaces)), methods(std::move(methods)) {}
 
+    std::vector<Name> superinterfaces;
     std::vector<Method> methods;
+    // Pointers here are set after superinterfaces are compiled, and
+    // are owned by the correspending superinterface.
+    std::vector<const Method*> all_methods;
 };
 
 struct Struct : public Decl {
     struct Member {
         Member(std::unique_ptr<Type> type, SourceLocation name,
-               std::unique_ptr<Constant> maybe_default_value)
+               std::unique_ptr<Constant> maybe_default_value,
+               std::unique_ptr<raw::AttributeList> attributes)
             : type(std::move(type)), name(std::move(name)),
-              maybe_default_value(std::move(maybe_default_value)) {}
+              maybe_default_value(std::move(maybe_default_value)),
+              attributes(std::move(attributes)) {}
         std::unique_ptr<Type> type;
         SourceLocation name;
         std::unique_ptr<Constant> maybe_default_value;
+        std::unique_ptr<raw::AttributeList> attributes;
         FieldShape fieldshape;
     };
 
@@ -430,14 +451,16 @@ struct Struct : public Decl {
 
     std::vector<Member> members;
     TypeShape typeshape;
+    bool recursive = false;
 };
 
 struct Union : public Decl {
     struct Member {
-        Member(std::unique_ptr<Type> type, SourceLocation name)
-            : type(std::move(type)), name(std::move(name)) {}
+        Member(std::unique_ptr<Type> type, SourceLocation name, std::unique_ptr<raw::AttributeList> attributes)
+            : type(std::move(type)), name(std::move(name)), attributes(std::move(attributes)) {}
         std::unique_ptr<Type> type;
         SourceLocation name;
+        std::unique_ptr<raw::AttributeList> attributes;
         FieldShape fieldshape;
     };
 
@@ -449,17 +472,19 @@ struct Union : public Decl {
     // The offset of each of the union members is the same, so store
     // it here as well.
     FieldShape membershape;
+    bool recursive = false;
 };
 
 class Library {
 public:
-    Library(const std::map<std::vector<StringView>, std::unique_ptr<Library>>* dependencies,
+    Library(const std::map<std::vector<StringView>, std::unique_ptr<Library>>* all_libraries,
             ErrorReporter* error_reporter);
 
     bool ConsumeFile(std::unique_ptr<raw::File> file);
     bool Compile();
 
     const std::vector<StringView>& name() const { return library_name_; }
+    const std::vector<std::string>& errors() const { return error_reporter_->errors(); }
 
 private:
     bool Fail(StringView message);
@@ -468,9 +493,16 @@ private:
     bool Fail(const Decl& decl, StringView message) { return Fail(decl.name, message); }
 
     bool CompileCompoundIdentifier(const raw::CompoundIdentifier* compound_identifier,
-                                   SourceLocation location, Name* name_out);
+                                   SourceLocation location, Name* out_name);
 
     bool ParseSize(std::unique_ptr<Constant> constant, Size* out_size);
+
+    bool RegisterDependentLibrary(Library* library,
+                                  const std::unique_ptr<raw::Identifier>& maybe_alias,
+                                  StringView filename);
+    bool InsertDependentLibraryByName(const std::vector<StringView>& library_name,
+                                      Library* library,
+                                      StringView filename);
 
     void RegisterConst(Const* decl);
     bool RegisterDecl(Decl* decl);
@@ -480,6 +512,8 @@ private:
     bool ConsumeType(std::unique_ptr<raw::Type> raw_type, SourceLocation location,
                      std::unique_ptr<Type>* out_type);
 
+    bool ConsumeUsing(std::unique_ptr<raw::Using> using_directive);
+    bool ConsumeTypeAlias(std::unique_ptr<raw::Using> using_directive);
     bool ConsumeConstDeclaration(std::unique_ptr<raw::ConstDeclaration> const_declaration);
     bool ConsumeEnumDeclaration(std::unique_ptr<raw::EnumDeclaration> enum_declaration);
     bool
@@ -496,19 +530,25 @@ private:
     // return the declaration corresponding to name.
     Decl* LookupConstant(const Type* type, const Name& name);
 
+    // Given a name, checks whether that name corresponds to a type alias. If
+    // so, returns the type. Otherwise, returns nullptr.
+    PrimitiveType* LookupTypeAlias(const Name& name) const;
+
     // Returns nullptr when |type| does not correspond directly to a
     // declaration. For example, if |type| refers to int32 or if it is
     // a struct pointer, this will return null. If it is a struct, it
     // will return a pointer to the declaration of the type.
-    Decl* LookupType(const flat::Type* type) const;
-
-    // Returns nullptr when the |name| cannot be resolved to a
-    // Name. Otherwise it returns the declaration.
-    Decl* LookupType(const Name& name) const;
+    enum class LookupOption {
+        kIgnoreNullable,
+        kIncludeNullable,
+    };
+    Decl* LookupDeclByType(const flat::Type* type, LookupOption option) const;
 
     bool DeclDependencies(Decl* decl, std::set<Decl*>* out_edges);
 
     bool SortDeclarations();
+
+    bool CompileLibraryName();
 
     bool CompileConst(Const* const_declaration);
     bool CompileEnum(Enum* enum_declaration);
@@ -530,6 +570,10 @@ private:
     bool CompileType(Type* type, TypeShape* out_type_metadata);
 
 public:
+    // Returns nullptr when the |name| cannot be resolved to a
+    // Name. Otherwise it returns the declaration.
+    Decl* LookupDeclByName(const Name& name) const;
+
     // TODO(TO-702) Add a validate literal function. Some things
     // (e.g. array indexes) want to check the value but print the
     // constant, say.
@@ -538,7 +582,7 @@ public:
         if (!literal) {
             return false;
         }
-        auto data = literal->location.data();
+        auto data = literal->location().data();
         std::string string_data(data.data(), data.data() + data.size());
         if (std::is_unsigned<IntType>::value) {
             errno = 0;
@@ -573,7 +617,7 @@ public:
         switch (constant->kind) {
         case Constant::Kind::kIdentifier: {
             auto identifier_constant = static_cast<const IdentifierConstant*>(constant);
-            auto decl = LookupType(identifier_constant->name);
+            auto decl = LookupDeclByName(identifier_constant->name);
             if (!decl || decl->kind != Decl::Kind::kConst)
                 return false;
             return ParseIntegerConstant(static_cast<Const*>(decl)->value.get(), out_value);
@@ -597,10 +641,13 @@ public:
         }
     }
 
-    const std::map<std::vector<StringView>, std::unique_ptr<Library>>* dependencies_;
+    bool HasAttribute(fidl::StringView name) const;
+
+    const std::map<std::vector<StringView>, Library*>& dependencies() const { return dependencies_; };
 
     std::vector<StringView> library_name_;
 
+    std::vector<std::unique_ptr<Using>> using_;
     std::vector<std::unique_ptr<Const>> const_declarations_;
     std::vector<std::unique_ptr<Enum>> enum_declarations_;
     std::vector<std::unique_ptr<Interface>> interface_declarations_;
@@ -612,8 +659,17 @@ public:
     std::vector<Decl*> declaration_order_;
 
 private:
-    // All Name, Constant, and Decl pointers here are non-null and are
+    std::unique_ptr<raw::AttributeList> attributes_;
+
+    // TODO(pascal): Refactor into a `Dependencies` object which nicely ties
+    // all these things together, and offers a simpler API.
+    std::map<std::vector<StringView>, Library*> dependencies_;
+    std::set<std::pair<std::vector<StringView>, std::string>> dependencies_by_filename_;
+    const std::map<std::vector<StringView>, std::unique_ptr<Library>>* all_libraries_;
+
+    // All Name, Constant, Using, and Decl pointers here are non-null and are
     // owned by the various foo_declarations_.
+    std::map<const Name*, Using*, PtrCompare<Name>> type_aliases_;
     std::map<const Name*, Decl*, PtrCompare<Name>> declarations_;
     std::map<const Name*, Const*, PtrCompare<Name>> string_constants_;
     std::map<const Name*, Const*, PtrCompare<Name>> primitive_constants_;

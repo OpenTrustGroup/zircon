@@ -24,11 +24,20 @@ zx_status_t SparseReader::Create(fbl::unique_fd fd, fbl::unique_ptr<SparseReader
 SparseReader::SparseReader(fbl::unique_fd fd) : compressed_(false), fd_(fbl::move(fd)) {}
 
 zx_status_t SparseReader::ReadMetadata() {
-    // Read sparse image
+    // Read sparse image header.
     fvm::sparse_image_t image;
     if (read(fd_.get(), &image, sizeof(fvm::sparse_image_t)) != sizeof(fvm::sparse_image_t)) {
         fprintf(stderr, "failed to read the sparse header\n");
         return ZX_ERR_IO;
+    }
+
+    // Verify the header.
+    if (image.magic != fvm::kSparseFormatMagic) {
+        fprintf(stderr, "SparseReader: Bad magic\n");
+        return ZX_ERR_BAD_STATE;
+    } else if (image.version != fvm::kSparseFormatVersion) {
+        fprintf(stderr, "SparseReader: Unexpected sparse file version\n");
+        return ZX_ERR_BAD_STATE;
     }
 
     fbl::AllocChecker ac;
@@ -39,7 +48,7 @@ zx_status_t SparseReader::ReadMetadata() {
 
     memcpy(metadata_.get(), &image, sizeof(image));
 
-    // Read remainder of metadata
+    // Read remainder of metadata.
     size_t off = sizeof(image);
     while (off < image.header_length) {
         ssize_t r = read(fd_.get(), &metadata_[off], image.header_length - off);
@@ -142,7 +151,7 @@ fvm::partition_descriptor_t* SparseReader::Partitions() {
 
 zx_status_t SparseReader::ReadData(uint8_t* data, size_t length, size_t* actual) {
 #ifdef __Fuchsia__
-    zx_time_t start = zx_ticks_get();
+    zx_ticks_t start = zx_ticks_get();
 #endif
     size_t total_size = 0;
     if (compressed_) {
@@ -217,7 +226,7 @@ zx_status_t SparseReader::ReadData(uint8_t* data, size_t length, size_t* actual)
 
 zx_status_t SparseReader::ReadRaw(uint8_t* data, size_t length, size_t* actual) {
 #ifdef __Fuchsia__
-    zx_time_t start = zx_ticks_get();
+    zx_ticks_t start = zx_ticks_get();
 #endif
     ssize_t r;
     size_t total_size = 0;

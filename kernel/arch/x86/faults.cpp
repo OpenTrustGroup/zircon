@@ -21,6 +21,8 @@
 #include <kernel/interrupt.h>
 #include <kernel/thread.h>
 
+#include <lib/crashlog.h>
+
 #include <platform.h>
 #include <trace.h>
 #include <vm/fault.h>
@@ -84,6 +86,7 @@ __NO_RETURN static void exception_die(x86_iframe_t* frame, const char* msg) {
     printf("vector %lu\n", (ulong)frame->vector);
     dprintf(CRITICAL, "%s", msg);
     dump_fault_frame(frame);
+    crashlog.iframe = frame;
 
     // try to dump the user stack
     if (is_user_address(frame->user_sp)) {
@@ -111,11 +114,11 @@ static bool try_dispatch_user_exception(x86_iframe_t* frame, uint kind) {
     if (is_from_user(frame)) {
         struct arch_exception_context context = {false, frame, 0};
         thread_preempt_reenable_no_resched();
-        arch_set_in_int_handler(false);
+        arch_set_blocking_disallowed(false);
         arch_enable_ints();
         zx_status_t erc = call_dispatch_user_exception(kind, &context, frame);
         arch_disable_ints();
-        arch_set_in_int_handler(true);
+        arch_set_blocking_disallowed(true);
         thread_preempt_disable();
         if (erc == ZX_OK)
             return true;
@@ -249,13 +252,13 @@ static zx_status_t x86_pfe_handler(x86_iframe_t* frame) {
 
     /* reenable interrupts */
     thread_preempt_reenable_no_resched();
-    arch_set_in_int_handler(false);
+    arch_set_blocking_disallowed(false);
     arch_enable_ints();
 
     /* make sure we put interrupts back as we exit */
     auto ac = fbl::MakeAutoCall([]() {
         arch_disable_ints();
-        arch_set_in_int_handler(true);
+        arch_set_blocking_disallowed(true);
         thread_preempt_disable();
     });
 
@@ -408,7 +411,7 @@ static void handle_exception_types(x86_iframe_t* frame) {
         break;
     }
     /* pass all other non-Intel defined irq vectors to the platform */
-    case X86_INT_PLATFORM_BASE... X86_INT_PLATFORM_MAX: {
+    case X86_INT_PLATFORM_BASE ... X86_INT_PLATFORM_MAX: {
         kcounter_add(exceptions_irq, 1);
         platform_irq(frame);
         break;
@@ -439,7 +442,7 @@ static void handle_exception_types(x86_iframe_t* frame) {
 /* top level x86 exception handler for most exceptions and irqs */
 void x86_exception_handler(x86_iframe_t* frame) {
     // are we recursing?
-    if (unlikely(arch_in_int_handler()) && frame->vector != X86_INT_NMI) {
+    if (unlikely(arch_blocking_disallowed()) && frame->vector != X86_INT_NMI) {
         exception_die(frame, "recursion in interrupt handler\n");
     }
 

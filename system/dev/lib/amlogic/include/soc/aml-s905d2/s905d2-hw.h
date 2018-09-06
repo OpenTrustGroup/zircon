@@ -11,6 +11,12 @@
 #define S905D2_GPIO_INTERRUPT_BASE      0xffd00000
 #define S905D2_GPIO_INTERRUPT_LENGTH    0x10000
 
+#define S905D2_MSR_CLK_BASE             0xffd18000
+#define S905D2_MSR_CLK_LENGTH           0x1000
+
+#define S905D2_TEMP_SENSOR_BASE         0xff634000
+#define S905D2_TEMP_SENSOR_LENGTH       0x1000
+
 #define S905D2_USB0_BASE                0xff500000
 #define S905D2_USB0_LENGTH              0x100000
 
@@ -26,6 +32,12 @@
 #define S905D2_RESET_BASE               0xffd01000
 #define S905D2_RESET_LENGTH             0x1000
 
+#define S905D2_MIPI_DSI_BASE            0xffd07000
+#define S905D2_MIPI_DSI_LENGTH          0x1000
+
+#define S905D2_DSI_PHY_BASE             0xff644000
+#define S905D2_DSI_PHY_LENGTH           0x1000
+
 #define S905D2_USBPHY20_BASE            0xff636000
 #define S905D2_USBPHY20_LENGTH          0x2000
 
@@ -34,6 +46,9 @@
 
 #define S905D2_HIU_BASE                 0xff63c000
 #define S905D2_HIU_LENGTH               0x2000
+
+#define S905D2_VPU_BASE                 0xff900000
+#define S905D2_VPU_LENGTH               0x40000
 
 #define S905D2_MALI_BASE                0xffe40000
 #define S905D2_MALI_LENGTH              0x40000
@@ -120,6 +135,10 @@
 #define S905D2_PWM_F2                 0x6406
 #define S905D2_PWM_BLINK_EF           0x6407
 
+#define S905D2_AO_PWM_AB_BASE         0xFF807000
+#define S905D2_AO_PWM_CD_BASE         0xFF802000
+#define S905D2_AO_PWM_LENGTH          0x1000
+
 // Datasheet has incorrect number, but linux device tree seems correct.
 #define S905D2_VIU1_VSYNC_IRQ           35
 #define S905D2_DEMUX_IRQ                55
@@ -127,6 +146,7 @@
 #define S905D2_USB0_IRQ                 62
 #define S905D2_PARSER_IRQ               64
 #define S905D2_RAW_NAND_IRQ             66
+#define S905D2_TS_PLL_IRQ               67
 #define S905D2_DOS_MBOX_0_IRQ           75
 #define S905D2_DOS_MBOX_1_IRQ           76
 #define S905D2_DOS_MBOX_2_IRQ           77
@@ -171,3 +191,7 @@
 #define S905D2_UART_CTS_A_FN          1
 #define S905D2_UART_RTS_A             S905D2_GPIOX(15)
 #define S905D2_UART_RTS_A_FN          1
+
+// Alternate function for PWM
+#define S905D2_PWM_D                  S905D2_GPIOE(1)
+#define S905D2_PWM_D_FN               3

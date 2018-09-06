@@ -110,7 +110,9 @@ static ssize_t zxsio_read_stream(fdio_t* io, void* data, size_t len) {
     }
 }
 
-static ssize_t zxsio_recvfrom(fdio_t* io, void* data, size_t len, int flags, struct sockaddr* restrict addr, socklen_t* restrict addrlen) {
+static ssize_t zxsio_recvfrom(fdio_t* io, void* data, size_t len, int flags,
+                              struct sockaddr* restrict addr,
+                              socklen_t* restrict addrlen) {
     struct iovec iov;
     iov.iov_base = data;
     iov.iov_len = len;
@@ -627,8 +629,7 @@ static zx_status_t zxsio_txn(zxsio_t* sio, zxsio_msg_t* msg) {
 
     size_t dsize = (size_t)r;
     // check for protocol errors
-    if (!is_rio_message_reply_valid(msg, dsize) ||
-        (ZXRIO_OP(msg->op) != request_op)) {
+    if (!is_rio_message_reply_valid(msg, dsize) || (msg->op != request_op)) {
         return ZX_ERR_IO;
     }
     return msg->arg;
@@ -645,15 +646,13 @@ static zx_status_t zxsio_misc(fdio_t* io, uint32_t op, int64_t off,
     }
 
     switch (op) {
-    case ZXRIO_GETADDRINFO:
-    case ZXRIO_GETSOCKNAME:
-    case ZXRIO_GETPEERNAME:
-    case ZXRIO_GETSOCKOPT:
-    case ZXRIO_SETSOCKOPT:
-    case ZXRIO_CONNECT:
-    case ZXRIO_BIND:
-    case ZXRIO_LISTEN:
-    case ZXRIO_FCNTL:
+    case ZXSIO_GETSOCKNAME:
+    case ZXSIO_GETPEERNAME:
+    case ZXSIO_GETSOCKOPT:
+    case ZXSIO_SETSOCKOPT:
+    case ZXSIO_CONNECT:
+    case ZXSIO_BIND:
+    case ZXSIO_LISTEN:
         break;
     default:
         return ZX_ERR_NOT_SUPPORTED;
@@ -678,7 +677,7 @@ static zx_status_t zxsio_misc(fdio_t* io, uint32_t op, int64_t off,
         memcpy(ptr, msg.data, msg.datalen);
     }
 
-    if (op == ZXRIO_LISTEN && r == ZX_OK) {
+    if (op == ZXSIO_LISTEN && r == ZX_OK) {
         sio->flags |= ZXSIO_DID_LISTEN;
     }
 
@@ -691,7 +690,7 @@ static zx_status_t zxsio_close(fdio_t* io) {
     zx_status_t r;
 
     memset(&msg, 0, ZXSIO_HDR_SZ);
-    msg.op = ZXRIO_CLOSE;
+    msg.op = ZXSIO_CLOSE;
     r = zxsio_txn(sio, &msg);
 
     zx_handle_t h = sio->s;
@@ -717,7 +716,7 @@ static ssize_t zxsio_ioctl(fdio_t* io, uint32_t op, const void* in_buf,
     }
 
     memset(&msg, 0, ZXSIO_HDR_SZ);
-    msg.op = ZXRIO_IOCTL;
+    msg.op = ZXSIO_IOCTL;
     msg.datalen = in_len;
     msg.arg = out_len;
     msg.arg2.op = op;
@@ -741,10 +740,6 @@ static fdio_ops_t fdio_socket_stream_ops = {
     .read_at = fdio_default_read_at,
     .write = zxsio_write_stream,
     .write_at = fdio_default_write_at,
-    .recvfrom = zxsio_recvfrom,
-    .sendto = zxsio_sendto,
-    .recvmsg = zxsio_recvmsg_stream,
-    .sendmsg = zxsio_sendmsg_stream,
     .seek = fdio_default_seek,
     .misc = zxsio_misc,
     .close = zxsio_close,
@@ -754,9 +749,25 @@ static fdio_ops_t fdio_socket_stream_ops = {
     .wait_begin = zxsio_wait_begin_stream,
     .wait_end = zxsio_wait_end_stream,
     .unwrap = zxsio_unwrap_stream,
-    .shutdown = fdio_socket_shutdown,
     .posix_ioctl = zxsio_posix_ioctl_stream,
     .get_vmo = fdio_default_get_vmo,
+    .get_token = fdio_default_get_token,
+    .get_attr = fdio_default_get_attr,
+    .set_attr = fdio_default_set_attr,
+    .sync = fdio_default_sync,
+    .readdir = fdio_default_readdir,
+    .rewind = fdio_default_rewind,
+    .unlink = fdio_default_unlink,
+    .truncate = fdio_default_truncate,
+    .rename = fdio_default_rename,
+    .link = fdio_default_link,
+    .get_flags = fdio_default_get_flags,
+    .set_flags = fdio_default_set_flags,
+    .recvfrom = zxsio_recvfrom,
+    .sendto = zxsio_sendto,
+    .recvmsg = zxsio_recvmsg_stream,
+    .sendmsg = zxsio_sendmsg_stream,
+    .shutdown = fdio_socket_shutdown,
 };
 
 static fdio_ops_t fdio_socket_dgram_ops = {
@@ -764,10 +775,6 @@ static fdio_ops_t fdio_socket_dgram_ops = {
     .read_at = fdio_default_read_at,
     .write = zxsio_write_dgram,
     .write_at = fdio_default_write_at,
-    .recvfrom = zxsio_recvfrom,
-    .sendto = zxsio_sendto,
-    .recvmsg = zxsio_recvmsg_dgram,
-    .sendmsg = zxsio_sendmsg_dgram,
     .seek = fdio_default_seek,
     .misc = zxsio_misc,
     .close = zxsio_close,
@@ -777,9 +784,25 @@ static fdio_ops_t fdio_socket_dgram_ops = {
     .wait_begin = zxsio_wait_begin_dgram,
     .wait_end = zxsio_wait_end_dgram,
     .unwrap = fdio_default_unwrap,
-    .shutdown = fdio_socket_shutdown,
     .posix_ioctl = fdio_default_posix_ioctl, // not supported
     .get_vmo = fdio_default_get_vmo,
+    .get_token = fdio_default_get_token,
+    .get_attr = fdio_default_get_attr,
+    .set_attr = fdio_default_set_attr,
+    .sync = fdio_default_sync,
+    .readdir = fdio_default_readdir,
+    .rewind = fdio_default_rewind,
+    .unlink = fdio_default_unlink,
+    .truncate = fdio_default_truncate,
+    .rename = fdio_default_rename,
+    .link = fdio_default_link,
+    .get_flags = fdio_default_get_flags,
+    .set_flags = fdio_default_set_flags,
+    .recvfrom = zxsio_recvfrom,
+    .sendto = zxsio_sendto,
+    .recvmsg = zxsio_recvmsg_dgram,
+    .sendmsg = zxsio_sendmsg_dgram,
+    .shutdown = fdio_socket_shutdown,
 };
 
 fdio_t* fdio_socket_create(zx_handle_t s, int flags) {

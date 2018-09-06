@@ -16,15 +16,12 @@
 #include <zircon/syscalls/resource.h>
 #include <zircon/types.h>
 
-#include <object/resources.h>
+#include <object/resource.h>
 
-#include <fbl/auto_lock.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/type_support.h>
 
 #include "priv.h"
-
-using fbl::AutoLock;
 
 KCOUNTER(profile_create, "kernel.profile.create");
 KCOUNTER(profile_set,    "kernel.profile.set");

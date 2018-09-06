@@ -46,7 +46,7 @@ zx_status_t astro_touch_init(aml_bus_t* bus) {
 
     //Check the display ID pin to determine which driver device to add
     gpio_set_alt_function(&bus->gpio, S905D2_GPIOH(5), 0);
-    gpio_config(&bus->gpio, S905D2_GPIOH(5), GPIO_DIR_IN);
+    gpio_config_in(&bus->gpio, S905D2_GPIOH(5), GPIO_NO_PULL);
     uint8_t gpio_state;
     /* Two variants of display are supported, one with BOE display panel and
           ft3x27 touch controller, the other with INX panel and Goodix touch
@@ -59,7 +59,7 @@ zx_status_t astro_touch_init(aml_bus_t* bus) {
         zxlogf(INFO, "Innolux/Goodix screen not supported at this time\n");
         return ZX_OK;
     } else {
-        zx_status_t status = pbus_device_add(&bus->pbus, &ft3x27_touch_dev, 0);
+        zx_status_t status = pbus_device_add(&bus->pbus, &ft3x27_touch_dev);
         if (status != ZX_OK) {
             zxlogf(ERROR, "astro_touch_init(ft3x27): pbus_device_add failed: %d\n", status);
             return status;

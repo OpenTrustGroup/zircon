@@ -18,7 +18,6 @@
 #include <ddk/protocol/platform-defs.h>
 #include <hw/reg.h>
 
-#include <soc/imx8m/imx8m.h>
 #include <soc/imx8m/imx8m-hw.h>
 #include <soc/imx8m/imx8m-iomux.h>
 
@@ -53,15 +52,6 @@ static const pbus_dev_t display_dev = {
     .btis = imx8mevk_display_btis,
     .bti_count = countof(imx8mevk_display_btis),
 };
-
-static zx_status_t imx8mevk_set_mode(void* ctx, usb_mode_t mode) {
-    return ZX_OK;
-}
-
-usb_mode_switch_protocol_ops_t usb_mode_switch_ops = {
-    .set_mode = imx8mevk_set_mode,
-};
-
 
 /* iMX8M EVK Pin Mux Table TODO: Add all supported peripherals on EVK board */
 iomux_cfg_struct imx8mevk_pinmux[] = {
@@ -118,8 +108,6 @@ static int imx8mevk_start_thread(void* arg) {
     zx_status_t status;
     imx8mevk_bus_t* bus = arg;
 
-    bus->usb_mode_switch.ops = &usb_mode_switch_ops;
-    bus->usb_mode_switch.ctx = bus;
     // TODO: Power and Clocks
 
     // start the gpio driver first so we can do our initial pinmux
@@ -148,12 +136,7 @@ static int imx8mevk_start_thread(void* arg) {
         goto fail;
     }
 
-    status = pbus_set_protocol(&bus->pbus, ZX_PROTOCOL_USB_MODE_SWITCH, &bus->usb_mode_switch);
-    if (status != ZX_OK) {
-        goto fail;
-    }
-
-    if ((status = pbus_device_add(&bus->pbus, &display_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &display_dev)) != ZX_OK) {
         zxlogf(ERROR, "%s could not add display_dev: %d\n", __FUNCTION__, status);
         goto fail;
     }

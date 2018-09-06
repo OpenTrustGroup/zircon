@@ -15,7 +15,7 @@
 
 #include <bitmap/raw-bitmap.h>
 #include <bitmap/rle-bitmap.h>
-#include <block-client/client.h>
+#include <block-client/cpp/client.h>
 #include <digest/digest.h>
 #include <fbl/algorithm.h>
 #include <fbl/intrusive_double_list.h>
@@ -26,13 +26,13 @@
 #include <fbl/unique_fd.h>
 #include <fbl/unique_ptr.h>
 #include <fs/block-txn.h>
-#include <fs/mapped-vmo.h>
 #include <fs/managed-vfs.h>
 #include <fs/ticker.h>
 #include <fs/trace.h>
 #include <fs/vfs.h>
 #include <fs/vnode.h>
 #include <lib/async/cpp/wait.h>
+#include <lib/fzl/mapped-vmo.h>
 #include <lib/zx/event.h>
 #include <lib/zx/vmo.h>
 #include <trace/event.h>
@@ -148,6 +148,7 @@ public:
 
     // Constructs a blob, reads in data, verifies the contents, then destroys the in-memory copy.
     static zx_status_t VerifyBlob(Blobfs* bs, size_t node_index);
+
 private:
     friend struct TypeWavlTraits;
 
@@ -167,7 +168,7 @@ private:
     // Monitors the current VMO, keeping a reference to the Vnode
     // alive while the |out| VMO (and any clones it may have) are open.
     zx_status_t CloneVmo(zx_rights_t rights, zx_handle_t* out);
-    void HandleNoClones(async_t* async, async::WaitBase* wait,
+    void HandleNoClones(async_dispatcher_t* dispatcher, async::WaitBase* wait,
                         zx_status_t status, const zx_packet_signal_t* signal);
 
     void QueueUnlink();
@@ -259,7 +260,7 @@ private:
     // The blob_ here consists of:
     // 1) The Merkle Tree
     // 2) The Blob itself, aligned to the nearest kBlobfsBlockSize
-    fbl::unique_ptr<fs::MappedVmo> blob_ = {};
+    fbl::unique_ptr<fzl::MappedVmo> blob_ = {};
     vmoid_t vmoid_ = {};
 
     // Watches any clones of "blob_" provided to clients.
@@ -283,7 +284,7 @@ private:
     struct WritebackInfo {
         uint64_t bytes_written = {};
         Compressor compressor;
-        fbl::unique_ptr<fs::MappedVmo> compressed_blob = {};
+        fbl::unique_ptr<fzl::MappedVmo> compressed_blob = {};
     };
 
     fbl::unique_ptr<WritebackInfo> write_info_ = {};
@@ -325,6 +326,8 @@ public:
 
     // Initializes the WritebackBuffer.
     zx_status_t InitializeWriteback();
+    // Returns the capacity of the writeback buffer, in blocks.
+    size_t WritebackCapacity() const { return writeback_->Capacity(); }
 
     void Shutdown(fs::Vfs::ShutdownCallback closure) final;
     virtual ~Blobfs();
@@ -361,30 +364,16 @@ public:
     // Release an allocated vmoid.
     zx_status_t DetachVmo(vmoid_t vmoid);
 
-    zx_status_t Txn(block_fifo_request_t* requests, size_t count) {
-        TRACE_DURATION("blobfs", "Blobfs::Txn", "count", count);
-        return block_fifo_txn(fifo_client_, requests, count);
+    zx_status_t Transaction(block_fifo_request_t* requests, size_t count) {
+        TRACE_DURATION("blobfs", "Blobfs::Transaction", "count", count);
+        return fifo_client_.Transaction(requests, count);
     }
     uint32_t BlockSize() const { return block_info_.block_size; }
 
-    txnid_t TxnId() const {
-        ZX_DEBUG_ASSERT(blockfd_);
-        thread_local txnid_t txnid_ = TXNID_INVALID;
-        if (txnid_ != TXNID_INVALID) {
-            return txnid_;
-        }
-        if (ioctl_block_alloc_txn(blockfd_.get(), &txnid_) < 0) {
-            return TXNID_INVALID;
-        }
-        return txnid_;
-    }
-
-    void FreeTxnId() {
-        txnid_t tid = TxnId();
-        if (tid == TXNID_INVALID) {
-            return;
-        }
-        ioctl_block_free_txn(blockfd_.get(), &tid);
+    groupid_t BlockGroupID() {
+        thread_local groupid_t group_ = next_group_.fetch_add(1);
+        ZX_ASSERT_MSG(group_ < MAX_TXN_GROUP_COUNT, "Too many threads accessing block device");
+        return group_;
     }
 
     // If possible, attempt to resize the blobfs partition.
@@ -510,9 +499,9 @@ private:
     // Frees blocks from the reserved/allocated maps and updates disk if necessary.
     void FreeBlocks(WritebackWork* wb, size_t nblocks, size_t blkno);
 
-    // Finds an unallocated node between indices start (inclusive) and end (exclusive).
-    // If it exists, sets |*node_index_out| to the first available value.
-    zx_status_t FindNode(size_t start, size_t end, size_t *node_index_out);
+    // Finds an unallocated node. If it exists, sets |*node_index_out| to the
+    // first available value.
+    zx_status_t FindNode(size_t* node_index_out);
 
     // Finds and reserves space for a blob node in memory. Does not update disk.
     zx_status_t ReserveNode(size_t* node_index_out);
@@ -557,25 +546,32 @@ private:
                                            MerkleRootTraits,
                                            VnodeBlob::TypeWavlTraits>;
     fbl::Mutex hash_lock_;
-    WAVLTreeByMerkle open_hash_ __TA_GUARDED(hash_lock_){}; // All 'in use' blobs.
+    WAVLTreeByMerkle open_hash_ __TA_GUARDED(hash_lock_){};   // All 'in use' blobs.
     WAVLTreeByMerkle closed_hash_ __TA_GUARDED(hash_lock_){}; // All 'closed' blobs.
 
     fbl::unique_fd blockfd_;
     block_info_t block_info_ = {};
-    fifo_client_t* fifo_client_ = {};
+    fbl::atomic<groupid_t> next_group_ = {};
+    block_client::Client fifo_client_;
 
     RawBitmap block_map_ = {};
     vmoid_t block_map_vmoid_ = {};
-    fbl::unique_ptr<fs::MappedVmo> node_map_ = {};
+    fbl::unique_ptr<fzl::MappedVmo> node_map_ = {};
     vmoid_t node_map_vmoid_ = {};
-    fbl::unique_ptr<fs::MappedVmo> info_vmo_= {};
-    vmoid_t info_vmoid_= {};
+    fbl::unique_ptr<fzl::MappedVmo> info_vmo_ = {};
+    vmoid_t info_vmoid_ = {};
 
     // The reserved_blocks_ and reserved_nodes_ bitmaps only hold in-flight reservations.
     // At a steady state they will be empty.
     bitmap::RleBitmap reserved_blocks_ = {};
     bitmap::RleBitmap reserved_nodes_ = {};
     uint64_t fs_id_ = {};
+
+    // free_node_lower_bound_ is lower bound on free nodes, meaning we are sure that
+    // there are no free nodes with indices less than free_node_lower_bound_. This
+    // doesn't mean that free_node_lower_bound_ is a free node; it just means that one
+    // can start looking for a free node from free_node_lower_bound_
+    size_t free_node_lower_bound_ = 0;
 
     bool collecting_metrics_ = false;
     BlobfsMetrics metrics_ = {};
@@ -589,7 +585,7 @@ typedef struct {
 } blob_options_t;
 
 zx_status_t blobfs_create(fbl::unique_ptr<Blobfs>* out, fbl::unique_fd blockfd);
-zx_status_t blobfs_mount(async_t* async, fbl::unique_fd blockfd,
+zx_status_t blobfs_mount(async_dispatcher_t* dispatcher, fbl::unique_fd blockfd,
                          const blob_options_t* options, zx::channel root,
                          fbl::Closure on_unmount);
 } // namespace blobfs

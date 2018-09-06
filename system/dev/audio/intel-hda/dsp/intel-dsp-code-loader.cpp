@@ -55,7 +55,7 @@ zx_status_t IntelDspCodeLoader::Initialize() {
 
     // Create a VMO made of a single page and map it for read/write so the CPU
     // has access to it.
-    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    constexpr uint32_t CPU_MAP_FLAGS = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     zx::vmo bdl_vmo;
     zx_status_t res;
     res = bdl_cpu_mem_.CreateAndMap(PAGE_SIZE,
@@ -90,7 +90,8 @@ zx_status_t IntelDspCodeLoader::Initialize() {
     return ZX_OK;
 }
 
-zx_status_t IntelDspCodeLoader::TransferFirmware(const PinnedVmo& pinned_fw, size_t fw_size) {
+zx_status_t IntelDspCodeLoader::TransferFirmware(const fzl::PinnedVmo& pinned_fw,
+                                                 size_t fw_size) {
 
     uint32_t region_count = pinned_fw.region_count();
 

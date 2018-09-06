@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <ddk/binding.h>
+#include <ddk/debug.h>
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/io-buffer.h>
@@ -71,6 +72,7 @@ static int irq_thread(void* arg) {
         if (irq & ETH_IRQ_LSC) {
             bool was_online = edev->online;
             bool online = eth_status_online(&edev->eth);
+            zxlogf(TRACE, "intel-eth: ETH_IRQ_LSC fired: %d->%d\n", was_online, online);
             if (online != was_online) {
                 edev->online = online;
                 if (edev->ifc) {
@@ -271,6 +273,13 @@ static zx_status_t eth_bind(void* ctx, zx_device_t* dev) {
     edev->eth.iobase = (uintptr_t)io;
     edev->ioh = h;
 
+    zx_pcie_device_info_t pci_info;
+    status = pci_get_device_info(&edev->pci, &pci_info);
+    if (status != ZX_OK) {
+        goto fail;
+    }
+    edev->eth.pci_did = pci_info.device_id;
+
     if ((r = pci_enable_bus_master(&edev->pci, true)) < 0) {
         printf("eth: cannot enable bus master %d\n", r);
         goto fail;
@@ -292,6 +301,7 @@ static zx_status_t eth_bind(void* ctx, zx_device_t* dev) {
 
     eth_setup_buffers(&edev->eth, io_buffer_virt(&edev->buffer), io_buffer_phys(&edev->buffer));
     eth_init_hw(&edev->eth);
+    edev->online = eth_status_online(&edev->eth);
 
     device_add_args_t args = {
         .version = DEVICE_ADD_ARGS_VERSION,
@@ -333,15 +343,17 @@ static zx_driver_ops_t intel_ethernet_driver_ops = {
 };
 
 // clang-format off
-ZIRCON_DRIVER_BEGIN(intel_ethernet, intel_ethernet_driver_ops, "zircon", "0.1", 11)
+ZIRCON_DRIVER_BEGIN(intel_ethernet, intel_ethernet_driver_ops, "zircon", "0.1", 13)
     BI_ABORT_IF(NE, BIND_PROTOCOL, ZX_PROTOCOL_PCI),
     BI_ABORT_IF(NE, BIND_PCI_VID, 0x8086),
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x100E), // Qemu
+    BI_MATCH_IF(EQ, BIND_PCI_DID, 0x1f45), // Atom c2000 2.5Gbe backplane
+    BI_MATCH_IF(EQ, BIND_PCI_DID, 0x1502), // Ivy Bridge
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x15A3), // Broadwell
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x1570), // Skylake
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x1533), // I210 standalone
-    BI_MATCH_IF(EQ, BIND_PCI_DID, 0x1539), // I211-AT
-    BI_MATCH_IF(EQ, BIND_PCI_DID, 0x156f), // I219-LM (Dawson Canyon NUC)
+    BI_MATCH_IF(EQ, BIND_PCI_DID, IE_DID_I211_AT),
+    BI_MATCH_IF(EQ, BIND_PCI_DID, IE_DID_I219_LM),
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x15b7), // Skull Canyon NUC
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x15b8), // I219-V
     BI_MATCH_IF(EQ, BIND_PCI_DID, 0x15d8), // Kaby Lake NUC

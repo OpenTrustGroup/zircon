@@ -8,10 +8,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <ddk/metadata.h>
+#include <ddk/metadata/bad-block.h>
+#include <ddk/metadata/nand.h>
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_lock.h>
 #include <zircon/assert.h>
 #include <zircon/device/ram-nand.h>
+#include <zircon/driver/binding.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 
@@ -24,13 +28,14 @@ struct RamNandOp {
 
 }  // namespace
 
-NandDevice::NandDevice(const NandParams& params) : params_(params) {
+NandDevice::NandDevice(const NandParams& params, zx_device_t* parent)
+        : DeviceType(parent), params_(params) {
 }
 
 NandDevice::~NandDevice() {
     if (thread_created_) {
         Kill();
-        completion_signal(&wake_signal_);
+        sync_completion_signal(&wake_signal_);
         int result_code;
         thrd_join(worker_, &result_code);
 
@@ -45,26 +50,98 @@ NandDevice::~NandDevice() {
     }
 
     if (mapped_addr_) {
-        zx_vmar_unmap(zx_vmar_root_self(), mapped_addr_, GetSize());
+        zx_vmar_unmap(zx_vmar_root_self(), mapped_addr_, DdkGetSize());
     }
+    DdkRemove();
 }
 
-zx_status_t NandDevice::Init(char name[NAME_MAX]) {
+zx_status_t NandDevice::Bind(const ram_nand_info_t& info) {
+    char name[NAME_MAX];
+    zx_status_t status = Init(name, zx::vmo(info.vmo));
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    zx_device_prop_t props[] = {
+        {BIND_PROTOCOL, 0, ZX_PROTOCOL_NAND},
+        {BIND_NAND_CLASS, 0, params_.nand_class},
+    };
+
+    status = DdkAdd(name, DEVICE_ADD_INVISIBLE, props, countof(props));
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    if (info.export_nand_config) {
+        nand_config_t config = {
+            .bad_block_config = {
+                .type = kAmlogicUboot,
+                .aml = {
+                    .table_start_block = info.bad_block_config.table_start_block,
+                    .table_end_block = info.bad_block_config.table_end_block,
+                },
+            },
+            .extra_partition_config_count = info.extra_partition_config_count,
+            .extra_partition_config = {},
+        };
+        for (size_t i = 0; i < info.extra_partition_config_count; i++) {
+            memcpy(config.extra_partition_config[i].type_guid,
+                   info.extra_partition_config[i].type_guid, ZBI_PARTITION_GUID_LEN);
+            config.extra_partition_config[i].copy_count =
+                    info.extra_partition_config[i].copy_count;
+            config.extra_partition_config[i].copy_byte_offset =
+                    info.extra_partition_config[i].copy_byte_offset;
+        }
+        status = DdkAddMetadata(DEVICE_METADATA_PRIVATE, &config, sizeof(config));
+        if (status != ZX_OK) {
+            return status;
+        }
+    }
+    if (info.export_partition_map) {
+        status = DdkAddMetadata(DEVICE_METADATA_PARTITION_MAP, &info.partition_map,
+                                sizeof(info.partition_map));
+        if (status != ZX_OK) {
+            return status;
+        }
+    }
+
+    DdkMakeVisible();
+    return ZX_OK;
+}
+
+zx_status_t NandDevice::Init(char name[NAME_MAX], zx::vmo vmo) {
+    ZX_DEBUG_ASSERT(!thread_created_);
     static uint64_t dev_count = 0;
     snprintf(name, NAME_MAX, "ram-nand-%" PRIu64, dev_count++);
 
-    zx_status_t status = zx::vmo::create(GetSize(), 0, &vmo_);
-    if (status != ZX_OK) {
-        return status;
+    zx_status_t status;
+    const bool use_vmo = vmo.is_valid();
+    if (use_vmo) {
+        vmo_ = fbl::move(vmo);
+
+        uint64_t size;
+        status = vmo_.get_size(&size);
+        if (status != ZX_OK) {
+            return status;
+        }
+        if (size < DdkGetSize()) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+    } else {
+        status = zx::vmo::create(DdkGetSize(), 0, &vmo_);
+        if (status != ZX_OK) {
+            return status;
+        }
     }
 
-    status = zx_vmar_map(zx_vmar_root_self(), 0, vmo_.get(), 0, GetSize(),
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                         &mapped_addr_);
+    status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                         0, vmo_.get(), 0, DdkGetSize(), &mapped_addr_);
     if (status != ZX_OK) {
         return status;
     }
-    memset(reinterpret_cast<char*>(mapped_addr_), 0xff, GetSize());
+    if (!use_vmo) {
+        memset(reinterpret_cast<char*>(mapped_addr_), 0xff, DdkGetSize());
+    }
 
     list_initialize(&txn_list_);
     if (thrd_create(&worker_, WorkerThreadStub, this) != thrd_success) {
@@ -75,13 +152,14 @@ zx_status_t NandDevice::Init(char name[NAME_MAX]) {
     return ZX_OK;
 }
 
-void NandDevice::Unbind() {
+void NandDevice::DdkUnbind() {
     Kill();
-    completion_signal(&wake_signal_);
+    sync_completion_signal(&wake_signal_);
+    DdkRemove();
 }
 
-zx_status_t NandDevice::Ioctl(uint32_t op, const void* in_buf, size_t in_len,
-                              void* out_buf, size_t out_len, size_t* out_actual) {
+zx_status_t NandDevice::DdkIoctl(uint32_t op, const void* in_buf, size_t in_len,
+                                 void* out_buf, size_t out_len, size_t* out_actual) {
     {
         fbl::AutoLock lock(&lock_);
         if (dead_) {
@@ -91,7 +169,7 @@ zx_status_t NandDevice::Ioctl(uint32_t op, const void* in_buf, size_t in_len,
 
     switch (op) {
     case IOCTL_RAM_NAND_UNLINK:
-        Unbind();
+        DdkUnbind();
         return ZX_OK;
 
     default:
@@ -136,15 +214,16 @@ void NandDevice::Queue(nand_op_t* operation) {
     }
 
     if (AddToList(operation)) {
-        completion_signal(&wake_signal_);
+        sync_completion_signal(&wake_signal_);
     } else {
         operation->completion_cb(operation, ZX_ERR_BAD_STATE);
     }
 }
 
-void NandDevice::GetBadBlockList(uint32_t* bad_blocks, uint32_t bad_block_len,
-                                 uint32_t* num_bad_blocks) {
+zx_status_t NandDevice::GetFactoryBadBlockList(uint32_t* bad_blocks, uint32_t bad_block_len,
+                                               uint32_t* num_bad_blocks) {
     *num_bad_blocks = 0;
+    return ZX_OK;
 }
 
 void NandDevice::Kill() {
@@ -180,10 +259,10 @@ int NandDevice::WorkerThread() {
                 return 0;
             }
             if (operation) {
-                completion_reset(&wake_signal_);
+                sync_completion_reset(&wake_signal_);
                 break;
             } else {
-                completion_wait(&wake_signal_, ZX_TIME_INFINITE);
+                sync_completion_wait(&wake_signal_, ZX_TIME_INFINITE);
             }
         }
 

@@ -12,7 +12,7 @@
 static constexpr uint32_t kSrcFrameBouncePeriod = 90;
 static constexpr uint32_t kDestFrameBouncePeriod = 60;
 static constexpr uint32_t kRotationPeriod = 24;
-
+static constexpr uint32_t kScalePeriod = 45;
 
 static uint32_t get_fg_color() {
     static uint32_t layer_count = 0;
@@ -39,6 +39,10 @@ static bool compute_intersection(const frame_t& a, const frame_t& b, frame_t* in
     intersection->height = bottom - top;
 
     return true;
+}
+
+static uint32_t interpolate_scaling(uint32_t x, uint32_t frame_num) {
+    return x / 2 + interpolate(x / 2, frame_num, kScalePeriod);
 }
 
 VirtualLayer::VirtualLayer(Display* display) {
@@ -98,6 +102,10 @@ PrimaryLayer::PrimaryLayer(const fbl::Vector<Display>& displays) : VirtualLayer(
 }
 
 bool PrimaryLayer::Init(zx_handle_t dc_handle) {
+    if ((displays_.size() > 1 || rotates_) && scaling_) {
+        printf("Unsupported config\n");
+        return false;
+    }
     uint32_t fg_color = get_fg_color();
     uint32_t bg_color = alpha_enable_ ? 0x3fffffff : 0xffffffff;
 
@@ -131,14 +139,7 @@ bool PrimaryLayer::Init(zx_handle_t dc_handle) {
         fuchsia_display_ControllerSetLayerPrimaryConfigRequest config;
         config.hdr.ordinal = fuchsia_display_ControllerSetLayerPrimaryConfigOrdinal;
         config.layer_id = layer->id;
-        config.image_config.height = image_height_;
-        config.image_config.width = image_width_;
-        config.image_config.pixel_format = image_format_;
-#if !USE_INTEL_Y_TILING
-        config.image_config.type = IMAGE_TYPE_SIMPLE;
-#else
-        config.image_config.type = 2; // IMAGE_TYPE_Y_LEGACY
-#endif
+        images_[0]->GetConfig(&config.image_config);
 
         if (zx_channel_write(dc_handle, 0, &config, sizeof(config), nullptr, 0) != ZX_OK) {
             printf("Setting layer config failed\n");
@@ -208,11 +209,19 @@ void PrimaryLayer::StepLayout(int32_t frame_num) {
             // Find the subset of the src region which shows up on this display
             if (rotation_ == fuchsia_display_Transform_IDENTITY
                     || rotation_ == fuchsia_display_Transform_ROT_180) {
-                layers_[i].src.x_pos =
-                        src_frame_.x_pos + (layers_[i].dest.x_pos - dest_frame_.x_pos);
-                layers_[i].src.y_pos = src_frame_.y_pos;
-                layers_[i].src.width = layers_[i].dest.width;
-                layers_[i].src.height = layers_[i].dest.height;
+                if (!scaling_) {
+                    layers_[i].src.x_pos =
+                            src_frame_.x_pos + (layers_[i].dest.x_pos - dest_frame_.x_pos);
+                    layers_[i].src.y_pos = src_frame_.y_pos;
+                    layers_[i].src.width = layers_[i].dest.width;
+                    layers_[i].src.height = layers_[i].dest.height;
+                } else {
+                    layers_[i].src.x_pos = src_frame_.x_pos + interpolate_scaling(
+                            layers_[i].dest.x_pos - dest_frame_.x_pos, frame_num);
+                    layers_[i].src.y_pos = src_frame_.y_pos;
+                    layers_[i].src.width = interpolate_scaling(layers_[i].dest.width, frame_num);
+                    layers_[i].src.height = interpolate_scaling(layers_[i].dest.height, frame_num);
+                }
             } else {
                 layers_[i].src.x_pos = src_frame_.x_pos;
                 layers_[i].src.y_pos =
@@ -242,17 +251,13 @@ void PrimaryLayer::SendLayout(zx_handle_t channel) {
     if (layer_flipping_) {
         SetLayerImages(channel, alt_image_);
     }
-    if (pan_src_ || pan_dest_) {
+    if (scaling_ || pan_src_ || pan_dest_) {
         SetLayerPositions(channel);
     }
 }
 
 bool PrimaryLayer::WaitForReady() {
     return Wait(SIGNAL_EVENT);
-}
-
-bool PrimaryLayer::WaitForPresent() {
-    return Wait(PRESENT_EVENT);
 }
 
 void PrimaryLayer::Render(int32_t frame_num) {
@@ -297,7 +302,6 @@ void VirtualLayer::SetLayerImages(zx_handle_t dc_handle, bool alt_image) {
         msg.layer_id = layer.id;
         msg.image_id = layer.import_info[alt_image].id;
         msg.wait_event_id = layer.import_info[alt_image].event_ids[WAIT_EVENT];
-        msg.present_event_id = layer.import_info[alt_image].event_ids[PRESENT_EVENT];
         msg.signal_event_id = layer.import_info[alt_image].event_ids[SIGNAL_EVENT];
 
         if (zx_channel_write(dc_handle, 0, &msg, sizeof(msg), nullptr, 0) != ZX_OK) {
@@ -394,4 +398,42 @@ void CursorLayer::SendLayout(zx_handle_t dc_handle) {
 
         display_start += displays_[i]->mode().horizontal_resolution;
     }
+}
+
+ColorLayer::ColorLayer(Display* display) : VirtualLayer(display) { }
+
+ColorLayer::ColorLayer(const fbl::Vector<Display>& displays) : VirtualLayer(displays) { }
+
+bool ColorLayer::Init(zx_handle_t dc_handle) {
+    for (unsigned i = 0; i < displays_.size(); i++) {
+        layer_t* layer = CreateLayer(dc_handle);
+        if (layer == nullptr) {
+            return false;
+        }
+
+        layer->active = true;
+
+        constexpr uint32_t kColorLayerFormat = ZX_PIXEL_FORMAT_ARGB_8888;
+        uint32_t kColorLayerColor = get_fg_color();
+
+        uint32_t size = sizeof(fuchsia_display_ControllerSetLayerColorConfigRequest)
+                + FIDL_ALIGN(ZX_PIXEL_FORMAT_BYTES(kColorLayerFormat));
+        uint8_t data[size];
+
+        auto config = reinterpret_cast<fuchsia_display_ControllerSetLayerColorConfigRequest*>(data);
+        config->hdr.ordinal = fuchsia_display_ControllerSetLayerColorConfigOrdinal;
+        config->layer_id = layer->id;
+        config->pixel_format = kColorLayerFormat;
+        config->color_bytes.count = ZX_PIXEL_FORMAT_BYTES(kColorLayerFormat);
+        config->color_bytes.data = reinterpret_cast<void*>(FIDL_ALLOC_PRESENT);
+
+        *reinterpret_cast<uint32_t*>(config + 1) = kColorLayerColor;
+
+        if (zx_channel_write(dc_handle, 0, data, size, nullptr, 0) != ZX_OK) {
+            printf("Setting layer config failed\n");
+            return false;
+        }
+    }
+
+    return true;
 }

@@ -17,7 +17,7 @@
 #include <fs-test-utils/fixture.h>
 #include <lib/async-loop/cpp/loop.h>
 #include <lib/memfs/memfs.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 #include <zircon/assert.h>
 #include <zircon/device/device.h>
 #include <zircon/device/vfs.h>
@@ -62,7 +62,7 @@ zx_status_t MountMemFs(async::Loop* loop) {
         return result;
     }
 
-    result = memfs_install_at(loop->async(), kMemFsPath);
+    result = memfs_install_at(loop->dispatcher(), kMemFsPath);
 
     return result;
 }
@@ -117,49 +117,6 @@ zx_status_t FormatDevice(const FixtureOptions& options, const fbl::String& block
         return result;
     }
 
-    return ZX_OK;
-}
-
-zx_status_t MountFs(const FixtureOptions& options, const fbl::String& block_device_path,
-                    const fbl::String& mount_path) {
-    zx_status_t result = FormatDevice(options, block_device_path);
-    if (result != ZX_OK) {
-        return result;
-    }
-
-    fbl::unique_fd fd(open(block_device_path.c_str(), O_RDWR));
-    if (!fd) {
-        LOG_ERROR(ZX_ERR_IO, "%s.\nblock_device_path:%s\n",
-                  strerror(errno), block_device_path.c_str());
-        return ZX_ERR_IO;
-    }
-
-    mount_options_t mount_options = default_mount_options;
-    mount_options.create_mountpoint = true;
-    mount_options.wait_until_ready = true;
-
-    result = mount(fd.release(), mount_path.c_str(), options.fs_type,
-                   &mount_options, launch_stdio_async);
-    if (result != ZX_OK) {
-        LOG_ERROR(result, "Failed to mount device at %s.\nblock_device_path:%s\n",
-                  mount_path.c_str(), block_device_path.c_str());
-        return result;
-    }
-
-    return ZX_OK;
-}
-
-zx_status_t UmountFs(const FixtureOptions& options, const fbl::String& block_device_path,
-                     const fbl::String& mount_path) {
-    if (!mount_path.empty()) {
-        zx_status_t result = umount(mount_path.c_str());
-        if (result != ZX_OK) {
-            LOG_ERROR(result,
-                      "Failed to umount device from MemFs.\nblock_device_path:%s\nmount_path:%s\n",
-                      block_device_path.c_str(), mount_path.c_str());
-            return result;
-        }
-    }
     return ZX_OK;
 }
 
@@ -274,7 +231,55 @@ Fixture::~Fixture() {
     TearDownTestCase();
 };
 
+zx_status_t Fixture::Mount() {
+    fbl::unique_fd fd(open(GetFsBlockDevice().c_str(), O_RDWR));
+    if (!fd) {
+        LOG_ERROR(ZX_ERR_IO, "%s.\nblock_device_path:%s\n",
+                  strerror(errno), GetFsBlockDevice().c_str());
+        return ZX_ERR_IO;
+    }
+
+    // Already mounted.
+    if (fs_state_ == ResourceState::kAllocated) {
+        return ZX_OK;
+    }
+
+    mount_options_t mount_options = default_mount_options;
+    mount_options.create_mountpoint = true;
+    mount_options.wait_until_ready = true;
+
+    disk_format_t format = detect_disk_format(fd.get());
+    zx_status_t result = mount(fd.release(), fs_path_.c_str(), format,
+                               &mount_options, launch_stdio_async);
+    if (result != ZX_OK) {
+        LOG_ERROR(result, "Failed to mount device at %s.\nblock_device_path:%s\n",
+                  fs_path_.c_str(), GetFsBlockDevice().c_str());
+        return result;
+    }
+    fs_state_ = ResourceState::kAllocated;
+    return ZX_OK;
+}
+
+zx_status_t Fixture::Umount() {
+    if (fs_state_ != ResourceState::kAllocated) {
+        return ZX_OK;
+    }
+    if (!fs_path_.empty()) {
+        zx_status_t result = umount(fs_path_.c_str());
+        if (result != ZX_OK) {
+            LOG_ERROR(result,
+                      "Failed to umount device from MemFs.\nblock_device_path:%s\nmount_path:%s\n",
+                      GetFsBlockDevice().c_str(), fs_path_.c_str());
+            return result;
+        }
+        fs_state_ = ResourceState::kFreed;
+    }
+    return ZX_OK;
+}
+
 zx_status_t Fixture::SetUpTestCase() {
+    LOG_INFO("Using random seed: %u\n", options_.seed);
+    seed_ = options_.seed;
     if (options_.use_ramdisk) {
         zx_status_t result = MakeRamdisk(options_, &block_device_path_);
         if (result != ZX_OK) {
@@ -307,11 +312,22 @@ zx_status_t Fixture::SetUp() {
     }
 
     fs_path_ = fbl::StringPrintf(kFsPath, kMemFsPath);
-    zx_status_t result = MountFs(options_, GetFsBlockDevice(), fs_path_);
-    if (result != ZX_OK) {
-        return result;
+    zx_status_t result;
+    if (options_.fs_format) {
+        result = FormatDevice(options_, GetFsBlockDevice());
+        if (result != ZX_OK) {
+            return result;
+        }
     }
-    fs_state_ = ResourceState::kAllocated;
+
+    if (options_.fs_mount) {
+        result = Mount();
+        if (result != ZX_OK) {
+            return result;
+        }
+        fs_state_ = ResourceState::kAllocated;
+    }
+
     return ZX_OK;
 }
 
@@ -319,7 +335,7 @@ zx_status_t Fixture::TearDown() {
     zx_status_t result;
     // Umount Fs from MemFs.
     if (fs_state_ == ResourceState::kAllocated) {
-        result = UmountFs(options_, block_device_path_, fs_path_);
+        result = Umount();
         if (result != ZX_OK) {
             return result;
         }
@@ -363,7 +379,7 @@ zx_status_t Fixture::TearDownTestCase() {
 }
 
 int RunWithMemFs(const fbl::Function<int()>& main_fn) {
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     if (MountMemFs(&loop) != ZX_OK) {
         return -1;
     }

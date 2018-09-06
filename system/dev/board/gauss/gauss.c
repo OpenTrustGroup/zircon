@@ -19,6 +19,7 @@
 #include <zircon/assert.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
+#include <zircon/threads.h>
 
 #include "gauss.h"
 #include "gauss-hw.h"
@@ -131,8 +132,7 @@ static int gauss_start_thread(void* arg) {
     gpio_set_alt_function(&bus->gpio, TDM_MISO_C, 2);
 
     gpio_set_alt_function(&bus->gpio, SPK_MUTEn, 0);
-    gpio_config(&bus->gpio, SPK_MUTEn, GPIO_DIR_OUT);
-    gpio_write(&bus->gpio, SPK_MUTEn, 1);
+    gpio_config_out(&bus->gpio, SPK_MUTEn, 1);
 
     if ((status = gauss_i2c_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "gauss_i2c_init failed: %d\n", status);
@@ -178,7 +178,7 @@ static int gauss_start_thread(void* arg) {
         goto fail;
     }
 
-    if ((status = pbus_device_add(&bus->pbus, &led_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &led_dev)) != ZX_OK) {
         zxlogf(ERROR, "a113_i2c_init could not add i2c_led_dev: %d\n", status);
         goto fail;
     }
@@ -230,6 +230,7 @@ static zx_status_t gauss_bus_bind(void* ctx, zx_device_t* parent) {
     thrd_t t;
     int thrd_rc = thrd_create_with_name(&t, gauss_start_thread, bus, "gauss_start_thread");
     if (thrd_rc != thrd_success) {
+        status = thrd_status_to_zx_status(thrd_rc);
         goto fail;
     }
     return ZX_OK;

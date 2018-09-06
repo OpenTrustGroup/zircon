@@ -51,12 +51,18 @@ This option is useful, for example, when a debugger wants to detach from the
 thread's process, but leave the thread in stasis waiting for an exception
 response.
 
+## RIGHTS
+
+TODO(ZX-2399)
+
 ## RETURN VALUE
 
 **task_bind_exception_port**() returns **ZX_OK** on success.
 In the event of failure, a negative error value is returned.
 
 ## ERRORS
+
+**ZX_ERR_ALREADY_BOUND** *object* already has its exception port bound.
 
 **ZX_ERR_BAD_HANDLE** *object* is not a valid handle,
 or *eport* is not a valid handle. Note that when unbinding from an exception

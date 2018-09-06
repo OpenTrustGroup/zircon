@@ -6,17 +6,28 @@
 
 #include <zircon/device/ioctl.h>
 #include <zircon/device/ioctl-wrapper.h>
+#include <ddk/metadata.h>
+#include <ddk/protocol/scpi.h>
 
+// Unique numbers to represent correct metadata.
+// 0x564f4c00 is the string representation of VOL.
+#define VOLTAGE_DUTY_CYCLE_METADATA          (0x564f4c00 | DEVICE_METADATA_PRIVATE)
+
+// 0x54485200 is the string representation of THR.
+#define THERMAL_CONFIG_METADATA              (0x54485200 | DEVICE_METADATA_PRIVATE)
+
+#define MAX_TRIP_POINTS                      16
+#define MAX_DVFS_DOMAINS                     2
+#define MAX_VOLTAGE_TABLE                    31
 // temperature units are in 10th of a degree kelvin
-
 typedef struct {
     // state is a bitmask
     uint32_t state;
     // trip points for below states are defined below
-#define THERMAL_STATE_NORMAL         0
-#define THERMAL_STATE_TRIP_VIOLATION 1
-#define BIG_CLUSTER_POWER_DOMAIN        0
-#define LITTLE_CLUSTER_POWER_DOMAIN     1
+#define THERMAL_STATE_NORMAL                 0
+#define THERMAL_STATE_TRIP_VIOLATION         1
+#define BIG_CLUSTER_POWER_DOMAIN             0
+#define LITTLE_CLUSTER_POWER_DOMAIN          1
 
     // the sensor temperature at which the system should activate
     // passive cooling policy
@@ -55,8 +66,17 @@ typedef struct {
     // number of trip points
     uint32_t num_trip_points;
 
-#define MAX_TRIP_POINTS             9
+    // big-little architecture
+    bool big_little;
+
+    // critical temperature
+    uint32_t critical_temp;
+
+    // trip point information
     thermal_temperature_info_t trip_point_info[MAX_TRIP_POINTS];
+
+    // opps information
+    scpi_opp_t opps[MAX_DVFS_DOMAINS];
 } thermal_device_info_t;
 
 typedef struct {
@@ -68,6 +88,16 @@ typedef struct {
     uint16_t op_idx;
     uint32_t power_domain;
 } dvfs_info_t;
+
+typedef struct {
+    uint32_t microvolt;
+    uint32_t duty_cycle;
+} voltage_table_t;
+
+typedef struct {
+    scpi_opp_entry_t opps[MAX_TRIP_POINTS];
+    voltage_table_t voltage_table[MAX_VOLTAGE_TABLE];
+} opp_info_t;
 
 // Get thermal info
 #define IOCTL_THERMAL_GET_INFO \
@@ -97,6 +127,18 @@ typedef struct {
 #define IOCTL_THERMAL_SET_DVFS_OPP \
     IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_THERMAL, 7)
 
+#define IOCTL_THERMAL_GET_TEMPERATURE \
+    IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_THERMAL, 8)
+
+#define IOCTL_THERMAL_GET_DVFS_INFO \
+    IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_THERMAL, 9)
+
+#define IOCTL_THERMAL_GET_DVFS_OPP \
+    IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_THERMAL, 10)
+
+#define IOCTL_THERMAL_GET_FAN_LEVEL \
+    IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_THERMAL, 11)
+
 // ssize_t ioctl_thermal_get_info(int fd, thermal_info_t* out)
 IOCTL_WRAPPER_OUT(ioctl_thermal_get_info, IOCTL_THERMAL_GET_INFO, thermal_info_t);
 
@@ -118,8 +160,24 @@ IOCTL_WRAPPER_OUT(ioctl_thermal_get_device_info,
                  IOCTL_THERMAL_GET_DEVICE_INFO, thermal_device_info_t);
 
 // ssize_t ioctl_thermal_set_fan_level(int fd, uint32_t fan_level)
-IOCTL_WRAPPER_IN(ioctl_thermal_set_fan_level, IOCTL_THERMAL_SET_FAN_LEVEL, int32_t);
+IOCTL_WRAPPER_IN(ioctl_thermal_set_fan_level, IOCTL_THERMAL_SET_FAN_LEVEL, uint32_t);
 
 // ssize_t ioctl_thermal_set_dvfs_opp(int fd, dvfs_info_t* info)
 IOCTL_WRAPPER_IN(ioctl_thermal_set_dvfs_opp,
                  IOCTL_THERMAL_SET_DVFS_OPP, dvfs_info_t);
+
+// ssize_t ioctl_thermal_get_temperature(int fd, uint32_t* temp)
+IOCTL_WRAPPER_OUT(ioctl_thermal_get_temperature, IOCTL_THERMAL_GET_TEMPERATURE, uint32_t);
+
+// ssize_t ioctl_thermal_get_dvfs_info(int fd, uint32_t* power_domain, scpi_opp_t* opp)
+IOCTL_WRAPPER_INOUT(ioctl_thermal_get_dvfs_info, IOCTL_THERMAL_GET_DVFS_INFO,
+                    uint32_t, scpi_opp_t);
+
+// ssize_t ioctl_thermal_get_dvfs_opp(int fd, uint32_t* power_domain, uint32_t* opp)
+IOCTL_WRAPPER_INOUT(ioctl_thermal_get_dvfs_opp, IOCTL_THERMAL_GET_DVFS_OPP,
+                    uint32_t, uint32_t);
+
+// ssize_t ioctl_thermal_get_fan_level(int fd, uint32_t* fan_level)
+IOCTL_WRAPPER_OUT(ioctl_thermal_get_fan_level, IOCTL_THERMAL_GET_FAN_LEVEL, uint32_t);
+
+

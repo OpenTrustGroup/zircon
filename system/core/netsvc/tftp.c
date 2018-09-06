@@ -12,13 +12,14 @@
 
 #include <inet6/inet6.h>
 #include <lib/fdio/spawn.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 #include <tftp/tftp.h>
 #include <zircon/assert.h>
 #include <zircon/boot/netboot.h>
 #include <zircon/process.h>
 #include <zircon/status.h>
 #include <zircon/syscalls.h>
+#include <zircon/time.h>
 
 #include "netsvc.h"
 
@@ -53,7 +54,7 @@ typedef struct {
             atomic_uint buf_refcount;
             atomic_size_t offset;       // Buffer write offset (read offset is stored locally)
             thrd_t buf_copy_thrd;
-            completion_t data_ready;    // Allows read thread to block on buffer writes
+            sync_completion_t data_ready;    // Allows read thread to block on buffer writes
         } paver;
     };
 } file_info_t;
@@ -101,8 +102,8 @@ static zx_status_t alloc_paver_buffer(file_info_t* file_info, size_t size) {
     }
     zx_object_set_property(file_info->paver.buffer_handle, ZX_PROP_NAME, "paver", 5);
     uintptr_t buffer;
-    status = zx_vmar_map(zx_vmar_root_self(), 0, file_info->paver.buffer_handle, 0, size,
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &buffer);
+    status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                         0, file_info->paver.buffer_handle, 0, size, &buffer);
     if (status != ZX_OK) {
         printf("netsvc: unable to map buffer\n");
         zx_handle_close(file_info->paver.buffer_handle);
@@ -153,12 +154,12 @@ static int paver_copy_buffer(void* arg) {
     int result = 0;
     zx_time_t last_reported = zx_clock_get_monotonic();
     while (read_ndx < file_info->paver.size) {
-        completion_reset(&file_info->paver.data_ready);
+        sync_completion_reset(&file_info->paver.data_ready);
         size_t write_ndx = atomic_load(&file_info->paver.offset);
         if (write_ndx == read_ndx) {
             // Wait for more data to be written -- we are allowed up to 3 tftp timeouts before
             // a connection is dropped, so we should wait at least that long before giving up.
-            if (completion_wait(&file_info->paver.data_ready, ZX_SEC(5 * TFTP_TIMEOUT_SECS))
+            if (sync_completion_wait(&file_info->paver.data_ready, ZX_SEC(5 * TFTP_TIMEOUT_SECS))
                 == ZX_OK) {
                 continue;
             }
@@ -176,7 +177,7 @@ static int paver_copy_buffer(void* arg) {
             }
             read_ndx += r;
             zx_time_t curr_time = zx_clock_get_monotonic();
-            if ((curr_time - last_reported) >= ZX_SEC(1)) {
+            if (zx_time_sub_time(curr_time, last_reported) >= ZX_SEC(1)) {
                 float complete = ((float)read_ndx / (float)file_info->paver.size) * 100.0;
                 printf("netsvc: paver write progress %0.1f%%\n", complete);
                 last_reported = curr_time;
@@ -211,6 +212,9 @@ static tftp_status paver_open_write(const char* filename, size_t size, file_info
     if (!strcmp(filename + NB_IMAGE_PREFIX_LEN, NB_FVM_HOST_FILENAME)) {
         printf("netsvc: Running FVM Paver\n");
         argv[1] = "install-fvm";
+    } else if (!strcmp(filename + NB_IMAGE_PREFIX_LEN, NB_BOOTLOADER_HOST_FILENAME)) {
+        printf("netsvc: Running BOOTLOADER Paver\n");
+        argv[1] = "install-bootloader";
     } else if (!strcmp(filename + NB_IMAGE_PREFIX_LEN, NB_EFI_HOST_FILENAME)) {
         printf("netsvc: Running EFI Paver\n");
         argv[1] = "install-efi";
@@ -373,7 +377,7 @@ static tftp_status file_write(const void* data, size_t* length, off_t offset, vo
         size_t new_offset = offset + *length;
         atomic_store(&file_info->paver.offset, new_offset);
         // Wake the paver thread, if it is waiting for data
-        completion_signal(&file_info->paver.data_ready);
+        sync_completion_signal(&file_info->paver.data_ready);
         return TFTP_NO_ERROR;
     } else {
         int write_result = netfile_offset_write(data, offset, *length);

@@ -23,6 +23,8 @@ typedef struct layer {
     uint64_t id;
     bool active;
 
+    bool done;
+
     frame_t src;
     frame_t dest;
 
@@ -32,8 +34,8 @@ typedef struct layer {
 // A layer whose output can appear on multiple displays.
 class VirtualLayer {
 public:
-    VirtualLayer(Display* display);
-    VirtualLayer(const fbl::Vector<Display>& displays);
+    explicit VirtualLayer(Display* display);
+    explicit VirtualLayer(const fbl::Vector<Display>& displays);
 
     // Finish initializing the layer. All Set* methods should be called before this.
     virtual bool Init(zx_handle_t channel) = 0;
@@ -50,19 +52,39 @@ public:
     // Renders the current frame (and signals the fence if necessary).
     virtual void Render(int32_t frame_num) = 0;
 
-    // Waits for the current layer configuration to be presented.
-    virtual bool WaitForPresent() = 0;
-
     // Gets the display controller layer ID for usage on the given display.
     uint64_t id(uint64_t display_id) const {
         for (unsigned i = 0; i < displays_.size(); i++) {
-            if (displays_[i]->id() == display_id) {
-                if (layers_[i].active) {
-                    return layers_[i].id;
-                }
+            if (displays_[i]->id() == display_id && layers_[i].active) {
+                return layers_[i].id;
             }
         }
         return INVALID_ID;
+    }
+
+    // Gets the ID of the image on the given display.
+    virtual uint64_t image_id(uint64_t display_id) const = 0;
+
+    void set_frame_done(uint64_t display_id) {
+        for (unsigned i = 0; i < displays_.size(); i++) {
+            if (displays_[i]->id() == display_id) {
+                layers_[i].done = true;
+            }
+        }
+    }
+
+    virtual bool is_done() const {
+        bool done = true;
+        for (unsigned i = 0; i < displays_.size(); i++) {
+            done &= !layers_[i].active || layers_[i].done;
+        }
+        return done;
+    }
+
+    void clear_done() {
+        for (unsigned i = 0; i < displays_.size(); i++) {
+            layers_[i].done = false;
+        }
     }
 
 protected:
@@ -78,8 +100,8 @@ protected:
 
 class PrimaryLayer : public VirtualLayer {
 public:
-    PrimaryLayer(Display* display);
-    PrimaryLayer(const fbl::Vector<Display>& displays);
+    explicit PrimaryLayer(Display* display);
+    explicit PrimaryLayer(const fbl::Vector<Display>& displays);
 
     // Set* methods to configure the layer.
     void SetImageDimens(uint32_t width, uint32_t height) {
@@ -108,13 +130,25 @@ public:
         alpha_enable_ = enable;
         alpha_val_ = val;
     }
+    void SetScaling(bool enable) {
+        scaling_ = enable;
+    }
+    void SetImageFormat(uint32_t image_format) { image_format_ = image_format; }
 
     bool Init(zx_handle_t channel) override;
     void StepLayout(int32_t frame_num) override;
     bool WaitForReady() override;
     void SendLayout(zx_handle_t channel) override;
     void Render(int32_t frame_num) override;
-    bool WaitForPresent() override;
+
+    uint64_t image_id(uint64_t display_id) const override {
+        for (unsigned i = 0; i < displays_.size(); i++) {
+            if (displays_[i]->id() == display_id && layers_[i].active) {
+                return layers_[i].import_info[alt_image_].id;
+            }
+        }
+        return INVALID_ID;
+    }
 
 private:
     void SetLayerPositions(zx_handle_t handle);
@@ -134,6 +168,7 @@ private:
     bool rotates_ = false;
     bool alpha_enable_ = false;
     float alpha_val_ = 0.f;
+    bool scaling_ = false;
 
     bool alt_image_ = false;
     Image* images_[2];
@@ -141,8 +176,8 @@ private:
 
 class CursorLayer : public VirtualLayer {
 public:
-    CursorLayer(Display* display);
-    CursorLayer(const fbl::Vector<Display>& displays);
+    explicit CursorLayer(Display* display);
+    explicit CursorLayer(const fbl::Vector<Display>& displays);
 
     bool Init(zx_handle_t channel) override;
     void StepLayout(int32_t frame_num) override;
@@ -150,11 +185,35 @@ public:
 
     bool WaitForReady() override { return true; }
     void Render(int32_t frame_num) override {}
-    bool WaitForPresent() override { return true; }
+
+    uint64_t image_id(uint64_t display_id) const override {
+        for (unsigned i = 0; i < displays_.size(); i++) {
+            if (displays_[i]->id() == display_id && layers_[i].active) {
+                return layers_[i].import_info[0].id;
+            }
+        }
+        return INVALID_ID;
+    }
+
 
 private:
     uint32_t x_pos_ = 0;
     uint32_t y_pos_ = 0;
 
     Image* image_;
+};
+
+class ColorLayer : public VirtualLayer {
+public:
+    explicit ColorLayer(Display* display);
+    explicit ColorLayer(const fbl::Vector<Display>& displays);
+
+    bool Init(zx_handle_t channel) override;
+
+    void SendLayout(zx_handle_t channel) override {};
+    void StepLayout(int32_t frame_num) override {};
+    bool WaitForReady() override { return true; }
+    void Render(int32_t frame_num) override {}
+    uint64_t image_id(uint64_t display_id) const override { return INVALID_ID; }
+    virtual bool is_done() const override { return true; }
 };

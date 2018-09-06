@@ -6,33 +6,36 @@
 
 namespace fidl {
 
-#define TOKEN_PRIMITIVE_TYPE_CASES                                                                 \
-    case Token::Kind::kBool:                                                                       \
-    case Token::Kind::kStatus:                                                                     \
-    case Token::Kind::kInt8:                                                                       \
-    case Token::Kind::kInt16:                                                                      \
-    case Token::Kind::kInt32:                                                                      \
-    case Token::Kind::kInt64:                                                                      \
-    case Token::Kind::kUint8:                                                                      \
-    case Token::Kind::kUint16:                                                                     \
-    case Token::Kind::kUint32:                                                                     \
-    case Token::Kind::kUint64:                                                                     \
-    case Token::Kind::kFloat32:                                                                    \
+#define TOKEN_PRIMITIVE_TYPE_CASES \
+    case Token::Kind::kBool:       \
+    case Token::Kind::kInt8:       \
+    case Token::Kind::kInt16:      \
+    case Token::Kind::kInt32:      \
+    case Token::Kind::kInt64:      \
+    case Token::Kind::kUint8:      \
+    case Token::Kind::kUint16:     \
+    case Token::Kind::kUint32:     \
+    case Token::Kind::kUint64:     \
+    case Token::Kind::kFloat32:    \
     case Token::Kind::kFloat64
 
-#define TOKEN_TYPE_CASES                                                                           \
-    TOKEN_PRIMITIVE_TYPE_CASES:                                                                    \
-    case Token::Kind::kIdentifier:                                                                 \
-    case Token::Kind::kArray:                                                                      \
-    case Token::Kind::kVector:                                                                     \
-    case Token::Kind::kString:                                                                     \
-    case Token::Kind::kHandle:                                                                     \
+#define TOKEN_TYPE_CASES           \
+    TOKEN_PRIMITIVE_TYPE_CASES:    \
+    case Token::Kind::kIdentifier: \
+    case Token::Kind::kArray:      \
+    case Token::Kind::kVector:     \
+    case Token::Kind::kString:     \
+    case Token::Kind::kHandle:     \
     case Token::Kind::kRequest
 
-#define TOKEN_LITERAL_CASES                                                                        \
-    case Token::Kind::kTrue:                                                                       \
-    case Token::Kind::kFalse:                                                                      \
-    case Token::Kind::kNumericLiteral:                                                             \
+#define TOKEN_ATTR_CASES           \
+    case Token::Kind::kDocComment: \
+    case Token::Kind::kLeftSquare
+
+#define TOKEN_LITERAL_CASES            \
+    case Token::Kind::kTrue:           \
+    case Token::Kind::kFalse:          \
+    case Token::Kind::kNumericLiteral: \
     case Token::Kind::kStringLiteral
 
 namespace {
@@ -43,7 +46,7 @@ enum {
 } // namespace
 
 Parser::Parser(Lexer* lexer, ErrorReporter* error_reporter)
-    : lexer_(lexer), error_reporter_(error_reporter) {
+    : lexer_(lexer), error_reporter_(error_reporter), latest_discarded_end_() {
     handle_subtype_table_ = {
         {"process", types::HandleSubtype::kProcess},
         {"thread", types::HandleSubtype::kThread},
@@ -68,7 +71,7 @@ Parser::Parser(Lexer* lexer, ErrorReporter* error_reporter)
 
 bool Parser::LookupHandleSubtype(const raw::Identifier* identifier,
                                  types::HandleSubtype* subtype_out) {
-    auto lookup = handle_subtype_table_.find(identifier->location.data());
+    auto lookup = handle_subtype_table_.find(identifier->location().data());
     if (lookup == handle_subtype_table_.end()) {
         return false;
     }
@@ -76,7 +79,25 @@ bool Parser::LookupHandleSubtype(const raw::Identifier* identifier,
     return true;
 }
 
+std::string MakeSquiggle(const std::string& surrounding_line, int column) {
+    std::string squiggle;
+    for (int i = 0; i < column - 1; i++) {
+        switch (surrounding_line[i]) {
+        case '\t':
+            squiggle += "\t";
+        default:
+            squiggle += " ";
+        }
+    }
+    squiggle += "^";
+    return squiggle;
+}
+
 decltype(nullptr) Parser::Fail() {
+  return Fail("found unexpected token");
+}
+
+decltype(nullptr) Parser::Fail(StringView message) {
     if (ok_) {
         auto token_location = last_token_.location();
         auto token_data = token_location.data();
@@ -86,8 +107,7 @@ decltype(nullptr) Parser::Fail() {
         auto line_number = std::to_string(position.line);
         auto column_number = std::to_string(position.column);
 
-        std::string squiggle(position.column, ' ');
-        squiggle += "^";
+        std::string squiggle = MakeSquiggle(surrounding_line, position.column);
         size_t squiggle_size = token_data.size();
         if (squiggle_size != 0u) {
             --squiggle_size;
@@ -102,10 +122,12 @@ decltype(nullptr) Parser::Fail() {
             squiggle.resize(line_size);
         }
 
-        std::string error = "found unexpected token in file ";
-        error += token_location.source_file().filename();
-        error += " on line " + line_number;
-        error += " column " + column_number + ":\n";
+        // Many editors and IDEs recognize errors in the form of
+        // filename:linenumber:column: error: descriptive-test-here\n
+        std::string error = token_location.position();
+        error += ": error: ";
+        error += message;
+        error += "\n";
         error += surrounding_line;
         error += squiggle + "\n";
 
@@ -115,18 +137,19 @@ decltype(nullptr) Parser::Fail() {
     return nullptr;
 }
 
-std::unique_ptr<raw::Identifier> Parser::ParseIdentifier() {
-    auto identifier = ConsumeToken(Token::Kind::kIdentifier);
+std::unique_ptr<raw::Identifier> Parser::ParseIdentifier(bool is_discarded) {
+    Token identifier = ConsumeToken(Token::Kind::kIdentifier, is_discarded);
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::Identifier>(identifier.location());
+    return std::make_unique<raw::Identifier>(identifier, identifier);
 }
 
 std::unique_ptr<raw::CompoundIdentifier> Parser::ParseCompoundIdentifier() {
     std::vector<std::unique_ptr<raw::Identifier>> components;
 
     components.emplace_back(ParseIdentifier());
+    Token first_token = components[0]->start_;
     if (!Ok())
         return Fail();
 
@@ -136,9 +159,10 @@ std::unique_ptr<raw::CompoundIdentifier> Parser::ParseCompoundIdentifier() {
             return Done;
 
         case Token::Kind::kDot:
-            ConsumeToken(Token::Kind::kDot);
-            if (Ok())
+            ConsumeToken(Token::Kind::kDot, true);
+            if (Ok()) {
                 components.emplace_back(ParseIdentifier());
+            }
             return More;
         }
     };
@@ -148,15 +172,15 @@ std::unique_ptr<raw::CompoundIdentifier> Parser::ParseCompoundIdentifier() {
             return Fail();
     }
 
-    return std::make_unique<raw::CompoundIdentifier>(std::move(components));
+    return std::make_unique<raw::CompoundIdentifier>(first_token, MarkLastUseful(), std::move(components));
 }
 
 std::unique_ptr<raw::StringLiteral> Parser::ParseStringLiteral() {
-    auto string_literal = ConsumeToken(Token::Kind::kStringLiteral);
+    Token string_literal = ConsumeToken(Token::Kind::kStringLiteral);
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::StringLiteral>(string_literal.location());
+    return std::make_unique<raw::StringLiteral>(string_literal);
 }
 
 std::unique_ptr<raw::NumericLiteral> Parser::ParseNumericLiteral() {
@@ -164,23 +188,23 @@ std::unique_ptr<raw::NumericLiteral> Parser::ParseNumericLiteral() {
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::NumericLiteral>(numeric_literal.location());
+    return std::make_unique<raw::NumericLiteral>(numeric_literal);
 }
 
 std::unique_ptr<raw::TrueLiteral> Parser::ParseTrueLiteral() {
-    ConsumeToken(Token::Kind::kTrue);
+    Token token = ConsumeToken(Token::Kind::kTrue);
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::TrueLiteral>();
+    return std::make_unique<raw::TrueLiteral>(token);
 }
 
 std::unique_ptr<raw::FalseLiteral> Parser::ParseFalseLiteral() {
-    ConsumeToken(Token::Kind::kFalse);
+    Token token = ConsumeToken(Token::Kind::kFalse);
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::FalseLiteral>();
+    return std::make_unique<raw::FalseLiteral>(token);
 }
 
 std::unique_ptr<raw::Literal> Parser::ParseLiteral() {
@@ -212,30 +236,84 @@ std::unique_ptr<raw::Attribute> Parser::ParseAttribute() {
         if (!Ok())
             return Fail();
     }
-    return std::make_unique<raw::Attribute>(std::move(name), std::move(value));
+
+    std::string str_name("");
+    std::string str_value("");
+    if (name)
+        str_name = std::string(name->location().data().data(), name->location().data().size());
+    if (value) {
+        auto data = value->location().data();
+        if (data.size() >= 2 && data[0] == '"' && data[data.size() - 1] == '"') {
+            str_value = std::string(value->location().data().data() + 1, value->location().data().size() - 2);
+        }
+    }
+    return std::make_unique<raw::Attribute>(name->start_, MarkLastUseful(), str_name, str_value);
 }
 
 std::unique_ptr<raw::AttributeList> Parser::ParseAttributeList() {
-    ConsumeToken(Token::Kind::kLeftSquare);
+    Token start = ConsumeToken(Token::Kind::kLeftSquare);
     if (!Ok())
         return Fail();
-    std::vector<std::unique_ptr<raw::Attribute>> attribute_list;
+    auto attributes = std::make_unique<raw::Attributes>();
     for (;;) {
-        attribute_list.emplace_back(ParseAttribute());
+        auto attribute = ParseAttribute();
         if (!Ok())
             return Fail();
+        auto attribute_name = attribute->name;
+        if (!attributes->Insert(std::move(attribute))) {
+            std::string message("Duplicate attribute with name '");
+            message += attribute_name;
+            message += "'";
+            return Fail(message);
+        }
         if (!MaybeConsumeToken(Token::Kind::kComma))
             break;
     }
-    ConsumeToken(Token::Kind::kRightSquare);
+    ConsumeToken(Token::Kind::kRightSquare, true);
     if (!Ok())
         return Fail();
-    return std::make_unique<raw::AttributeList>(std::move(attribute_list));
+    auto attribute_list = std::make_unique<raw::AttributeList>(start, MarkLastUseful(), std::move(attributes));
+    return attribute_list;
+}
+
+std::unique_ptr<raw::Attribute> Parser::ParseDocComment() {
+    std::string str_value("");
+    Token doc_line;
+    while (Peek() == Token::Kind::kDocComment) {
+        doc_line = ConsumeToken(Token::Kind::kDocComment);
+        str_value += std::string(doc_line.location().data().data() + 3, doc_line.location().data().size() - 2);
+        assert(Ok());
+    }
+    return std::make_unique<raw::Attribute>(doc_line, MarkLastUseful(), "doc", str_value);
 }
 
 std::unique_ptr<raw::AttributeList> Parser::MaybeParseAttributeList() {
-    if (Peek() == Token::Kind::kLeftSquare)
-        return ParseAttributeList();
+    std::unique_ptr<raw::Attribute> doc_comment;
+    Token start;
+    // Doc comments must appear above attributes
+    if (Peek() == Token::Kind::kDocComment) {
+        doc_comment = ParseDocComment();
+    }
+    if (Peek() == Token::Kind::kLeftSquare) {
+        auto list = ParseAttributeList();
+        if (list && doc_comment) {
+          auto attribute_name = doc_comment->name;
+          if (!list->attributes_->Insert(std::move(doc_comment))) {
+            std::string message("Duplicate attribute with name '");
+            message += attribute_name;
+            message += "'";
+            Fail(message);
+            return nullptr;
+          }
+        }
+        return list;
+    }
+    // no generic attributes, start the attribute list
+    if (doc_comment) {
+        auto attributes = std::make_unique<raw::Attributes>();
+        attributes->Insert(std::move(doc_comment));
+        return std::make_unique<raw::AttributeList>(MarkLastUseful(), MarkLastUseful(), std::move(attributes));
+    }
     return nullptr;
 }
 
@@ -261,7 +339,7 @@ std::unique_ptr<raw::Constant> Parser::ParseConstant() {
 }
 
 std::unique_ptr<raw::Using> Parser::ParseUsing() {
-    ConsumeToken(Token::Kind::kUsing);
+    Token start = ConsumeToken(Token::Kind::kUsing);
     if (!Ok())
         return Fail();
     auto using_path = ParseCompoundIdentifier();
@@ -269,51 +347,59 @@ std::unique_ptr<raw::Using> Parser::ParseUsing() {
         return Fail();
 
     std::unique_ptr<raw::Identifier> maybe_alias;
+    std::unique_ptr<raw::PrimitiveType> maybe_primitive;
+
     if (MaybeConsumeToken(Token::Kind::kAs)) {
         if (!Ok())
             return Fail();
         maybe_alias = ParseIdentifier();
         if (!Ok())
             return Fail();
+    } else if (MaybeConsumeToken(Token::Kind::kEqual)) {
+        if (!Ok() || using_path->components.size() != 1u)
+            return Fail();
+        maybe_primitive = ParsePrimitiveType();
+        if (!Ok())
+            return Fail();
     }
 
-    return std::make_unique<raw::Using>(std::move(using_path), std::move(maybe_alias));
+    return std::make_unique<raw::Using>(start, MarkLastUseful(), std::move(using_path), std::move(maybe_alias), std::move(maybe_primitive));
 }
 
 std::unique_ptr<raw::ArrayType> Parser::ParseArrayType() {
-    ConsumeToken(Token::Kind::kArray);
+    Token start = ConsumeToken(Token::Kind::kArray);
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kLeftAngle);
+    ConsumeToken(Token::Kind::kLeftAngle, true);
     if (!Ok())
         return Fail();
     auto element_type = ParseType();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kRightAngle);
+    ConsumeToken(Token::Kind::kRightAngle, true);
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kColon);
+    ConsumeToken(Token::Kind::kColon, true);
     if (!Ok())
         return Fail();
     auto element_count = ParseConstant();
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::ArrayType>(std::move(element_type), std::move(element_count));
+    return std::make_unique<raw::ArrayType>(start, MarkLastUseful(), std::move(element_type), std::move(element_count));
 }
 
 std::unique_ptr<raw::VectorType> Parser::ParseVectorType() {
-    ConsumeToken(Token::Kind::kVector);
+    Token start = ConsumeToken(Token::Kind::kVector);
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kLeftAngle);
+    ConsumeToken(Token::Kind::kLeftAngle, true);
     if (!Ok())
         return Fail();
     auto element_type = ParseType();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kRightAngle);
+    ConsumeToken(Token::Kind::kRightAngle, true);
     if (!Ok())
         return Fail();
 
@@ -331,12 +417,12 @@ std::unique_ptr<raw::VectorType> Parser::ParseVectorType() {
         nullability = types::Nullability::kNullable;
     }
 
-    return std::make_unique<raw::VectorType>(std::move(element_type),
+    return std::make_unique<raw::VectorType>(start, MarkLastUseful(), std::move(element_type),
                                              std::move(maybe_element_count), nullability);
 }
 
 std::unique_ptr<raw::StringType> Parser::ParseStringType() {
-    ConsumeToken(Token::Kind::kString);
+    Token start = ConsumeToken(Token::Kind::kString);
     if (!Ok())
         return Fail();
 
@@ -354,11 +440,11 @@ std::unique_ptr<raw::StringType> Parser::ParseStringType() {
         nullability = types::Nullability::kNullable;
     }
 
-    return std::make_unique<raw::StringType>(std::move(maybe_element_count), nullability);
+    return std::make_unique<raw::StringType>(start, MarkLastUseful(), std::move(maybe_element_count), nullability);
 }
 
 std::unique_ptr<raw::HandleType> Parser::ParseHandleType() {
-    ConsumeToken(Token::Kind::kHandle);
+    Token start = ConsumeToken(Token::Kind::kHandle);
     if (!Ok())
         return Fail();
 
@@ -366,12 +452,12 @@ std::unique_ptr<raw::HandleType> Parser::ParseHandleType() {
     if (MaybeConsumeToken(Token::Kind::kLeftAngle)) {
         if (!Ok())
             return Fail();
-        auto identifier = ParseIdentifier();
+        auto identifier = ParseIdentifier(true);
         if (!Ok())
             return Fail();
         if (!LookupHandleSubtype(identifier.get(), &subtype))
             return Fail();
-        ConsumeToken(Token::Kind::kRightAngle);
+        ConsumeToken(Token::Kind::kRightAngle, true);
         if (!Ok())
             return Fail();
     }
@@ -381,7 +467,7 @@ std::unique_ptr<raw::HandleType> Parser::ParseHandleType() {
         nullability = types::Nullability::kNullable;
     }
 
-    return std::make_unique<raw::HandleType>(subtype, nullability);
+    return std::make_unique<raw::HandleType>(start, MarkLastUseful(), subtype, nullability);
 }
 
 std::unique_ptr<raw::PrimitiveType> Parser::ParsePrimitiveType() {
@@ -390,9 +476,6 @@ std::unique_ptr<raw::PrimitiveType> Parser::ParsePrimitiveType() {
     switch (Peek()) {
     case Token::Kind::kBool:
         subtype = types::PrimitiveSubtype::kBool;
-        break;
-    case Token::Kind::kStatus:
-        subtype = types::PrimitiveSubtype::kStatus;
         break;
     case Token::Kind::kInt8:
         subtype = types::PrimitiveSubtype::kInt8;
@@ -428,23 +511,23 @@ std::unique_ptr<raw::PrimitiveType> Parser::ParsePrimitiveType() {
         return Fail();
     }
 
-    ConsumeToken(Peek());
+    Token start = ConsumeToken(Peek());
     if (!Ok())
         return Fail();
-    return std::make_unique<raw::PrimitiveType>(subtype);
+    return std::make_unique<raw::PrimitiveType>(start, MarkLastUseful(), subtype);
 }
 
 std::unique_ptr<raw::RequestHandleType> Parser::ParseRequestHandleType() {
-    ConsumeToken(Token::Kind::kRequest);
+    Token start = ConsumeToken(Token::Kind::kRequest);
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kLeftAngle);
+    ConsumeToken(Token::Kind::kLeftAngle, true);
     if (!Ok())
         return Fail();
     auto identifier = ParseCompoundIdentifier();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kRightAngle);
+    ConsumeToken(Token::Kind::kRightAngle, true);
     if (!Ok())
         return Fail();
 
@@ -453,7 +536,7 @@ std::unique_ptr<raw::RequestHandleType> Parser::ParseRequestHandleType() {
         nullability = types::Nullability::kNullable;
     }
 
-    return std::make_unique<raw::RequestHandleType>(std::move(identifier), nullability);
+    return std::make_unique<raw::RequestHandleType>(start, MarkLastUseful(), std::move(identifier), nullability);
 }
 
 std::unique_ptr<raw::Type> Parser::ParseType() {
@@ -468,7 +551,7 @@ std::unique_ptr<raw::Type> Parser::ParseType() {
                 return Fail();
             nullability = types::Nullability::kNullable;
         }
-        return std::make_unique<raw::IdentifierType>(std::move(identifier), nullability);
+        return std::make_unique<raw::IdentifierType>(identifier->start_, MarkLastUseful(), std::move(identifier), nullability);
     }
 
     case Token::Kind::kArray: {
@@ -520,7 +603,8 @@ std::unique_ptr<raw::Type> Parser::ParseType() {
 
 std::unique_ptr<raw::ConstDeclaration>
 Parser::ParseConstDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
-    ConsumeToken(Token::Kind::kConst);
+    Token start = ConsumeTokenReturnEarliest(Token::Kind::kConst, attributes);
+
     if (!Ok())
         return Fail();
     auto type = ParseType();
@@ -529,23 +613,26 @@ Parser::ParseConstDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     auto identifier = ParseIdentifier();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kEqual);
+    ConsumeToken(Token::Kind::kEqual, true);
     if (!Ok())
         return Fail();
     auto constant = ParseConstant();
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::ConstDeclaration>(std::move(attributes), std::move(type),
+    return std::make_unique<raw::ConstDeclaration>(start, MarkLastUseful(), std::move(attributes), std::move(type),
                                                    std::move(identifier), std::move(constant));
 }
 
 std::unique_ptr<raw::EnumMember> Parser::ParseEnumMember() {
+    auto attributes = MaybeParseAttributeList();
+    if (!Ok())
+        return Fail();
     auto identifier = ParseIdentifier();
     if (!Ok())
         return Fail();
 
-    ConsumeToken(Token::Kind::kEqual);
+    ConsumeToken(Token::Kind::kEqual, true);
     if (!Ok())
         return Fail();
 
@@ -553,14 +640,15 @@ std::unique_ptr<raw::EnumMember> Parser::ParseEnumMember() {
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::EnumMember>(std::move(identifier), std::move(member_value));
+    return std::make_unique<raw::EnumMember>(MarkLastUseful(), std::move(identifier), std::move(member_value), std::move(attributes));
 }
 
 std::unique_ptr<raw::EnumDeclaration>
 Parser::ParseEnumDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     std::vector<std::unique_ptr<raw::EnumMember>> members;
 
-    ConsumeToken(Token::Kind::kEnum);
+    Token start = ConsumeTokenReturnEarliest(Token::Kind::kEnum, attributes);
+
     if (!Ok())
         return Fail();
     auto identifier = ParseIdentifier();
@@ -574,16 +662,18 @@ Parser::ParseEnumDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
         if (!Ok())
             return Fail();
     }
-    ConsumeToken(Token::Kind::kLeftCurly);
+    ConsumeToken(Token::Kind::kLeftCurly, true);
     if (!Ok())
         return Fail();
 
     auto parse_member = [&members, this]() {
         switch (Peek()) {
         default:
-            ConsumeToken(Token::Kind::kRightCurly);
+            ConsumeToken(Token::Kind::kRightCurly, true);
             return Done;
 
+        TOKEN_ATTR_CASES:
+            // intentional fallthrough for attribute parsing
         TOKEN_TYPE_CASES:
             members.emplace_back(ParseEnumMember());
             return More;
@@ -593,7 +683,7 @@ Parser::ParseEnumDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     while (parse_member() == More) {
         if (!Ok())
             Fail();
-        ConsumeToken(Token::Kind::kSemicolon);
+        ConsumeToken(Token::Kind::kSemicolon, true);
         if (!Ok())
             return Fail();
     }
@@ -603,7 +693,8 @@ Parser::ParseEnumDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     if (members.empty())
         return Fail();
 
-    return std::make_unique<raw::EnumDeclaration>(std::move(attributes), std::move(identifier),
+    return std::make_unique<raw::EnumDeclaration>(start, MarkLastUseful(),
+                                                  std::move(attributes), std::move(identifier),
                                                   std::move(subtype), std::move(members));
 }
 
@@ -615,22 +706,27 @@ std::unique_ptr<raw::Parameter> Parser::ParseParameter() {
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::Parameter>(std::move(type), std::move(identifier));
+    return std::make_unique<raw::Parameter>(type->start_, MarkLastUseful(), std::move(type), std::move(identifier));
 }
 
 std::unique_ptr<raw::ParameterList> Parser::ParseParameterList() {
     std::vector<std::unique_ptr<raw::Parameter>> parameter_list;
+    Token start;
 
     switch (Peek()) {
     default:
         break;
 
     TOKEN_TYPE_CASES:
-        parameter_list.emplace_back(ParseParameter());
+        auto parameter = ParseParameter();
+        if (start.kind() != Token::Kind::kNotAToken) {
+            start = parameter->start_;
+        }
+        parameter_list.emplace_back(std::move(parameter));
         if (!Ok())
             return Fail();
         while (Peek() == Token::Kind::kComma) {
-            ConsumeToken(Token::Kind::kComma);
+            ConsumeToken(Token::Kind::kComma, true);
             if (!Ok())
                 return Fail();
             switch (Peek()) {
@@ -646,14 +742,20 @@ std::unique_ptr<raw::ParameterList> Parser::ParseParameterList() {
         }
     }
 
-    return std::make_unique<raw::ParameterList>(std::move(parameter_list));
+    return std::make_unique<raw::ParameterList>(start, MarkLastUseful(), std::move(parameter_list));
 }
 
-std::unique_ptr<raw::InterfaceMethod> Parser::ParseInterfaceMethod() {
+std::unique_ptr<raw::InterfaceMethod> Parser::ParseInterfaceMethod(std::unique_ptr<raw::AttributeList> attributes) {
+    Token start;
     auto ordinal = ParseNumericLiteral();
+    if (attributes != nullptr && attributes->attributes_->attributes_.size() != 0) {
+        start = attributes->start_;
+    } else {
+        start = ordinal->start_;
+    }
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kColon);
+    ConsumeToken(Token::Kind::kColon, true);
     if (!Ok())
         return Fail();
 
@@ -662,13 +764,13 @@ std::unique_ptr<raw::InterfaceMethod> Parser::ParseInterfaceMethod() {
     std::unique_ptr<raw::ParameterList> maybe_response;
 
     auto parse_params = [this](std::unique_ptr<raw::ParameterList>* params_out) {
-        ConsumeToken(Token::Kind::kLeftParen);
+        ConsumeToken(Token::Kind::kLeftParen, true);
         if (!Ok())
             return false;
         *params_out = ParseParameterList();
         if (!Ok())
             return false;
-        ConsumeToken(Token::Kind::kRightParen);
+        ConsumeToken(Token::Kind::kRightParen, true);
         if (!Ok())
             return false;
         return true;
@@ -698,7 +800,10 @@ std::unique_ptr<raw::InterfaceMethod> Parser::ParseInterfaceMethod() {
     assert(method_name);
     assert(maybe_request || maybe_response);
 
-    return std::make_unique<raw::InterfaceMethod>(std::move(ordinal), std::move(method_name),
+    return std::make_unique<raw::InterfaceMethod>(start, MarkLastUseful(),
+                                                  std::move(attributes),
+                                                  std::move(ordinal),
+                                                  std::move(method_name),
                                                   std::move(maybe_request),
                                                   std::move(maybe_response));
 }
@@ -708,7 +813,10 @@ Parser::ParseInterfaceDeclaration(std::unique_ptr<raw::AttributeList> attributes
     std::vector<std::unique_ptr<raw::CompoundIdentifier>> superinterfaces;
     std::vector<std::unique_ptr<raw::InterfaceMethod>> methods;
 
-    ConsumeToken(Token::Kind::kInterface);
+    // The first token may be the word "interface", or it may be the beginning
+    // of the attribute list.
+    Token start = ConsumeTokenReturnEarliest(Token::Kind::kInterface, attributes);
+
     if (!Ok())
         return Fail();
 
@@ -726,7 +834,7 @@ Parser::ParseInterfaceDeclaration(std::unique_ptr<raw::AttributeList> attributes
         }
     }
 
-    ConsumeToken(Token::Kind::kLeftCurly);
+    ConsumeToken(Token::Kind::kLeftCurly, true);
     if (!Ok())
         return Fail();
 
@@ -737,11 +845,11 @@ Parser::ParseInterfaceDeclaration(std::unique_ptr<raw::AttributeList> attributes
 
         switch (Peek()) {
         default:
-            ConsumeToken(Token::Kind::kRightCurly);
+            ConsumeToken(Token::Kind::kRightCurly, true);
             return Done;
 
         case Token::Kind::kNumericLiteral:
-            methods.emplace_back(ParseInterfaceMethod());
+            methods.emplace_back(ParseInterfaceMethod(std::move(attributes)));
             return More;
         }
     };
@@ -749,19 +857,23 @@ Parser::ParseInterfaceDeclaration(std::unique_ptr<raw::AttributeList> attributes
     while (parse_member() == More) {
         if (!Ok())
             Fail();
-        ConsumeToken(Token::Kind::kSemicolon);
+        ConsumeToken(Token::Kind::kSemicolon, true);
         if (!Ok())
             return Fail();
     }
     if (!Ok())
         Fail();
 
-    return std::make_unique<raw::InterfaceDeclaration>(std::move(attributes), std::move(identifier),
+    return std::make_unique<raw::InterfaceDeclaration>(start, MarkLastUseful(),
+                                                       std::move(attributes), std::move(identifier),
                                                        std::move(superinterfaces),
                                                        std::move(methods));
 }
 
 std::unique_ptr<raw::StructMember> Parser::ParseStructMember() {
+    auto attributes = MaybeParseAttributeList();
+    if (!Ok())
+        return Fail();
     auto type = ParseType();
     if (!Ok())
         return Fail();
@@ -778,34 +890,33 @@ std::unique_ptr<raw::StructMember> Parser::ParseStructMember() {
             return Fail();
     }
 
-    return std::make_unique<raw::StructMember>(std::move(type), std::move(identifier),
-                                               std::move(maybe_default_value));
+    return std::make_unique<raw::StructMember>(MarkLastUseful(),
+                                               std::move(type), std::move(identifier),
+                                               std::move(maybe_default_value), std::move(attributes));
 }
 
 std::unique_ptr<raw::StructDeclaration>
 Parser::ParseStructDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     std::vector<std::unique_ptr<raw::StructMember>> members;
 
-    ConsumeToken(Token::Kind::kStruct);
+    Token start = ConsumeTokenReturnEarliest(Token::Kind::kStruct, attributes);
     if (!Ok())
         return Fail();
     auto identifier = ParseIdentifier();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kLeftCurly);
+    ConsumeToken(Token::Kind::kLeftCurly, true);
     if (!Ok())
         return Fail();
 
     auto parse_member = [&members, this]() {
-        std::unique_ptr<raw::AttributeList> attributes = MaybeParseAttributeList();
-        if (!Ok())
-            return More;
-
         switch (Peek()) {
         default:
-            ConsumeToken(Token::Kind::kRightCurly);
+            ConsumeToken(Token::Kind::kRightCurly, true);
             return Done;
 
+        TOKEN_ATTR_CASES:
+            // intentional fallthrough for attribute parsing
         TOKEN_TYPE_CASES:
             members.emplace_back(ParseStructMember());
             return More;
@@ -815,7 +926,7 @@ Parser::ParseStructDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     while (parse_member() == More) {
         if (!Ok())
             Fail();
-        ConsumeToken(Token::Kind::kSemicolon);
+        ConsumeToken(Token::Kind::kSemicolon, true);
         if (!Ok())
             return Fail();
     }
@@ -825,11 +936,15 @@ Parser::ParseStructDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     if (members.empty())
         return Fail();
 
-    return std::make_unique<raw::StructDeclaration>(std::move(attributes), std::move(identifier),
+    return std::make_unique<raw::StructDeclaration>(start, MarkLastUseful(),
+                                                    std::move(attributes), std::move(identifier),
                                                     std::move(members));
 }
 
 std::unique_ptr<raw::UnionMember> Parser::ParseUnionMember() {
+    auto attributes = MaybeParseAttributeList();
+    if (!Ok())
+        return Fail();
     auto type = ParseType();
     if (!Ok())
         return Fail();
@@ -837,33 +952,31 @@ std::unique_ptr<raw::UnionMember> Parser::ParseUnionMember() {
     if (!Ok())
         return Fail();
 
-    return std::make_unique<raw::UnionMember>(std::move(type), std::move(identifier));
+    return std::make_unique<raw::UnionMember>(type->start_, MarkLastUseful(), std::move(type), std::move(identifier), std::move(attributes));
 }
 
 std::unique_ptr<raw::UnionDeclaration>
 Parser::ParseUnionDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     std::vector<std::unique_ptr<raw::UnionMember>> members;
 
-    ConsumeToken(Token::Kind::kUnion);
+    Token start = ConsumeTokenReturnEarliest(Token::Kind::kUnion, attributes);
     if (!Ok())
         return Fail();
     auto identifier = ParseIdentifier();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kLeftCurly);
+    ConsumeToken(Token::Kind::kLeftCurly, true);
     if (!Ok())
         return Fail();
 
     auto parse_member = [&members, this]() {
-        std::unique_ptr<raw::AttributeList> attributes = MaybeParseAttributeList();
-        if (!Ok())
-            return More;
-
         switch (Peek()) {
         default:
-            ConsumeToken(Token::Kind::kRightCurly);
+            ConsumeToken(Token::Kind::kRightCurly, true);
             return Done;
 
+        TOKEN_ATTR_CASES:
+            // intentional fallthrough for attribute parsing
         TOKEN_TYPE_CASES:
             members.emplace_back(ParseUnionMember());
             return More;
@@ -873,7 +986,7 @@ Parser::ParseUnionDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     while (parse_member() == More) {
         if (!Ok())
             Fail();
-        ConsumeToken(Token::Kind::kSemicolon);
+        ConsumeToken(Token::Kind::kSemicolon, true);
         if (!Ok())
             return Fail();
     }
@@ -883,7 +996,8 @@ Parser::ParseUnionDeclaration(std::unique_ptr<raw::AttributeList> attributes) {
     if (members.empty())
         Fail();
 
-    return std::make_unique<raw::UnionDeclaration>(std::move(attributes), std::move(identifier),
+    return std::make_unique<raw::UnionDeclaration>(start, MarkLastUseful(),
+                                                   std::move(attributes), std::move(identifier),
                                                    std::move(members));
 }
 
@@ -895,13 +1009,16 @@ std::unique_ptr<raw::File> Parser::ParseFile() {
     std::vector<std::unique_ptr<raw::StructDeclaration>> struct_declaration_list;
     std::vector<std::unique_ptr<raw::UnionDeclaration>> union_declaration_list;
 
-    ConsumeToken(Token::Kind::kLibrary);
+    auto attributes = MaybeParseAttributeList();
+    if (!Ok())
+        return Fail();
+    Token start = ConsumeToken(Token::Kind::kLibrary);
     if (!Ok())
         return Fail();
     auto library_name = ParseCompoundIdentifier();
     if (!Ok())
         return Fail();
-    ConsumeToken(Token::Kind::kSemicolon);
+    ConsumeToken(Token::Kind::kSemicolon, true);
     if (!Ok())
         return Fail();
 
@@ -919,7 +1036,7 @@ std::unique_ptr<raw::File> Parser::ParseFile() {
     while (parse_using() == More) {
         if (!Ok())
             return Fail();
-        ConsumeToken(Token::Kind::kSemicolon);
+        ConsumeToken(Token::Kind::kSemicolon, true);
         if (!Ok())
             return Fail();
     }
@@ -961,17 +1078,18 @@ std::unique_ptr<raw::File> Parser::ParseFile() {
     while (parse_declaration() == More) {
         if (!Ok())
             return Fail();
-        ConsumeToken(Token::Kind::kSemicolon);
+        ConsumeToken(Token::Kind::kSemicolon, true);
         if (!Ok())
             return Fail();
     }
 
-    ConsumeToken(Token::Kind::kEndOfFile);
+    Token end = ConsumeToken(Token::Kind::kEndOfFile, false);
     if (!Ok())
         return Fail();
 
     return std::make_unique<raw::File>(
-        std::move(library_name), std::move(using_list), std::move(const_declaration_list),
+        start, end,
+        std::move(attributes), std::move(library_name), std::move(using_list), std::move(const_declaration_list),
         std::move(enum_declaration_list), std::move(interface_declaration_list),
         std::move(struct_declaration_list), std::move(union_declaration_list));
 }

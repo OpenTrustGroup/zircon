@@ -6,41 +6,57 @@
 
 #include <trace/handler.h>
 
-#include <lib/zx/eventpair.h>
+#include <lib/async/cpp/wait.h>
+#include <lib/zx/fifo.h>
 #include <lib/zx/vmo.h>
 #include <fbl/intrusive_hash_table.h>
 #include <fbl/macros.h>
 #include <fbl/string.h>
 #include <fbl/unique_ptr.h>
 #include <fbl/vector.h>
-#include <zircon/misc/fnv1hash.h>
+#include <lib/zircon-internal/fnv1hash.h>
 
 namespace trace {
 namespace internal {
 
 class TraceHandlerImpl final : public trace::TraceHandler {
 public:
-    static zx_status_t StartEngine(async_t* async, zx::vmo buffer,
-                                   zx::eventpair fence,
+    static zx_status_t StartEngine(async_dispatcher_t* dispatcher,
+                                   trace_buffering_mode_t buffering_mode,
+                                   zx::vmo buffer, zx::fifo fifo,
                                    fbl::Vector<fbl::String> enabled_categories);
     static zx_status_t StopEngine();
 
 private:
-    TraceHandlerImpl(void* buffer, size_t buffer_num_bytes,
-                     zx::eventpair fence,
+    TraceHandlerImpl(void* buffer, size_t buffer_num_bytes, zx::fifo fifo,
                      fbl::Vector<fbl::String> enabled_categories);
     ~TraceHandlerImpl() override;
 
     // |trace::TraceHandler|
     bool IsCategoryEnabled(const char* category) override;
     void TraceStarted() override;
-    void TraceStopped(async_t* async,
+    void TraceStopped(async_dispatcher_t* dispatcher,
                       zx_status_t disposition, size_t buffer_bytes_written) override;
-    void BufferOverflow() override;
+
+    void HandleFifo(async_dispatcher_t* dispatcher, async::WaitBase* wait,
+                    zx_status_t status,
+                    const zx_packet_signal_t* signal);
+    bool ReadFifoMessage();
+
+    // This is called in streaming mode to notify the trace manager that
+    // buffer |buffer_number| is full and needs to be saved.
+    void NotifyBufferFull(uint32_t wrapped_count, uint64_t durable_data_end)
+        override;
+
+    // This is called in streaming mode when TraceManager reports back that
+    // it has saved the buffer.
+    static zx_status_t MarkBufferSaved(uint32_t wrapped_count,
+                                       uint64_t durable_data_end);
 
     void* buffer_;
     size_t buffer_num_bytes_;
-    zx::eventpair fence_;
+    zx::fifo fifo_;
+    async::WaitMethod<TraceHandlerImpl, &TraceHandlerImpl::HandleFifo> fifo_wait_;
     fbl::Vector<fbl::String> const enabled_categories_;
 
     using CString = const char*;

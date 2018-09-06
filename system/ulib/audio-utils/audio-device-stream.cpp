@@ -5,22 +5,24 @@
 #include <audio-utils/audio-device-stream.h>
 #include <audio-utils/audio-input.h>
 #include <audio-utils/audio-output.h>
+#include <fbl/algorithm.h>
+#include <fbl/auto_call.h>
+#include <fbl/limits.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <zircon/assert.h>
-#include <zircon/device/audio.h>
-#include <zircon/process.h>
-#include <zircon/syscalls.h>
+#include <lib/fdio/io.h>
 #include <lib/zx/channel.h>
 #include <lib/zx/handle.h>
 #include <lib/zx/vmar.h>
 #include <lib/zx/vmo.h>
-#include <fbl/algorithm.h>
-#include <fbl/auto_call.h>
-#include <fbl/limits.h>
-#include <lib/fdio/io.h>
 #include <stdio.h>
 #include <string.h>
+#include <zircon/assert.h>
+#include <zircon/device/audio.h>
+#include <zircon/process.h>
+#include <zircon/syscalls.h>
+#include <zircon/time.h>
+#include <zircon/types.h>
 
 namespace audio {
 namespace utils {
@@ -358,7 +360,8 @@ zx_status_t AudioDeviceStream::PlugMonitor(float duration) {
                                                                zx_time_t plug_time) {
         printf("Plug State now : %s (%.3lf sec since last change).\n",
                plug_state ? "plugged" : "unplugged",
-               static_cast<double>(plug_time - last_plug_time) / ZX_SEC(1));
+               static_cast<double>(zx_time_sub_time(plug_time, last_plug_time)) /
+                   static_cast<double>(ZX_SEC(1)));
 
         last_plug_state = plug_state;
         last_plug_time  = plug_time;
@@ -415,7 +418,7 @@ zx_status_t AudioDeviceStream::PlugMonitor(float duration) {
             if (now >= deadline)
                 break;
 
-            zx_time_t next_wake = fbl::min(deadline, now + ZX_MSEC(100u));
+            zx_time_t next_wake = fbl::min(deadline, zx_time_add_duration(now, ZX_MSEC(100u)));
 
             zx_signals_t sigs;
             zx_status_t res = stream_ch_.wait_one(ZX_CHANNEL_PEER_CLOSED, zx::time(next_wake), &sigs);
@@ -570,9 +573,9 @@ zx_status_t AudioDeviceStream::GetBuffer(uint32_t frames, uint32_t irqs_per_ring
     // Map the VMO into our address space
     // TODO(johngro) : How do I specify the cache policy for this mapping?
     uint32_t flags = input_
-                   ? ZX_VM_FLAG_PERM_READ
-                   : ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
-    res = zx::vmar::root_self().map(0u, rb_vmo_,
+                   ? ZX_VM_PERM_READ
+                   : ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
+    res = zx::vmar::root_self()->map(0u, rb_vmo_,
                                     0u, rb_sz_,
                                     flags, reinterpret_cast<uintptr_t*>(&rb_virt_));
 
@@ -626,7 +629,7 @@ zx_status_t AudioDeviceStream::StopRingBuffer() {
 void AudioDeviceStream::ResetRingBuffer() {
     if (rb_virt_ != nullptr) {
         ZX_DEBUG_ASSERT(rb_sz_ != 0);
-        zx::vmar::root_self().unmap(reinterpret_cast<uintptr_t>(rb_virt_), rb_sz_);
+        zx::vmar::root_self()->unmap(reinterpret_cast<uintptr_t>(rb_virt_), rb_sz_);
     }
     rb_ch_.reset();
     rb_vmo_.reset();

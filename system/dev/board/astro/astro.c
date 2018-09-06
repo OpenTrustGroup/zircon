@@ -38,71 +38,32 @@ static zx_protocol_device_t aml_bus_device_protocol = {
     .release = aml_bus_release,
 };
 
-static pbus_mmio_t astro_video_mmios[] = {
-    {
-        .base =     S905D2_CBUS_BASE,
-        .length =   S905D2_CBUS_LENGTH,
-    },
-    {
-        .base =     S905D2_DOS_BASE,
-        .length =   S905D2_DOS_LENGTH,
-    },
-    {
-        .base =     S905D2_HIU_BASE,
-        .length =   S905D2_HIU_LENGTH,
-    },
-    {
-        .base =     S905D2_AOBUS_BASE,
-        .length =   S905D2_AOBUS_LENGTH,
-    },
-    {
-        .base =     S905D2_DMC_BASE,
-        .length =   S905D2_DMC_LENGTH,
-    },
+static const pbus_dev_t rtc_dev = {
+    .name = "rtc",
+    .vid = PDEV_VID_GENERIC,
+    .pid = PDEV_PID_GENERIC,
+    .did = PDEV_DID_RTC_FALLBACK,
 };
 
-static const pbus_bti_t astro_video_btis[] = {
-    {
-        .iommu_index = 0,
-        .bti_id = BTI_VIDEO,
-    },
-};
+static uint32_t astro_get_board_rev(aml_bus_t* bus) {
+    uint32_t board_rev;
+    uint8_t id0, id1, id2;
+    gpio_config_in(&bus->gpio, GPIO_HW_ID0, GPIO_NO_PULL);
+    gpio_config_in(&bus->gpio, GPIO_HW_ID1, GPIO_NO_PULL);
+    gpio_config_in(&bus->gpio, GPIO_HW_ID2, GPIO_NO_PULL);
+    gpio_read(&bus->gpio, GPIO_HW_ID0, &id0);
+    gpio_read(&bus->gpio, GPIO_HW_ID1, &id1);
+    gpio_read(&bus->gpio, GPIO_HW_ID2, &id2);
+    board_rev = id0 + (id1 << 1) + (id2 << 2);
 
-static const pbus_irq_t astro_video_irqs[] = {
-    {
-        .irq = S905D2_DEMUX_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S905D2_PARSER_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S905D2_DOS_MBOX_0_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S905D2_DOS_MBOX_1_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-    {
-        .irq = S905D2_DOS_MBOX_2_IRQ,
-        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH,
-    },
-};
+    if (board_rev >= MAX_SUPPORTED_REV) {
+        // We have detected a new board rev. Print this warning just in case the
+        // new board rev requires additional support that we were not aware of
+        zxlogf(INFO, "Unsupported board revision detected (%d)\n", board_rev);
+    }
 
-static const pbus_dev_t video_dev = {
-    .name = "video",
-    .vid = PDEV_VID_AMLOGIC,
-    .pid = PDEV_PID_AMLOGIC_S905D2,
-    .did = PDEV_DID_AMLOGIC_VIDEO,
-    .mmios = astro_video_mmios,
-    .mmio_count = countof(astro_video_mmios),
-    .btis = astro_video_btis,
-    .bti_count = countof(astro_video_btis),
-    .irqs = astro_video_irqs,
-    .irq_count = countof(astro_video_irqs),
-};
+    return board_rev;
+}
 
 static int aml_start_thread(void* arg) {
     aml_bus_t* bus = arg;
@@ -113,6 +74,13 @@ static int aml_start_thread(void* arg) {
         goto fail;
     }
 
+    // Once gpio is up and running, let's populate board revision
+    pbus_board_info_t info;
+    info.board_revision = astro_get_board_rev(bus);
+    pbus_set_board_info(&bus->pbus, &info);
+
+    zxlogf(INFO, "Detected board rev 0x%x\n", info.board_revision);
+
     if ((status = aml_i2c_init(bus)) != ZX_OK) {
         zxlogf(ERROR, "aml_i2c_init failed: %d\n", status);
         goto fail;
@@ -121,11 +89,6 @@ static int aml_start_thread(void* arg) {
     status = aml_mali_init(&bus->pbus, BTI_MALI);
     if (status != ZX_OK) {
         zxlogf(ERROR, "aml_mali_init failed: %d\n", status);
-        goto fail;
-    }
-
-    if ((status = aml_bluetooth_init(bus)) != ZX_OK) {
-        zxlogf(ERROR, "aml_bluetooth_init failed: %d\n", status);
         goto fail;
     }
 
@@ -144,8 +107,18 @@ static int aml_start_thread(void* arg) {
         goto fail;
     }
 
-    if ((status = pbus_device_add(&bus->pbus, &video_dev, 0)) != ZX_OK) {
-        zxlogf(ERROR, "aml_start_thread could not add video_dev: %d\n", status);
+    if ((status = aml_canvas_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "aml_canvas_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = aml_video_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "aml_video_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = pbus_device_add(&bus->pbus, &rtc_dev)) != ZX_OK) {
+        zxlogf(ERROR, "aml_start_thread could not add rtc_dev: %d\n", status);
         goto fail;
     }
 
@@ -158,6 +131,29 @@ static int aml_start_thread(void* arg) {
         zxlogf(ERROR, "aml_sdio_init failed: %d\n", status);
         goto fail;
     }
+
+    if ((status = ams_light_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "ams_light_init failed: %d\n", status);
+        goto fail;
+    }
+
+    // This function includes some non-trivial delays, so lets run this last
+    // to avoid slowing down the rest of the boot.
+    if ((status = aml_bluetooth_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "aml_bluetooth_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = aml_clk_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "aml_clk_init failed: %d\n", status);
+        goto fail;
+    }
+
+    if ((status = aml_thermal_init(bus)) != ZX_OK) {
+        zxlogf(ERROR, "aml_thermal_init failed: %d\n", status);
+        goto fail;
+    }
+
     return ZX_OK;
 fail:
     zxlogf(ERROR, "aml_start_thread failed, not all devices have been initialized\n");

@@ -18,12 +18,14 @@ MODULE_SO_NAME := driver
 MODULE_COMPILEFLAGS := -fvisibility=hidden
 
 MODULE_SRCS := \
-	$(LOCAL_DIR)/usb.c \
 	$(DEVMGR_SRCS)/devhost.c \
 	$(DEVMGR_SRCS)/devhost-api.c \
 	$(DEVMGR_SRCS)/devhost-core.c \
 	$(DEVMGR_SRCS)/devhost-rpc-server.c \
 	$(DEVMGR_SRCS)/devhost-shared.c \
+
+MODULE_FIDL_LIBS := \
+    system/fidl/fuchsia-io \
 
 MODULE_STATIC_LIBS := system/ulib/ddk system/ulib/fidl system/ulib/sync system/ulib/port
 

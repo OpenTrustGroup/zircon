@@ -57,43 +57,14 @@
     #define PCIE_CFG12_LTSSM_MASK             (0x1f << 10)
     #define PCIE_CFG12_LTSSM_UP               (0x11 << 10)
 
-#define ATU_REGION_COUNT                      (16)
-#define ATU_REGION_CTRL2_ENABLE               (1 << 31)
-#define ATU_CFG_SHIFT_MODE                    (1 << 28)
-#define ATU_PROGRAM_RETRIES                   (5)
-#define ATU_WAIT_ENABLE_TIMEOUT_US            (10000)
-#define ATU_MIN_REGION_SIZE                   (1024 * 64)       // 64 KiB
-
-#define PCIE_TLP_TYPE_MEM_RW                  (0x00)
-#define PCIE_TLP_TYPE_MEM_RD_LOCKED           (0x01)
-#define PCIE_TLP_TYPE_IO_RW                   (0x02)
-#define PCIE_TLP_TYPE_CFG0                    (0x04)
-#define PCIE_TLP_TYPE_CFG1                    (0x05)
-#define PCIE_ECAM_SIZE                        (0x1000)
-
 #define PCIE_HEADER_TYPE_MASK                 (0x7f)
 #define PCIE_HEADER_TYPE0                     (0x0)
 #define PCIE_HEADER_TYPE1                     (0x1)
 #define PCIE_HEADER_TYPE1                     (0x1)
 #define PCIE_HEADER_BUS_REG_OFF               (0x18)
 
-#define RST_PCIE_A       (0x1 << 1)
-#define RST_PCIE_B       (0x1 << 2)
-#define RST_PCIE_APB     (0x1 << 6)
-#define RST_PCIE_PHY     (0x1 << 7)
-
 #define PCI_TYPE1_BAR0  (0x10)
 #define PCI_TYPE1_BAR1  (0x14)
-
-typedef struct atu_ctrl_regs {
-    uint32_t region_ctrl1;
-    uint32_t region_ctrl2;
-    uint32_t unroll_lower_base;
-    uint32_t unroll_upper_base;
-    uint32_t unroll_limit;
-    uint32_t unroll_lower_target;
-    uint32_t unroll_upper_target;
-} __PACKED atu_ctrl_regs_t;
 
 typedef struct pci_bus_reg {
     uint8_t primary_bus;

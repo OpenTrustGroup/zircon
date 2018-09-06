@@ -161,8 +161,8 @@ typedef struct zx_info_bti {
 // Describes a VM mapping.
 typedef struct zx_info_maps_mapping {
     // MMU flags for the mapping.
-    // Bitwise OR of ZX_VM_FLAG_PERM_{READ,WRITE,EXECUTE} values.
-    uint32_t mmu_flags;
+    // Bitwise OR of ZX_VM_PERM_{READ,WRITE,EXECUTE} values.
+    zx_vm_option_t mmu_flags;
     // koid of the mapped VMO.
     zx_koid_t vmo_koid;
     // The number of PAGE_SIZE pages in the mapped region of the VMO
@@ -336,19 +336,25 @@ typedef struct zx_info_kmem_stats {
     // like page tables.
     uint64_t mmu_overhead_bytes;
 
+    // The amount of memory in use by IPC.
+    uint64_t ipc_bytes;
+
     // Non-free memory that isn't accounted for in any other field.
     uint64_t other_bytes;
 } zx_info_kmem_stats_t;
 
 typedef struct zx_info_resource {
     // The resource kind, one of:
-    // {ZX_RSRC_KIND_ROOT, ZX_RSRC_KIND_MMIO, ZX_RSRC_KIND_IOPORT, ZX_RSRC_KIND_IRQ,
-    // ZX_RSRC_KIND_HYPERVISOR }
+    // ZX_RSRC_KIND_ROOT, ZX_RSRC_KIND_MMIO, ZX_RSRC_KIND_IRQ,
+    // ZX_RSRC_KIND_IOPORT, or ZX_RSRC_KIND_HYPERVISOR
     uint32_t kind;
-    // Resource's low value (inclusive)
-    uint64_t low;
-    // Resource's high value (inclusive)
-    uint64_t high;
+    // Resource's creation flags
+    uint32_t flags;
+    // Resource's base value (inclusive)
+    uint64_t base;
+    // Resource's length value
+    size_t size;
+    char name[ZX_MAX_NAME_LEN];
 } zx_info_resource_t;
 
 #define ZX_INFO_CPU_STATS_FLAG_ONLINE       (1u<<0)
@@ -364,8 +370,12 @@ typedef struct zx_info_resource {
 #define ZX_PROP_REGISTER_FS                 4u
 #endif
 
-// Argument is the value of ld.so's _dl_debug_addr, a uintptr_t.
+// Argument is the value of ld.so's _dl_debug_addr, a uintptr_t. If the
+// property is set to the magic value of ZX_PROCESS_DEBUG_ADDR_BREAK_ON_SET
+// on process startup, ld.so will trigger a debug breakpoint immediately after
+// setting the property to the correct value.
 #define ZX_PROP_PROCESS_DEBUG_ADDR          5u
+#define ZX_PROCESS_DEBUG_ADDR_BREAK_ON_SET 1u
 
 // Argument is the base address of the vDSO mapping (or zero), a uintptr_t.
 #define ZX_PROP_PROCESS_VDSO_BASE_ADDRESS   6u

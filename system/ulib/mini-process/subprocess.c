@@ -8,10 +8,6 @@
 // This function is the entire program that the child process will execute. It
 // gets directly mapped into the child process via zx_vmo_write() so it must not
 // reference any addressable entity outside it.
-__NO_SAFESTACK
-#ifdef __clang__
-__attribute__((no_sanitize("all")))
-#endif
 void minipr_thread_loop(zx_handle_t channel, uintptr_t fnptr) {
     if (fnptr == 0) {
         // In this mode we don't have a VDSO so we don't care what the handle is
@@ -121,6 +117,17 @@ void minipr_thread_loop(zx_handle_t channel, uintptr_t fnptr) {
                     if (ctx.handle_close(channel1) != ZX_OK ||
                         ctx.handle_close(channel2) != ZX_OK)
                         __builtin_trap();
+                    goto reply;
+                }
+                if (what & MINIP_CMD_VALIDATE_CLOSED_HANDLE) {
+                    what &= ~MINIP_CMD_VALIDATE_CLOSED_HANDLE;
+
+                    zx_handle_t event;
+                    if (ctx.event_create(0u, &event) != ZX_OK)
+                        __builtin_trap();
+                    ctx.handle_close(event);
+                    cmd.status = ctx.object_get_info(
+                        event, ZX_INFO_HANDLE_VALID, NULL, 0, NULL, NULL);
                     goto reply;
                 }
 

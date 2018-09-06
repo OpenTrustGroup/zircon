@@ -86,6 +86,8 @@ zx_status_t Gtt::Init(Controller* controller) {
         return status;
     }
 
+    scratch_buffer_.op_range(ZX_VMO_OP_CACHE_CLEAN, 0, PAGE_SIZE, nullptr, 0);
+
     // Populate the gtt with the scratch buffer.
     uint64_t pte = gen_pte_encode(scratch_buffer_paddr_);
     unsigned i;
@@ -162,7 +164,7 @@ zx_status_t GttRegion::PopulateRegion(zx_handle_t vmo, uint64_t page_offset,
 
         uint64_t actual_entries = ROUNDUP(cur_len, gtt_->min_contiguity_) / gtt_->min_contiguity_;
         zx::pmt pmt;
-        status = gtt_->bti_.pin(flags, zx::unowned_vmo::wrap(vmo_),
+        status = gtt_->bti_.pin(flags, *zx::unowned_vmo(vmo_),
                                 vmo_offset, cur_len, paddrs, actual_entries, &pmt);
         if (status != ZX_OK) {
             LOG_ERROR("Failed to get paddrs (%d)\n", status);

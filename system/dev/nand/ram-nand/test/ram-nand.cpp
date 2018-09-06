@@ -11,15 +11,29 @@
 #include <zircon/device/ram-nand.h>
 #include <zircon/process.h>
 
+#include "fake-ddk.h"
 #include "ram-nand.h"
 
 namespace {
 
-const int kPageSize = 4096;
-const int kOobSize = 4;
-const int kBlockSize = 4;
-const int kNumBlocks = 5;
-const int kNumPages = kBlockSize * kNumBlocks;
+constexpr int kPageSize = 4096;
+constexpr int kOobSize = 4;
+constexpr int kBlockSize = 4;
+constexpr int kNumBlocks = 5;
+constexpr int kNumPages = kBlockSize * kNumBlocks;
+
+ram_nand_info_t BuildConfig() {
+    return ram_nand_info_t{
+        .vmo = 0,
+        .nand_info = {4096, 4, 5, 6, 0, NAND_CLASS_FTL, {}},
+        .export_nand_config = false,
+        .export_partition_map = false,
+        .bad_block_config = {},
+        .extra_partition_config_count = 0,
+        .extra_partition_config = {},
+        .partition_map = {},
+    };
+}
 
 bool TrivialLifetimeTest() {
     BEGIN_TEST;
@@ -28,15 +42,30 @@ bool TrivialLifetimeTest() {
     {
         NandDevice device(params);
 
-        ASSERT_EQ(ZX_OK, device.Init(name));
+        ASSERT_EQ(ZX_OK, device.Init(name, zx::vmo()));
         EXPECT_EQ(0, strncmp("ram-nand-0", name, NAME_MAX));
     }
     {
         NandDevice device(params);
 
-        ASSERT_EQ(ZX_OK, device.Init(name));
+        ASSERT_EQ(ZX_OK, device.Init(name, zx::vmo()));
         EXPECT_EQ(0, strncmp("ram-nand-1", name, NAME_MAX));
     }
+    END_TEST;
+}
+
+bool DdkLifetimeTest() {
+    BEGIN_TEST;
+    NandParams params(kPageSize, kBlockSize, kNumBlocks, 6, 0);  // 6 bits of ECC, no OOB.
+    NandDevice* device(new NandDevice(params, fake_ddk::kFakeParent));
+
+    fake_ddk::Bind ddk;
+    ASSERT_EQ(ZX_OK, device->Bind(BuildConfig()));
+    device->DdkUnbind();
+    EXPECT_TRUE(ddk.Ok());
+
+    // This should delete the object, which means this test should not leak.
+    device->DdkRelease();
     END_TEST;
 }
 
@@ -54,7 +83,7 @@ fbl::unique_ptr<NandDevice> CreateDevice(size_t* operation_size) {
     }
 
     char name[NAME_MAX];
-    if (device->Init(name) != ZX_OK) {
+    if (device->Init(name, zx::vmo()) != ZX_OK) {
         return nullptr;
     }
     return fbl::move(device);
@@ -66,14 +95,14 @@ bool BasicDeviceProtocolTest() {
     NandDevice device(params);
 
     char name[NAME_MAX];
-    ASSERT_EQ(ZX_OK, device.Init(name));
+    ASSERT_EQ(ZX_OK, device.Init(name, zx::vmo()));
 
-    ASSERT_EQ(kPageSize * kNumPages, device.GetSize());
+    ASSERT_EQ(kPageSize * kNumPages, device.DdkGetSize());
 
-    device.Unbind();
+    device.DdkUnbind();
 
     ASSERT_EQ(ZX_ERR_BAD_STATE,
-              device.Ioctl(IOCTL_RAM_NAND_UNLINK, nullptr, 0, nullptr, 0, nullptr));
+              device.DdkIoctl(IOCTL_RAM_NAND_UNLINK, nullptr, 0, nullptr, 0, nullptr));
     END_TEST;
 }
 
@@ -82,11 +111,11 @@ bool UnlinkTest() {
     fbl::unique_ptr<NandDevice> device = CreateDevice(nullptr);
     ASSERT_TRUE(device);
 
-    ASSERT_EQ(ZX_OK, device->Ioctl(IOCTL_RAM_NAND_UNLINK, nullptr, 0, nullptr, 0, nullptr));
+    ASSERT_EQ(ZX_OK, device->DdkIoctl(IOCTL_RAM_NAND_UNLINK, nullptr, 0, nullptr, 0, nullptr));
 
     // The device is "dead" now.
     ASSERT_EQ(ZX_ERR_BAD_STATE,
-              device->Ioctl(IOCTL_RAM_NAND_UNLINK, nullptr, 0, nullptr, 0, nullptr));
+              device->DdkIoctl(IOCTL_RAM_NAND_UNLINK, nullptr, 0, nullptr, 0, nullptr));
     END_TEST;
 }
 
@@ -104,19 +133,19 @@ bool QueryTest() {
 }
 
 // Tests setting and getting bad blocks.
-bool BadBlockListTest() {
+bool FactoryBadBlockListTest() {
     BEGIN_TEST;
     fbl::unique_ptr<NandDevice> device = CreateDevice(nullptr);
     ASSERT_TRUE(device);
 
     uint32_t bad_blocks[] = {1, 3, 5};
     ASSERT_EQ(ZX_ERR_NOT_SUPPORTED,
-              device->Ioctl(IOCTL_RAM_NAND_SET_BAD_BLOCKS, bad_blocks, sizeof(bad_blocks),
-                            nullptr, 0, nullptr));
+              device->DdkIoctl(IOCTL_RAM_NAND_SET_BAD_BLOCKS, bad_blocks, sizeof(bad_blocks),
+                               nullptr, 0, nullptr));
 
     uint32_t result[4];
     uint32_t num_bad_blocks;
-    device->GetBadBlockList(result, sizeof(result), &num_bad_blocks);
+    device->GetFactoryBadBlockList(result, sizeof(result), &num_bad_blocks);
     ASSERT_EQ(0, num_bad_blocks);
     END_TEST;
 }
@@ -208,9 +237,9 @@ zx_handle_t Operation::GetVmo() {
     }
 
     uintptr_t address;
-    status = zx_vmar_map(zx_vmar_root_self(), 0, vmo_.get(), 0, buffer_size_,
-                         ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                         &address);
+    status = zx_vmar_map(zx_vmar_root_self(),
+                         ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                         0, vmo_.get(), 0, buffer_size_, &address);
     if (status != ZX_OK) {
         return ZX_HANDLE_INVALID;
     }
@@ -243,12 +272,12 @@ class NandTest {
 
         header->operation->OnCompletion(status);
         header->test->num_completed_++;
-        completion_signal(&header->test->event_);
+        sync_completion_signal(&header->test->event_);
     }
 
     bool Wait() {
-        zx_status_t status = completion_wait(&event_, ZX_SEC(5));
-        completion_reset(&event_);
+        zx_status_t status = sync_completion_wait(&event_, ZX_SEC(5));
+        sync_completion_reset(&event_);
         return status == ZX_OK;
     }
 
@@ -262,7 +291,7 @@ class NandTest {
     }
 
   private:
-    completion_t event_;
+    sync_completion_t event_;
     int num_completed_ = 0;
     DISALLOW_COPY_ASSIGN_AND_MOVE(NandTest);
 };
@@ -673,10 +702,11 @@ bool EraseTest() {
 
 BEGIN_TEST_CASE(RamNandTests)
 RUN_TEST_SMALL(TrivialLifetimeTest)
+RUN_TEST_SMALL(DdkLifetimeTest)
 RUN_TEST_SMALL(BasicDeviceProtocolTest)
 RUN_TEST_SMALL(UnlinkTest)
 RUN_TEST_SMALL(QueryTest)
-RUN_TEST_SMALL(BadBlockListTest)
+RUN_TEST_SMALL(FactoryBadBlockListTest)
 RUN_TEST_SMALL(QueueOneTest)
 RUN_TEST_SMALL(ReadWriteTest)
 RUN_TEST_SMALL(QueueMultipleTest)

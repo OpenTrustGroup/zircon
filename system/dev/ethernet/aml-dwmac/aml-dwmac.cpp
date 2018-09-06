@@ -10,9 +10,9 @@
 #include <fbl/ref_counted.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/type_support.h>
-#include <lib/vmo-utils/vmar_manager.h>
 #include <hw/arch_ops.h>
 #include <hw/reg.h>
+#include <lib/fzl/vmar-manager.h>
 #include <soc/aml-s912/s912-hw.h>
 #include <zircon/compiler.h>
 
@@ -98,8 +98,8 @@ zx_status_t AmlDWMacDevice::InitPdev() {
         return status;
     }
 
-    gpio_config(&gpio_, PHY_RESET, GPIO_DIR_OUT);
-    gpio_write(&gpio_, PHY_RESET, 0);
+    gpio_config_out(&gpio_, PHY_RESET, 0);
+    ResetPhy();
 
     // Map amlogic peripheral control registers
     status = pdev_map_mmio_buffer(&pdev_, 0, ZX_CACHE_POLICY_UNCACHED_DEVICE,
@@ -258,7 +258,7 @@ zx_status_t AmlDWMacDevice::Create(zx_device_t* device) {
 
 zx_status_t AmlDWMacDevice::InitBuffers() {
 
-    fbl::RefPtr<vmo_utils::VmarManager> vmar_mgr;
+    fbl::RefPtr<fzl::VmarManager> vmar_mgr;
 
     constexpr size_t kDescSize = ROUNDUP(2 * kNumDesc * sizeof(dw_dmadescr_t), PAGE_SIZE);
 

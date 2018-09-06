@@ -124,6 +124,9 @@
                 "name": {
                     "$ref": "#/definitions/identifier"
                 },
+                "maybe_attributes": {
+                    "$ref": "#/definitions/attributes-list"
+                },
                 "value": {
                     "$ref": "#/definitions/constant"
                 }
@@ -159,6 +162,9 @@
                 "has_response"
             ],
             "properties": {
+                "maybe_attributes": {
+                    "$ref": "#/definitions/attributes-list"
+                },
                 "ordinal": {
                     "$ref": "#/definitions/ordinal"
                 },
@@ -232,6 +238,9 @@
                 "size"
             ],
             "properties": {
+                "max_handles": {
+                    "$ref": "#/definitions/max-handles"
+                },
                 "maybe_attributes": {
                     "$ref": "#/definitions/attributes-list"
                 },
@@ -274,6 +283,9 @@
                 "offset": {
                     "$ref": "#/definitions/size"
                 },
+                "maybe_attributes": {
+                    "$ref": "#/definitions/attributes-list"
+                },
                 "maybe_default_value": {
                     "$ref": "#/definitions/constant"
                 }
@@ -288,6 +300,9 @@
                 "alignment"
             ],
             "properties": {
+                "max_handles": {
+                    "$ref": "#/definitions/max-handles"
+                },
                 "maybe_attributes": {
                     "$ref": "#/definitions/attributes-list"
                 },
@@ -332,6 +347,9 @@
                 },
                 "offset": {
                     "$ref": "#/definitions/size"
+                },
+                "maybe_attributes": {
+                    "$ref": "#/definitions/attributes-list"
                 }
             }
         },
@@ -734,7 +752,6 @@
                     "type": "string",
                     "enum": [
                         "bool",
-                        "status",
                         "float32",
                         "float64"
                     ]
@@ -773,6 +790,11 @@
         "library-identifier": {
             "type": "string",
             "pattern": "([_A-Za-z][_A-Za-z0-9]*-)*[_A-Za-z][_A-Za-z0-9]*"
+        },
+        "max-handles": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
         },
         "size": {
             "type": "integer",

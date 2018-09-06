@@ -71,18 +71,23 @@ static const pbus_gpio_t emmc_gpios[] = {
 
 static aml_sd_emmc_config_t config = {
     .supports_dma = true,
+    //As per AMlogic, on S912 chipset, HS400 mode can be operated at 125MHZ or low.
+    .min_freq = 400000,
+    .max_freq = 120000000,
 };
 
 static const pbus_metadata_t emmc_metadata[] = {
     {
         .type       = DEVICE_METADATA_PRIVATE,
-        .extra      = 0,
         .data       = &config,
         .len        = sizeof(config),
     },
+};
+
+static const pbus_boot_metadata_t emmc_boot_metadata[] = {
     {
-        .type = DEVICE_METADATA_PARTITION_MAP,
-        .extra = 0,
+        .zbi_type = DEVICE_METADATA_PARTITION_MAP,
+        .zbi_extra = 0,
     },
 };
 
@@ -101,6 +106,8 @@ static const pbus_dev_t emmc_dev = {
     .gpio_count = countof(emmc_gpios),
     .metadata = emmc_metadata,
     .metadata_count = countof(emmc_metadata),
+    .boot_metadata = emmc_boot_metadata,
+    .boot_metadata_count = countof(emmc_boot_metadata),
 };
 
 zx_status_t vim_sd_emmc_init(vim_bus_t* bus) {
@@ -120,7 +127,7 @@ zx_status_t vim_sd_emmc_init(vim_bus_t* bus) {
     gpio_set_alt_function(&bus->gpio, S912_EMMC_CMD, S912_EMMC_CMD_FN);
     gpio_set_alt_function(&bus->gpio, S912_EMMC_DS, S912_EMMC_DS_FN);
 
-    if ((status = pbus_device_add(&bus->pbus, &emmc_dev, 0)) != ZX_OK) {
+    if ((status = pbus_device_add(&bus->pbus, &emmc_dev)) != ZX_OK) {
         zxlogf(ERROR, "vim_sd_emmc_init could not add emmc_dev: %d\n", status);
         return status;
     }

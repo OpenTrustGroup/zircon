@@ -54,10 +54,10 @@ static const pbus_bti_t eth_btis[] = {
     },
 };
 
-static const pbus_metadata_t eth_metadata[] = {
+static const pbus_boot_metadata_t eth_metadata[] = {
     {
-        .type = DEVICE_METADATA_MAC_ADDRESS,
-        .extra = 0,
+        .zbi_type = DEVICE_METADATA_MAC_ADDRESS,
+        .zbi_extra = 0,
     },
 };
 
@@ -74,8 +74,8 @@ static pbus_dev_t eth_dev = {
     .bti_count = countof(eth_btis),
     .irqs = eth_irqs,
     .irq_count = countof(eth_irqs),
-    .metadata = eth_metadata,
-    .metadata_count = countof(eth_metadata),
+    .boot_metadata = eth_metadata,
+    .boot_metadata_count = countof(eth_metadata),
 };
 
 zx_status_t vim_eth_init(vim_bus_t* bus) {
@@ -99,10 +99,10 @@ zx_status_t vim_eth_init(vim_bus_t* bus) {
     gpio_set_alt_function(&bus->gpio, S912_ETH_TXD2,     S912_ETH_TXD2_FN);
     gpio_set_alt_function(&bus->gpio, S912_ETH_TXD3,     S912_ETH_TXD3_FN);
 
-    //Set reset line to output
-    gpio_config(&bus->gpio, S912_GPIOZ(14), GPIO_DIR_OUT);
+    // Set reset line to output
+    gpio_config_out(&bus->gpio, S912_GPIOZ(14), 0);
 
-    zx_status_t status = pbus_device_add(&bus->pbus, &eth_dev, PDEV_ADD_PBUS_DEVHOST);
+    zx_status_t status = pbus_device_add(&bus->pbus, &eth_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "vim_eth_init: pbus_device_add failed: %d\n", status);
     }

@@ -5,22 +5,16 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
-#include <stdarg.h>
-#include <reg.h>
+#include <arch/x86.h>
+#include <arch/x86/apic.h>
 #include <bits.h>
-#include <stdio.h>
+#include <dev/interrupt.h>
+#include <kernel/cmdline.h>
 #include <kernel/spinlock.h>
 #include <kernel/thread.h>
 #include <kernel/timer.h>
-#include <vm/physmap.h>
-#include <lk/init.h>
-#include <arch/x86.h>
-#include <arch/x86/apic.h>
-#include <dev/interrupt.h>
-#include <kernel/cmdline.h>
-#include <kernel/thread.h>
-#include <kernel/timer.h>
 #include <lib/cbuf.h>
+#include <lib/debuglog.h>
 #include <lk/init.h>
 #include <platform.h>
 #include <platform/console.h>
@@ -34,6 +28,7 @@
 #include <string.h>
 #include <trace.h>
 #include <vm/physmap.h>
+#include <zircon/time.h>
 #include <zircon/types.h>
 
 #include "platform_p.h"
@@ -115,7 +110,8 @@ static void platform_drain_debug_uart_rx(void) {
 
 // for devices where the uart rx interrupt doesn't seem to work
 static void uart_rx_poll(timer_t* t, zx_time_t now, void* arg) {
-    timer_set(t, now + ZX_MSEC(10), TIMER_SLACK_CENTER, ZX_MSEC(1), uart_rx_poll, NULL);
+    zx_time_t deadline = zx_time_add_duration(now, ZX_MSEC(10));
+    timer_set(t, deadline, TIMER_SLACK_CENTER, ZX_MSEC(1), uart_rx_poll, NULL);
     platform_drain_debug_uart_rx();
 }
 
@@ -128,7 +124,7 @@ void platform_debug_start_uart_timer(void) {
     if (!started) {
         started = true;
         timer_init(&uart_rx_poll_timer);
-        timer_set(&uart_rx_poll_timer, current_time() + ZX_MSEC(10),
+        timer_set(&uart_rx_poll_timer, zx_time_add_duration(current_time(), ZX_MSEC(10)),
                   TIMER_SLACK_CENTER, ZX_MSEC(1), uart_rx_poll, NULL);
     }
 }
@@ -295,7 +291,8 @@ void pc_init_debug(void) {
         return;
     }
 
-    if ((uart_irq == 0) || cmdline_get_bool("kernel.debug_uart_poll", false)) {
+    if ((uart_irq == 0) || cmdline_get_bool("kernel.debug_uart_poll", false) ||
+        dlog_bypass()) {
         printf("debug-uart: polling enabled\n");
         platform_debug_start_uart_timer();
     } else {
@@ -310,9 +307,7 @@ void pc_init_debug(void) {
         const uint8_t mcr = uart_read(4);
         uart_write(4, mcr | 0x8);
         printf("UART: started IRQ driven RX\n");
-#if !ENABLE_KERNEL_LL_DEBUG
         tx_irq_driven = true;
-#endif
     }
     if (tx_irq_driven) {
         // start up tx driven output

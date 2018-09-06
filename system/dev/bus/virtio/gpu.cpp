@@ -12,6 +12,7 @@
 #include <fbl/auto_call.h>
 #include <fbl/auto_lock.h>
 #include <zircon/compiler.h>
+#include <zircon/time.h>
 
 #include "trace.h"
 #include "virtio_gpu.h"
@@ -51,24 +52,17 @@ void GpuDevice::virtio_gpu_set_display_controller_cb(void* ctx, void* cb_ctx,
         gd->dc_cb_ctx_ = cb_ctx;
     }
 
-    uint64_t disp_id = kDisplayId;
-    cb->on_displays_changed(cb_ctx, &disp_id, 1, nullptr, 0);
-}
-
-zx_status_t GpuDevice::virtio_gpu_get_display_info(void* ctx, uint64_t id, display_info_t* info) {
-    if (id != kDisplayId) {
-        return ZX_ERR_INVALID_ARGS;
-    }
-    GpuDevice* gd = static_cast<GpuDevice*>(ctx);
-
-    info->edid_present = false;
-    info->panel.params.width = gd->pmode_.r.width;
-    info->panel.params.height = gd->pmode_.r.height;
-    info->panel.params.refresh_rate_e2 = kRefreshRateHz * 100;
-
-    info->pixel_formats = &gd->supported_formats_;
-    info->pixel_format_count = 1;
-    return ZX_OK;
+    added_display_args_t args = {};
+    args.display_id = kDisplayId,
+    args.edid_present = false,
+    args.panel.params = {
+        .width = gd->pmode_.r.width,
+        .height = gd->pmode_.r.height,
+        .refresh_rate_e2 = kRefreshRateHz * 100,
+    },
+    args.pixel_formats = &gd->supported_formats_,
+    args.pixel_format_count = 1,
+    cb->on_displays_changed(cb_ctx, &args, 1, nullptr, 0);
 }
 
 zx_status_t GpuDevice::virtio_gpu_import_vmo_image(void* ctx, image_t* image,
@@ -86,18 +80,12 @@ zx_status_t GpuDevice::virtio_gpu_import_vmo_image(void* ctx, image_t* image,
 
     unsigned pixel_size = ZX_PIXEL_FORMAT_BYTES(image->pixel_format);
     unsigned size = ROUNDUP(image->width * image->height * pixel_size, PAGE_SIZE);
-    unsigned num_pages = size / PAGE_SIZE;
-    zx_paddr_t paddr[num_pages];
-    zx_status_t status = zx_bti_pin(gd->bti_.get(), ZX_BTI_PERM_READ, vmo, offset, size,
-                                    paddr, num_pages, import_data->pmt.reset_and_get_address());
+    zx_paddr_t paddr;
+    zx_status_t status = zx_bti_pin(gd->bti_.get(), ZX_BTI_PERM_READ | ZX_BTI_CONTIGUOUS,
+                                    vmo, offset, size,
+                                    &paddr, 1, import_data->pmt.reset_and_get_address());
     if (status != ZX_OK) {
         return status;
-    }
-
-    for (unsigned i = 0; i < num_pages - 1; i++) {
-        if (paddr[i] + PAGE_SIZE != paddr[i + 1]) {
-            return ZX_ERR_INVALID_ARGS;
-        }
     }
 
     status = gd->allocate_2d_resource(&import_data->resource_id, image->width, image->height);
@@ -106,7 +94,7 @@ zx_status_t GpuDevice::virtio_gpu_import_vmo_image(void* ctx, image_t* image,
         return status;
     }
 
-    status = gd->attach_backing(import_data->resource_id, paddr[0], size);
+    status = gd->attach_backing(import_data->resource_id, paddr, size);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: failed to attach backing store\n", gd->tag());
         return status;
@@ -123,6 +111,7 @@ void GpuDevice::virtio_gpu_release_image(void* ctx, image_t* image) {
 
 void GpuDevice::virtio_gpu_check_configuration(void* ctx,
                                                const display_config_t** display_configs,
+                                               uint32_t* display_cfg_result,
                                                uint32_t** layer_cfg_results,
                                                uint32_t display_count) {
     GpuDevice* gd = static_cast<GpuDevice*>(ctx);
@@ -391,7 +380,6 @@ void GpuDevice::virtio_gpu_flusher() {
     zx_time_t period = ZX_SEC(1) / kRefreshRateHz;
     for (;;) {
         zx_nanosleep(next_deadline);
-        next_deadline += period;
 
         bool fb_change;
         {
@@ -430,9 +418,11 @@ void GpuDevice::virtio_gpu_flusher() {
             fbl::AutoLock al(&flush_lock_);
             if (dc_cb_) {
                 void* handles[] = { static_cast<void*>(displayed_fb_) };
-                dc_cb_->on_display_vsync(dc_cb_ctx_, kDisplayId, handles, displayed_fb_ != nullptr);
+                dc_cb_->on_display_vsync(dc_cb_ctx_, kDisplayId,
+                                         next_deadline, handles, displayed_fb_ != nullptr);
             }
         }
+        next_deadline = zx_time_add_duration(next_deadline, period);
     }
 }
 
@@ -467,7 +457,6 @@ zx_status_t GpuDevice::virtio_gpu_start() {
     LTRACEF("publishing device\n");
 
     display_proto_ops_.set_display_controller_cb = virtio_gpu_set_display_controller_cb;
-    display_proto_ops_.get_display_info = virtio_gpu_get_display_info;
     display_proto_ops_.import_vmo_image = virtio_gpu_import_vmo_image;
     display_proto_ops_.release_image = virtio_gpu_release_image;
     display_proto_ops_.check_configuration = virtio_gpu_check_configuration;

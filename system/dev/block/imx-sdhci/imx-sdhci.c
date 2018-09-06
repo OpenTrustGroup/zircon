@@ -31,7 +31,7 @@
 // Zircon Includes
 #include <zircon/threads.h>
 #include <zircon/assert.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 #include <pretty/hexdump.h>
 
 #include "imx-sdhci.h"
@@ -40,7 +40,7 @@
 // #define ENABLE_POLLING
 
 // Uncomment to disable DMA Mode
-// #define DISABLE_DMA
+#define DISABLE_DMA
 
 // Uncomment to print logs at all levels
 // #define SDHCI_LOG_ALL 1
@@ -81,8 +81,8 @@ typedef struct sdhci_adma64_desc {
 
 static_assert(sizeof(sdhci_adma64_desc_t) == 8, "unexpected ADMA2 descriptor size");
 
-// 64k max per descriptor
-#define ADMA2_DESC_MAX_LENGTH   0x10000 // 64k
+// 64k - 1 is max per descriptor, we operate on pages so we use 64K - PAGE_SIZE
+#define ADMA2_DESC_MAX_LENGTH   (0x10000 - PAGE_SIZE)
 // for 2M max transfer size for fully discontiguous
 // also see SDMMC_PAGES_COUNT in ddk/protocol/sdmmc.h
 #define DMA_DESC_COUNT          512
@@ -114,7 +114,7 @@ typedef struct imx_sdhci_device {
     uint16_t                    data_blockid;       // Current block id to transfer (PIO)
     bool                        data_done;          // Set to true if the data stage completed
                                                     // before the cmd stage
-    completion_t                req_completion;     // used to signal request complete
+    sync_completion_t                req_completion;     // used to signal request complete
     sdmmc_host_info_t           info;               // Controller info
     uint32_t                    base_clock;         // Base clock rate
     bool                        ddr_mode;           // DDR Mode enable flag
@@ -303,7 +303,7 @@ static void imx_sdhci_complete_request_locked(imx_sdhci_device_t* dev, sdmmc_req
     dev->data_done = false;
 
     req->status = status;
-    completion_signal(&dev->req_completion);
+    sync_completion_signal(&dev->req_completion);
 }
 
 static void imx_sdhci_cmd_stage_complete_locked(imx_sdhci_device_t* dev) {
@@ -534,6 +534,17 @@ static zx_status_t imx_sdhci_build_dma_desc(imx_sdhci_device_t* dev, sdmmc_req_t
     }
     // cache this for zx_pmt_unpin() later
     req->pmt = pmt;
+
+    if (is_read) {
+        st = zx_vmo_op_range(req->dma_vmo, ZX_VMO_OP_CACHE_CLEAN_INVALIDATE,
+                             req->buf_offset, req_len, NULL, 0);
+    } else {
+        st = zx_vmo_op_range(req->dma_vmo, ZX_VMO_OP_CACHE_CLEAN,
+                             req->buf_offset, req_len, NULL, 0);
+    }
+    if (st != ZX_OK) {
+        zxlogf(ERROR, "imx-emmc: cache clean failed with error %d\n", st);
+    }
 
     phys_iter_buffer_t buf = {
         .phys = phys,
@@ -998,11 +1009,11 @@ static zx_status_t imx_sdhci_request(void* ctx, sdmmc_req_t* req) {
 
     mtx_unlock(&dev->mtx);
 
-    completion_wait(&dev->req_completion, ZX_TIME_INFINITE);
+    sync_completion_wait(&dev->req_completion, ZX_TIME_INFINITE);
 
     imx_sdhci_finish_req(dev, req);
 
-    completion_reset(&dev->req_completion);
+    sync_completion_reset(&dev->req_completion);
 
     return req->status;
 
@@ -1160,7 +1171,7 @@ static zx_status_t imx_sdhci_bind(void* ctx, zx_device_t* parent) {
     dev->base_clock = IMX8M_SDHCI_BASE_CLOCK; // TODO: Better way of obtaining this info
 
     // Toggle the reset button
-    if (gpio_config(&dev->gpio, 0, GPIO_DIR_OUT) != ZX_OK) {
+    if (gpio_config_out(&dev->gpio, 0, 0) != ZX_OK) {
         SDHCI_ERROR("Could not configure RESET pin as output\n");
         goto fail;
     }

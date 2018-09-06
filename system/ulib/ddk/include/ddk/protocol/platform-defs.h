@@ -24,16 +24,25 @@ __BEGIN_CDECLS;
 #define PDEV_DID_LED2472G           11  // RPi Sense Hat LED2472G
 #define PDEV_DID_GPU_VSL_GC         12  // Verisilicon GC series GPU
 #define PDEV_DID_ARM_MALI_INIT      13  // ARM MALI GPU (Zircon)
+#define PDEV_DID_OPTEE              14  // OP-TEE OS Driver
+#define PDEV_DID_RTC_FALLBACK       15  // Synthetic RTC device
 
 // QEMU emulator
 #define PDEV_VID_QEMU               1
 #define PDEV_PID_QEMU               1
+
+#define PDEV_DID_QEMU_TEST_PARENT   1
+#define PDEV_DID_QEMU_TEST_CHILD_1  2
+#define PDEV_DID_QEMU_TEST_CHILD_2  3
+#define PDEV_DID_QEMU_TEST_CHILD_3  4
 
 // 96Boards
 #define PDEV_VID_96BOARDS           2
 #define PDEV_PID_HIKEY960           1
 
 #define PDEV_DID_HIKEY960_I2C_TEST  1
+#define PDEV_DID_HI3660_CLK         2
+#define PDEV_DID_HIKEY960_USB       3
 
 // Google
 #define PDEV_VID_GOOGLE             3
@@ -78,6 +87,7 @@ __BEGIN_CDECLS;
 #define PDEV_DID_AMLOGIC_VIDEO      12
 #define PDEV_DID_AMLOGIC_RAW_NAND   13
 #define PDEV_DID_AMLOGIC_CANVAS     14
+#define PDEV_DID_AMLOGIC_G12A_CLK   15
 
 // Broadcom
 #define PDEV_VID_BROADCOM           6
@@ -102,5 +112,10 @@ __BEGIN_CDECLS;
 #define PDEV_DID_IMX_SDHCI          3
 
 #define PDEV_DID_PCF8563_RTC        1
+
+// AMS
+#define PDEV_VID_AMS                10
+#define PDEV_PID_AMS_TCS3400        1
+#define PDEV_DID_AMS_LIGHT          1
 
 __END_CDECLS;

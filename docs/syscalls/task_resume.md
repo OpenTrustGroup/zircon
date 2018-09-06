@@ -3,6 +3,8 @@
 This function is deprecated. When you suspend a thread with
 [task_suspend_token](task_suspend_token.md) closing the suspend token will
 automatically resume the thread.
+And when you want to resume a thread from an exception,
+use [task_resume_from_exception](task_resume_from_exception.md].
 
 ## NAME
 
@@ -79,6 +81,10 @@ can resume a thread from an exception. It is up to exception
 handlers to not trip over each other, as well as all other
 software calling **zx_task_resume**() with **ZX_RESUME_EXCEPTION**.
 (ZX-562 documents this issue.)
+
+## RIGHTS
+
+TODO(ZX-2399)
 
 ## RETURN VALUE
 

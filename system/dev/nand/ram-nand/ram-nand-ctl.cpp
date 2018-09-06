@@ -10,10 +10,11 @@
 #include <fbl/alloc_checker.h>
 #include <fbl/macros.h>
 #include <fbl/unique_ptr.h>
+#include <lib/zx/vmo.h>
 #include <zircon/device/ram-nand.h>
 #include <zircon/types.h>
 
-#include "device.h"
+#include "ram-nand.h"
 #include "ram-nand-ctl.h"
 
 namespace {
@@ -31,7 +32,8 @@ class RamNandCtl : public RamNandCtlDeviceType {
     zx_status_t DdkIoctl(uint32_t op, const void* in_buf, size_t in_len,
                          void* out_buf, size_t out_len, size_t* out_actual);
   private:
-    zx_status_t CreateDevice(const NandParams& params, void* out_buf, size_t* out_actual);
+    zx_status_t CreateDevice(const ram_nand_info_t& in, void* out_buf,
+                             size_t* out_actual);
     DISALLOW_COPY_ASSIGN_AND_MOVE(RamNandCtl);
 };
 
@@ -42,27 +44,32 @@ zx_status_t RamNandCtl::DdkIoctl(uint32_t op, const void* in_buf, size_t in_len,
     }
 
     switch (op) {
-    case IOCTL_RAM_NAND_CREATE: {
-        if (in_len != sizeof(nand_info_t)) {
+    case IOCTL_RAM_NAND_CREATE:
+    case IOCTL_RAM_NAND_CREATE_VMO: {
+        if (in_len < sizeof(ram_nand_info_t)) {
             return ZX_ERR_INVALID_ARGS;
         }
-        const NandParams* params = static_cast<const NandParams*>(in_buf);
-        return CreateDevice(*params, out_buf, out_actual);
+        const auto* in = static_cast<const ram_nand_info_t*>(in_buf);
+        if (op == IOCTL_RAM_NAND_CREATE && in->vmo != ZX_HANDLE_INVALID) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+        return CreateDevice(*in, out_buf, out_actual);
     }
     default:
         return ZX_ERR_NOT_SUPPORTED;
     }
 }
 
-zx_status_t RamNandCtl::CreateDevice(const NandParams& params, void* out_buf,
+zx_status_t RamNandCtl::CreateDevice(const ram_nand_info_t& in, void* out_buf,
                                      size_t* out_actual) {
+    const auto& params = static_cast<const NandParams>(in.nand_info);
     fbl::AllocChecker checker;
-    fbl::unique_ptr<RamNandDevice> device(new (&checker) RamNandDevice(zxdev(), params));
+    fbl::unique_ptr<NandDevice> device(new (&checker) NandDevice(params, zxdev()));
     if (!checker.check()) {
         return ZX_ERR_NO_MEMORY;
     }
 
-    zx_status_t status = device->Bind();
+    zx_status_t status = device->Bind(in);
     if (status != ZX_OK) {
         return status;
     }
@@ -71,7 +78,7 @@ zx_status_t RamNandCtl::CreateDevice(const NandParams& params, void* out_buf,
     strcpy(static_cast<char*>(out_buf), device->name());
 
     // devmgr is now in charge of the device.
-    __UNUSED RamNandDevice* dummy = device.release();
+    __UNUSED NandDevice* dummy = device.release();
     return ZX_OK;
 }
 

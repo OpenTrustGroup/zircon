@@ -10,31 +10,38 @@
 #include <ddk/binding.h>
 #include <ddk/debug.h>
 #include <ddk/device.h>
-#include <ddk/metadata.h>
 #include <ddk/io-buffer.h>
+#include <ddk/io-buffer.h>
+#include <ddk/metadata.h>
+#include <ddk/phys-iter.h>
+#include <ddk/protocol/gpio.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
 #include <ddk/protocol/platform-device.h>
-#include <ddk/protocol/gpio.h>
-#include <ddk/io-buffer.h>
-#include <ddk/phys-iter.h>
-#include <hw/reg.h>
-#include <soc/aml-common/aml-sd-emmc.h>
 #include <ddk/protocol/sdmmc.h>
+#include <hw/reg.h>
 #include <hw/sdmmc.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
+#include <soc/aml-common/aml-sd-emmc.h>
 
 #include <zircon/assert.h>
-#include <zircon/types.h>
 #include <zircon/threads.h>
+#include <zircon/types.h>
 
 // Limit maximum number of descriptors to 512 for now
-#define AML_DMA_DESC_MAX_COUNT      512
+#define AML_DMA_DESC_MAX_COUNT 512
 #define AML_SD_EMMC_TRACE(fmt, ...) zxlogf(TRACE, "%s: " fmt, __func__, ##__VA_ARGS__)
-#define AML_SD_EMMC_INFO(fmt, ...)  zxlogf(INFO, "%s: "fmt, __func__, ##__VA_ARGS__)
+#define AML_SD_EMMC_INFO(fmt, ...) zxlogf(INFO, "%s: " fmt, __func__, ##__VA_ARGS__)
 #define AML_SD_EMMC_ERROR(fmt, ...) zxlogf(ERROR, "%s: " fmt, __func__, ##__VA_ARGS__)
-#define AML_SD_EMMC_COMMAND(c)      ((0x80) | (c))
-#define PAGE_MASK                   (PAGE_SIZE - 1ull)
+#define AML_SD_EMMC_COMMAND(c) ((0x80) | (c))
+#define PAGE_MASK (PAGE_SIZE - 1ull)
+
+static inline uint8_t log2_ceil(uint16_t blk_sz) {
+    if (blk_sz == 1) {
+        return 0;
+    }
+    return (16 - __builtin_clz(blk_sz - 1));
+}
 
 typedef struct aml_sd_emmc_t {
     platform_device_protocol_t pdev;
@@ -55,12 +62,12 @@ typedef struct aml_sd_emmc_t {
     uint32_t max_freq;
     uint32_t min_freq;
     // cur pending req
-    sdmmc_req_t *cur_req;
+    sdmmc_req_t* cur_req;
     // used to signal request complete
-    completion_t req_completion;
+    sync_completion_t req_completion;
 } aml_sd_emmc_t;
 
-zx_status_t aml_sd_emmc_request(void *ctx, sdmmc_req_t* req);
+zx_status_t aml_sd_emmc_request(void* ctx, sdmmc_req_t* req);
 static void aml_sd_emmc_dump_clock(uint32_t clock);
 static void aml_sd_emmc_dump_cfg(uint32_t cfg);
 
@@ -95,7 +102,7 @@ static void aml_sd_emmc_dump_regs(aml_sd_emmc_t* dev) {
     AML_SD_EMMC_TRACE("sd_emmc_next_rsp: 0x%x\n", regs->sd_emmc_curr_rsp);
     AML_SD_EMMC_TRACE("sd_emmc_rxd : 0x%x\n", regs->sd_emmc_rxd);
     AML_SD_EMMC_TRACE("sd_emmc_txd : 0x%x\n", regs->sd_emmc_txd);
-    AML_SD_EMMC_TRACE("sramDesc : %p\n",regs->sramDesc);
+    AML_SD_EMMC_TRACE("sramDesc : %p\n", regs->sramDesc);
     AML_SD_EMMC_TRACE("ping : %p\n", regs->ping);
     AML_SD_EMMC_TRACE("pong : %p\n", regs->pong);
 }
@@ -114,11 +121,11 @@ static void aml_sd_emmc_dump_status(uint32_t status) {
     AML_SD_EMMC_TRACE("    DESC_IRQ: %d\n", get_bit(status, AML_SD_EMMC_STATUS_RESP_STATUS));
     AML_SD_EMMC_TRACE("    IRQ_SDIO: %d\n", get_bit(status, AML_SD_EMMC_STATUS_IRQ_SDIO));
     AML_SD_EMMC_TRACE("    DAT_I: %d\n", get_bits(status, AML_SD_EMMC_STATUS_DAT_I_MASK,
-                                            AML_SD_EMMC_STATUS_DAT_I_LOC));
+                                                  AML_SD_EMMC_STATUS_DAT_I_LOC));
     AML_SD_EMMC_TRACE("    CMD_I: %d\n", get_bit(status, AML_SD_EMMC_STATUS_CMD_I));
     AML_SD_EMMC_TRACE("    DS: %d\n", get_bit(status, AML_SD_EMMC_STATUS_DS));
     AML_SD_EMMC_TRACE("    BUS_FSM: %d\n", get_bits(status, AML_SD_EMMC_STATUS_BUS_FSM_MASK,
-                                              AML_SD_EMMC_STATUS_BUS_FSM_LOC));
+                                                    AML_SD_EMMC_STATUS_BUS_FSM_LOC));
     AML_SD_EMMC_TRACE("    BUS_DESC_BUSY: %d\n", get_bit(status, AML_SD_EMMC_STATUS_BUS_DESC_BUSY));
     AML_SD_EMMC_TRACE("    CORE_RDY: %d\n", get_bit(status, AML_SD_EMMC_STATUS_BUS_CORE_BUSY));
 }
@@ -126,30 +133,54 @@ static void aml_sd_emmc_dump_status(uint32_t status) {
 static void aml_sd_emmc_dump_cfg(uint32_t config) {
     AML_SD_EMMC_TRACE("Dumping sd_emmc_cfg 0x%0x\n", config);
     AML_SD_EMMC_TRACE("    BUS_WIDTH: %d\n", get_bits(config, AML_SD_EMMC_CFG_BUS_WIDTH_MASK,
-                                                AML_SD_EMMC_CFG_BUS_WIDTH_LOC));
+                                                      AML_SD_EMMC_CFG_BUS_WIDTH_LOC));
     AML_SD_EMMC_TRACE("    DDR: %d\n", get_bit(config, AML_SD_EMMC_CFG_DDR));
     AML_SD_EMMC_TRACE("    DC_UGT: %d\n", get_bit(config, AML_SD_EMMC_CFG_DC_UGT));
     AML_SD_EMMC_TRACE("    BLOCK LEN: %d\n", get_bits(config, AML_SD_EMMC_CFG_BL_LEN_MASK,
-                                                AML_SD_EMMC_CFG_BL_LEN_LOC));
+                                                      AML_SD_EMMC_CFG_BL_LEN_LOC));
 }
 
 static void aml_sd_emmc_dump_clock(uint32_t clock) {
     AML_SD_EMMC_TRACE("Dumping clock 0x%0x\n", clock);
     AML_SD_EMMC_TRACE("   DIV: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_DIV_MASK,
-                                            AML_SD_EMMC_CLOCK_CFG_DIV_LOC));
+                                               AML_SD_EMMC_CLOCK_CFG_DIV_LOC));
     AML_SD_EMMC_TRACE("   SRC: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_SRC_MASK,
-                                            AML_SD_EMMC_CLOCK_CFG_SRC_LOC));
+                                               AML_SD_EMMC_CLOCK_CFG_SRC_LOC));
     AML_SD_EMMC_TRACE("   CORE_PHASE: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_CO_PHASE_MASK,
-                                                   AML_SD_EMMC_CLOCK_CFG_CO_PHASE_LOC));
+                                                      AML_SD_EMMC_CLOCK_CFG_CO_PHASE_LOC));
     AML_SD_EMMC_TRACE("   TX_PHASE: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_TX_PHASE_MASK,
-                                                 AML_SD_EMMC_CLOCK_CFG_TX_PHASE_LOC));
+                                                    AML_SD_EMMC_CLOCK_CFG_TX_PHASE_LOC));
     AML_SD_EMMC_TRACE("   RX_PHASE: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_RX_PHASE_MASK,
-                                                 AML_SD_EMMC_CLOCK_CFG_RX_PHASE_LOC));
+                                                    AML_SD_EMMC_CLOCK_CFG_RX_PHASE_LOC));
     AML_SD_EMMC_TRACE("   TX_DELAY: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_TX_DELAY_MASK,
-                                                 AML_SD_EMMC_CLOCK_CFG_TX_DELAY_LOC));
+                                                    AML_SD_EMMC_CLOCK_CFG_TX_DELAY_LOC));
     AML_SD_EMMC_TRACE("   RX_DELAY: %d\n", get_bits(clock, AML_SD_EMMC_CLOCK_CFG_RX_DELAY_MASK,
-                                                 AML_SD_EMMC_CLOCK_CFG_RX_DELAY_LOC));
+                                                    AML_SD_EMMC_CLOCK_CFG_RX_DELAY_LOC));
     AML_SD_EMMC_TRACE("   ALWAYS_ON: %d\n", get_bit(clock, AML_SD_EMMC_CLOCK_CFG_ALWAYS_ON));
+}
+
+static void aml_sd_emmc_dump_desc_cmd_cfg(uint32_t cmd_desc) {
+    AML_SD_EMMC_TRACE("Dumping cmd_cfg 0x%0x\n", cmd_desc);
+    AML_SD_EMMC_TRACE("   REQ_LEN: %d\n", get_bits(cmd_desc, AML_SD_EMMC_CMD_INFO_LEN_MASK,
+                                                   AML_SD_EMMC_CMD_INFO_LEN_LOC));
+    AML_SD_EMMC_TRACE("   BLOCK_MODE: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_BLOCK_MODE));
+    AML_SD_EMMC_TRACE("   R1B: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_R1B));
+    AML_SD_EMMC_TRACE("   END_OF_CHAIN: %d\n", get_bit(cmd_desc,
+                                                       AML_SD_EMMC_CMD_INFO_END_OF_CHAIN));
+    AML_SD_EMMC_TRACE("   TIMEOUT: %d\n", get_bits(cmd_desc, AML_SD_EMMC_CMD_INFO_TIMEOUT_MASK,
+                                                   AML_SD_EMMC_CMD_INFO_TIMEOUT_LOC));
+    AML_SD_EMMC_TRACE("   NO_RESP: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_NO_RESP));
+    AML_SD_EMMC_TRACE("   NO_CMD: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_NO_CMD));
+    AML_SD_EMMC_TRACE("   DATA_IO: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_DATA_IO));
+    AML_SD_EMMC_TRACE("   DATA_WR: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_DATA_WR));
+    AML_SD_EMMC_TRACE("   RESP_NO_CRC: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_RESP_NO_CRC));
+    AML_SD_EMMC_TRACE("   RESP_128: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_RESP_128));
+    AML_SD_EMMC_TRACE("   RESP_NUM: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_RESP_NUM));
+    AML_SD_EMMC_TRACE("   DATA_NUM: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_DATA_NUM));
+    AML_SD_EMMC_TRACE("   CMD_IDX: %d\n", get_bits(cmd_desc, AML_SD_EMMC_CMD_INFO_CMD_IDX_MASK,
+                                                   AML_SD_EMMC_CMD_INFO_CMD_IDX_LOC));
+    AML_SD_EMMC_TRACE("   ERROR: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_ERROR));
+    AML_SD_EMMC_TRACE("   OWNER: %d\n", get_bit(cmd_desc, AML_SD_EMMC_CMD_INFO_OWNER));
 }
 
 uint32_t get_clk_freq(uint32_t clk_src) {
@@ -173,7 +204,7 @@ static void aml_sd_emmc_release(void* ctx) {
 }
 
 static zx_status_t aml_sd_emmc_host_info(void* ctx, sdmmc_host_info_t* info) {
-    aml_sd_emmc_t *dev = (aml_sd_emmc_t *)ctx;
+    aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
     mtx_lock(&dev->mtx);
     memcpy(info, &dev->info, sizeof(dev->info));
     mtx_unlock(&dev->mtx);
@@ -181,7 +212,7 @@ static zx_status_t aml_sd_emmc_host_info(void* ctx, sdmmc_host_info_t* info) {
 }
 
 static zx_status_t aml_sd_emmc_set_bus_width(void* ctx, uint32_t bw) {
-    aml_sd_emmc_t *dev = (aml_sd_emmc_t *)ctx;
+    aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
 
     mtx_lock(&dev->mtx);
     aml_sd_emmc_regs_t* regs = dev->regs;
@@ -210,8 +241,8 @@ static zx_status_t aml_sd_emmc_set_bus_width(void* ctx, uint32_t bw) {
     return ZX_OK;
 }
 
-static zx_status_t aml_sd_emmc_do_tuning_transfer(aml_sd_emmc_t *dev, uint8_t *tuning_res,
-                                                  size_t blk_pattern_size){
+static zx_status_t aml_sd_emmc_do_tuning_transfer(aml_sd_emmc_t* dev, uint8_t* tuning_res,
+                                                  size_t blk_pattern_size) {
     sdmmc_req_t tuning_req = {
         .cmd_idx = MMC_SEND_TUNING_BLOCK,
         .cmd_flags = MMC_SEND_TUNING_BLOCK_FLAGS,
@@ -224,7 +255,7 @@ static zx_status_t aml_sd_emmc_do_tuning_transfer(aml_sd_emmc_t *dev, uint8_t *t
     return aml_sd_emmc_request(dev, &tuning_req);
 }
 
-static bool aml_sd_emmc_tuning_test_delay(aml_sd_emmc_t *dev, const uint8_t *blk_pattern,
+static bool aml_sd_emmc_tuning_test_delay(aml_sd_emmc_t* dev, const uint8_t* blk_pattern,
                                           size_t blk_pattern_size, uint32_t adj_delay) {
     mtx_lock(&dev->mtx);
     aml_sd_emmc_regs_t* regs = dev->regs;
@@ -249,11 +280,11 @@ static bool aml_sd_emmc_tuning_test_delay(aml_sd_emmc_t *dev, const uint8_t *blk
     return (n == AML_SD_EMMC_ADJ_DELAY_TEST_ATTEMPTS);
 }
 
-static zx_status_t aml_sd_emmc_tuning_calculate_best_window(aml_sd_emmc_t *dev,
-                                                            const uint8_t *tuning_blk,
+static zx_status_t aml_sd_emmc_tuning_calculate_best_window(aml_sd_emmc_t* dev,
+                                                            const uint8_t* tuning_blk,
                                                             size_t tuning_blk_size,
-                                                            uint32_t cur_clk_div, int *best_start,
-                                                            uint32_t *best_size) {
+                                                            uint32_t cur_clk_div, int* best_start,
+                                                            uint32_t* best_size) {
     int cur_win_start = -1, best_win_start = -1;
     uint32_t cycle_begin_win_size = 0, cur_win_size = 0, best_win_size = 0;
 
@@ -303,11 +334,11 @@ static zx_status_t aml_sd_emmc_tuning_calculate_best_window(aml_sd_emmc_t *dev,
 }
 
 static zx_status_t aml_sd_emmc_perform_tuning(void* ctx) {
-    aml_sd_emmc_t *dev = (aml_sd_emmc_t *)ctx;
+    aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
     mtx_lock(&dev->mtx);
 
     aml_sd_emmc_regs_t* regs = dev->regs;
-    const uint8_t *tuning_blk;
+    const uint8_t* tuning_blk;
     size_t tuning_blk_size;
     int best_win_start = -1;
     uint32_t best_win_size = 0;
@@ -387,7 +418,7 @@ static zx_status_t aml_sd_emmc_perform_tuning(void* ctx) {
 }
 
 static zx_status_t aml_sd_emmc_set_bus_freq(void* ctx, uint32_t freq) {
-    aml_sd_emmc_t *dev = (aml_sd_emmc_t *)ctx;
+    aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
 
     mtx_lock(&dev->mtx);
     aml_sd_emmc_regs_t* regs = dev->regs;
@@ -408,7 +439,7 @@ static zx_status_t aml_sd_emmc_set_bus_freq(void* ctx, uint32_t freq) {
         clk_src = AML_SD_EMMC_FCLK_DIV2_SRC;
         clk = AML_SD_EMMC_FCLK_DIV2_FREQ;
     }
-    clk_div = clk/freq;
+    clk_div = clk / freq;
     update_bits(&clk_val, AML_SD_EMMC_CLOCK_CFG_DIV_MASK, AML_SD_EMMC_CLOCK_CFG_DIV_LOC, clk_div);
     update_bits(&clk_val, AML_SD_EMMC_CLOCK_CFG_SRC_MASK, AML_SD_EMMC_CLOCK_CFG_SRC_LOC, clk_src);
     regs->sd_emmc_clock = clk_val;
@@ -437,7 +468,7 @@ static void aml_sd_emmc_init_regs(aml_sd_emmc_t* dev) {
     update_bits(&config, AML_SD_EMMC_CFG_RC_CC_MASK, AML_SD_EMMC_CFG_RC_CC_LOC,
                 AML_SD_EMMC_DEFAULT_RC_CC);
     update_bits(&config, AML_SD_EMMC_CFG_BUS_WIDTH_MASK, AML_SD_EMMC_CFG_BUS_WIDTH_LOC,
-                 AML_SD_EMMC_CFG_BUS_WIDTH_1BIT);
+                AML_SD_EMMC_CFG_BUS_WIDTH_1BIT);
 
     regs->sd_emmc_cfg = config;
     regs->sd_emmc_status = AML_SD_EMMC_IRQ_ALL_CLEAR;
@@ -445,10 +476,9 @@ static void aml_sd_emmc_init_regs(aml_sd_emmc_t* dev) {
 }
 
 static void aml_sd_emmc_hw_reset(void* ctx) {
-    aml_sd_emmc_t *dev = (aml_sd_emmc_t *)ctx;
+    aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
     mtx_lock(&dev->mtx);
-    gpio_config(&dev->gpio, 0, GPIO_DIR_OUT);
-    gpio_write(&dev->gpio, 0, 0);
+    gpio_config_out(&dev->gpio, 0, 0);
     usleep(10 * 1000);
     gpio_write(&dev->gpio, 0, 1);
     usleep(10 * 1000);
@@ -464,7 +494,8 @@ static zx_status_t aml_sd_emmc_set_bus_timing(void* ctx, sdmmc_timing_t timing) 
     uint32_t config = regs->sd_emmc_cfg;
     uint32_t clk_val = regs->sd_emmc_clock;
 
-    if (timing == SDMMC_TIMING_HS400 || timing == SDMMC_TIMING_HSDDR) {
+    if (timing == SDMMC_TIMING_HS400 || timing == SDMMC_TIMING_HSDDR ||
+        timing == SDMMC_TIMING_DDR50) {
         if (timing == SDMMC_TIMING_HS400) {
             config |= AML_SD_EMMC_CFG_CHK_DS;
         } else {
@@ -495,7 +526,7 @@ static zx_status_t aml_sd_emmc_set_signal_voltage(void* ctx, sdmmc_voltage_t vol
     return ZX_OK;
 }
 
-static int aml_sd_emmc_irq_thread(void *ctx) {
+static int aml_sd_emmc_irq_thread(void* ctx) {
     aml_sd_emmc_t* dev = ctx;
     uint32_t status_irq;
 
@@ -508,7 +539,7 @@ static int aml_sd_emmc_irq_thread(void *ctx) {
         }
         mtx_lock(&dev->mtx);
         aml_sd_emmc_regs_t* regs = dev->regs;
-        sdmmc_req_t *req = dev->cur_req;
+        sdmmc_req_t* req = dev->cur_req;
 
         if (req == NULL) {
             status = ZX_ERR_IO_INVALID;
@@ -553,13 +584,13 @@ static int aml_sd_emmc_irq_thread(void *ctx) {
         }
         if (status_irq & AML_SD_EMMC_STATUS_RESP_TIMEOUT) {
             AML_SD_EMMC_ERROR("No response reived before time limit, cmd%d, status=0x%x\n",
-                    req->cmd_idx, status_irq);
+                              req->cmd_idx, status_irq);
             status = ZX_ERR_TIMED_OUT;
             goto complete;
         }
         if (status_irq & AML_SD_EMMC_STATUS_DESC_TIMEOUT) {
             AML_SD_EMMC_ERROR("Descriptor execution timed out, cmd%d, status=0x%x\n", req->cmd_idx,
-                        status_irq);
+                              status_irq);
             status = ZX_ERR_TIMED_OUT;
             goto complete;
         }
@@ -573,35 +604,41 @@ static int aml_sd_emmc_irq_thread(void *ctx) {
             req->response[0] = regs->sd_emmc_cmd_rsp;
         }
         if ((!req->use_dma) && (req->cmd_flags & SDMMC_CMD_READ)) {
-            volatile uint64_t *dest = (uint64_t *)req->virt;
             uint32_t length = req->blockcount * req->blocksize;
-            volatile uint64_t *end = (uint64_t *)(req->virt + length);
-            volatile uint64_t *src = (uint64_t *)(io_buffer_virt(&dev->mmio) +
-                                                  AML_SD_EMMC_PING_BUFFER_BASE);
-            while (dest < end) {
+            if (length == 0 || ((length % 4) != 0)) {
+                status = ZX_ERR_INTERNAL;
+                goto complete;
+            }
+            uint32_t data_copied = 0;
+            uint32_t* dest = (uint32_t*)req->virt;
+            volatile uint32_t* src = (volatile uint32_t*)(io_buffer_virt(&dev->mmio) +
+                                                          AML_SD_EMMC_PING_BUFFER_BASE);
+            while (length) {
                 *dest++ = *src++;
+                length -= 4;
+                data_copied += 4;
             }
         }
 
-complete:
+    complete:
         req->status = status;
         regs->sd_emmc_status = AML_SD_EMMC_IRQ_ALL_CLEAR;
         dev->cur_req = NULL;
-        completion_signal(&dev->req_completion);
+        sync_completion_signal(&dev->req_completion);
         mtx_unlock(&dev->mtx);
     }
     return 0;
 }
 
-static void aml_sd_emmc_setup_cmd_desc(aml_sd_emmc_t *dev, sdmmc_req_t* req,
-                                       aml_sd_emmc_desc_t **out_desc) {
-    aml_sd_emmc_desc_t *desc;
+static void aml_sd_emmc_setup_cmd_desc(aml_sd_emmc_t* dev, sdmmc_req_t* req,
+                                       aml_sd_emmc_desc_t** out_desc) {
+    aml_sd_emmc_desc_t* desc;
     if (req->use_dma) {
         ZX_DEBUG_ASSERT((dev->info.caps & SDMMC_HOST_CAP_ADMA2));
-        desc = (aml_sd_emmc_desc_t *)io_buffer_virt(&dev->descs_buffer);
+        desc = (aml_sd_emmc_desc_t*)io_buffer_virt(&dev->descs_buffer);
         memset(desc, 0, dev->descs_buffer.size);
     } else {
-        desc = (aml_sd_emmc_desc_t *)(io_buffer_virt(&dev->mmio) + AML_SD_EMMC_SRAM_MEMORY_BASE);
+        desc = (aml_sd_emmc_desc_t*)(io_buffer_virt(&dev->mmio) + AML_SD_EMMC_SRAM_MEMORY_BASE);
     }
     uint32_t cmd_info = 0;
     if (req->cmd_flags == 0) {
@@ -611,7 +648,7 @@ static void aml_sd_emmc_setup_cmd_desc(aml_sd_emmc_t *dev, sdmmc_req_t* req,
             cmd_info |= AML_SD_EMMC_CMD_INFO_RESP_128;
         }
 
-        if (!(req->cmd_flags & SDMMC_RESP_CRC_CHECK)){
+        if (!(req->cmd_flags & SDMMC_RESP_CRC_CHECK)) {
             cmd_info |= AML_SD_EMMC_CMD_INFO_RESP_NO_CRC;
         }
 
@@ -633,13 +670,13 @@ static void aml_sd_emmc_setup_cmd_desc(aml_sd_emmc_t *dev, sdmmc_req_t* req,
     *out_desc = desc;
 }
 
-static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t *dev, sdmmc_req_t *req,
-                                                             aml_sd_emmc_desc_t *cur_desc,
-                                                             aml_sd_emmc_desc_t **last_desc) {
+static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t* dev, sdmmc_req_t* req,
+                                                    aml_sd_emmc_desc_t* cur_desc,
+                                                    aml_sd_emmc_desc_t** last_desc) {
     uint64_t req_len = req->blockcount * req->blocksize;
     bool is_read = req->cmd_flags & SDMMC_CMD_READ;
     uint64_t pagecount = ((req->buf_offset & PAGE_MASK) + req_len + PAGE_MASK) /
-                          PAGE_SIZE;
+                         PAGE_SIZE;
     if (pagecount > SDMMC_PAGES_COUNT) {
         zxlogf(ERROR, "aml-sd-emmc.c: too many pages %lu vs %lu\n", pagecount, SDMMC_PAGES_COUNT);
         return ZX_ERR_INVALID_ARGS;
@@ -685,7 +722,7 @@ static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t *dev, sdmmc_re
     size_t length;
     zx_paddr_t paddr;
     uint32_t blockcount;
-    aml_sd_emmc_desc_t *desc = cur_desc;
+    aml_sd_emmc_desc_t* desc = cur_desc;
     for (;;) {
         length = phys_iter_next(&iter, &paddr);
         if (length == 0) {
@@ -702,7 +739,7 @@ static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t *dev, sdmmc_re
             return ZX_ERR_NOT_SUPPORTED;
         } else if ((++count) > AML_DMA_DESC_MAX_COUNT) {
             zxlogf(TRACE, "aml-sd-emmc: request with more than %d chunks is unsupported\n",
-                    AML_DMA_DESC_MAX_COUNT);
+                   AML_DMA_DESC_MAX_COUNT);
             return ZX_ERR_NOT_SUPPORTED;
         }
         if (count > 1) {
@@ -718,7 +755,7 @@ static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t *dev, sdmmc_re
         desc->cmd_info &= ~AML_SD_EMMC_CMD_INFO_ERROR;
 
         uint32_t blocksize = req->blocksize;
-        blockcount = length/blocksize;
+        blockcount = length / blocksize;
         ZX_DEBUG_ASSERT(((length % blocksize) == 0));
 
         if (blockcount > 1) {
@@ -736,9 +773,9 @@ static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t *dev, sdmmc_re
     return ZX_OK;
 }
 
-static zx_status_t aml_sd_emmc_setup_data_descs_pio(aml_sd_emmc_t *dev, sdmmc_req_t *req,
-                                                         aml_sd_emmc_desc_t *desc,
-                                                         aml_sd_emmc_desc_t **last_desc) {
+static zx_status_t aml_sd_emmc_setup_data_descs_pio(aml_sd_emmc_t* dev, sdmmc_req_t* req,
+                                                    aml_sd_emmc_desc_t* desc,
+                                                    aml_sd_emmc_desc_t** last_desc) {
     zx_status_t status = ZX_OK;
     uint32_t length = req->blockcount * req->blocksize;
 
@@ -747,24 +784,37 @@ static zx_status_t aml_sd_emmc_setup_data_descs_pio(aml_sd_emmc_t *dev, sdmmc_re
         return ZX_ERR_NOT_SUPPORTED;
     }
 
+    if (length == 0 || ((length % 4) != 0)) {
+        // From Amlogic documentation, Ping and Pong buffers in sram can be accessed only 4 bytes
+        // at a time.
+        zxlogf(ERROR, "Request sizes that are not multiple of 4 are not supported in PIO mode\n");
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
     desc->cmd_info |= AML_SD_EMMC_CMD_INFO_DATA_IO;
     if (!(req->cmd_flags & SDMMC_CMD_READ)) {
         desc->cmd_info |= AML_SD_EMMC_CMD_INFO_DATA_WR;
-        volatile uint64_t *src = (uint64_t *)req->virt;
-        volatile uint64_t *end = (uint64_t *)(req->virt + length);
-        volatile uint64_t *dest = (uint64_t *)(io_buffer_virt(&dev->mmio) +
-                                               AML_SD_EMMC_PING_BUFFER_BASE);
-        while (src < end) {
+        uint32_t data_copied = 0;
+        uint32_t data_remaining = length;
+        uint32_t* src = (uint32_t*)req->virt;
+        volatile uint32_t* dest = (volatile uint32_t*)(io_buffer_virt(&dev->mmio) +
+                                                       AML_SD_EMMC_PING_BUFFER_BASE);
+        while (data_remaining) {
             *dest++ = *src++;
+            data_remaining -= 4;
+            data_copied += 4;
         }
-        io_buffer_cache_flush(&dev->mmio, AML_SD_EMMC_PING_BUFFER_BASE, length);
-    } else if (req->cmd_flags & SDMMC_CMD_READ) {
-        io_buffer_cache_flush_invalidate(&dev->mmio, AML_SD_EMMC_PING_BUFFER_BASE, length);
     }
 
-    // Make it 1 block
-    update_bits(&desc->cmd_info, AML_SD_EMMC_CMD_INFO_LEN_MASK, AML_SD_EMMC_CMD_INFO_LEN_LOC,
-                length);
+    if (req->blockcount > 1) {
+        desc->cmd_info |= AML_SD_EMMC_CMD_INFO_BLOCK_MODE;
+        update_bits(&desc->cmd_info, AML_SD_EMMC_CMD_INFO_LEN_MASK,
+                    AML_SD_EMMC_CMD_INFO_LEN_LOC, req->blockcount);
+    } else {
+        update_bits(&desc->cmd_info, AML_SD_EMMC_CMD_INFO_LEN_MASK,
+                    AML_SD_EMMC_CMD_INFO_LEN_LOC, req->blocksize);
+    }
+
     // data_addr[0] = 0 for DDR. data_addr[0] = 1 if address is from SRAM
     zx_paddr_t buffer_phys = io_buffer_phys(&dev->mmio) + AML_SD_EMMC_PING_BUFFER_BASE;
     desc->data_addr = (uint32_t)buffer_phys | 1;
@@ -775,12 +825,35 @@ static zx_status_t aml_sd_emmc_setup_data_descs_pio(aml_sd_emmc_t *dev, sdmmc_re
 static zx_status_t aml_sd_emmc_setup_data_descs(aml_sd_emmc_t *dev, sdmmc_req_t *req,
                                                 aml_sd_emmc_desc_t *desc,
                                                 aml_sd_emmc_desc_t **last_desc) {
-    if (req->use_dma) {
-        return aml_sd_emmc_setup_data_descs_dma(dev, req, desc, last_desc);
+    zx_status_t st = ZX_OK;
+
+    if (!req->blocksize || req->blocksize > AML_SD_EMMC_MAX_BLK_SIZE) {
+        return ZX_ERR_NOT_SUPPORTED;
     }
 
-    // Data is at address req->virt
-    return aml_sd_emmc_setup_data_descs_pio(dev, req, desc, last_desc);
+    if (req->use_dma) {
+        st = aml_sd_emmc_setup_data_descs_dma(dev, req, desc, last_desc);
+        if (st != ZX_OK) {
+            return st;
+        }
+    } else {
+        st =  aml_sd_emmc_setup_data_descs_pio(dev, req, desc, last_desc);
+        if (st != ZX_OK) {
+            return st;
+        }
+    }
+
+    //update config
+    uint32_t config = dev->regs->sd_emmc_cfg;
+    uint8_t cur_blk_len = get_bits(config, AML_SD_EMMC_CFG_BL_LEN_MASK,
+                                   AML_SD_EMMC_CFG_BL_LEN_LOC);
+    uint8_t req_blk_len = log2_ceil(req->blocksize);
+    if (cur_blk_len != req_blk_len) {
+        update_bits(&config, AML_SD_EMMC_CFG_BL_LEN_MASK, AML_SD_EMMC_CFG_BL_LEN_LOC,
+                    req_blk_len);
+        dev->regs->sd_emmc_cfg = config;
+    }
+    return ZX_OK;
 }
 
 static zx_status_t aml_sd_emmc_finish_req(aml_sd_emmc_t* dev, sdmmc_req_t* req) {
@@ -809,8 +882,8 @@ static zx_status_t aml_sd_emmc_finish_req(aml_sd_emmc_t* dev, sdmmc_req_t* req) 
     return st;
 }
 
-zx_status_t aml_sd_emmc_request(void *ctx, sdmmc_req_t* req) {
-    aml_sd_emmc_t *dev = (aml_sd_emmc_t *)ctx;
+zx_status_t aml_sd_emmc_request(void* ctx, sdmmc_req_t* req) {
+    aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
     zx_status_t status = ZX_OK;
 
     mtx_lock(&dev->mtx);
@@ -820,7 +893,7 @@ zx_status_t aml_sd_emmc_request(void *ctx, sdmmc_req_t* req) {
     uint32_t start_reg = regs->sd_emmc_start;
     start_reg &= ~AML_SD_EMMC_START_DESC_BUSY;
     regs->sd_emmc_start = start_reg;
-    aml_sd_emmc_desc_t* desc, *last_desc;
+    aml_sd_emmc_desc_t *desc, *last_desc;
 
     aml_sd_emmc_setup_cmd_desc(dev, req, &desc);
     last_desc = desc;
@@ -844,24 +917,23 @@ zx_status_t aml_sd_emmc_request(void *ctx, sdmmc_req_t* req) {
     if (req->use_dma) {
         desc_phys = io_buffer_phys(&dev->descs_buffer);
         io_buffer_cache_flush(&dev->descs_buffer, 0,
-                               AML_DMA_DESC_MAX_COUNT * sizeof(aml_sd_emmc_desc_t));
+                              AML_DMA_DESC_MAX_COUNT * sizeof(aml_sd_emmc_desc_t));
         //Read desc from external DDR
         start_reg &= ~AML_SD_EMMC_START_DESC_INT;
     } else {
-        io_buffer_physmap(&dev->mmio);
         desc_phys = (io_buffer_phys(&dev->mmio)) + AML_SD_EMMC_SRAM_MEMORY_BASE;
         start_reg |= AML_SD_EMMC_START_DESC_INT;
     }
 
     start_reg |= AML_SD_EMMC_START_DESC_BUSY;
     update_bits(&start_reg, AML_SD_EMMC_START_DESC_ADDR_MASK, AML_SD_EMMC_START_DESC_ADDR_LOC,
-              (((uint32_t)desc_phys) >> 2));
+                (((uint32_t)desc_phys) >> 2));
     mtx_unlock(&dev->mtx);
     regs->sd_emmc_start = start_reg;
 
-    completion_wait(&dev->req_completion, ZX_TIME_INFINITE);
+    sync_completion_wait(&dev->req_completion, ZX_TIME_INFINITE);
     aml_sd_emmc_finish_req(dev, req);
-    completion_reset(&dev->req_completion);
+    sync_completion_reset(&dev->req_completion);
     return req->status;
 }
 
@@ -870,14 +942,14 @@ static zx_protocol_device_t aml_sd_emmc_device_proto = {
     .release = aml_sd_emmc_release,
 };
 
-static zx_status_t aml_sd_emmc_get_sdio_oob_irq(void* ctx, zx_handle_t *oob_irq_handle) {
+static zx_status_t aml_sd_emmc_get_sdio_oob_irq(void* ctx, zx_handle_t* oob_irq_handle) {
     aml_sd_emmc_t* dev = ctx;
 
     if (dev->gpio_count <= 1) {
         return ZX_OK;
     }
 
-    zx_status_t st = gpio_config(&dev->gpio, 1, GPIO_DIR_IN);
+    zx_status_t st = gpio_config_in(&dev->gpio, 1, GPIO_NO_PULL);
     if (st != ZX_OK) {
         zxlogf(ERROR, "aml_sd_emmc_get_oob_irq: gpio_config failed: %d\n", st);
         return st;
@@ -909,7 +981,7 @@ static zx_status_t aml_sd_emmc_bind(void* ctx, zx_device_t* parent) {
         zxlogf(ERROR, "aml-dev_bind: out of memory\n");
         return ZX_ERR_NO_MEMORY;
     }
-    dev->req_completion = COMPLETION_INIT;
+    dev->req_completion = SYNC_COMPLETION_INIT;
 
     zx_status_t status = ZX_OK;
     if ((status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_DEV, &dev->pdev)) != ZX_OK) {
@@ -930,7 +1002,7 @@ static zx_status_t aml_sd_emmc_bind(void* ctx, zx_device_t* parent) {
     }
 
     if (info.mmio_count != info.irq_count) {
-         zxlogf(ERROR, "aml_sd_emmc_bind: mmio_count %u does not match irq_count %u\n",
+        zxlogf(ERROR, "aml_sd_emmc_bind: mmio_count %u does not match irq_count %u\n",
                info.mmio_count, info.irq_count);
         status = ZX_ERR_INVALID_ARGS;
         goto fail;
@@ -993,8 +1065,8 @@ static zx_status_t aml_sd_emmc_bind(void* ctx, zx_device_t* parent) {
         dev->info.max_transfer_size = AML_SD_EMMC_MAX_PIO_DATA_SIZE;
     }
 
-    dev->max_freq = AML_SD_EMMC_MAX_FREQ;
-    dev->min_freq = AML_SD_EMMC_MIN_FREQ;
+    dev->max_freq = dev_config.max_freq;
+    dev->min_freq = dev_config.min_freq;
     // Create the device.
     device_add_args_t args = {
         .version = DEVICE_ADD_ARGS_VERSION,
@@ -1005,7 +1077,12 @@ static zx_status_t aml_sd_emmc_bind(void* ctx, zx_device_t* parent) {
         .proto_ops = &aml_sdmmc_proto,
     };
 
-    status = device_add(parent, &args, &dev->zxdev);
+    // Try pdev_device_add() first, but fallback to device_add()
+    // if we weren't configured for platform device children.
+    status = pdev_device_add(&dev->pdev, 0, &args, &dev->zxdev);
+    if (status != ZX_OK) {
+        status = device_add(parent, &args, &dev->zxdev);
+    }
     if (status != ZX_OK) {
         goto fail;
     }

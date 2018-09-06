@@ -9,6 +9,7 @@
 
 #include <fs/vfs.h>
 #include <fs/vnode.h>
+#include <fuchsia/io/c/fidl.h>
 #include <lib/fdio/debug.h>
 #include <lib/fdio/remoteio.h>
 #include <lib/fdio/vfs.h>
@@ -118,14 +119,16 @@ zx_status_t Vfs::UninstallRemote(fbl::RefPtr<Vnode> vn, zx::channel* h) {
     return UninstallRemoteLocked(fbl::move(vn), h);
 }
 
-zx_status_t Vfs::ForwardMessageRemote(fbl::RefPtr<Vnode> vn, zx::channel channel,
-                                      zxrio_msg_t* msg) {
+zx_status_t Vfs::ForwardOpenRemote(fbl::RefPtr<Vnode> vn, zx::channel channel,
+                                   fbl::StringPiece path, uint32_t flags, uint32_t mode) {
     fbl::AutoLock lock(&vfs_lock_);
     zx_handle_t h = vn->GetRemote();
     if (h == ZX_HANDLE_INVALID) {
         return ZX_ERR_NOT_FOUND;
     }
-    zx_status_t r = zxrio_txn_handoff(h, channel.release(), msg);
+
+    zx_status_t r = fuchsia_io_DirectoryOpen(h, flags, mode, path.data(),
+                                             path.length(), channel.release());
     if (r == ZX_ERR_PEER_CLOSED) {
         zx::channel c;
         UninstallRemoteLocked(fbl::move(vn), &c);

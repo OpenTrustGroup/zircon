@@ -14,6 +14,35 @@ __BEGIN_CDECLS;
  * protocol/display-controller.h - display controller protocol definitions
  */
 
+// The image is linear and VMO backed.
+#define IMAGE_TYPE_SIMPLE 0
+
+// a structure containing information about each plane of an image.
+typedef struct image_plane {
+    uint32_t byte_offset;
+    uint32_t bytes_per_row;
+} image_plane_t;
+
+// a structure containing information about an image
+typedef struct image {
+    // the width and height of the image in pixels
+    uint32_t width;
+    uint32_t height;
+
+    // the pixel format of the image
+    zx_pixel_format_t pixel_format;
+
+    // The type conveys information about what is providing the pixel data. If this is not
+    // IMAGE_FORMAT_SIMPLE, it is up to the driver and buffer producer to agree on the meaning
+    // of the value through some mechanism outside the scope of this API.
+    uint32_t type;
+
+    image_plane_t planes[4];
+
+    // A driver-defined handle to the image. Each handle must be unique.
+    void* handle;
+} image_t;
+
 #define INVALID_DISPLAY_ID 0
 
 // a fallback structure to convey display information without an edid
@@ -32,16 +61,26 @@ typedef struct cursor_info {
 } cursor_info_t;
 
 // a structure containing information a connected display
-typedef struct display_info {
-    // A flag indicating whether or not the display has a valid edid. If no edid is
-    // present, then the meaning of display_config's mode structure is undefined, and
-    // drivers should ignore it.
+typedef struct added_display_args {
+    uint64_t display_id;
+
+    // A flag indicating whether or not the display has a valid edid.
+    //
+    // If true, the device should expose an ZX_PROTOCOL_I2C_IMPL device through get_protocol, in
+    // addition to the ZX_PROTOCOL_DISPLAY_CONTROLLER_IMPL protocol. Note that the i2c device
+    // will be called from the on_displays_changed callback, so care should be taken to avoid
+    // deadlocks or double-locking.
+    //
+    // If no edid is present, then the meaning of display_config's mode structure is
+    // undefined, and drivers should ignore it in check_configuration and apply_configuration.
     bool edid_present;
     union {
-        // the display's edid
         struct {
+            // TODO(stevensd): Remove these when vim2 stops using them
             const uint8_t* data;
             uint16_t length;
+            // the bus_id to use to read this display's edid from the device's i2c protocol
+            uint32_t i2c_bus_id;
         } edid;
         // the display's parameters if an edid is not present
         display_params_t params;
@@ -60,29 +99,14 @@ typedef struct display_info {
     // should be valid at most times.
     const cursor_info_t* cursor_infos;
     uint32_t cursor_info_count;
-} display_info_t;
 
-// The image is linear and VMO backed.
-#define IMAGE_TYPE_SIMPLE 0
+    // Out parameters will be populated before on_displays_changed returns.
+    bool is_hdmi_out;
+    bool is_standard_srgb_out;
+} added_display_args_t;
 
-// a structure containing information about an image
-typedef struct image {
-    // the width and height of the image in pixels
-    uint32_t width;
-    uint32_t height;
-
-    // the pixel format of the image
-    zx_pixel_format_t pixel_format;
-
-    // The type conveys information about what is providing the pixel data. If this is not
-    // IMAGE_FORMAT_SIMPLE, it is up to the driver and buffer producer to agree on the meaning
-    // of the value through some mechanism outside the scope of this API.
-    uint32_t type;
-
-    // A driver-defined handle to the image. Each handle must be unique.
-    void* handle;
-} image_t;
-
+// The client will not make any ZX_PROTOCOL_DISPLAY_CONTROLLER_IMPL calls into the device
+// during these callbacks.
 typedef struct display_controller_cb {
     // Callbacks which are invoked when displays are added or removed. |displays_added| and
     // |displays_removed| point to arrays of the display ids which were added and removed. If
@@ -93,12 +117,14 @@ typedef struct display_controller_cb {
     // The driver should call this function when the callback is registered if any displays
     // are present.
     void (*on_displays_changed)(void* ctx,
-                                uint64_t* displays_added, uint32_t added_count,
-                                uint64_t* displays_removed, uint32_t removed_count);
+                                added_display_args_t* added_displays, uint32_t added_count,
+                                uint64_t* removed_displays, uint32_t removed_count);
 
+    // |timestamp| is the ZX_CLOCK_MONOTONIC timestamp at which the vsync occurred.
     // |handles| points to an array of image handles of each framebuffer being
     // displayed, in increasing z-order.
-    void (*on_display_vsync)(void* ctx, uint64_t display_id, void** handle, uint32_t handle_count);
+    void (*on_display_vsync)(void* ctx, uint64_t display_id, zx_time_t timestamp,
+                             void** handles, uint32_t handle_count);
 } display_controller_cb_t;
 
 #define ALPHA_DISABLE 0
@@ -165,10 +191,18 @@ typedef struct cursor_layer {
     int32_t y_pos;
 } cursor_layer_t;
 
+typedef struct color_layer {
+    zx_pixel_format_t format;
+    // The color to use for the layer. The color is little-endian, and is
+    // guaranteed to be of the appropriate size.
+    uint8_t* color;
+} color_layer_t;
+
 // Types of layers.
 
 #define LAYER_PRIMARY 0
 #define LAYER_CURSOR 1
+#define LAYER_COLOR 2
 
 typedef struct layer {
     // One of the LAYER_* flags.
@@ -178,6 +212,7 @@ typedef struct layer {
     union {
         primary_layer_t primary;
         cursor_layer_t cursor;
+        color_layer_t color;
     } cfg;
 } layer_t;
 
@@ -185,6 +220,8 @@ typedef struct layer {
 #define MODE_FLAG_VSYNC_POSITIVE (1 << 0)
 #define MODE_FLAG_HSYNC_POSITIVE (1 << 1)
 #define MODE_FLAG_INTERLACED (1 << 2)
+#define MODE_FLAG_ALTERNATING_VBLANK (1 << 3)
+#define MODE_FLAG_DOUBLE_CLOCKED (1 << 4)
 
 // The video parameters which specify the display mode.
 typedef struct display_mode {
@@ -197,7 +234,7 @@ typedef struct display_mode {
     uint32_t v_front_porch;
     uint32_t v_sync_pulse;
     uint32_t v_blanking;
-    uint32_t mode_flags; // A bitmask of MODE_FLAG_* values
+    uint32_t flags; // A bitmask of MODE_FLAG_* values
 } display_mode_t;
 
 // If set, use the 0 vector for the color conversion preoffset
@@ -228,6 +265,18 @@ typedef struct display_config {
     layer_t** layers;
 } display_config_t;
 
+// The display mode configuration is valid. Note that this is distinct from
+// whether or not the layer configuration is valid.
+#define CONFIG_DISPLAY_OK 0
+// Error indicating that the hardware cannot simultaniously support the
+// requested number of displays.
+#define CONFIG_DISPLAY_TOO_MANY 1
+// Error indicating that the hardware cannot simultaniously support the given
+// set of display modes. To support a mode, the display must be able to display
+// a single layer with width and height equal to the requested mode and the
+// preferred pixel format.
+#define CONFIG_DISPLAY_UNSUPPORTED_MODES 2
+
 // The client should convert the corresponding layer to a primary layer.
 #define CLIENT_USE_PRIMARY (1 << 0)
 // The client should compose all layers with MERGE_BASE and MERGE_SRC into a new,
@@ -255,12 +304,9 @@ typedef struct display_config {
 // The client guarantees that check_configuration and apply_configuration are always
 // made from a single thread. The client makes no other threading guarantees.
 typedef struct display_controller_protocol_ops {
+    // The function will only be called once, and it will be called before any other
+    // functions are called.
     void (*set_display_controller_cb)(void* ctx, void* cb_ctx, display_controller_cb_t* cb);
-
-    // Gets all information about the display. Pointers returned in |info| must remain
-    // valid until the the display is removed with on_displays_changed or the device's
-    // release device-op is invoked.
-    zx_status_t (*get_display_info)(void* ctx, uint64_t display_id, display_info_t* info);
 
     // Imports a VMO backed image into the driver. The driver should set image->handle. The
     // driver does not own the vmo handle passed to this function.
@@ -285,14 +331,18 @@ typedef struct display_controller_protocol_ops {
     // place of another image with a matching configuration. It also cannot depend on the
     // cursor position, as that can be updated without another call to check_configuration.
     //
+    // display_cfg_result should be set to a CONFIG_DISPLAY_* error if the combination of
+    // display modes is not supported.
+    //
     // layer_cfg_result points to an array of arrays. The primary length is display_count, the
-    // secondary lengths are the corresponding display_cfg's layer_count. Any errors in layer
-    // configuration should be returned as a CLIENT* flag in the corresponding layer_cfg_result
-    // entry.
+    // secondary lengths are the corresponding display_cfg's layer_count. If display_cfg_result
+    // is CONFIG_DISPLAY_OK, any errors in layer configuration should be returned as a CLIENT*
+    // flag in the corresponding layer_cfg_result entry.
     //
     // The driver must not retain references to the configuration after this function returns.
     void (*check_configuration)(void* ctx, const display_config_t** display_config,
-                                uint32_t** layer_cfg_result, uint32_t display_count);
+                                uint32_t* display_cfg_result, uint32_t** layer_cfg_result,
+                                uint32_t display_count);
 
     // Applies the configuration.
     //

@@ -8,7 +8,6 @@
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
 
-#include <soc/imx8m/imx8m.h>
 #include <soc/imx8m/imx8m-hw.h>
 #include <soc/imx8m/imx8m-iomux.h>
 #include <soc/imx8m/imx8m-gpio.h>
@@ -47,12 +46,13 @@ static const pbus_bti_t sdhci_btis[] = {
     },
 };
 
-static const pbus_metadata_t sdhci_metadata[] = {
-    {
-        .type = DEVICE_METADATA_PARTITION_MAP,
-        .extra = 0,
-    },
-};
+// Disable until bootloader is updated to provide the metadata
+// static const pbus_metadata_t sdhci_metadata[] = {
+//     {
+//         .type = DEVICE_METADATA_PARTITION_MAP,
+//         .extra = 0,
+//     },
+// };
 
 static const pbus_gpio_t sdhci_gpios[] = {
     {
@@ -74,12 +74,13 @@ static pbus_dev_t sdhci_dev = {
     .bti_count = countof(sdhci_btis),
     .gpios = sdhci_gpios,
     .gpio_count = countof(sdhci_gpios),
-    .metadata = sdhci_metadata,
-    .metadata_count = countof(sdhci_metadata),
+    // Disable until bootloader is updated to provide the metadata
+    // .metadata = sdhci_metadata,
+    // .metadata_count = countof(sdhci_metadata),
 };
 
 zx_status_t imx8m_sdhci_init(imx8mevk_bus_t* bus) {
-    zx_status_t status = pbus_device_add(&bus->pbus, &sdhci_dev, 0);
+    zx_status_t status = pbus_device_add(&bus->pbus, &sdhci_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: pbus_device_add failed %d\n", __FUNCTION__, status);
         return status;

@@ -20,6 +20,7 @@
 #include <zircon/device/ethernet.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
+#include <zircon/time.h>
 #include <zircon/types.h>
 
 #include <inet6/inet6.h>
@@ -230,7 +231,7 @@ int eth_add_mcast_filter(const mac_addr_t* addr) {
 static volatile zx_time_t net_timer = 0;
 
 void netifc_set_timer(uint32_t ms) {
-    net_timer = zx_clock_get_monotonic() + ZX_MSEC(ms);
+    net_timer = zx_deadline_after(ZX_MSEC(ms));
 }
 
 int netifc_timer_expired(void) {
@@ -306,13 +307,13 @@ static zx_status_t netifc_open_cb(int dirfd, int event, const char* fn, void* co
     if (iobuf == NULL) {
         // allocate shareable ethernet buffer data heap
         size_t iosize = 2 * NET_BUFFERS * NET_BUFFERSZ;
-        if ((status = zx_vmo_create(iosize, 0, &iovmo)) < 0) {
+        if ((status = zx_vmo_create(iosize, ZX_VMO_NON_RESIZABLE, &iovmo)) < 0) {
             goto fail_close_fd;
         }
         zx_object_set_property(iovmo, ZX_PROP_NAME, "eth-buffers", 11);
-        if ((status = zx_vmar_map(zx_vmar_root_self(), 0, iovmo, 0, iosize,
-                                  ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                                  (uintptr_t*)&iobuf)) < 0) {
+        if ((status = zx_vmar_map(zx_vmar_root_self(),
+                                  ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                                  0, iovmo, 0, iosize, (uintptr_t*)&iobuf)) < 0) {
             zx_handle_close(iovmo);
             iovmo = ZX_HANDLE_INVALID;
             goto fail_close_fd;
@@ -445,7 +446,7 @@ int netifc_poll(void) {
 
         zx_time_t deadline;
         if (net_timer) {
-            deadline = net_timer + ZX_MSEC(1);
+            deadline = zx_time_add_duration(net_timer, ZX_MSEC(1));
         } else {
             deadline = ZX_TIME_INFINITE;
         }

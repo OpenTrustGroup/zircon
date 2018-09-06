@@ -94,7 +94,9 @@ static zx_status_t decompress_bootfs_vmo(zx_handle_t vmar, const uint8_t* data,
     }
     data += sizeof(uint32_t);
 
-    check_lz4_frame((const lz4_frame_desc*)data, _outsize, err);
+    zx_status_t status = check_lz4_frame((const lz4_frame_desc*)data, _outsize, err);
+    if (status < 0)
+        return status;
     data += sizeof(lz4_frame_desc);
 
     size_t outsize = (_outsize + 4095) & ~4095;
@@ -104,7 +106,7 @@ static zx_status_t decompress_bootfs_vmo(zx_handle_t vmar, const uint8_t* data,
         return ZX_ERR_NO_MEMORY;
     }
     zx_handle_t dst_vmo;
-    zx_status_t status = zx_vmo_create((uint64_t)outsize, 0, &dst_vmo);
+    status = zx_vmo_create((uint64_t)outsize, 0, &dst_vmo);
     if (status < 0) {
         *err = "zx_vmo_create failed for decompressing bootfs";
         return status;
@@ -112,8 +114,9 @@ static zx_status_t decompress_bootfs_vmo(zx_handle_t vmar, const uint8_t* data,
     zx_object_set_property(dst_vmo, ZX_PROP_NAME, "bootfs", 6);
 
     uintptr_t dst_addr = 0;
-    status = zx_vmar_map(vmar, 0, dst_vmo, 0, outsize,
-            ZX_VM_FLAG_PERM_READ|ZX_VM_FLAG_PERM_WRITE, &dst_addr);
+    status = zx_vmar_map(vmar,
+            ZX_VM_PERM_READ|ZX_VM_PERM_WRITE,
+            0, dst_vmo, 0, outsize, &dst_addr);
     if (status < 0) {
         *err = "zx_vmar_map failed on bootfs vmo during decompression";
         return status;
@@ -189,7 +192,7 @@ zx_status_t decompress_bootdata(zx_handle_t vmar, zx_handle_t vmo,
     size_t aligned_offset = offset & ~(PAGE_SIZE - 1);
     size_t align_shift = offset - aligned_offset;
     length += align_shift;
-    zx_status_t status = zx_vmar_map(vmar, 0, vmo, aligned_offset, length, ZX_VM_FLAG_PERM_READ, &addr);
+    zx_status_t status = zx_vmar_map(vmar, ZX_VM_PERM_READ, 0, vmo, aligned_offset, length, &addr);
     if (status < 0) {
         *err = "zx_vmar_map failed on bootfs vmo";
         return status;

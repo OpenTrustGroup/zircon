@@ -25,7 +25,7 @@
 
 static void inorder_count_task(void* raw_context) {
     ASSERT(arch_ints_disabled());
-    ASSERT(arch_in_int_handler());
+    ASSERT(arch_blocking_disallowed());
     int* inorder_counter = (int*)raw_context;
     uint cpu_num = arch_curr_cpu_num();
 
@@ -36,7 +36,7 @@ static void inorder_count_task(void* raw_context) {
 
 static void counter_task(void* raw_context) {
     ASSERT(arch_ints_disabled());
-    ASSERT(arch_in_int_handler());
+    ASSERT(arch_blocking_disallowed());
     int* counter = (int*)raw_context;
     atomic_add(counter, 1);
 }
@@ -59,7 +59,7 @@ static void deadlock_test(void) {
 
     thread_t* threads[5] = {0};
     for (uint i = 0; i < fbl::count_of(threads); ++i) {
-        threads[i] = thread_create("sync_ipi_deadlock", deadlock_test_thread, &gate, DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
+        threads[i] = thread_create("sync_ipi_deadlock", deadlock_test_thread, &gate, DEFAULT_PRIORITY);
         if (!threads[i]) {
             TRACEF("  failed to create thread\n");
             goto cleanup;

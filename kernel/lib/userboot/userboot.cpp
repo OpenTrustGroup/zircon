@@ -71,10 +71,10 @@ public:
         fbl::RefPtr<VmAddressRegionDispatcher> vmar;
         zx_rights_t vmar_rights;
         zx_status_t status = root_vmar->Allocate(0, size(),
-                                                 ZX_VM_FLAG_CAN_MAP_READ |
-                                                 ZX_VM_FLAG_CAN_MAP_WRITE |
-                                                 ZX_VM_FLAG_CAN_MAP_EXECUTE |
-                                                 ZX_VM_FLAG_CAN_MAP_SPECIFIC,
+                                                 ZX_VM_CAN_MAP_READ |
+                                                 ZX_VM_CAN_MAP_WRITE |
+                                                 ZX_VM_CAN_MAP_EXECUTE |
+                                                 ZX_VM_CAN_MAP_SPECIFIC,
                                                  &vmar, &vmar_rights);
         if (status != ZX_OK)
             return status;
@@ -132,7 +132,8 @@ static zx_status_t get_job_handle(Handle** ptr) {
 static zx_status_t get_resource_handle(Handle** ptr) {
     zx_rights_t rights;
     fbl::RefPtr<ResourceDispatcher> root;
-    zx_status_t result = ResourceDispatcher::Create(&root, &rights, ZX_RSRC_KIND_ROOT, 0, 0);
+    zx_status_t result = ResourceDispatcher::Create(&root, &rights, ZX_RSRC_KIND_ROOT, 0, 0, 0,
+                                                    "root");
     if (result == ZX_OK)
         *ptr = Handle::Make(fbl::RefPtr<Dispatcher>(root.get()),
                             rights).release();
@@ -379,7 +380,7 @@ static zx_status_t attempt_userboot() {
     fbl::RefPtr<VmMapping> stack_mapping;
     status = vmar->Map(0,
                        fbl::move(stack_vmo), 0, stack_size,
-                       ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
+                       ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
                        &stack_mapping);
     if (status != ZX_OK)
         return status;

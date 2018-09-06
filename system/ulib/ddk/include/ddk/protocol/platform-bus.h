@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <ddk/protocol/serial.h>
+#include <ddk/protocol/platform-proxy.h>
 #include <zircon/compiler.h>
+#include <zircon/types.h>
 
 __BEGIN_CDECLS;
 
@@ -41,20 +42,31 @@ typedef struct {
     uint32_t    bti_id;
 } pbus_bti_t;
 
-// metadata for the device
+// Device metadata.
 typedef struct {
-    uint32_t    type;   // metadata type (matches zbi_header_t.type for bootloader metadata)
-    uint32_t    extra;  // matches zbi_header_t.extra for bootloader metadata
-    void*       data;   // pointer to metadata (set to NULL for bootloader metadata)
-    size_t      len;    // metadata length in bytes (set to zero for bootloader metadata)
+    // Metadata type.
+    uint32_t    type;
+    // Pointer to the metadata.
+    const void* data;
+    // Metadata length in bytes.
+    uint32_t    len;
 } pbus_metadata_t;
 
+// Device metadata to be passed from bootloader via a ZBI record.
 typedef struct {
+    // Metadata type (matches zbi_header_t.type for bootloader metadata).
+    uint32_t zbi_type;
+    // Matches zbi_header_t.extra for bootloader metadata.
+    // Used in cases where bootloader provides multiple metadata records of the same type.
+    uint32_t zbi_extra;
+} pbus_boot_metadata_t;
+
+typedef struct pbus_dev pbus_dev_t;
+struct pbus_dev {
     const char* name;
     uint32_t vid;   // BIND_PLATFORM_DEV_VID
     uint32_t pid;   // BIND_PLATFORM_DEV_PID
     uint32_t did;   // BIND_PLATFORM_DEV_DID
-    serial_port_info_t serial_port_info;
     const pbus_mmio_t* mmios;
     uint32_t mmio_count;
     const pbus_irq_t* irqs;
@@ -69,22 +81,35 @@ typedef struct {
     uint32_t bti_count;
     const pbus_metadata_t* metadata;
     uint32_t metadata_count;
-} pbus_dev_t;
-
-// flags for pbus_device_add()
-enum {
-    // Add the device but to not publish it to the devmgr until enabled with pbus_device_enable().
-    PDEV_ADD_DISABLED = (1 << 0),
-    // Add the device to run in platform bus devhost rather than in a new devhost.
-    PDEV_ADD_PBUS_DEVHOST = (1 << 1),
+    const pbus_boot_metadata_t* boot_metadata;
+    uint32_t boot_metadata_count;
+    // List of this device's child devices.
+    // This is only used in cases where children of a platform device also need to access
+    // platform bus resources.
+    const pbus_dev_t* children;
+    uint32_t child_count;
+    // Extra protocols to be provided to this platform device and its children.
+    // These fields are only used for the top level pbus_dev_t,
+    const uint32_t* protocols;
+    uint32_t protocol_count;
 };
 
+// Subset of pdev_board_info_t to be set by the board driver.
 typedef struct {
-    zx_status_t (*set_protocol)(void* ctx, uint32_t proto_id, void* protocol);
-    zx_status_t (*wait_protocol)(void* ctx, uint32_t proto_id);
-    zx_status_t (*device_add)(void* ctx, const pbus_dev_t* dev, uint32_t flags);
-    zx_status_t (*device_enable)(void* ctx, uint32_t vid, uint32_t pid, uint32_t did, bool enable);
+    // Board specific revision number.
+    uint32_t board_revision;
+} pbus_board_info_t;
+
+// Callback for proxy server.
+typedef zx_status_t (*platform_proxy_cb_t)(platform_proxy_args_t* args, void* cookie);
+
+typedef struct {
+    zx_status_t (*device_add)(void* ctx, const pbus_dev_t* dev);
+    zx_status_t (*protocol_device_add)(void* ctx, uint32_t proto_id, const pbus_dev_t* dev);
+    zx_status_t (*register_protocol)(void* ctx, uint32_t proto_id, void* protocol,
+                                     platform_proxy_cb_t proxy_cb, void* cb_cookie);
     const char* (*get_board_name)(void* ctx);
+    zx_status_t (*set_board_info)(void* ctx, const pbus_board_info_t* info);
 } platform_bus_protocol_ops_t;
 
 typedef struct {
@@ -92,31 +117,48 @@ typedef struct {
     void* ctx;
 } platform_bus_protocol_t;
 
-static inline zx_status_t pbus_set_protocol(platform_bus_protocol_t* pbus,
-                                            uint32_t proto_id, void* protocol) {
-    return pbus->ops->set_protocol(pbus->ctx, proto_id, protocol);
+// Adds a new platform device to the bus, using configuration provided by "dev".
+// Platform devices are created in their own separate devhosts.
+static inline zx_status_t pbus_device_add(const platform_bus_protocol_t* pbus,
+                                          const pbus_dev_t* dev) {
+    return pbus->ops->device_add(pbus->ctx, dev);
 }
 
-// waits for the specified protocol to be made available by another driver
-// calling pbus_set_protocol()
-static inline zx_status_t pbus_wait_protocol(platform_bus_protocol_t* pbus, uint32_t proto_id) {
-    return pbus->ops->wait_protocol(pbus->ctx, proto_id);
+// Adds a device for binding a protocol implementation driver.
+// These devices are added in the same devhost as the platform bus.
+// After the driver binds to the device it calls pbus_register_protocol()
+// to register its protocol with the platform bus.
+// pbus_protocol_device_add() blocks until the protocol implementation driver
+// registers its protocol (or times out).
+static inline zx_status_t pbus_protocol_device_add(const platform_bus_protocol_t* pbus,
+                                                   uint32_t proto_id, const pbus_dev_t* dev) {
+    return pbus->ops->protocol_device_add(pbus->ctx, proto_id, dev);
 }
 
-static inline zx_status_t pbus_device_add(platform_bus_protocol_t* pbus, const pbus_dev_t* dev,
-                                          uint32_t flags) {
-    return pbus->ops->device_add(pbus->ctx, dev, flags);
+// Called by protocol implementation drivers to register their protocol
+// with the platform bus. *proto* is a pointer to the local protocol struct,
+// while *proxy_cb* and *cb_cookie* are optionally used when drivers support
+// proxying the protocol across devhost boundaries with a client proxy driver.
+// In that case, *proxy_cb* is called in response to requests from the client proxy driver,
+// and *cb_cookie* is a cookie used to provide context for the *proxy_cb* callback.
+static inline zx_status_t pbus_register_protocol(const platform_bus_protocol_t* pbus,
+                                                 uint32_t proto_id, void* protocol,
+                                                 platform_proxy_cb_t proxy_cb, void* cb_cookie) {
+    return pbus->ops->register_protocol(pbus->ctx, proto_id, protocol, proxy_cb, cb_cookie);
 }
 
-// Dynamically enables or disables a platform device by adding or removing it
-// from the DDK device tree.
-static inline zx_status_t pbus_device_enable(platform_bus_protocol_t* pbus, uint32_t vid,
-                                             uint32_t pid, uint32_t did, bool enable) {
-    return pbus->ops->device_enable(pbus->ctx, vid, pid, did, enable);
-}
-
-static inline const char* pbus_get_board_name(platform_bus_protocol_t* pbus) {
+// Returns the board name for the underlying hardware.
+// Board drivers may use this to differentiate between multiple boards that they support.
+static inline const char* pbus_get_board_name(const platform_bus_protocol_t* pbus) {
     return pbus->ops->get_board_name(pbus->ctx);
+}
+
+// Board drivers may use this to set information about the board
+// (like the board revision number).
+// Platform device drivers can access this via pdev_get_board_info().
+static inline zx_status_t pbus_set_board_info(const platform_bus_protocol_t* pbus,
+                                              const pbus_board_info_t* info) {
+    return pbus->ops->set_board_info(pbus->ctx, info);
 }
 
 __END_CDECLS;

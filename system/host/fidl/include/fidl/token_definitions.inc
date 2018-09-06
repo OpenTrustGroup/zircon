@@ -17,6 +17,7 @@
 TOKEN(NotAToken)
 TOKEN(EndOfFile)
 TOKEN(Comment)
+TOKEN(DocComment)
 
 // Identifiers and constants
 TOKEN(Identifier)
@@ -47,8 +48,6 @@ TOKEN(Arrow)
 KEYWORD(As, "as")
 KEYWORD(Library, "library")
 KEYWORD(Using, "using")
-
-KEYWORD(Status, "status")
 
 KEYWORD(Array, "array")
 KEYWORD(Handle, "handle")

@@ -16,8 +16,29 @@
 
 static const pbus_mmio_t display_mmios[] = {
     {
+        // Canvas
         .base = S905D2_DMC_BASE,
         .length = S905D2_DMC_LENGTH,
+    },
+    {
+        // DSI Host Controller
+        .base = S905D2_MIPI_DSI_BASE,
+        .length = S905D2_MIPI_DSI_LENGTH,
+    },
+    {
+        // DSI PHY
+        .base = S905D2_DSI_PHY_BASE,
+        .length = S905D2_DSI_PHY_LENGTH,
+    },
+    {
+        // HHI
+        .base = S905D2_HIU_BASE,
+        .length = S905D2_HIU_LENGTH,
+    },
+    {
+        // VBUS/VPU
+        .base = S905D2_VPU_BASE,
+        .length = S905D2_VPU_LENGTH,
     },
 };
 
@@ -32,6 +53,14 @@ static const pbus_gpio_t display_gpios[] = {
     {
         // Backlight Enable
         .gpio = S905D2_GPIOA(10),
+    },
+    {
+        // LCD Reset
+        .gpio = S905D2_GPIOH(6),
+    },
+    {
+        // Panel detection
+        .gpio = S905D2_GPIOH(5),
     },
 };
 
@@ -49,6 +78,9 @@ static const pbus_i2c_channel_t display_i2c_channels[] = {
     },
 };
 
+static const uint32_t display_protocols[] = {
+    ZX_PROTOCOL_AMLOGIC_CANVAS,
+};
 
 static pbus_dev_t display_dev = {
     .name = "display",
@@ -65,10 +97,12 @@ static pbus_dev_t display_dev = {
     .i2c_channel_count = countof(display_i2c_channels),
     .btis = display_btis,
     .bti_count = countof(display_btis),
+    .protocols = display_protocols,
+    .protocol_count = countof(display_protocols),
 };
 
 zx_status_t aml_display_init(aml_bus_t* bus) {
-    zx_status_t status = pbus_device_add(&bus->pbus, &display_dev, 0);
+    zx_status_t status = pbus_device_add(&bus->pbus, &display_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: Could not add display dev: %d\n", __FUNCTION__, status);
         return status;

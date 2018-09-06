@@ -129,6 +129,12 @@ public:
     // whether the caller should do another test run.
     virtual bool KeepRunning() = 0;
 
+    // If the test processes some number of bytes per run, this amount can
+    // be declared by calling this method.  This allows the perftest
+    // library to calculate the throughput of the test, in bytes per unit
+    // time.
+    virtual void SetBytesProcessedPerRun(uint64_t bytes) = 0;
+
     // Calls to DeclareStep() specify the names of the steps that a test
     // consists of.  This is used for multi-step tests.  If DeclareStep()
     // is not called, the test will just have a single step.  DeclareStep()
@@ -180,7 +186,7 @@ void RegisterSimpleTest(const char* test_name) {
 // based on the command line arguments.  (See the "--help" output for more
 // details.)  |test_suite| is included in the test results JSON and is used to
 // categorize test results in the performance dashboard.
-int PerfTestMain(int argc, char** argv, const char* test_suite = "");
+int PerfTestMain(int argc, char** argv, const char* test_suite);
 
 // Run a single test for |test_suite| |run_count| times, and add the results to
 // |results_set| using the given name, |test_name|.  On error, this returns

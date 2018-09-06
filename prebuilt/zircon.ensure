@@ -28,9 +28,12 @@ $VerifiedPlatform linux-amd64
 $VerifiedPlatform mac-amd64
 #MatchedPlatform linux-arm64
 
+# This tells CIPD to fix up manually deleted files.
+$ParanoidMode CheckPresence
+
 # Clang
 @Subdir clang
-fuchsia/clang/${platform} git_revision:bf0e3dfee52b8515aa95cde6239d0ba4ff3bac5d
+fuchsia/clang/${platform} git_revision:70a812b6f9a686e288468cc448144f910e361939
 
 # GCC
 @Subdir gcc
@@ -42,7 +45,7 @@ fuchsia/sysroot/${os=linux}-${arch} git_revision:a96053c799a0f1ad0b7e8ab8199edbf
 
 # Symbolizer tool.  This is a standalone executable, not a subdirectory.
 @Subdir
-fuchsia/tools/symbolize/${platform} git_revision:829a2862fba77bf5c8fdc43357ec29f49057cde9
+fuchsia/tools/symbolize/${platform} git_revision:4f2007ecb0b2cdee974ad478305f3a7466d7ab77
 
 # QEMU
 @Subdir qemu

@@ -6,12 +6,12 @@
 #include <ddk/debug.h>
 #include <ddk/device.h>
 #include <ddk/io-buffer.h>
-#include <ddk/protocol/i2c.h>
+#include <ddk/protocol/i2c-impl.h>
 #include <ddk/protocol/platform-defs.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-device.h>
 #include <hw/reg.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 #include <zircon/process.h>
 #include <zircon/assert.h>
 
@@ -208,7 +208,7 @@ static zx_status_t i2c_dw_set_bitrate(void* ctx, uint32_t bus_id, uint32_t bitra
     return ZX_ERR_NOT_SUPPORTED;
 }
 
-static size_t i2c_dw_get_bus_count(void* ctx) {
+static uint32_t i2c_dw_get_bus_count(void* ctx) {
     i2c_dw_t* i2c = ctx;
 
     return i2c->i2c_dev_count;
@@ -415,7 +415,7 @@ init_fail:
     return status;
 }
 
-static i2c_impl_ops_t i2c_ops = {
+static i2c_impl_protocol_ops_t i2c_ops = {
     .get_bus_count = i2c_dw_get_bus_count,
     .get_max_transfer_size = i2c_dw_get_max_transfer_size,
     .set_bitrate = i2c_dw_set_bitrate,
@@ -491,7 +491,7 @@ static zx_status_t dw_i2c_bind(void* ctx, zx_device_t* parent) {
 
     i2c->i2c.ops = &i2c_ops;
     i2c->i2c.ctx = i2c;
-    pbus_set_protocol(&pbus, ZX_PROTOCOL_I2C_IMPL, &i2c->i2c);
+    pbus_register_protocol(&pbus, ZX_PROTOCOL_I2C_IMPL, &i2c->i2c, NULL, NULL);
 
     return ZX_OK;
 

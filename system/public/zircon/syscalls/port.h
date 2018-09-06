@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#pragma once
+#ifndef ZIRCON_SYSCALLS_PORT_H_
+#define ZIRCON_SYSCALLS_PORT_H_
 
+#include <zircon/compiler.h>
 #include <zircon/types.h>
 
 __BEGIN_CDECLS
@@ -11,22 +13,21 @@ __BEGIN_CDECLS
 // clang-format off
 
 // zx_object_wait_async() options
-#define ZX_WAIT_ASYNC_ONCE          0u
-#define ZX_WAIT_ASYNC_REPEATING     1u
+#define ZX_WAIT_ASYNC_ONCE          ((uint32_t)0u)
+#define ZX_WAIT_ASYNC_REPEATING     ((uint32_t)1u)
 
-// packet types.
-#define ZX_PKT_TYPE_USER            0x00u
-#define ZX_PKT_TYPE_SIGNAL_ONE      0x01u
-#define ZX_PKT_TYPE_SIGNAL_REP      0x02u
-#define ZX_PKT_TYPE_GUEST_BELL      0x03u
-#define ZX_PKT_TYPE_GUEST_MEM       0x04u
-#define ZX_PKT_TYPE_GUEST_IO        0x05u
-#define ZX_PKT_TYPE_GUEST_VCPU      0x06u
-#define ZX_PKT_TYPE_INTERRUPT       0x07u
-#define ZX_PKT_TYPE_EXCEPTION(n)    (0x08u | (((n) & 0xFFu) << 8))
+// packet types.  zx_port_packet_t::type
+#define ZX_PKT_TYPE_USER            ((uint8_t)0x00u)
+#define ZX_PKT_TYPE_SIGNAL_ONE      ((uint8_t)0x01u)
+#define ZX_PKT_TYPE_SIGNAL_REP      ((uint8_t)0x02u)
+#define ZX_PKT_TYPE_GUEST_BELL      ((uint8_t)0x03u)
+#define ZX_PKT_TYPE_GUEST_MEM       ((uint8_t)0x04u)
+#define ZX_PKT_TYPE_GUEST_IO        ((uint8_t)0x05u)
+#define ZX_PKT_TYPE_GUEST_VCPU      ((uint8_t)0x06u)
+#define ZX_PKT_TYPE_INTERRUPT       ((uint8_t)0x07u)
+#define ZX_PKT_TYPE_EXCEPTION(n)    ((uint32_t)(0x08u | (((n) & 0xFFu) << 8)))
 
-
-#define ZX_PKT_TYPE_MASK            0xFFu
+#define ZX_PKT_TYPE_MASK            ((uint32_t)0x000000FFu)
 
 #define ZX_PKT_IS_USER(type)        ((type) == ZX_PKT_TYPE_USER)
 #define ZX_PKT_IS_SIGNAL_ONE(type)  ((type) == ZX_PKT_TYPE_SIGNAL_ONE)
@@ -38,8 +39,9 @@ __BEGIN_CDECLS
 #define ZX_PKT_IS_INTERRUPT(type)   ((type) == ZX_PKT_TYPE_INTERRUPT)
 #define ZX_PKT_IS_EXCEPTION(type)   (((type) & ZX_PKT_TYPE_MASK) == ZX_PKT_TYPE_EXCEPTION(0))
 
-#define ZX_PKT_GUEST_VCPU_INTERRUPT  0
-#define ZX_PKT_GUEST_VCPU_STARTUP    1
+// zx_packet_guest_vcpu_t::type
+#define ZX_PKT_GUEST_VCPU_INTERRUPT  ((uint8_t)0)
+#define ZX_PKT_GUEST_VCPU_STARTUP    ((uint8_t)1)
 // clang-format on
 
 // port_packet_t::type ZX_PKT_TYPE_USER.
@@ -67,14 +69,14 @@ typedef struct zx_packet_exception {
 } zx_packet_exception_t;
 
 typedef struct zx_packet_guest_bell {
-    zx_vaddr_t addr;
+    zx_gpaddr_t addr;
     uint64_t reserved0;
     uint64_t reserved1;
     uint64_t reserved2;
 } zx_packet_guest_bell_t;
 
 typedef struct zx_packet_guest_mem {
-    zx_vaddr_t addr;
+    zx_gpaddr_t addr;
 #if __aarch64__
     uint8_t access_size;
     bool sign_extend;
@@ -108,17 +110,17 @@ typedef struct zx_packet_guest_io {
 } zx_packet_guest_io_t;
 
 typedef struct zx_packet_guest_vcpu {
-    uint8_t type;
     union {
         struct {
-            uint32_t mask;
+            uint64_t mask;
             uint8_t vector;
         } interrupt;
         struct {
             uint64_t id;
-            zx_vaddr_t entry;
+            zx_gpaddr_t entry;
         } startup;
     };
+    uint8_t type;
     uint64_t reserved;
 } zx_packet_guest_vcpu_t;
 
@@ -143,3 +145,5 @@ typedef struct zx_port_packet {
 } zx_port_packet_t;
 
 __END_CDECLS
+
+#endif // ZIRCON_SYSCALLS_PORT_H_

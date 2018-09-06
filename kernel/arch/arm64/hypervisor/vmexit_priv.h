@@ -26,6 +26,19 @@ enum class ExceptionClass : uint8_t {
     DATA_ABORT          = 0b100100,
 };
 
+static inline const char* exception_class_name(ExceptionClass exception_class) {
+#define EXCEPTION_CLASS_NAME(name) case ExceptionClass::name: return #name
+    switch (exception_class) {
+    EXCEPTION_CLASS_NAME(WFI_WFE_INSTRUCTION);
+    EXCEPTION_CLASS_NAME(SMC_INSTRUCTION);
+    EXCEPTION_CLASS_NAME(SYSTEM_INSTRUCTION);
+    EXCEPTION_CLASS_NAME(INSTRUCTION_ABORT);
+    EXCEPTION_CLASS_NAME(DATA_ABORT);
+#undef EXIT_REASON_NAME
+    default: return "UNKNOWN";
+    }
+}
+
 // Exception syndrome for a VM exit.
 struct ExceptionSyndrome {
     ExceptionClass ec;
@@ -61,6 +74,9 @@ enum class SystemRegister : uint16_t {
     OSLSR_EL1       = 0b10100000 << 8 /* op */ | 0b00010001 /* cr */,
     OSDLR_EL1       = 0b10100000 << 8 /* op */ | 0b00010011 /* cr */,
     DBGPRCR_EL1     = 0b10100000 << 8 /* op */ | 0b00010100 /* cr */,
+
+    // Interrupt Controller System Registers. See GIC v3/v4 Architecture Spec Section 8.2.
+    ICC_SGI1R_EL1   = 0b11101000 << 8 /* op */ | 0b11001011 /* cr */,
 };
 
 // System instruction that caused a VM exit.
@@ -70,6 +86,18 @@ struct SystemInstruction {
     bool read;
 
     SystemInstruction(uint32_t iss);
+};
+
+struct SgiRegister {
+    uint8_t aff3;
+    uint8_t aff2;
+    uint8_t aff1;
+    uint8_t rs;
+    uint16_t target_list;
+    uint8_t int_id;
+    bool all_but_local;
+
+    SgiRegister(uint64_t sgi);
 };
 
 // Data abort that caused a VM exit.

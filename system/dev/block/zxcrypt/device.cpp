@@ -27,6 +27,7 @@
 #include <zircon/types.h>
 #include <zxcrypt/volume.h>
 
+#include "debug.h"
 #include "device.h"
 #include "extra.h"
 #include "worker.h"
@@ -46,18 +47,22 @@ int InitThread(void* arg) {
 
 // Public methods
 
-Device::Device(zx_device_t* parent)
-    : DeviceType(parent), state_(0), info_(nullptr), hint_(0) {
+Device::Device(zx_device_t* parent) : DeviceType(parent), state_(0), info_(nullptr), hint_(0) {
+    LOG_ENTRY();
+
     list_initialize(&queue_);
 }
 
-Device::~Device() {}
+Device::~Device() {
+    LOG_ENTRY();
+}
 
 // Public methods called from global context
 
 zx_status_t Device::Bind() {
-    zx_status_t rc;
+    LOG_ENTRY();
     ZX_DEBUG_ASSERT(!info_);
+    zx_status_t rc;
 
     // Add the (invisible) device to devmgr
     if ((rc = DdkAdd("zxcrypt", DEVICE_ADD_INVISIBLE)) != ZX_OK) {
@@ -78,8 +83,9 @@ zx_status_t Device::Bind() {
 }
 
 zx_status_t Device::Init() {
-    zx_status_t rc;
+    LOG_ENTRY();
     ZX_DEBUG_ASSERT(!info_);
+    zx_status_t rc;
 
     zxlogf(TRACE, "zxcrypt device %p initializing\n", this);
     auto cleanup = fbl::MakeAutoCall([this]() {
@@ -90,7 +96,7 @@ zx_status_t Device::Init() {
     fbl::AllocChecker ac;
     fbl::unique_ptr<DeviceInfo> info(new (&ac) DeviceInfo());
     if (!ac.check()) {
-        zxlogf(ERROR, "allocation failed: %zu bytes\n", sizeof(DeviceInfo));
+        zxlogf(ERROR, "failed to allocate %zu bytes\n", sizeof(DeviceInfo));
         return ZX_ERR_NO_MEMORY;
     }
     info->base = nullptr;
@@ -103,11 +109,13 @@ zx_status_t Device::Init() {
     crypto::Secret root_key;
     uint8_t* buf;
     if ((rc = root_key.Allocate(kZx1130KeyLen, &buf)) != ZX_OK) {
+        zxlogf(ERROR, "failed to key of %zu bytes: %s\n", kZx1130KeyLen, zx_status_get_string(rc));
         return rc;
     }
     memset(buf, 0, root_key.len());
     fbl::unique_ptr<Volume> volume;
     if ((rc = Volume::Unlock(parent(), root_key, 0, &volume)) != ZX_OK) {
+        zxlogf(ERROR, "failed to unlock volume: %s\n", zx_status_get_string(rc));
         return rc;
     }
 
@@ -130,9 +138,9 @@ zx_status_t Device::Init() {
         zxlogf(ERROR, "zx::vmo::create failed: %s\n", zx_status_get_string(rc));
         return rc;
     }
-    constexpr uint32_t flags = ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    constexpr uint32_t flags = ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     uintptr_t address;
-    if ((rc = zx::vmar::root_self().map(0, info->vmo, 0, Volume::kBufferSize, flags, &address)) !=
+    if ((rc = zx::vmar::root_self()->map(0, info->vmo, 0, Volume::kBufferSize, flags, &address)) !=
         ZX_OK) {
         zxlogf(ERROR, "zx::vmar::map failed: %s\n", zx_status_get_string(rc));
         return rc;
@@ -159,6 +167,7 @@ zx_status_t Device::Init() {
         zx::port port;
         port_.duplicate(ZX_RIGHT_SAME_RIGHTS, &port);
         if ((rc = workers_[i].Start(this, *volume, fbl::move(port))) != ZX_OK) {
+            zxlogf(ERROR, "failed to start worker %zu: %s\n", i, zx_status_get_string(rc));
             return rc;
         }
         ++info->num_workers;
@@ -181,8 +190,10 @@ zx_status_t Device::Init() {
 
 zx_status_t Device::DdkIoctl(uint32_t op, const void* in, size_t in_len, void* out, size_t out_len,
                              size_t* actual) {
-    zx_status_t rc;
+    LOG_ENTRY_ARGS("op=%0x" PRIx32 ", in=%p, in_len=%zu, out=%p, out_len=%zu, actual=%p", op, in,
+                   in_len, out, out_len, actual);
     ZX_DEBUG_ASSERT(info_);
+    zx_status_t rc;
 
     // Modify inputs
     switch (op) {
@@ -216,7 +227,7 @@ zx_status_t Device::DdkIoctl(uint32_t op, const void* in, size_t in_len, void* o
         break;
     }
     if (rc < 0) {
-        zxlogf(ERROR, "parent device returned failure for ioctl %" PRIu32 ": %s\n", op,
+        zxlogf(ERROR, "parent device returned failure for ioctl 0x%" PRIx32 ": %s\n", op,
                zx_status_get_string(rc));
         return rc;
     }
@@ -243,19 +254,23 @@ zx_status_t Device::DdkIoctl(uint32_t op, const void* in, size_t in_len, void* o
 }
 
 zx_off_t Device::DdkGetSize() {
+    LOG_ENTRY();
+
     zx_off_t reserved, size;
     if (mul_overflow(info_->block_size, info_->reserved_blocks, &reserved) ||
         sub_overflow(device_get_size(parent()), reserved, &size)) {
         zxlogf(ERROR, "device_get_size returned less than what has been reserved\n");
         return 0;
     }
+
     return size;
 }
 
 // TODO(aarongreen): See ZX-1138.  Currently, there's no good way to trigger
 // this on demand.
 void Device::DdkUnbind() {
-    zxlogf(TRACE, "zxcrypt device %p unbinding\n", this);
+    LOG_ENTRY();
+
     // Clear the active flag.  The state is only zero if |DdkUnbind| has been called and all
     // requests are complete.
     if (state_.fetch_and(~kActive) == kActive) {
@@ -264,6 +279,7 @@ void Device::DdkUnbind() {
 }
 
 void Device::DdkRelease() {
+    LOG_ENTRY();
     zx_status_t rc;
 
     // One way or another we need to release the memory
@@ -288,9 +304,7 @@ void Device::DdkRelease() {
 
     // Stop workers; send a stop message to each, then join each (possibly in different order).
     zx_port_packet_t packet;
-    packet.key = 0;
-    packet.type = ZX_PKT_TYPE_USER;
-    packet.status = ZX_ERR_STOP;
+    Worker::MakeRequest(&packet, Worker::kStopRequest);
     for (size_t i = 0; i < info->num_workers; ++i) {
         port_.queue(&packet);
     }
@@ -300,7 +314,8 @@ void Device::DdkRelease() {
 
     // Release write buffer
     const uintptr_t address = reinterpret_cast<uintptr_t>(info->base);
-    if (address != 0 && (rc = zx::vmar::root_self().unmap(address, Volume::kBufferSize)) != ZX_OK) {
+    if (address != 0 &&
+        (rc = zx::vmar::root_self()->unmap(address, Volume::kBufferSize)) != ZX_OK) {
         zxlogf(WARN, "failed to unmap %" PRIu32 " bytes at %" PRIuPTR ": %s\n", Volume::kBufferSize,
                address, zx_status_get_string(rc));
     }
@@ -310,15 +325,17 @@ void Device::DdkRelease() {
 // ddk::BlockProtocol methods
 
 void Device::BlockQuery(block_info_t* out_info, size_t* out_op_size) {
+    LOG_ENTRY_ARGS("out_info=%p, out_op_size=%p", out_info, out_op_size);
     ZX_DEBUG_ASSERT(info_);
+
     info_->proto.ops->query(info_->proto.ctx, out_info, out_op_size);
     out_info->block_count -= info_->reserved_blocks;
     *out_op_size = info_->op_size;
 }
 
 void Device::BlockQueue(block_op_t* block) {
+    LOG_ENTRY_ARGS("block=%p", block);
     ZX_DEBUG_ASSERT(info_);
-    zxlogf(TRACE, "zxcrypt device %p processing I/O request %p\n", this, block);
 
     // Check if the device is active, and if so increment the count to accept this request. The
     // corresponding decrement is in |BlockComplete|; all requests that make it out of this loop
@@ -329,62 +346,57 @@ void Device::BlockQueue(block_op_t* block) {
     while (!state_.compare_exchange_weak(&expected, desired, fbl::memory_order_seq_cst,
                                          fbl::memory_order_seq_cst)) {
         if ((expected & kActive) == 0) {
+            zxlogf(ERROR, "rejecting I/O request: device is not active\n");
             block->completion_cb(block, ZX_ERR_BAD_STATE);
             return;
         }
         if ((expected & kMaxReqs) == kMaxReqs) {
+            zxlogf(ERROR, "rejecting I/O request: maximum requests exceeded\n");
             block->completion_cb(block, ZX_ERR_UNAVAILABLE);
             return;
         }
         desired = expected + 1;
     }
 
-    // Initialize our extra space
+    // Initialize our extra space and save original values
     extra_op_t* extra = BlockToExtra(block, info_->op_size);
-    extra->Init();
-
-    // Skip the reserved blocks
-    uint32_t command = block->command & BLOCK_OP_MASK;
-    if ((command == BLOCK_OP_READ || command == BLOCK_OP_WRITE) &&
-        add_overflow(block->rw.offset_dev, info_->reserved_blocks, &block->rw.offset_dev)) {
-        zxlogf(ERROR, "adjusted offset overflow: block->rw.offset_dev=%" PRIu64 "\n",
-               block->rw.offset_dev);
-        BlockComplete(block, ZX_ERR_OUT_OF_RANGE);
+    zx_status_t rc = extra->Init(block, info_->reserved_blocks);
+    if (rc != ZX_OK) {
+        zxlogf(ERROR, "failed to initialize extra info: %s\n", zx_status_get_string(rc));
+        BlockComplete(block, rc);
         return;
     }
 
-    // Queue write requests to get a portion of the write buffer, send all others to the device
-    if (command == BLOCK_OP_WRITE) {
+    switch (block->command & BLOCK_OP_MASK) {
+    case BLOCK_OP_WRITE:
         EnqueueWrite(block);
-    } else {
+        break;
+    case BLOCK_OP_READ:
+    default:
         BlockForward(block, ZX_OK);
+        break;
     }
 }
 
 void Device::BlockForward(block_op_t* block, zx_status_t status) {
+    LOG_ENTRY_ARGS("block=%p, status=%s", block, zx_status_get_string(status));
     ZX_DEBUG_ASSERT(info_);
-    zxlogf(TRACE, "zxcrypt device %p sending I/O request %p to parent device\n", this, block);
 
     if (!block) {
+        zxlogf(SPEW, "early return; no block provided\n");
         return;
     }
     if (status != ZX_OK) {
+        zxlogf(ERROR, "aborting request due to failure: %s\n", zx_status_get_string(status));
         BlockComplete(block, status);
         return;
     }
     // Check if the device is active (i.e. |DdkUnbind| has not been called).
     if ((state_.load() & kActive) == 0) {
-        zxlogf(ERROR, "zxcrypt device %p is not active\n", this);
+        zxlogf(ERROR, "aborting request; device is not active\n");
         BlockComplete(block, ZX_ERR_BAD_STATE);
         return;
     }
-    // Save info that may change
-    extra_op_t* extra = BlockToExtra(block, info_->op_size);
-    extra->length = block->rw.length;
-    extra->offset_dev = block->rw.offset_dev;
-    extra->completion_cb = block->completion_cb;
-    extra->cookie = block->cookie;
-
     // Register ourselves as the callback
     block->completion_cb = BlockCallback;
     block->cookie = this;
@@ -394,8 +406,8 @@ void Device::BlockForward(block_op_t* block, zx_status_t status) {
 }
 
 void Device::BlockComplete(block_op_t* block, zx_status_t status) {
+    LOG_ENTRY_ARGS("block=%p, status=%s", block, zx_status_get_string(status));
     ZX_DEBUG_ASSERT(info_);
-    zxlogf(TRACE, "zxcrypt device %p completing I/O request %p\n", this, block);
     zx_status_t rc;
 
     // If a portion of the write buffer was allocated, release it.
@@ -431,6 +443,7 @@ void Device::BlockComplete(block_op_t* block, zx_status_t status) {
 // Private methods
 
 void Device::EnqueueWrite(block_op_t* block) {
+    LOG_ENTRY_ARGS("block=%p", block);
     zx_status_t rc = ZX_OK;
 
     fbl::AutoLock lock(&mtx_);
@@ -441,10 +454,8 @@ void Device::EnqueueWrite(block_op_t* block) {
         extra = BlockToExtra(block, info_->op_size);
         list_add_tail(&queue_, &extra->node);
     }
-
-    // If we previously stalled and haven't completed any requests since then, don't bother looking
-    // for space again.
     if (state_.load() & kStalled) {
+        zxlogf(SPEW, "early return; no requests completed since last stall\n");
         return;
     }
 
@@ -475,9 +486,6 @@ void Device::EnqueueWrite(block_op_t* block) {
 
         // Modify request to use write buffer
         extra->data = info_->base + (off * info_->block_size);
-        extra->vmo = block->rw.vmo;
-        extra->offset_vmo = block->rw.offset_vmo;
-
         block->rw.vmo = info_->vmo.get();
         block->rw.offset_vmo = (extra->data - info_->base) / info_->block_size;
 
@@ -495,13 +503,11 @@ void Device::EnqueueWrite(block_op_t* block) {
 }
 
 void Device::SendToWorker(block_op_t* block) {
+    LOG_ENTRY_ARGS("block=%p", block);
     zx_status_t rc;
+
     zx_port_packet_t packet;
-    packet.key = 0;
-    packet.type = ZX_PKT_TYPE_USER;
-    packet.status = ZX_ERR_NEXT;
-    memcpy(packet.user.c8, &block, sizeof(block));
-    zxlogf(TRACE, "zxcrypt device %p sending I/O request %p to workers\n", this, block);
+    Worker::MakeRequest(&packet, Worker::kBlockRequest, block);
     if ((rc = port_.queue(&packet)) != ZX_OK) {
         zxlogf(ERROR, "zx::port::queue failed: %s\n", zx_status_get_string(rc));
         BlockComplete(block, rc);
@@ -510,39 +516,53 @@ void Device::SendToWorker(block_op_t* block) {
 }
 
 void Device::BlockCallback(block_op_t* block, zx_status_t status) {
-    Device* device = static_cast<Device*>(block->cookie);
-    zxlogf(TRACE, "zxcrypt device %p received I/O response %p\n", device, block);
+    LOG_ENTRY_ARGS("block=%p, status=%s", block, zx_status_get_string(status));
 
     // Restore data that may have changed
+    Device* device = static_cast<Device*>(block->cookie);
     extra_op_t* extra = BlockToExtra(block, device->op_size());
+    block->rw.vmo = extra->vmo;
     block->rw.length = extra->length;
     block->rw.offset_dev = extra->offset_dev;
+    block->rw.offset_vmo = extra->offset_vmo;
     block->completion_cb = extra->completion_cb;
     block->cookie = extra->cookie;
 
-    // If this is a successful read, send it to the workers
-    if (status == ZX_OK && (block->command & BLOCK_OP_MASK) == BLOCK_OP_READ) {
-        device->SendToWorker(block);
-    } else {
+    if (status != ZX_OK) {
+        zxlogf(TRACE, "parent device returned %s\n", zx_status_get_string(status));
         device->BlockComplete(block, status);
+        return;
+    }
+    switch (block->command & BLOCK_OP_MASK) {
+    case BLOCK_OP_READ:
+        device->SendToWorker(block);
+        break;
+    case BLOCK_OP_WRITE:
+    default:
+        device->BlockComplete(block, ZX_OK);
+        break;
     }
 }
 
 } // namespace zxcrypt
 
 extern "C" zx_status_t zxcrypt_device_bind(void* ctx, zx_device_t* parent) {
+    LOG_ENTRY_ARGS("ctx=%p, parent=%p", ctx, parent);
     zx_status_t rc;
+
     fbl::AllocChecker ac;
     auto dev = fbl::make_unique_checked<zxcrypt::Device>(&ac, parent);
     if (!ac.check()) {
-        zxlogf(ERROR, "allocation failed: %zu bytes\n", sizeof(zxcrypt::Device));
+        zxlogf(ERROR, "failed to allocate %zu bytes\n", sizeof(zxcrypt::Device));
         return ZX_ERR_NO_MEMORY;
     }
     if ((rc = dev->Bind()) != ZX_OK) {
+        zxlogf(ERROR, "failed to bind: %s\n", zx_status_get_string(rc));
         return rc;
     }
     // devmgr is now in charge of the memory for |dev|
     zxcrypt::Device* devmgr_owned __attribute__((unused));
     devmgr_owned = dev.release();
+
     return ZX_OK;
 }

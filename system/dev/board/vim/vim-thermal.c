@@ -12,6 +12,47 @@
 #include <soc/aml-common/aml-thermal.h>
 #include "vim.h"
 
+static const pbus_mmio_t mailbox_mmios[] = {
+    // Mailbox
+    {
+        .base = S912_HIU_MAILBOX_BASE,
+        .length = S912_HIU_MAILBOX_LENGTH,
+    },
+    // Mailbox Payload
+    {
+        .base = S912_MAILBOX_PAYLOAD_BASE,
+        .length = S912_MAILBOX_PAYLOAD_LENGTH,
+    },
+};
+
+// IRQ for Mailbox
+static const pbus_irq_t mailbox_irqs[] = {
+    {
+        .irq = S912_MBOX_IRQ_RECEIV0,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH
+    },
+    {
+        .irq = S912_MBOX_IRQ_RECEIV1,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH
+    },
+    {
+        .irq = S912_MBOX_IRQ_RECEIV2,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH
+    },
+    {
+        .irq = S912_MBOX_IRQ_SEND3,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH
+    },
+    {
+        .irq = S912_MBOX_IRQ_SEND4,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH
+    },
+    {
+        .irq = S912_MBOX_IRQ_SEND5,
+        .mode = ZX_INTERRUPT_MODE_EDGE_HIGH
+    },
+};
+
 static const pbus_gpio_t fanctl_gpios[] = {
     {
         .gpio = S912_GPIODV(14),
@@ -53,11 +94,12 @@ static const pbus_gpio_t fanctl_gpios[] = {
  * Operating point -1 - INVALID/No throttling needed
  */
 
-static aml_thermal_config_t aml_vim2_config = {
+static thermal_device_info_t aml_vim2_config = {
     .active_cooling                 = true,
     .passive_cooling                = true,
     .gpu_throttling                 = true,
-    .trip_point_count               = 8,
+    .big_little                     = true,
+    .num_trip_points                = 8,
     .critical_temp                  = 81,
     .trip_point_info = {
         {
@@ -71,56 +113,56 @@ static aml_thermal_config_t aml_vim2_config = {
         },
         {
             .fan_level                  = 1,
-            .up_temp                    = 45,
-            .down_temp                  = 43,
+            .up_temp                    = 65,
+            .down_temp                  = 63,
             .big_cluster_dvfs_opp       = 6,
             .little_cluster_dvfs_opp    = 4,
             .gpu_clk_freq_source        = 3,
         },
         {
             .fan_level                  = 2,
-            .up_temp                    = 55,
-            .down_temp                  = 53,
-            .big_cluster_dvfs_opp       = 6,
-            .little_cluster_dvfs_opp    = 4,
-            .gpu_clk_freq_source        = 3,
-        },
-        {
-            .fan_level                  = 3,
-            .up_temp                    = 60,
-            .down_temp                  = 58,
-            .big_cluster_dvfs_opp       = 6,
-            .little_cluster_dvfs_opp    = 4,
-            .gpu_clk_freq_source        = 3,
-        },
-        {
-            .fan_level                  = 3,
             .up_temp                    = 70,
             .down_temp                  = 68,
+            .big_cluster_dvfs_opp       = 6,
+            .little_cluster_dvfs_opp    = 4,
+            .gpu_clk_freq_source        = 3,
+        },
+        {
+            .fan_level                  = 3,
+            .up_temp                    = 75,
+            .down_temp                  = 73,
+            .big_cluster_dvfs_opp       = 6,
+            .little_cluster_dvfs_opp    = 4,
+            .gpu_clk_freq_source        = 3,
+        },
+        {
+            .fan_level                  = 3,
+            .up_temp                    = 82,
+            .down_temp                  = 79,
             .big_cluster_dvfs_opp       = 5,
             .little_cluster_dvfs_opp    = 4,
             .gpu_clk_freq_source        = 2,
         },
         {
             .fan_level                  = 3,
-            .up_temp                    = 74,
-            .down_temp                  = 73,
+            .up_temp                    = 87,
+            .down_temp                  = 84,
             .big_cluster_dvfs_opp       = 4,
             .little_cluster_dvfs_opp    = 4,
             .gpu_clk_freq_source        = 2,
         },
         {
             .fan_level                  = 3,
-            .up_temp                    = 77,
-            .down_temp                  = 75,
+            .up_temp                    = 92,
+            .down_temp                  = 89,
             .big_cluster_dvfs_opp       = 3,
             .little_cluster_dvfs_opp    = 3,
             .gpu_clk_freq_source        = 1,
         },
         {
             .fan_level                  = 3,
-            .up_temp                    = 79,
-            .down_temp                  = 76,
+            .up_temp                    = 96,
+            .down_temp                  = 93,
             .big_cluster_dvfs_opp       = 2,
             .little_cluster_dvfs_opp    = 2,
             .gpu_clk_freq_source        = 0,
@@ -131,32 +173,44 @@ static aml_thermal_config_t aml_vim2_config = {
 static const pbus_metadata_t vim_thermal_metadata[] = {
     {
         .type       = DEVICE_METADATA_PRIVATE,
-        .extra      = 0,
         .data       = &aml_vim2_config,
         .len        = sizeof(aml_vim2_config),
     }
 };
 
-static const pbus_dev_t thermal_dev = {
-    .name = "vim-thermal",
-    .vid = PDEV_VID_AMLOGIC,
-    .pid = PDEV_PID_GENERIC,
-    .did = PDEV_DID_AMLOGIC_THERMAL,
-    .gpios = fanctl_gpios,
-    .gpio_count = countof(fanctl_gpios),
-    .metadata = vim_thermal_metadata,
-    .metadata_count = countof(vim_thermal_metadata),
+static const pbus_dev_t scpi_children[] = {
+    // VIM2 thermal driver
+    {
+        .gpios = fanctl_gpios,
+        .gpio_count = countof(fanctl_gpios),
+        .metadata = vim_thermal_metadata,
+        .metadata_count = countof(vim_thermal_metadata),
+    },
+};
+
+static const pbus_dev_t mailbox_children[] = {
+    // Amlogic SCPI driver
+    {
+        .children = scpi_children,
+        .child_count = countof(scpi_children),
+    },
+};
+
+static const pbus_dev_t mailbox_dev = {
+    .name = "mailbox",
+    .vid = PDEV_VID_KHADAS,
+    .pid = PDEV_PID_VIM2,
+    .did = PDEV_DID_AMLOGIC_MAILBOX,
+    .mmios = mailbox_mmios,
+    .mmio_count = countof(mailbox_mmios),
+    .irqs = mailbox_irqs,
+    .irq_count = countof(mailbox_irqs),
+    .children = mailbox_children,
+    .child_count = countof(mailbox_children),
 };
 
 zx_status_t vim2_thermal_init(vim_bus_t* bus) {
-
-    zx_status_t status = pbus_wait_protocol(&bus->pbus, ZX_PROTOCOL_SCPI);
-    if (status != ZX_OK) {
-        zxlogf(ERROR, "vim2_thermal_init: pbus_wait_protocol failed: %d\n", status);
-        return status;
-    }
-
-    status = pbus_device_add(&bus->pbus, &thermal_dev, 0);
+    zx_status_t status = pbus_device_add(&bus->pbus, &mailbox_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "vim2_thermal_init: pbus_device_add failed: %d\n", status);
         return status;

@@ -30,12 +30,14 @@ MODULE_COMPILEFLAGS := \
     -Isystem/ulib/bitmap/include \
     -Isystem/ulib/fs/include \
     -Isystem/ulib/fs-management/include \
+    -Isystem/ulib/fzl/include \
     -Isystem/ulib/minfs/include \
     -Isystem/ulib/fbl/include \
     -Isystem/ulib/fdio/include \
     -Isystem/ulib/zxcpp/include \
     -Isystem/ulib/fbl/include \
     -Isystem/ulib/fdio/include \
+    -Isystem/ulib/zircon-internal/include \
     -Isystem/ulib/zircon/include \
 
 MODULE_HOST_LIBS := \

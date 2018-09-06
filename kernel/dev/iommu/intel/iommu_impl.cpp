@@ -6,8 +6,8 @@
 
 #include "iommu_impl.h"
 
+#include <dev/interrupt.h>
 #include <err.h>
-#include <zxcpp/new.h>
 #include <fbl/algorithm.h>
 #include <fbl/auto_lock.h>
 #include <fbl/limits.h>
@@ -18,6 +18,8 @@
 #include <vm/vm_aspace.h>
 #include <vm/vm_object_paged.h>
 #include <vm/vm_object_physical.h>
+#include <zircon/time.h>
+#include <zxcpp/new.h>
 
 #include "context_table_state.h"
 #include "device_context.h"
@@ -85,8 +87,7 @@ IommuImpl::~IommuImpl() {
     ASSERT(status == ZX_OK);
 
     DisableFaultsLocked();
-    auto& pcie_platform = PcieBusDriver::GetDriver()->platform();
-    pcie_platform.FreeMsiBlock(&irq_block_);
+    msi_free_block(&irq_block_);
 
     VmAspace::kernel_aspace()->FreeRegion(mmio_.base());
 }
@@ -405,7 +406,7 @@ zx_status_t IommuImpl::Initialize() {
         return status;
     }
 
-    status = SetTranslationEnableLocked(true, current_time() + ZX_SEC(1));
+    status = SetTranslationEnableLocked(true, zx_time_add_duration(current_time(), ZX_SEC(1)));
     if (status != ZX_OK) {
         LTRACEF("set translation enable failed\n");
         return status;
@@ -475,7 +476,7 @@ zx_status_t IommuImpl::SetRootTablePointerLocked(paddr_t pa) {
     global_ctl.set_root_table_ptr(1);
     global_ctl.WriteTo(&mmio_);
     zx_status_t status = WaitForValueLocked(&global_ctl, &decltype(global_ctl)::root_table_ptr,
-                                            1, current_time() + ZX_SEC(1));
+                                            1, zx_time_add_duration(current_time(), ZX_SEC(1)));
     if (status != ZX_OK) {
         LTRACEF("Timed out waiting for root_table_ptr bit to take\n");
         return status;
@@ -616,7 +617,7 @@ zx_status_t IommuImpl::WaitForValueLocked(RegType* reg,
             break;
         }
 
-        zx_time_t sleep_deadline = fbl::min(now + kMaxSleepDuration, deadline);
+        zx_time_t sleep_deadline = fbl::min(zx_time_add_duration(now, kMaxSleepDuration), deadline);
         thread_sleep(sleep_deadline);
     }
     return ZX_ERR_TIMED_OUT;
@@ -670,12 +671,11 @@ void IommuImpl::FaultHandler(void* ctx) {
 zx_status_t IommuImpl::ConfigureFaultEventInterruptLocked() {
     DEBUG_ASSERT(lock_.IsHeld());
 
-    auto& pcie_platform = PcieBusDriver::GetDriver()->platform();
-    if (!pcie_platform.supports_msi()) {
+    if (!msi_is_supported()) {
         return ZX_ERR_NOT_SUPPORTED;
     }
-    zx_status_t status = pcie_platform.AllocMsiBlock(1, false/* can_target_64bit */,
-                                                     false /* msi x */, &irq_block_);
+    zx_status_t status = msi_alloc_block(1, false/* can_target_64bit */,
+                                            false /* msi x */, &irq_block_);
     if (status != ZX_OK) {
         return status;
     }
@@ -701,7 +701,7 @@ zx_status_t IommuImpl::ConfigureFaultEventInterruptLocked() {
     auto fault_status_ctl = reg::FaultStatus::Get().ReadFrom(&mmio_);
     fault_status_ctl.WriteTo(&mmio_);
 
-    pcie_platform.RegisterMsiHandler(&irq_block_, 0, FaultHandler, this);
+    msi_register_handler(&irq_block_, 0, FaultHandler, this);
 
     // Unmask interrupts
     auto fault_event_ctl = reg::FaultEventControl::Get().ReadFrom(&mmio_);

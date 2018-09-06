@@ -6,8 +6,10 @@
 #include <lib/async-loop/cpp/loop.h>
 #include <lib/crashanalyzer/crashanalyzer.h>
 #include <lib/fdio/util.h>
+#include <lib/logger/provider.h>
 #include <lib/process-launcher/launcher.h>
 #include <lib/svc/outgoing.h>
+#include <lib/sysmem/sysmem.h>
 #include <zircon/process.h>
 #include <zircon/processargs.h>
 #include <zircon/status.h>
@@ -33,7 +35,7 @@ static zx_status_t provider_init(zx_service_provider_instance_t* instance) {
 }
 
 static zx_status_t provider_publish(zx_service_provider_instance_t* instance,
-                                    async_t* async, const fbl::RefPtr<fs::PseudoDir>& dir) {
+                                    async_dispatcher_t* dispatcher, const fbl::RefPtr<fs::PseudoDir>& dir) {
     const zx_service_provider_t* provider = instance->provider;
 
     if (!provider->services || !provider->ops->connect)
@@ -43,8 +45,8 @@ static zx_status_t provider_publish(zx_service_provider_instance_t* instance,
         const char* service_name = provider->services[i];
         zx_status_t status = dir->AddEntry(
             service_name,
-            fbl::MakeRefCounted<fs::Service>([instance, async, service_name](zx::channel request) {
-                return instance->provider->ops->connect(instance->ctx, async, service_name, request.release());
+            fbl::MakeRefCounted<fs::Service>([instance, dispatcher, service_name](zx::channel request) {
+                return instance->provider->ops->connect(instance->ctx, dispatcher, service_name, request.release());
             }));
         if (status != ZX_OK) {
             for (size_t j = 0; j < i; ++j)
@@ -63,7 +65,7 @@ static void provider_release(zx_service_provider_instance_t* instance) {
 }
 
 static zx_status_t provider_load(zx_service_provider_instance_t* instance,
-                                 async_t* async, const fbl::RefPtr<fs::PseudoDir>& dir) {
+                                 async_dispatcher_t* dispatcher, const fbl::RefPtr<fs::PseudoDir>& dir) {
     if (instance->provider->version != SERVICE_PROVIDER_VERSION) {
         return ZX_ERR_INVALID_ARGS;
     }
@@ -73,7 +75,7 @@ static zx_status_t provider_load(zx_service_provider_instance_t* instance,
         return status;
     }
 
-    status = provider_publish(instance, async, dir);
+    status = provider_publish(instance, dispatcher, dir);
     if (status != ZX_OK) {
         provider_release(instance);
         return status;
@@ -102,14 +104,19 @@ zx_status_t publish_tracelink(const fbl::RefPtr<fs::PseudoDir>& dir) {
 static constexpr const char* deprecated_services[] = {
     // remove amber.Control when CP-50 is resolved
     "fuchsia.amber.Control",
-    "fuchsia.cobalt.CobaltEncoderFactory",
+    "fuchsia.cobalt.EncoderFactory",
+    "fuchsia.cobalt.LoggerFactory",
     "fuchsia.devicesettings.DeviceSettingsManager",
     "fuchsia.logger.Log",
     "fuchsia.logger.LogSink",
     "fuchsia.media.Audio",
     "fuchsia.mediaplayer.MediaPlayer",
+    "fuchsia.mediaplayer.Player",
+    "fuchsia.net.LegacySocketProvider",
+    // Legacy interface for netstack, defined in //garnet
     "fuchsia.netstack.Netstack",
-    "fuchsia.net_stack.Stack",
+    // New interface for netstack (WIP), defined in //zircon
+    "fuchsia.net.stack.Stack",
     "fuchsia.power.PowerManager",
     "fuchsia.sys.Environment",
     "fuchsia.sys.Launcher",
@@ -131,16 +138,19 @@ void publish_deprecated_services(const fbl::RefPtr<fs::PseudoDir>& dir) {
         dir->AddEntry(
             service_name,
             fbl::MakeRefCounted<fs::Service>([service_name](zx::channel request) {
-                fprintf(stderr, "svchost: warning: Using deprecated path to %s.\n", service_name);
                 return fdio_service_connect_at(appmgr_svc, service_name, request.release());
             }));
     }
 }
 
 int main(int argc, char** argv) {
-    async::Loop loop;
-    async_t* async = loop.async();
-    svc::Outgoing outgoing(async);
+    bool require_system = false;
+    if (argc > 1) {
+      require_system = strcmp(argv[1], "--require-system") == 0 ? true: false;
+    }
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
+    async_dispatcher_t* dispatcher = loop.dispatcher();
+    svc::Outgoing outgoing(dispatcher);
 
     appmgr_svc = zx_take_startup_handle(PA_HND(PA_USER0, 0));
 
@@ -152,17 +162,30 @@ int main(int argc, char** argv) {
     }
 
     zx_service_provider_instance_t service_providers[] = {
-        {.provider = launcher_get_service_provider(), .ctx = nullptr},
         {.provider = crashanalyzer_get_service_provider(), .ctx = nullptr},
+        {.provider = launcher_get_service_provider(), .ctx = nullptr},
+        {.provider = sysmem_get_service_provider(), .ctx = nullptr},
     };
 
+
     for (size_t i = 0; i < fbl::count_of(service_providers); ++i) {
-        status = provider_load(&service_providers[i], async, outgoing.public_dir());
+        status = provider_load(&service_providers[i], dispatcher, outgoing.public_dir());
         if (status != ZX_OK) {
             fprintf(stderr, "svchost: error: Failed to load service provider %zu: %d (%s).\n",
                     i, status, zx_status_get_string(status));
             return 1;
         }
+    }
+
+    // if full system is not required drop simple logger service.
+    zx_service_provider_instance_t logger_service{.provider = logger_get_service_provider(), .ctx = nullptr};
+    if(!require_system) {
+      status = provider_load(&logger_service, dispatcher, outgoing.public_dir());
+      if (status != ZX_OK) {
+          fprintf(stderr, "svchost: error: Failed to publish logger: %d (%s).\n",
+                status, zx_status_get_string(status));
+          return 1;
+      }
     }
 
     status = publish_tracelink(outgoing.public_dir());

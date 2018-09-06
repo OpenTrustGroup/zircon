@@ -6,8 +6,7 @@
 
 #include <assert.h>
 #include <dev/udisplay.h>
-#include <vm/vm_aspace.h>
-#include <vm/vm_object.h>
+#include <lib/crashlog.h>
 #include <lib/debuglog.h>
 #include <lib/gfxconsole.h>
 #include <lib/io.h>
@@ -15,32 +14,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <trace.h>
-
-#include <qrcodegen/qrcode.h>
+#include <vm/vm_aspace.h>
+#include <vm/vm_object.h>
 
 #define LOCAL_TRACE 0
 
 constexpr uint kFramebufferArchMmuFlags = ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE;
 
-static qrcodegen::QrCode qrcode;
-
-#define MAX_QRCODE_DATA (2953u)
-static char crashlogbuf[MAX_QRCODE_DATA];
-static size_t crashlogptr;
-
-static void crashlog_print_callback(print_callback_t* cb, const char* str, size_t len) {
-    if (len > (sizeof(crashlogbuf) - crashlogptr))
-        len = (sizeof(crashlogbuf) - crashlogptr);
-
-    memcpy(crashlogbuf + crashlogptr, str, len);
-    crashlogptr += len;
-}
-
-static print_callback_t crashlog_cb = {
-    .entry = {},
-    .print = crashlog_print_callback,
-    .context = nullptr
-};
+static char crashlogbuf[4096u];
 
 struct udisplay_info {
     void* framebuffer_virt;
@@ -56,46 +37,10 @@ zx_status_t udisplay_init(void) {
 }
 
 void dlog_bluescreen_halt(void) {
-    platform_stow_crashlog(crashlogbuf, crashlogptr);
-
+    size_t len = crashlog_to_string(crashlogbuf, sizeof(crashlogbuf));
+    platform_stow_crashlog(crashlogbuf, len);
     if (g_udisplay.framebuffer_virt == 0)
         return;
-
-    if (qrcode.encodeBinary(crashlogbuf, crashlogptr, qrcodegen::Ecc::LOW)) {
-        printf("cannot create qrcode\n");
-        return;
-    }
-
-    int w = g_udisplay.info.width;
-    int h = g_udisplay.info.height;
-
-    // qrcode.pixel() returns infinite white pixels if you
-    // access outside of the body of the qrcode, which we
-    // take advantage of to draw a border around the qrcode
-    // (necessary for good recogniation) by overshooting 3
-    // "pixels" in every direction.
-    int sz = qrcode.size() + 6;
-    int px = 1;
-
-    // Scale up a bit if there's room, but don't go crazy
-    // (no more than 5x5 pixel scaling)
-    while (((sz * (px + 1)) < (w / 2)) && (px < 5))
-        px++;
-
-    w -= sz * px;
-    h -= sz * px;
-
-    for (int y = 0; y < sz; y++) {
-        for (int x = 0; x < sz; x++) {
-            uint32_t color = qrcode.pixel(x - 3, y - 3) ? 0xFF000000 : 0xFFFFFFFF;
-            for (int yy = 0; yy < px; yy++) {
-                for (int xx = 0; xx < px; xx++) {
-                    gfxconsole_putpixel(w + x * px + xx, h + y * px + yy, color);
-                }
-            }
-        }
-    }
-    gfxconsole_flush();
 }
 
 void udisplay_clear_framebuffer_vmo() {
@@ -113,8 +58,8 @@ zx_status_t udisplay_set_framebuffer(fbl::RefPtr<VmObject> vmo) {
     const size_t size = vmo->size();
     fbl::RefPtr<VmMapping> mapping;
     zx_status_t status = VmAspace::kernel_aspace()->RootVmar()->CreateVmMapping(
-            0 /* ignored */, size, 0 /* align pow2 */, 0 /* vmar flags */,
-            fbl::move(vmo), 0, kFramebufferArchMmuFlags, "framebuffer_vmo", &mapping);
+        0 /* ignored */, size, 0 /* align pow2 */, 0 /* vmar flags */,
+        fbl::move(vmo), 0, kFramebufferArchMmuFlags, "framebuffer_vmo", &mapping);
     if (status != ZX_OK)
         return status;
 
@@ -136,8 +81,6 @@ zx_status_t udisplay_set_display_info(struct display_info* display) {
 }
 
 zx_status_t udisplay_bind_gfxconsole(void) {
-    register_print_callback(&crashlog_cb);
-
     if (g_udisplay.framebuffer_virt == 0)
         return ZX_ERR_NOT_FOUND;
 

@@ -54,7 +54,16 @@ void LogDispatcher::Notify(void* cookie) {
 zx_status_t LogDispatcher::Write(uint32_t flags, const void* ptr, size_t len) {
     canary_.Assert();
 
-    return dlog_write(flags_ | flags, ptr, len);
+    zx_status_t status;
+    status = dlog_write(flags_ | flags, ptr, len);
+    if (status == ZX_ERR_NOT_SUPPORTED) {
+        // The not supported error is returned, when we choose to bypass the debuglog
+        // using the kernel command line option kernel.bypass-debuglog, write directly
+        // to serial console.
+        dlog_serial_write((char *)ptr, len);
+        status = ZX_OK;
+    }
+    return status;
 }
 
 zx_status_t LogDispatcher::Read(uint32_t flags, void* ptr, size_t len, size_t* actual) {
@@ -63,7 +72,7 @@ zx_status_t LogDispatcher::Read(uint32_t flags, void* ptr, size_t len, size_t* a
     if (!(flags_ & ZX_LOG_FLAG_READABLE))
         return ZX_ERR_BAD_STATE;
 
-    fbl::AutoLock lock(get_lock());
+    Guard<fbl::Mutex> guard{get_lock()};
 
     zx_status_t status = dlog_read(&reader_, 0, ptr, len, actual);
     if (status == ZX_ERR_SHOULD_WAIT) {

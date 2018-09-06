@@ -58,11 +58,11 @@ static void do_print_zx_error(const char* file, int line, const char* what, zx_s
                    what, status, zx_status_get_string(status));
 }
 
-#define print_zx_error(what, status) \
-  do { \
-    do_print_zx_error(__FILE__, __LINE__, \
-                      (what), static_cast<zx_status_t>(status)); \
-  } while (0)
+#define PRINT_ZX_ERROR(what, status)                                 \
+    do {                                                             \
+        do_print_zx_error(__FILE__, __LINE__,                        \
+                          (what), static_cast<zx_status_t>(status)); \
+    } while (0)
 
 // Return true if the thread is to be resumed "successfully" (meaning the o/s
 // won't kill it, and thus the kill process).
@@ -76,13 +76,13 @@ static bool is_resumable_swbreak(uint32_t excp_type) {
 #if defined(__x86_64__)
 
 static int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
-    return regs->rax == CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
+    return regs->rax == ZX_CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
 }
 
 #elif defined(__aarch64__)
 
 static int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
-    return regs->r[0] == CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
+    return regs->r[0] == ZX_CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
 }
 
 #else
@@ -133,10 +133,10 @@ static uint32_t crashed_thread_excp_type;
 #if defined(__aarch64__)
 static bool write_general_regs(zx_handle_t thread, void* buf, size_t buf_size) {
     // The syscall takes a uint32_t.
-    auto to_xfer = static_cast<uint32_t> (buf_size);
+    auto to_xfer = static_cast<uint32_t>(buf_size);
     auto status = zx_thread_write_state(thread, ZX_THREAD_STATE_GENERAL_REGS, buf, to_xfer);
     if (status != ZX_OK) {
-        print_zx_error("unable to access general regs", status);
+        PRINT_ZX_ERROR("unable to access general regs", status);
         return false;
     }
     return true;
@@ -162,7 +162,7 @@ static void resume_thread(zx_handle_t thread, bool handled) {
         options |= ZX_RESUME_TRY_NEXT;
     auto status = zx_task_resume(thread, options);
     if (status != ZX_OK) {
-        print_zx_error("unable to \"resume\" thread", status);
+        PRINT_ZX_ERROR("unable to \"resume\" thread", status);
         // This shouldn't happen (unless someone killed it already).
         // The task is now effectively hung (until someone kills it).
         // TODO: Try to forcefully kill it ourselves?
@@ -175,8 +175,8 @@ static void resume_thread_from_exception(zx_handle_t thread,
     if (is_resumable_swbreak(excp_type) &&
         gregs != nullptr && have_swbreak_magic(gregs)) {
 #if defined(__x86_64__)
-        // On x86, the pc is left at one past the s/w break insn,
-        // so there's nothing more we need to do.
+// On x86, the pc is left at one past the s/w break insn,
+// so there's nothing more we need to do.
 #elif defined(__aarch64__)
         zx_thread_state_general_regs_t regs = *gregs;
         // Skip past the brk instruction.
@@ -201,7 +201,7 @@ static void resume_thread_from_exception(zx_handle_t thread,
     }
 
 #if !defined(__x86_64__)
-  Fail:
+Fail:
 #endif
     // Tell the o/s to "resume" the thread by killing the process, the
     // exception has not been handled.
@@ -245,7 +245,7 @@ static void process_report(zx_handle_t process, zx_handle_t thread, bool use_lib
     auto context = report.context;
 
     zx_thread_state_general_regs_t reg_buf;
-    zx_thread_state_general_regs_t *regs = nullptr;
+    zx_thread_state_general_regs_t* regs = nullptr;
     zx_vaddr_t pc = 0, sp = 0, fp = 0;
     const char* arch = "unknown";
     const char* fatal = "fatal ";
@@ -273,7 +273,7 @@ static void process_report(zx_handle_t process, zx_handle_t thread, bool use_lib
 #endif
 
     // This won't print "fatal" in the case where this is a s/w bkpt but
-    // CRASHLOGGER_REQUEST_SELF_BT_MAGIC isn't set. Big deal.
+    // ZX_CRASHLOGGER_REQUEST_SELF_BT_MAGIC isn't set. Big deal.
     if (is_resumable_swbreak(type))
         fatal = "";
     // TODO(MA-922): Remove this and make policy exceptions fatal.
@@ -322,7 +322,7 @@ static void process_report(zx_handle_t process, zx_handle_t thread, bool use_lib
                                   pc, sp, fp, use_libunwind);
     }
 
-    // TODO(ZX-588): Print a backtrace of all other threads in the process.
+// TODO(ZX-588): Print a backtrace of all other threads in the process.
 
 Fail:
     if (verbosity_level >= 1)
@@ -370,13 +370,27 @@ static zx_status_t handle_message(zx_handle_t channel, fidl::MessageBuffer* buff
 
         return status;
     }
+    case fuchsia_crash_AnalyzerProcessOrdinal: {
+        fprintf(stderr, "crashanalyzer: error: No processing of crashlog VMO supported\n");
+
+        const char* error_msg = nullptr;
+        zx_status_t status = message.Decode(&fuchsia_crash_AnalyzerProcessRequestTable, &error_msg);
+        if (status != ZX_OK) {
+            fprintf(stderr, "crashanalyzer: error: %s\n", error_msg);
+            return status;
+        }
+        auto* request = message.GetBytesAs<fuchsia_crash_AnalyzerProcessRequest>();
+        zx_handle_close(request->crashlog.vmo);
+
+        return ZX_ERR_NOT_SUPPORTED;
+    }
     default:
         fprintf(stderr, "crashanalyzer: error: Unknown message ordinal: %d\n", message.ordinal());
         return ZX_ERR_NOT_SUPPORTED;
     }
 }
 
-static void handle_ready(async_t* async,
+static void handle_ready(async_dispatcher_t* dispatcher,
                          async::Wait* wait,
                          zx_status_t status,
                          const zx_packet_signal_t* signal) {
@@ -392,7 +406,7 @@ static void handle_ready(async_t* async,
             if (status != ZX_OK)
                 goto done;
         }
-        status = wait->Begin(async);
+        status = wait->Begin(dispatcher);
         if (status != ZX_OK)
             goto done;
         return;
@@ -421,13 +435,13 @@ static zx_status_t init(void** out_ctx) {
     return ZX_OK;
 }
 
-static zx_status_t connect(void* ctx, async_t* async, const char* service_name,
+static zx_status_t connect(void* ctx, async_dispatcher_t* dispatcher, const char* service_name,
                            zx_handle_t request) {
-    if (!strcmp(service_name, "fuchsia.crash.Analyzer")) {
+    if (!strcmp(service_name, fuchsia_crash_Analyzer_Name)) {
         auto wait = new async::Wait(request,
                                     ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED,
                                     handle_ready);
-        zx_status_t status = wait->Begin(async);
+        zx_status_t status = wait->Begin(dispatcher);
 
         if (status != ZX_OK) {
             delete wait;
@@ -443,7 +457,7 @@ static zx_status_t connect(void* ctx, async_t* async, const char* service_name,
 }
 
 static constexpr const char* crashanalyzer_services[] = {
-    "fuchsia.crash.Analyzer",
+    fuchsia_crash_Analyzer_Name,
     nullptr,
 };
 

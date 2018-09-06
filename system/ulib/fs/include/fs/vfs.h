@@ -152,10 +152,10 @@ public:
     zx_status_t Readdir(Vnode* vn, vdircookie_t* cookie,
                         void* dirents, size_t len, size_t* out_actual) __TA_EXCLUDES(vfs_lock_);
 
-    Vfs(async_t* async);
+    Vfs(async_dispatcher_t* dispatcher);
 
-    async_t* async() { return async_; }
-    void SetAsync(async_t* async) { async_ = async; }
+    async_dispatcher_t* dispatcher() { return dispatcher_; }
+    void SetDispatcher(async_dispatcher_t* dispatcher) { dispatcher_ = dispatcher; }
 
     // Begins serving VFS messages over the specified connection.
     zx_status_t ServeConnection(fbl::unique_ptr<Connection> connection) __TA_EXCLUDES(vfs_lock_);
@@ -177,11 +177,12 @@ public:
     // Unpin a handle to a remote filesystem from a vnode, if one exists.
     zx_status_t UninstallRemote(fbl::RefPtr<Vnode> vn, zx::channel* h) __TA_EXCLUDES(vfs_lock_);
 
-    // Forwards a RIO message on a remote handle.
+    // Forwards an open request to a remote handle.
     // If the remote handle is closed (handing off returns ZX_ERR_PEER_CLOSED),
     // it is automatically unmounted.
-    zx_status_t ForwardMessageRemote(fbl::RefPtr<Vnode> vn, zx::channel channel,
-                                     zxrio_msg_t* msg) __TA_EXCLUDES(vfs_lock_);
+    zx_status_t ForwardOpenRemote(fbl::RefPtr<Vnode> vn, zx::channel channel,
+                                  fbl::StringPiece path, uint32_t flags,
+                                  uint32_t mode) __TA_EXCLUDES(vfs_lock_);
 
     // Unpins all remote filesystems in the current filesystem, and waits for the
     // response of each one with the provided deadline.
@@ -198,8 +199,8 @@ private:
     // or we encounter a vnode that represents a remote filesystem
     //
     // On success,
-    // |out| is the vnode at which we stopped searching
-    // |pathout| is the reaminer of the path to search
+    // |out| is the vnode at which we stopped searching.
+    // |pathout| is the remainder of the path to search.
     zx_status_t Walk(fbl::RefPtr<Vnode> vn, fbl::RefPtr<Vnode>* out,
                      fbl::StringPiece path, fbl::StringPiece* pathout) __TA_REQUIRES(vfs_lock_);
 
@@ -236,7 +237,7 @@ private:
     // empty; "remote_list" is a member of the bss section.
     MountNode::ListType remote_list_ __TA_GUARDED(vfs_lock_){};
 
-    async_t* async_{};
+    async_dispatcher_t* dispatcher_{};
 
 protected:
     // A lock which should be used to protect lookup and walk operations

@@ -262,19 +262,18 @@ public:
     static bool Create(int fd, fbl::RefPtr<VmoClient>* out);
     bool CheckWrite(VmoBuf* vbuf, size_t buf_off, size_t dev_off, size_t len);
     bool CheckRead(VmoBuf* vbuf, size_t buf_off, size_t dev_off, size_t len);
-    bool Txn(block_fifo_request_t* requests, size_t count) {
+    bool Transaction(block_fifo_request_t* requests, size_t count) {
         BEGIN_HELPER;
         ASSERT_EQ(block_fifo_txn(client_, &requests[0], count), ZX_OK); END_HELPER;
     }
 
     int fd() const { return fd_; }
-    txnid_t txnid() { return txnid_; }
+    groupid_t group() { return 0; }
     ~VmoClient() {
         block_fifo_release_client(client_);
     }
 private:
     int fd_;
-    txnid_t txnid_;
     block_info_t info_;
     fifo_client_t* client_;
 };
@@ -311,10 +310,10 @@ public:
     ~VmoBuf() {
         if (vmo_.is_valid()) {
             block_fifo_request_t request;
-            request.txnid = client_->txnid();
+            request.group = client_->group();
             request.vmoid = vmoid_;
             request.opcode = BLOCKIO_CLOSE_VMO;
-            client_->Txn(&request, 1);
+            client_->Transaction(&request, 1);
         }
     }
 
@@ -340,7 +339,6 @@ bool VmoClient::Create(int fd, fbl::RefPtr<VmoClient>* out) {
     zx_handle_t fifo;
     ASSERT_GT(ioctl_block_get_fifos(fd, &fifo), 0, "Failed to get FIFO");
     ASSERT_GT(ioctl_block_get_info(fd, &vc->info_), 0, "Failed to get block info");
-    ASSERT_GT(ioctl_block_alloc_txn(fd, &vc->txnid_), 0, "Failed to alloc txn");
     ASSERT_EQ(block_fifo_create_client(fifo, &vc->client_), ZX_OK);
     vc->fd_ = fd;
     *out = fbl::move(vc);
@@ -358,16 +356,16 @@ bool VmoClient::CheckWrite(VmoBuf* vbuf, size_t buf_off, size_t dev_off, size_t 
 
     // Write to the block device
     block_fifo_request_t request;
-    request.txnid = txnid_;
+    request.group = group();
     request.vmoid = vbuf->vmoid_;
     request.opcode = BLOCKIO_WRITE;
     ASSERT_EQ(len % info_.block_size, 0);
     ASSERT_EQ(buf_off % info_.block_size, 0);
     ASSERT_EQ(dev_off % info_.block_size, 0);
-    request.length = len / info_.block_size;
+    request.length = static_cast<uint32_t>(len / info_.block_size);
     request.vmo_offset = buf_off / info_.block_size;
     request.dev_offset = dev_off / info_.block_size;
-    ASSERT_TRUE(Txn(&request, 1));
+    ASSERT_TRUE(Transaction(&request, 1));
     END_HELPER;
 }
 
@@ -382,16 +380,16 @@ bool VmoClient::CheckRead(VmoBuf* vbuf, size_t buf_off, size_t dev_off, size_t l
 
     // Read from the block device
     block_fifo_request_t request;
-    request.txnid = txnid_;
+    request.group = group();
     request.vmoid = vbuf->vmoid_;
     request.opcode = BLOCKIO_READ;
     ASSERT_EQ(len % info_.block_size, 0);
     ASSERT_EQ(buf_off % info_.block_size, 0);
     ASSERT_EQ(dev_off % info_.block_size, 0);
-    request.length = len / info_.block_size;
+    request.length = static_cast<uint32_t>(len / info_.block_size);
     request.vmo_offset = buf_off / info_.block_size;
     request.dev_offset = dev_off / info_.block_size;
-    ASSERT_TRUE(Txn(&request, 1));
+    ASSERT_TRUE(Transaction(&request, 1));
 
     // Read from the registered VMO
     ASSERT_EQ(vbuf->vmo_.read(out.get(), buf_off, len), ZX_OK);
@@ -2950,12 +2948,12 @@ int main(int argc, char** argv) {
     }
 
     // Initialize tmpfs.
-    async::Loop loop;
+    async::Loop loop(&kAsyncLoopConfigNoAttachToThread);
     if (loop.StartThread() != ZX_OK) {
         fprintf(stderr, "Error: Cannot initialize local tmpfs loop\n");
         return -1;
     }
-    if (memfs_install_at(loop.async(), kTmpfsPath) != ZX_OK) {
+    if (memfs_install_at(loop.dispatcher(), kTmpfsPath) != ZX_OK) {
         fprintf(stderr, "Error: Cannot install local tmpfs\n");
         return -1;
     }

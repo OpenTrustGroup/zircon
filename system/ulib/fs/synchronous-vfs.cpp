@@ -7,13 +7,13 @@
 #include <lib/async/cpp/task.h>
 #include <fbl/atomic.h>
 #include <fbl/unique_ptr.h>
-#include <sync/completion.h>
+#include <lib/sync/completion.h>
 
 namespace fs {
 
 SynchronousVfs::SynchronousVfs() : is_shutting_down_(false) {}
 
-SynchronousVfs::SynchronousVfs(async_t* async) : Vfs(async),
+SynchronousVfs::SynchronousVfs(async_dispatcher_t* dispatcher) : Vfs(dispatcher),
     is_shutting_down_(false) {}
 
 SynchronousVfs::~SynchronousVfs() {

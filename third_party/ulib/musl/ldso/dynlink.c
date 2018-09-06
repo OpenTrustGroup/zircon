@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "dynlink.h"
+#include "relr.h"
 #include "libc.h"
 #include "asan_impl.h"
 #include "zircon_impl.h"
@@ -130,7 +131,7 @@ static jmp_buf* rtld_fail;
 static pthread_rwlock_t lock;
 static struct r_debug debug;
 static struct tls_module* tls_tail;
-static size_t tls_cnt, tls_offset, tls_align = MIN_TLS_ALIGN;
+static size_t tls_cnt, tls_offset = 16, tls_align = MIN_TLS_ALIGN;
 static size_t static_tls_cnt;
 static pthread_mutex_t init_fini_lock = {._m_type = PTHREAD_MUTEX_RECURSIVE};
 
@@ -151,15 +152,6 @@ struct r_debug* _dl_debug_addr = &debug;
 // post-processing the h/w trace.
 static bool trace_maps = false;
 
-__attribute__((__visibility__("hidden"))) void (*const __init_array_start)(void) = 0,
-                                                       (*const __fini_array_start)(void) = 0;
-
-__attribute__((__visibility__("hidden"))) extern void (*const __init_array_end)(void),
-    (*const __fini_array_end)(void);
-
-weak_alias(__init_array_start, __init_array_end);
-weak_alias(__fini_array_start, __fini_array_end);
-
 NO_ASAN static int dl_strcmp(const char* l, const char* r) {
     for (; *l == *r && *l; l++, r++)
         ;
@@ -167,6 +159,20 @@ NO_ASAN static int dl_strcmp(const char* l, const char* r) {
 }
 #define strcmp(l, r) dl_strcmp(l, r)
 
+// Signals a debug breakpoint. It does't use __builtin_trap() because that's
+// actually an "undefined instruction" rather than a debug breakpoint, and
+// __builtin_trap() documented to never return. We don't want the compiler to
+// optimize later code away because it assumes the trap will never be returned
+// from.
+static void debug_break(void) {
+#if defined(__x86_64__)
+    __asm__("int3");
+#elif defined(__aarch64__)
+    __asm__("brk 0");
+#else
+#error
+#endif
+}
 
 // Simple bump allocator for dynamic linker internal data structures.
 // This allocator is single-threaded: it can be used only at startup or
@@ -199,9 +205,9 @@ static void* dl_alloc(size_t size) {
         _zx_object_set_property(vmo, ZX_PROP_NAME,
                                 VMO_NAME_DL_ALLOC, sizeof(VMO_NAME_DL_ALLOC));
         uintptr_t chunk;
-        status = _zx_vmar_map(_zx_vmar_root_self(), 0, vmo, 0, chunk_size,
-                              ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE,
-                              &chunk);
+        status = _zx_vmar_map(_zx_vmar_root_self(),
+                              ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
+                              0, vmo, 0, chunk_size, &chunk);
         _zx_handle_close(vmo);
         if (status != ZX_OK)
             return NULL;
@@ -271,6 +277,15 @@ __NO_SAFESTACK NO_ASAN
 static inline void dso_set_prev(struct dso* p, struct dso* prev) {
     p->l_map.l_prev = &prev->l_map;
 }
+
+// TODO(mcgrathr): Working around arcane compiler issues; find a better way.
+// The compiler can decide to turn the loop below into a memset call.  Since
+// memset is an exported symbol, calls to that name are PLT calls.  But this
+// code runs before PLT calls are available.  So use the .weakref trick to
+// tell the assembler to rename references (the compiler generates) to memset
+// to __libc_memset.  That's a hidden symbol that won't cause a PLT entry to
+// be generated, so it's safe to use in calls here.
+__asm__(".weakref memset,__libc_memset");
 
 __NO_SAFESTACK NO_ASAN
  static void decode_vec(ElfW(Dyn)* v, size_t* a, size_t cnt) {
@@ -519,7 +534,7 @@ __NO_SAFESTACK NO_ASAN static void do_relocs(struct dso* dso, size_t* rel,
             break;
 #ifdef TLS_ABOVE_TP
         case REL_TPOFF:
-            *reloc_addr = tls_val + def.dso->tls.offset + TPOFF_K + addend;
+            *reloc_addr = tls_val + def.dso->tls.offset + addend;
             break;
 #else
         case REL_TPOFF:
@@ -546,7 +561,7 @@ __NO_SAFESTACK NO_ASAN static void do_relocs(struct dso* dso, size_t* rel,
             } else {
                 reloc_addr[0] = (size_t)__tlsdesc_static;
 #ifdef TLS_ABOVE_TP
-                reloc_addr[1] = tls_val + def.dso->tls.offset + TPOFF_K + addend;
+                reloc_addr[1] = tls_val + def.dso->tls.offset + addend;
 #else
                 reloc_addr[1] = tls_val - def.dso->tls.offset + addend;
 #endif
@@ -932,12 +947,12 @@ __NO_SAFESTACK NO_ASAN static zx_status_t map_library(zx_handle_t vmo,
     // the new VMAR's handle until relocation has finished, because
     // we need it to adjust page protections for RELRO.
     uintptr_t vmar_base;
-    status = _zx_vmar_allocate(__zircon_vmar_root_self, 0, map_len,
-                               ZX_VM_FLAG_CAN_MAP_READ |
-                                   ZX_VM_FLAG_CAN_MAP_WRITE |
-                                   ZX_VM_FLAG_CAN_MAP_EXECUTE |
-                                   ZX_VM_FLAG_CAN_MAP_SPECIFIC,
-                               &dso->vmar, &vmar_base);
+    status = _zx_vmar_allocate(__zircon_vmar_root_self,
+                               ZX_VM_CAN_MAP_READ |
+                                   ZX_VM_CAN_MAP_WRITE |
+                                   ZX_VM_CAN_MAP_EXECUTE |
+                                   ZX_VM_CAN_MAP_SPECIFIC,
+                                0, map_len, &dso->vmar, &vmar_base);
     if (status != ZX_OK) {
         error("failed to reserve %zu bytes of address space: %d\n",
               map_len, status);
@@ -969,10 +984,10 @@ __NO_SAFESTACK NO_ASAN static zx_status_t map_library(zx_handle_t vmo,
         this_min = ph->p_vaddr & -PAGE_SIZE;
         this_max = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & -PAGE_SIZE;
         size_t off_start = ph->p_offset & -PAGE_SIZE;
-        uint32_t zx_flags = ZX_VM_FLAG_SPECIFIC;
-        zx_flags |= (ph->p_flags & PF_R) ? ZX_VM_FLAG_PERM_READ : 0;
-        zx_flags |= (ph->p_flags & PF_W) ? ZX_VM_FLAG_PERM_WRITE : 0;
-        zx_flags |= (ph->p_flags & PF_X) ? ZX_VM_FLAG_PERM_EXECUTE : 0;
+        zx_vm_option_t zx_options = ZX_VM_SPECIFIC;
+        zx_options |= (ph->p_flags & PF_R) ? ZX_VM_PERM_READ : 0;
+        zx_options |= (ph->p_flags & PF_W) ? ZX_VM_PERM_WRITE : 0;
+        zx_options |= (ph->p_flags & PF_X) ? ZX_VM_PERM_EXECUTE : 0;
         uintptr_t mapaddr = (uintptr_t)base + this_min;
         zx_handle_t map_vmo = vmo;
         size_t map_size = this_max - this_min;
@@ -1023,8 +1038,8 @@ __NO_SAFESTACK NO_ASAN static zx_status_t map_library(zx_handle_t vmo,
             goto noexec;
         }
 
-        status = _zx_vmar_map(dso->vmar, mapaddr - vmar_base, map_vmo,
-                              off_start, map_size, zx_flags, &mapaddr);
+        status = _zx_vmar_map(dso->vmar, zx_options, mapaddr - vmar_base, map_vmo,
+                              off_start, map_size, &mapaddr);
         if (map_vmo != vmo)
             _zx_handle_close(map_vmo);
         if (status != ZX_OK)
@@ -1064,8 +1079,8 @@ error:
 }
 
 __NO_SAFESTACK NO_ASAN static void decode_dyn(struct dso* p) {
-    size_t dyn[DYN_CNT];
-    decode_vec(p->l_map.l_ld, dyn, DYN_CNT);
+    size_t dyn[DT_NUM];
+    decode_vec(p->l_map.l_ld, dyn, DT_NUM);
     p->syms = laddr(p, dyn[DT_SYMTAB]);
     p->strings = laddr(p, dyn[DT_STRTAB]);
     if (dyn[0] & (1 << DT_SONAME))
@@ -1259,10 +1274,8 @@ __NO_SAFESTACK static void do_tls_layout(struct dso* p,
     p->tls_id = ++tls_cnt;
     tls_align = MAXP2(tls_align, p->tls.align);
 #ifdef TLS_ABOVE_TP
-    p->tls.offset =
-        tls_offset +
-        ((tls_align - 1) & -(tls_offset + (uintptr_t)p->tls.image));
-    tls_offset += p->tls.size;
+    p->tls.offset = (tls_offset + p->tls.align - 1) & -p->tls.align;
+    tls_offset = p->tls.offset + p->tls.size;
 #else
     tls_offset += p->tls.size + p->tls.align - 1;
     tls_offset -= (tls_offset + (uintptr_t)p->tls.image) & (p->tls.align - 1);
@@ -1432,11 +1445,16 @@ __NO_SAFESTACK static void load_deps(struct dso* p) {
 }
 
 __NO_SAFESTACK NO_ASAN static void reloc_all(struct dso* p) {
-    size_t dyn[DYN_CNT];
+    size_t dyn[DT_NUM];
     for (; p; p = dso_next(p)) {
         if (p->relocated)
             continue;
-        decode_vec(p->l_map.l_ld, dyn, DYN_CNT);
+        decode_vec(p->l_map.l_ld, dyn, DT_NUM);
+        // _dl_start did apply_relr already.
+        if (p != &ldso) {
+            apply_relr(p->l_map.l_addr,
+                       laddr(p, dyn[DT_RELR]), dyn[DT_RELRSZ]);
+        }
         do_relocs(p, laddr(p, dyn[DT_JMPREL]), dyn[DT_PLTRELSZ], 2 + (dyn[DT_PLTREL] == DT_RELA));
         do_relocs(p, laddr(p, dyn[DT_REL]), dyn[DT_RELSZ], 2);
         do_relocs(p, laddr(p, dyn[DT_RELA]), dyn[DT_RELASZ], 3);
@@ -1444,9 +1462,9 @@ __NO_SAFESTACK NO_ASAN static void reloc_all(struct dso* p) {
         if (head != &ldso && p->relro_start != p->relro_end) {
             zx_status_t status =
                 _zx_vmar_protect(p->vmar,
+                                 ZX_VM_PERM_READ,
                                  saddr(p, p->relro_start),
-                                 p->relro_end - p->relro_start,
-                                 ZX_VM_FLAG_PERM_READ);
+                                 p->relro_end - p->relro_start);
             if (status == ZX_ERR_BAD_HANDLE &&
                 p == &ldso && p->vmar == ZX_HANDLE_INVALID) {
                 debugmsg("No VMAR_LOADED handle received;"
@@ -1508,11 +1526,11 @@ __NO_SAFESTACK NO_ASAN static void kernel_mapped_dso(struct dso* p) {
 
 void __libc_exit_fini(void) {
     struct dso* p;
-    size_t dyn[DYN_CNT];
+    size_t dyn[DT_NUM];
     for (p = fini_head; p; p = p->fini_next) {
         if (!p->constructed)
             continue;
-        decode_vec(p->l_map.l_ld, dyn, DYN_CNT);
+        decode_vec(p->l_map.l_ld, dyn, DT_NUM);
         if (dyn[0] & (1 << DT_FINI_ARRAY)) {
             size_t n = dyn[DT_FINI_ARRAYSZ] / sizeof(size_t);
             size_t* fn = (size_t*)laddr(p, dyn[DT_FINI_ARRAY]) + n;
@@ -1527,7 +1545,7 @@ void __libc_exit_fini(void) {
 }
 
 static void do_init_fini(struct dso* p) {
-    size_t dyn[DYN_CNT];
+    size_t dyn[DT_NUM];
     /* Allow recursive calls that arise when a library calls
      * dlopen from one of its constructors, but block any
      * other threads until all ctors have finished. */
@@ -1536,7 +1554,7 @@ static void do_init_fini(struct dso* p) {
         if (p->constructed)
             continue;
         p->constructed = 1;
-        decode_vec(p->l_map.l_ld, dyn, DYN_CNT);
+        decode_vec(p->l_map.l_ld, dyn, DT_NUM);
         if (dyn[0] & ((1 << DT_FINI) | (1 << DT_FINI_ARRAY))) {
             p->fini_next = fini_head;
             fini_head = p;
@@ -1556,6 +1574,23 @@ static void do_init_fini(struct dso* p) {
 }
 
 void __libc_start_init(void) {
+    // If a preinit hook spawns a thread that calls dlopen, that thread will
+    // get to do_init_fini and block on the lock.  Now the main thread finishes
+    // preinit hooks and releases the lock.  Then it's a race for which thread
+    // gets the lock and actually runs all the normal constructors.  This is
+    // expected, but to avoid such races preinit hooks should be very careful
+    // about what they do and rely on.
+    pthread_mutex_lock(&init_fini_lock);
+    size_t dyn[DT_NUM];
+    decode_vec(head->l_map.l_ld, dyn, DT_NUM);
+    if (dyn[0] & (1ul << DT_PREINIT_ARRAY)) {
+        size_t n = dyn[DT_PREINIT_ARRAYSZ] / sizeof(size_t);
+        size_t* fn = laddr(head, dyn[DT_PREINIT_ARRAY]);
+        while (n--)
+            ((void (*)(void)) * fn++)();
+    }
+    pthread_mutex_unlock(&init_fini_lock);
+
     do_init_fini(tail);
 }
 
@@ -1692,8 +1727,8 @@ dl_start_return_t __dls2(
      * can be reused in stage 3. There should be very few. If
      * something goes wrong and there are a huge number, abort
      * instead of risking stack overflow. */
-    size_t dyn[DYN_CNT];
-    decode_vec(ldso.l_map.l_ld, dyn, DYN_CNT);
+    size_t dyn[DT_NUM];
+    decode_vec(ldso.l_map.l_ld, dyn, DT_NUM);
     size_t* rel = laddr(&ldso, dyn[DT_REL]);
     size_t rel_size = dyn[DT_RELSZ];
     size_t symbolic_rel_cnt = 0;
@@ -1775,9 +1810,8 @@ __NO_SAFESTACK static void* dls3(zx_handle_t exec_vmo, int argc, char** argv) {
         libc.tls_head = tls_tail = &app.tls;
         app.tls_id = tls_cnt = 1;
 #ifdef TLS_ABOVE_TP
-        app.tls.offset = 0;
-        tls_offset =
-            app.tls.size + (-((uintptr_t)app.tls.image + app.tls.size) & (app.tls.align - 1));
+        app.tls.offset = (tls_offset + app.tls.align - 1) & -app.tls.align;
+        tls_offset = app.tls.offset + app.tls.size;
 #else
         tls_offset = app.tls.offset =
             app.tls.size + (-((uintptr_t)app.tls.image + app.tls.size) & (app.tls.align - 1));
@@ -1850,6 +1884,18 @@ __NO_SAFESTACK static void* dls3(zx_handle_t exec_vmo, int argc, char** argv) {
     debug.r_ldbase = ldso.l_map.l_addr;
     debug.r_state = 0;
 
+    // The ZX_PROP_PROCESS_DEBUG_ADDR being set to 1 on startup is a signal
+    // to issue a debug breakpoint after setting the property to signal to a
+    // debugger that the property is now valid.
+    intptr_t existing_debug_addr = 0;
+    status = _zx_object_get_property(__zircon_process_self,
+                                    ZX_PROP_PROCESS_DEBUG_ADDR,
+                                    &existing_debug_addr,
+                                    sizeof(existing_debug_addr));
+    bool break_after_set =
+        (status == ZX_OK) &&
+        (existing_debug_addr == ZX_PROCESS_DEBUG_ADDR_BREAK_ON_SET);
+
     status = _zx_object_set_property(__zircon_process_self,
                                      ZX_PROP_PROCESS_DEBUG_ADDR,
                                      &_dl_debug_addr, sizeof(_dl_debug_addr));
@@ -1859,6 +1905,9 @@ __NO_SAFESTACK static void* dls3(zx_handle_t exec_vmo, int argc, char** argv) {
         // TODO(dje): Is there a way to detect we're here because of being
         // an injected process (launchpad_start_injected)? IWBN to print a
         // warning here but launchpad_start_injected can trigger this.
+    }
+    if (break_after_set) {
+        debug_break();
     }
 
     _dl_debug_state();
@@ -1968,7 +2017,7 @@ __NO_SAFESTACK NO_ASAN static dl_start_return_t __dls3(void* start_arg) {
     // TODO(mcgrathr): For now, always use a kernel log channel.
     // This needs to be replaced by a proper unprivileged logging scheme ASAP.
     if (logger == ZX_HANDLE_INVALID) {
-        _zx_log_create(0, &logger);
+        _zx_debuglog_create(ZX_HANDLE_INVALID, 0, &logger);
     }
 
     if (__zircon_process_self == ZX_HANDLE_INVALID)

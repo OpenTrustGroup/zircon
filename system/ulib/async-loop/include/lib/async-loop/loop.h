@@ -12,7 +12,8 @@
 // See README.md for example usage.
 //
 
-#pragma once
+#ifndef LIB_ASYNC_LOOP_LOOP_H_
+#define LIB_ASYNC_LOOP_LOOP_H_
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -20,7 +21,6 @@
 
 #include <zircon/compiler.h>
 
-#include <lib/async/default.h>
 #include <lib/async/dispatcher.h>
 
 __BEGIN_CDECLS
@@ -38,7 +38,7 @@ typedef struct async_loop_config {
     //
     // If false, the loop will not do this.  The loop's creator is then
     // resposible for retrieving the loop's dispatcher using |async_loop_get_dispatcher()|
-    // and passing it around explicitly or calling |async_set_default()| as needed.
+    // and passing it around explicitly or calling |async_set_default_dispatcher()| as needed.
     //
     // Note that the loop can be used even without setting it as the current
     // thread's default.
@@ -59,7 +59,11 @@ typedef struct async_loop_config {
 // dispatcher for the thread upon which it was created and will
 // automatically unregister itself when destroyed (which must occur on
 // the same thread).
-extern const async_loop_config_t kAsyncLoopConfigMakeDefault;
+extern const async_loop_config_t kAsyncLoopConfigAttachToThread;
+
+// Simple config that when passed to async_loop_create will create a loop
+// that is not registered to the current thread.
+extern const async_loop_config_t kAsyncLoopConfigNoAttachToThread;
 
 // Creates a message loop and returns a pointer to it in |out_loop|.
 // All operations on the message loop are thread-safe (except destroy).
@@ -67,31 +71,25 @@ extern const async_loop_config_t kAsyncLoopConfigMakeDefault;
 // Note that it's ok to run the loop on a different thread from the one
 // upon which it was created.
 //
-// |config| provides configuration for the message loop.  If null, the behavior
-// is the same as that of a zero-initialized instance of async_loop_config_t.
+// |config| provides configuration for the message loop. Must not be null.
 //
 // Returns |ZX_OK| on success.
 // Returns |ZX_ERR_NO_MEMORY| if allocation failed.
 // May return other errors if the necessary internal handles could not be created.
 //
-// See also |kAsyncLoopConfigMakeDefault|.
+// See also |kAsyncLoopConfigAttachToThread| and |kAsyncLoopConfigNoAttachToThread|.
 zx_status_t async_loop_create(const async_loop_config_t* config,
                               async_loop_t** out_loop);
 
 // Gets the the message loop's asynchronous dispatch interface.
-static inline async_t* async_loop_get_dispatcher(async_loop_t* loop) {
-    // Note: The loop's implementation inherits from async_t so we can upcast to it.
-    return (async_t*)loop;
-}
+async_dispatcher_t* async_loop_get_dispatcher(async_loop_t* loop);
 
 // Gets the message loop associated with the specified asynchronous dispatch interface
 //
 // This function assumes the dispatcher is backed by an |async_loop_t| which was created
 // using |async_loop_create()|.  Its behavior is undefined if used with other dispatcher
 // implementations.
-static inline async_loop_t* async_loop_from_dispatcher(async_t* async) {
-    return (async_loop_t*)async;
-}
+async_loop_t* async_loop_from_dispatcher(async_dispatcher_t* dispatcher);
 
 // Shuts down the message loop, notifies handlers which asked to handle shutdown.
 // The message loop must not currently be running on any threads other than
@@ -152,11 +150,10 @@ void async_loop_quit(async_loop_t* loop);
 zx_status_t async_loop_reset_quit(async_loop_t* loop);
 
 // Returns the current state of the message loop.
-typedef enum {
-    ASYNC_LOOP_RUNNABLE = 0,
-    ASYNC_LOOP_QUIT = 1,
-    ASYNC_LOOP_SHUTDOWN = 2,
-} async_loop_state_t;
+typedef uint32_t async_loop_state_t;
+#define ASYNC_LOOP_RUNNABLE ((async_loop_state_t) 0)
+#define ASYNC_LOOP_QUIT ((async_loop_state_t) 1)
+#define ASYNC_LOOP_SHUTDOWN ((async_loop_state_t) 2)
 async_loop_state_t async_loop_get_state(async_loop_t* loop);
 
 // Starts a message loop running on a new thread.
@@ -176,3 +173,5 @@ zx_status_t async_loop_start_thread(async_loop_t* loop, const char* name,
 void async_loop_join_threads(async_loop_t* loop);
 
 __END_CDECLS
+
+#endif  // LIB_ASYNC_LOOP_LOOP_H_

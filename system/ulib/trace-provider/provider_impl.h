@@ -9,8 +9,11 @@
 #include <fbl/vector.h>
 #include <lib/async/cpp/wait.h>
 #include <lib/zx/channel.h>
-#include <lib/zx/eventpair.h>
+#include <lib/zx/event.h>
+#include <lib/zx/fifo.h>
+#include <lib/zx/time.h>
 #include <lib/zx/vmo.h>
+#include <trace-engine/types.h>
 #include <trace-provider/provider.h>
 
 // Provide a definition for the opaque type declared in provider.h.
@@ -21,8 +24,11 @@ namespace internal {
 
 class TraceProviderImpl final : public trace_provider_t {
 public:
-    TraceProviderImpl(async_t* async, zx::channel channel);
+    TraceProviderImpl(async_dispatcher_t* dispatcher, zx::channel channel,
+                      zx::event start_event);
     ~TraceProviderImpl();
+
+    zx_status_t WaitForTracingStarted(zx::duration timeout);
 
 private:
     class Connection final {
@@ -31,7 +37,7 @@ private:
         ~Connection();
 
     private:
-        void Handle(async_t* async,
+        void Handle(async_dispatcher_t* dispatcher,
                     async::WaitBase* wait,
                     zx_status_t status,
                     const zx_packet_signal_t* signal);
@@ -46,13 +52,15 @@ private:
         async::WaitMethod<Connection, &Connection::Handle> wait_;
     };
 
-    void Start(zx::vmo buffer, zx::eventpair fence,
-               fbl::Vector<fbl::String> enabled_categories);
+    void Start(trace_buffering_mode_t buffering_mode, zx::vmo buffer,
+               zx::fifo fifo, fbl::Vector<fbl::String> enabled_categories);
     void Stop();
+    void OnClose();
 
-    async_t* const async_;
+    async_dispatcher_t* const dispatcher_;
     Connection connection_;
     bool running_ = false;
+    zx::event start_event_;
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(TraceProviderImpl);
 };

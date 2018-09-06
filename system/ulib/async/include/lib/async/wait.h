@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#pragma once
+#ifndef LIB_ASYNC_WAIT_H_
+#define LIB_ASYNC_WAIT_H_
 
 #include <lib/async/dispatcher.h>
 
@@ -13,7 +14,7 @@ __BEGIN_CDECLS
 // The |status| is |ZX_OK| if the wait was satisfied and |signal| is non-null.
 // The |status| is |ZX_ERR_CANCELED| if the dispatcher was shut down before
 // the task's handler ran or the task was canceled.
-typedef void(async_wait_handler_t)(async_t* async,
+typedef void(async_wait_handler_t)(async_dispatcher_t* dispatcher,
                                    async_wait_t* wait,
                                    zx_status_t status,
                                    const zx_packet_signal_t* signal);
@@ -51,7 +52,7 @@ struct async_wait {
 // Returns |ZX_ERR_NOT_SUPPORTED| if not supported by the dispatcher.
 //
 // This operation is thread-safe.
-zx_status_t async_begin_wait(async_t* async, async_wait_t* wait);
+zx_status_t async_begin_wait(async_dispatcher_t* dispatcher, async_wait_t* wait);
 
 // Cancels the wait associated with |wait|.
 //
@@ -66,6 +67,8 @@ zx_status_t async_begin_wait(async_t* async, async_wait_t* wait);
 // Returns |ZX_ERR_NOT_SUPPORTED| if not supported by the dispatcher.
 //
 // This operation is thread-safe.
-zx_status_t async_cancel_wait(async_t* async, async_wait_t* wait);
+zx_status_t async_cancel_wait(async_dispatcher_t* dispatcher, async_wait_t* wait);
 
 __END_CDECLS
+
+#endif  // LIB_ASYNC_WAIT_H_

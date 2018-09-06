@@ -7,9 +7,11 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
+MODULE_COMPILEFLAGS += -fvisibility=hidden
 
 MODULE_SRCS = \
     $(LOCAL_DIR)/context.cpp \
+    $(LOCAL_DIR)/context_api.cpp \
     $(LOCAL_DIR)/engine.cpp \
     $(LOCAL_DIR)/nonce.cpp
 

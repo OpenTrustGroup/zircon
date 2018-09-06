@@ -10,7 +10,7 @@
 #include <inttypes.h>
 
 #ifdef __Fuchsia__
-#include <block-client/client.h>
+#include <block-client/cpp/client.h>
 #include <fs/fvm.h>
 #include <lib/zx/vmo.h>
 #else
@@ -22,10 +22,10 @@
 #include <fbl/unique_ptr.h>
 #include <fbl/unique_fd.h>
 #include <fs/block-txn.h>
-#include <fs/mapped-vmo.h>
 #include <fs/trace.h>
 #include <fs/vfs.h>
 #include <fs/vnode.h>
+#include <lib/fzl/mapped-vmo.h>
 #include <minfs/format.h>
 
 namespace minfs {
@@ -52,8 +52,8 @@ public:
 
     ssize_t GetDevicePath(char* out, size_t out_len);
     zx_status_t AttachVmo(zx_handle_t vmo, vmoid_t* out) const;
-    zx_status_t Txn(block_fifo_request_t* requests, size_t count) {
-        return block_fifo_txn(fifo_client_, requests, count);
+    zx_status_t Transaction(block_fifo_request_t* requests, size_t count) const {
+        return fifo_client_.Transaction(requests, count);
     }
 
     zx_status_t FVMQuery(fvm_info_t* info) {
@@ -92,28 +92,12 @@ public:
         return fs::fvm_reset_volume_slices(fd_.get());
     }
 
-    // Acquires a Thread-local TxnId that can be used for sending messages
+    // Acquires a Thread-local group that can be used for sending messages
     // over the block I/O FIFO.
-    txnid_t TxnId() const {
-        ZX_DEBUG_ASSERT(fd_);
-        thread_local txnid_t txnid_ = TXNID_INVALID;
-        if (txnid_ != TXNID_INVALID) {
-            return txnid_;
-        }
-        if (ioctl_block_alloc_txn(fd_.get(), &txnid_) < 0) {
-            return TXNID_INVALID;
-        }
-        return txnid_;
-    }
-
-    // Frees the TxnId allocated for the thread (if one was allocated).
-    // Must be called separately by all threads which access TxnId().
-    void FreeTxnId() {
-        txnid_t tid = TxnId();
-        if (tid == TXNID_INVALID) {
-            return;
-        }
-        ioctl_block_free_txn(fd_.get(), &tid);
+    groupid_t BlockGroupID() {
+        thread_local groupid_t group_ = next_group_.fetch_add(1);
+        ZX_ASSERT_MSG(group_ < MAX_TXN_GROUP_COUNT, "Too many threads accessing block device");
+        return group_;
     }
 
 #else
@@ -135,8 +119,9 @@ private:
     Bcache(fbl::unique_fd fd, uint32_t blockmax);
 
 #ifdef __Fuchsia__
-    fifo_client_t* fifo_client_{}; // Fast path to interact with block device
+    block_client::Client fifo_client_{}; // Fast path to interact with block device
     block_info_t info_{};
+    fbl::atomic<groupid_t> next_group_ = {};
 #else
     off_t offset_{};
 #endif

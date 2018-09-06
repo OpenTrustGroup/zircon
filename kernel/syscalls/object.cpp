@@ -10,10 +10,12 @@
 
 #include <kernel/mp.h>
 #include <kernel/stats.h>
+#include <kernel/thread_lock.h>
 #include <lib/heap.h>
 #include <platform.h>
 #include <vm/pmm.h>
 #include <vm/vm.h>
+#include <zircon/time.h>
 #include <zircon/types.h>
 
 #include <object/bus_transaction_initiator_dispatcher.h>
@@ -22,7 +24,7 @@
 #include <object/job_dispatcher.h>
 #include <object/process_dispatcher.h>
 #include <object/resource_dispatcher.h>
-#include <object/resources.h>
+#include <object/resource.h>
 #include <object/socket_dispatcher.h>
 #include <object/thread_dispatcher.h>
 #include <object/vm_address_region_dispatcher.h>
@@ -127,7 +129,8 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
 
     switch (topic) {
     case ZX_INFO_HANDLE_VALID: {
-        return up->IsHandleValid(handle) ? ZX_OK : ZX_ERR_BAD_HANDLE;
+        // This syscall + topic is excepted from the ZX_POL_BAD_HANDLE policy.
+        return up->IsHandleValidNoPolicyCheck(handle) ? ZX_OK : ZX_ERR_BAD_HANDLE;
     }
     case ZX_INFO_HANDLE_BASIC: {
         // TODO(ZX-458): Handle forward/backward compatibility issues
@@ -426,12 +429,14 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
 
             // account for idle time if a cpu is currently idle
             {
-                AutoSpinLock lock(&thread_lock);
+                Guard<spin_lock_t, IrqSave> thread_lock_guard{ThreadLock::Get()};
 
                 zx_time_t idle_time = cpu->stats.idle_time;
                 bool is_idle = mp_is_cpu_idle(i);
                 if (is_idle) {
-                    idle_time += current_time() - percpu[i].idle_thread.last_started_running;
+                    zx_duration_t recent_idle = zx_time_sub_time(
+                        current_time(), percpu[i].idle_thread.last_started_running);
+                    idle_time = zx_duration_add_duration(idle_time, recent_idle);
                 }
                 stats.idle_time = idle_time;
             }
@@ -510,6 +515,9 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
         stats.mmu_overhead_bytes = state_count[VM_PAGE_STATE_MMU] * PAGE_SIZE;
         other_bytes -= stats.mmu_overhead_bytes;
 
+        stats.ipc_bytes = state_count[VM_PAGE_STATE_IPC] * PAGE_SIZE;
+        other_bytes -= stats.ipc_bytes;
+
         // All other VM_PAGE_STATE_* counts get lumped into other_bytes.
         stats.other_bytes = other_bytes;
 
@@ -519,14 +527,18 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     case ZX_INFO_RESOURCE: {
         // grab a reference to the dispatcher
         fbl::RefPtr<ResourceDispatcher> resource;
-        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_NONE, &resource);
-        if (error < 0)
+        zx_status_t error = up->GetDispatcherWithRights(handle, ZX_RIGHT_NONE, &resource);
+        if (error != ZX_OK) {
             return error;
+        }
 
         // build the info structure
         zx_info_resource_t info = {};
         info.kind = resource->get_kind();
-        resource->get_range(&info.low, &info.high);
+        info.base = resource->get_base();
+        info.size = resource->get_size();
+        info.flags = resource->get_flags();
+        resource->get_name(info.name);
 
         return single_record_result(
             _buffer, buffer_size, _actual, _avail, &info, sizeof(info));

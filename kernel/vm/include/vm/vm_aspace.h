@@ -15,12 +15,17 @@
 #include <fbl/macros.h>
 #include <fbl/ref_counted.h>
 #include <fbl/ref_ptr.h>
+#include <kernel/lockdep.h>
 #include <kernel/mutex.h>
 #include <lib/crypto/prng.h>
 #include <vm/arch_vm_aspace.h>
 #include <vm/vm.h>
 #include <vm/vm_address_region.h>
 #include <zircon/types.h>
+
+namespace hypervisor {
+    class GuestPhysicalAddressSpace;
+} // namespace hypervisor
 
 class VmObject;
 
@@ -154,7 +159,7 @@ protected:
     friend class VmAddressRegionOrMapping;
     friend class VmAddressRegion;
     friend class VmMapping;
-    mutex_t* lock() { return &lock_; }
+    Lock<fbl::Mutex>* lock() { return &lock_; }
 
     // Expose the PRNG for ASLR to VmAddressRegion
     crypto::PRNG& AslrPrng() {
@@ -180,8 +185,7 @@ private:
     // internal page fault routine, friended to be only called by vmm_page_fault_handler
     zx_status_t PageFault(vaddr_t va, uint flags);
     friend zx_status_t vmm_page_fault_handler(vaddr_t va, uint flags);
-    friend zx_status_t vmm_guest_page_fault_handler(vaddr_t va, uint flags,
-                                                    fbl::RefPtr<VmAspace> aspace);
+    friend class hypervisor::GuestPhysicalAddressSpace;
 
     // magic
     fbl::Canary<fbl::magic("VMAS")> canary_;
@@ -194,7 +198,7 @@ private:
     bool aspace_destroyed_ = false;
     bool aslr_enabled_ = false;
 
-    mutable mutex_t lock_ = MUTEX_INITIAL_VALUE(lock_);
+    mutable DECLARE_MUTEX(VmAspace) lock_;
 
     // root of virtual address space
     // Access to this reference is guarded by lock_.

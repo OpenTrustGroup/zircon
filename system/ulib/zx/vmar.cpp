@@ -8,15 +8,13 @@
 
 namespace zx {
 
-zx_status_t vmar::allocate(size_t offset, size_t size, uint32_t flags,
+zx_status_t vmar::allocate(size_t offset, size_t size, zx_vm_option_t options,
                            vmar* child, uintptr_t* child_addr) const {
-    zx_handle_t h;
-    zx_status_t status = zx_vmar_allocate(get(), offset, size, flags, &h, child_addr);
-    if (status == ZX_OK) {
-        child->reset(h);
-    } else {
-        child->reset(ZX_HANDLE_INVALID);
-    }
+    // Allow for aliasing of |child| to the same container as |this|.
+    vmar h;
+    zx_status_t status = zx_vmar_allocate(
+        get(), options, offset, size, h.reset_and_get_address(), child_addr);
+    child->reset(h.release());
     return status;
 }
 

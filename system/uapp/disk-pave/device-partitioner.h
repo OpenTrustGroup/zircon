@@ -17,6 +17,7 @@
 namespace paver {
 
 enum class Partition {
+    kBootloader,
     kKernelC,
     kEfi,
     kZirconA,
@@ -30,6 +31,11 @@ enum class Partition {
     kData,
 };
 
+// A special filter for test injection.
+// API should return true if device passed in should be filtered out.
+extern bool (*TestBlockFilter)(const fbl::unique_fd&);
+extern bool (*TestSkipBlockFilter)(const fbl::unique_fd&);
+
 // Abstract device partitioner definition.
 // This class defines common APIs for interacting with a device partitioner.
 class DevicePartitioner {
@@ -41,6 +47,10 @@ public:
     virtual ~DevicePartitioner() = default;
 
     virtual bool IsCros() const = 0;
+
+    // Whether to use skip block interface or block interface for non-FVM
+    // partitions.
+    virtual bool UseSkipBlockInterface() const = 0;
 
     // Returns a file descriptor to a partition of type |partition_type|, creating it.
     // Assumes that the partition does not already exist.
@@ -56,9 +66,9 @@ public:
     // Wipes partition list specified.
     virtual zx_status_t WipePartitions(const fbl::Vector<Partition>& partitions) = 0;
 
-    // Returns block info for specified block.
-    virtual zx_status_t GetBlockInfo(const fbl::unique_fd& block_fd,
-                                     block_info_t* block_info) const = 0;
+    // Returns block size in bytes for specified device.
+    virtual zx_status_t GetBlockSize(const fbl::unique_fd& device_fd,
+                                     uint32_t* block_size) const = 0;
 };
 
 // Useful for when a GPT table is available (e.g. x86 devices). Provides common
@@ -129,6 +139,8 @@ public:
 
     bool IsCros() const override { return false; }
 
+    bool UseSkipBlockInterface() const override { return false; }
+
     zx_status_t AddPartition(Partition partition_type, fbl::unique_fd* out_fd) override;
 
     zx_status_t FindPartition(Partition partition_type, fbl::unique_fd* out_fd) const override;
@@ -137,10 +149,7 @@ public:
 
     zx_status_t WipePartitions(const fbl::Vector<Partition>& partitions) override;
 
-    zx_status_t GetBlockInfo(const fbl::unique_fd& block_fd,
-                             block_info_t* block_info) const override {
-        return gpt_->GetBlockInfo(block_info);
-    }
+    zx_status_t GetBlockSize(const fbl::unique_fd& device_fd, uint32_t* block_size) const override;
 
 private:
     EfiDevicePartitioner(fbl::unique_ptr<GptDevicePartitioner> gpt)
@@ -158,6 +167,8 @@ public:
 
     bool IsCros() const override { return true; }
 
+    bool UseSkipBlockInterface() const override { return false; }
+
     zx_status_t AddPartition(Partition partition_type, fbl::unique_fd* out_fd) override;
 
     zx_status_t FindPartition(Partition partition_type, fbl::unique_fd* out_fd) const override;
@@ -166,10 +177,7 @@ public:
 
     zx_status_t WipePartitions(const fbl::Vector<Partition>& partitions) override;
 
-    zx_status_t GetBlockInfo(const fbl::unique_fd& block_fd,
-                             block_info_t* block_info) const override {
-        return gpt_->GetBlockInfo(block_info);
-    }
+    zx_status_t GetBlockSize(const fbl::unique_fd& device_fd, uint32_t* block_size) const override;
 
 private:
     CrosDevicePartitioner(fbl::unique_ptr<GptDevicePartitioner> gpt)
@@ -188,6 +196,8 @@ public:
 
     bool IsCros() const override { return false; }
 
+    bool UseSkipBlockInterface() const override { return false; }
+
     zx_status_t AddPartition(Partition partition_type, fbl::unique_fd* out_fd) override {
         return ZX_ERR_NOT_SUPPORTED;
     }
@@ -196,15 +206,40 @@ public:
 
     zx_status_t FinalizePartition(Partition unused) override { return ZX_OK; }
 
-    zx_status_t WipePartitions(const fbl::Vector<Partition>& partitions) override {
-        return ZX_ERR_NOT_SUPPORTED;
-    }
+    zx_status_t WipePartitions(const fbl::Vector<Partition>& partitions) override;
 
-    zx_status_t GetBlockInfo(const fbl::unique_fd& block_fd,
-                             block_info_t* block_info) const override;
+    zx_status_t GetBlockSize(const fbl::unique_fd& device_fd, uint32_t* block_size) const override;
 
 private:
     FixedDevicePartitioner() {}
 };
 
+// DevicePartitioner implementation for devices which have fixed partition maps, but do not expose a
+// block device interface. Instead they expose devices with skip-block IOCTL interfaces. Like the
+// FixedDevicePartitioner, it will not attempt to write a partition map of any kind to the device.
+// Assumes standardized partition layout structure (e.g. ZIRCON-A, ZIRCON-B,
+// ZIRCON-R).
+class SkipBlockDevicePartitioner : public DevicePartitioner {
+public:
+    static zx_status_t Initialize(fbl::unique_ptr<DevicePartitioner>* partitioner);
+
+    bool IsCros() const override { return false; }
+
+    bool UseSkipBlockInterface() const override { return true; }
+
+    zx_status_t AddPartition(Partition partition_type, fbl::unique_fd* out_fd) override {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
+    zx_status_t FindPartition(Partition partition_type, fbl::unique_fd* out_fd) const override;
+
+    zx_status_t FinalizePartition(Partition unused) override { return ZX_OK; }
+
+    zx_status_t WipePartitions(const fbl::Vector<Partition>& partitions) override;
+
+    zx_status_t GetBlockSize(const fbl::unique_fd& device_fd, uint32_t* block_size) const override;
+
+private:
+    SkipBlockDevicePartitioner() {}
+};
 } // namespace paver

@@ -29,6 +29,21 @@
 #include "virtual-layer.h"
 
 static zx_handle_t dc_handle;
+static bool has_ownership;
+
+static bool wait_for_driver_event(zx_time_t deadline) {
+    zx_handle_t observed;
+    uint32_t signals = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
+    if (zx_object_wait_one(dc_handle, signals, ZX_TIME_INFINITE, &observed) != ZX_OK) {
+        printf("Wait failed\n");
+        return false;
+    }
+    if (observed & ZX_CHANNEL_PEER_CLOSED) {
+        printf("Display controller died\n");
+        return false;
+    }
+    return true;
+}
 
 static bool bind_display(fbl::Vector<Display>* displays) {
     printf("Opening controller\n");
@@ -43,38 +58,50 @@ static bool bind_display(fbl::Vector<Display>* displays) {
         return false;
     }
 
-    printf("Wating for display\n");
-    zx_handle_t observed;
-    uint32_t signals = ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED;
-    if (zx_object_wait_one(dc_handle, signals, ZX_TIME_INFINITE, &observed) != ZX_OK) {
-        printf("Wait failed\n");
-        return false;
-    }
-    if (observed & ZX_CHANNEL_PEER_CLOSED) {
-        printf("Display controller died\n");
-        return false;
-    }
-
-    printf("Querying display\n");
     uint8_t byte_buffer[ZX_CHANNEL_MAX_MSG_BYTES];
     fidl::Message msg(fidl::BytePart(byte_buffer, ZX_CHANNEL_MAX_MSG_BYTES), fidl::HandlePart());
-    if (msg.Read(dc_handle, 0) != ZX_OK) {
-        printf("Read failed\n");
-        return false;
+    while (displays->is_empty()) {
+        printf("Wating for display\n");
+        if (!wait_for_driver_event(ZX_TIME_INFINITE)) {
+            return false;
+        }
+
+        printf("Querying display\n");
+        if (msg.Read(dc_handle, 0) != ZX_OK) {
+            printf("Read failed\n");
+            return false;
+        }
+
+        if (msg.ordinal() == fuchsia_display_ControllerDisplaysChangedOrdinal) {
+            const char* err_msg;
+            if (msg.Decode(&fuchsia_display_ControllerDisplaysChangedEventTable,
+                           &err_msg) != ZX_OK) {
+                printf("Fidl decode error %d %s\n", msg.ordinal(), err_msg);
+                return false;
+            }
+
+            auto changes = reinterpret_cast<fuchsia_display_ControllerDisplaysChangedEvent*>(
+                    msg.bytes().data());
+            auto display_info = reinterpret_cast<fuchsia_display_Info*>(changes->added.data);
+
+            for (unsigned i = 0; i < changes->added.count; i++) {
+                displays->push_back(Display(display_info + i));
+            }
+        } else if (msg.ordinal() == fuchsia_display_ControllerClientOwnershipChangeOrdinal) {
+            has_ownership = ((fuchsia_display_ControllerClientOwnershipChangeEvent*)
+                    msg.bytes().data())->has_ownership;
+        } else {
+            printf("Got unexpected message %d\n", msg.ordinal());
+            return false;
+        }
     }
 
-    const char* err_msg;
-    if (msg.Decode(&fuchsia_display_ControllerDisplaysChangedEventTable, &err_msg) != ZX_OK) {
-        printf("Fidl decode error %s\n", err_msg);
+    fuchsia_display_ControllerEnableVsyncRequest enable_vsync;
+    enable_vsync.hdr.ordinal = fuchsia_display_ControllerEnableVsyncOrdinal;
+    enable_vsync.enable = true;
+    if (zx_channel_write(dc_handle, 0, &enable_vsync, sizeof(enable_vsync), nullptr, 0) != ZX_OK) {
+        printf("Failed to enable vsync\n");
         return false;
-    }
-
-    auto changes = reinterpret_cast<fuchsia_display_ControllerDisplaysChangedEvent*>(
-            msg.bytes().data());
-    auto display_info = reinterpret_cast<fuchsia_display_Info*>(changes->added.data);
-
-    for (unsigned i = 0; i < changes->added.count; i++) {
-        displays->push_back(Display(display_info + i));
     }
 
     return true;
@@ -168,22 +195,12 @@ bool apply_config() {
     auto check_rsp =
             reinterpret_cast<fuchsia_display_ControllerCheckConfigResponse*>(msg.bytes().data());
 
-    if (check_rsp->res.count) {
-        printf("Config not valid\n");
-        fuchsia_display_ConfigResult* arr =
-                static_cast<fuchsia_display_ConfigResult*>(check_rsp->res.data);
-        for (unsigned i = 0; i < check_rsp->res.count; i++) {
-            printf("Display %ld\n", arr[i].display_id);
-            if (arr[i].error) {
-                printf("  Display error: %d\n", arr[i].error);
-            }
-
-            uint64_t* layers = static_cast<uint64_t*>(arr[i].layers.data);
-            fuchsia_display_ClientCompositionOp* ops =
-                    static_cast<fuchsia_display_ClientCompositionOp*>(arr[i].client_ops.data);
-            for (unsigned j = 0; j < arr[i].layers.count; j++) {
-                printf("  Layer %ld: %d\n", layers[j], ops[j]);
-            }
+    if (check_rsp->res != fuchsia_display_ConfigResult_OK) {
+        printf("Config not valid (%d)\n", check_rsp->res);
+        auto* arr = static_cast<fuchsia_display_ClientCompositionOp*>(check_rsp->ops.data);
+        for (unsigned i = 0; i < check_rsp->ops.count; i++) {
+            printf("Client composition op (display %ld, layer %ld): %d\n",
+                   arr[i].display_id, arr[i].layer_id, arr[i].opcode);
         }
         return false;
     }
@@ -195,6 +212,65 @@ bool apply_config() {
         return false;
     }
     return true;
+}
+
+zx_status_t wait_for_vsync(const fbl::Vector<VirtualLayer*>& layers) {
+    zx_time_t deadline = has_ownership
+            ? zx_clock_get(ZX_CLOCK_MONOTONIC) + ZX_MSEC(100) : ZX_TIME_INFINITE;
+    if (!wait_for_driver_event(deadline)) {
+        return ZX_ERR_STOP;
+    }
+
+    uint8_t byte_buffer[ZX_CHANNEL_MAX_MSG_BYTES];
+    fidl::Message msg(fidl::BytePart(byte_buffer, ZX_CHANNEL_MAX_MSG_BYTES), fidl::HandlePart());
+    if (msg.Read(dc_handle, 0) != ZX_OK) {
+        printf("Read failed\n");
+        return ZX_ERR_STOP;
+    }
+
+    switch (msg.ordinal()) {
+    case fuchsia_display_ControllerDisplaysChangedOrdinal:
+        printf("Display disconnected\n");
+        return ZX_ERR_STOP;
+    case fuchsia_display_ControllerClientOwnershipChangeOrdinal:
+        printf("Ownership change\n");
+        has_ownership = ((fuchsia_display_ControllerClientOwnershipChangeEvent*) msg.bytes().data())
+                ->has_ownership;
+        return ZX_ERR_NEXT;
+    case fuchsia_display_ControllerVsyncOrdinal:
+        break;
+    default:
+        printf("Unknown ordinal %d\n", msg.ordinal());
+        return ZX_ERR_STOP;
+    }
+
+    const char* err_msg;
+    if (msg.Decode(&fuchsia_display_ControllerVsyncEventTable, &err_msg) != ZX_OK) {
+        printf("Fidl decode error %s\n", err_msg);
+        return ZX_ERR_STOP;
+    }
+
+    auto vsync = reinterpret_cast<fuchsia_display_ControllerVsyncEvent*>(msg.bytes().data());
+    uint64_t* image_ids = reinterpret_cast<uint64_t*>(vsync->images.data);
+
+    for (auto& layer : layers) {
+        uint64_t id = layer->image_id(vsync->display_id);
+        if (id == 0) {
+            continue;
+        }
+        for (unsigned i = 0; i < vsync->images.count; i++) {
+            if (image_ids[i] == layer->image_id(vsync->display_id)) {
+                layer->set_frame_done(vsync->display_id);
+            }
+        }
+    }
+
+    for (auto& layer : layers) {
+        if (!layer->is_done()) {
+            return ZX_ERR_NEXT;
+        }
+    }
+    return ZX_OK;
 }
 
 int main(int argc, const char* argv[]) {
@@ -263,9 +339,14 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    // Color layer which covers all displays
+    ColorLayer layer0(displays);
+    layers.push_back(&layer0);
+
     // Layer which covers all displays and uses page flipping.
     PrimaryLayer layer1(displays);
     layer1.SetLayerFlipping(true);
+    layer1.SetAlpha(true, .75);
     layers.push_back(&layer1);
 
     // Layer which covers the left half of the of the first display
@@ -274,6 +355,7 @@ int main(int argc, const char* argv[]) {
     layer2.SetImageDimens(displays[0].mode().horizontal_resolution / 2,
                           displays[0].mode().vertical_resolution);
     layer2.SetLayerToggle(true);
+    layer2.SetScaling(true);
     layers.push_back(&layer2);
 
 // Intel only supports 3 layers, so add ifdef for quick toggling of the 3rd layer
@@ -296,7 +378,6 @@ int main(int argc, const char* argv[]) {
     layer3.SetPanDest(true);
     layer3.SetPanSrc(true);
     layer3.SetRotates(true);
-    layer3.SetAlpha(true, .5f);
     layers.push_back(&layer3);
 #else
     CursorLayer layer4(displays);
@@ -327,6 +408,7 @@ int main(int argc, const char* argv[]) {
                 return -1;
             }
 
+            layer->clear_done();
             layer->SendLayout(dc_handle);
         }
 
@@ -344,9 +426,11 @@ int main(int argc, const char* argv[]) {
             layer->Render(i);
         }
 
-        for (auto& layer : layers) {
-            ZX_ASSERT(layer->WaitForPresent());
+        zx_status_t status;
+        while ((status = wait_for_vsync(layers)) == ZX_ERR_NEXT) {
+            // wait again
         }
+        ZX_ASSERT(status == ZX_OK);
     }
 
     printf("Done rendering\n");
