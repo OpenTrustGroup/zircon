@@ -20,7 +20,7 @@ static const zbi_mem_range_t mem_config[] = {
     {
         .type = ZBI_MEM_RANGE_RAM,
         .paddr = 0x0e100000,
-        .length = 0x01f00000,
+        .length = 0x03f00000,
     },
     {
         .type = ZBI_MEM_RANGE_PERIPHERAL,
