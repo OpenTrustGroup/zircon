@@ -29,21 +29,26 @@ namespace {
 void WriteDescribeError(zx::channel channel, zx_status_t status) {
     zxrio_describe_t msg;
     memset(&msg, 0, sizeof(msg));
-    msg.op = ZXFIDL_ON_OPEN;
+    msg.hdr.ordinal = fuchsia_io_NodeOnOpenOrdinal;
     msg.status = status;
     channel.write(0, &msg, sizeof(zxrio_describe_t), nullptr, 0);
 }
 
+zx_status_t GetNodeInfo(const fbl::RefPtr<Vnode>& vn, uint32_t flags,
+                        zxrio_node_info_t* info) {
+    if (IsPathOnly(flags)) {
+        return vn->Vnode::GetHandles(flags, &info->handle, &info->tag, info);
+    } else {
+        return vn->GetHandles(flags, &info->handle, &info->tag, info);
+    }
+}
+
 void Describe(const fbl::RefPtr<Vnode>& vn, uint32_t flags,
               zxrio_describe_t* response, zx_handle_t* handle) {
-    response->op = ZXFIDL_ON_OPEN;
-    zx_status_t r;
-    *handle = ZX_HANDLE_INVALID;
-    if (IsPathOnly(flags)) {
-        r = vn->Vnode::GetHandles(flags, handle, &response->extra.tag, &response->extra);
-    } else {
-        r = vn->GetHandles(flags, handle, &response->extra.tag, &response->extra);
-    }
+    response->hdr.ordinal = fuchsia_io_NodeOnOpenOrdinal;
+    response->extra.handle = ZX_HANDLE_INVALID;
+    zx_status_t r = GetNodeInfo(vn, flags, &response->extra);
+    *handle = response->extra.handle;
 
     // If a handle was returned, encode it.
     if (*handle != ZX_HANDLE_INVALID) {
@@ -54,7 +59,7 @@ void Describe(const fbl::RefPtr<Vnode>& vn, uint32_t flags,
 
     // If a valid response was returned, encode it.
     response->status = r;
-    response->extra_ptr = reinterpret_cast<zxrio_object_info_t*>(r == ZX_OK ?
+    response->extra_ptr = reinterpret_cast<zxrio_node_info_t*>(r == ZX_OK ?
                                                                  FIDL_ALLOC_PRESENT :
                                                                  FIDL_ALLOC_ABSENT);
 }
@@ -142,28 +147,18 @@ zx_status_t Method ## Op(void* ctx, Args... args) {                       \
     return (connection->Connection::Method)(fbl::forward<Args>(args)...); \
 }
 
-ZXFIDL_OPERATION(ObjectClone)
-ZXFIDL_OPERATION(ObjectClose)
-ZXFIDL_OPERATION(ObjectBind)
-ZXFIDL_OPERATION(ObjectDescribe)
-
-const fuchsia_io_Object_ops kObjectOps = {
-    .Clone = ObjectCloneOp,
-    .Close = ObjectCloseOp,
-    .Bind = ObjectBindOp,
-    .Describe = ObjectDescribeOp,
-};
-
+ZXFIDL_OPERATION(NodeClone)
+ZXFIDL_OPERATION(NodeClose)
+ZXFIDL_OPERATION(NodeDescribe)
 ZXFIDL_OPERATION(NodeSync)
 ZXFIDL_OPERATION(NodeGetAttr)
 ZXFIDL_OPERATION(NodeSetAttr)
 ZXFIDL_OPERATION(NodeIoctl)
 
 const fuchsia_io_Node_ops kNodeOps = {
-    .Clone = ObjectCloneOp,
-    .Close = ObjectCloseOp,
-    .Bind = ObjectBindOp,
-    .Describe = ObjectDescribeOp,
+    .Clone = NodeCloneOp,
+    .Close = NodeCloseOp,
+    .Describe = NodeDescribeOp,
     .Sync = NodeSyncOp,
     .GetAttr = NodeGetAttrOp,
     .SetAttr = NodeSetAttrOp,
@@ -179,13 +174,11 @@ ZXFIDL_OPERATION(FileTruncate)
 ZXFIDL_OPERATION(FileGetFlags)
 ZXFIDL_OPERATION(FileSetFlags)
 ZXFIDL_OPERATION(FileGetVmo)
-ZXFIDL_OPERATION(FileGetVmoAt)
 
 const fuchsia_io_File_ops kFileOps = {
-    .Clone = ObjectCloneOp,
-    .Close = ObjectCloseOp,
-    .Bind = ObjectBindOp,
-    .Describe = ObjectDescribeOp,
+    .Clone = NodeCloneOp,
+    .Close = NodeCloseOp,
+    .Describe = NodeDescribeOp,
     .Sync = NodeSyncOp,
     .GetAttr = NodeGetAttrOp,
     .SetAttr = NodeSetAttrOp,
@@ -199,7 +192,6 @@ const fuchsia_io_File_ops kFileOps = {
     .GetFlags = FileGetFlagsOp,
     .SetFlags = FileSetFlagsOp,
     .GetVmo = FileGetVmoOp,
-    .GetVmoAt = FileGetVmoAtOp,
 };
 
 ZXFIDL_OPERATION(DirectoryOpen)
@@ -209,12 +201,12 @@ ZXFIDL_OPERATION(DirectoryRewind)
 ZXFIDL_OPERATION(DirectoryGetToken)
 ZXFIDL_OPERATION(DirectoryRename)
 ZXFIDL_OPERATION(DirectoryLink)
+ZXFIDL_OPERATION(DirectoryWatch)
 
 const fuchsia_io_Directory_ops kDirectoryOps {
-    .Clone = ObjectCloneOp,
-    .Close = ObjectCloseOp,
-    .Bind = ObjectBindOp,
-    .Describe = ObjectDescribeOp,
+    .Clone = NodeCloneOp,
+    .Close = NodeCloseOp,
+    .Describe = NodeDescribeOp,
     .Sync = NodeSyncOp,
     .GetAttr = NodeGetAttrOp,
     .SetAttr = NodeSetAttrOp,
@@ -226,6 +218,38 @@ const fuchsia_io_Directory_ops kDirectoryOps {
     .GetToken = DirectoryGetTokenOp,
     .Rename = DirectoryRenameOp,
     .Link = DirectoryLinkOp,
+    .Watch = DirectoryWatchOp,
+};
+
+ZXFIDL_OPERATION(DirectoryAdminMount)
+ZXFIDL_OPERATION(DirectoryAdminMountAndCreate)
+ZXFIDL_OPERATION(DirectoryAdminUnmount)
+ZXFIDL_OPERATION(DirectoryAdminUnmountNode)
+ZXFIDL_OPERATION(DirectoryAdminQueryFilesystem)
+ZXFIDL_OPERATION(DirectoryAdminGetDevicePath)
+
+const fuchsia_io_DirectoryAdmin_ops kDirectoryAdminOps {
+    .Clone = NodeCloneOp,
+    .Close = NodeCloseOp,
+    .Describe = NodeDescribeOp,
+    .Sync = NodeSyncOp,
+    .GetAttr = NodeGetAttrOp,
+    .SetAttr = NodeSetAttrOp,
+    .Ioctl = NodeIoctlOp,
+    .Open = DirectoryOpenOp,
+    .Unlink = DirectoryUnlinkOp,
+    .ReadDirents = DirectoryReadDirentsOp,
+    .Rewind = DirectoryRewindOp,
+    .GetToken = DirectoryGetTokenOp,
+    .Rename = DirectoryRenameOp,
+    .Link = DirectoryLinkOp,
+    .Watch = DirectoryWatchOp,
+    .Mount = DirectoryAdminMountOp,
+    .MountAndCreate = DirectoryAdminMountAndCreateOp,
+    .Unmount = DirectoryAdminUnmountOp,
+    .UnmountNode = DirectoryAdminUnmountNodeOp,
+    .QueryFilesystem = DirectoryAdminQueryFilesystemOp,
+    .GetDevicePath = DirectoryAdminGetDevicePathOp,
 };
 
 } // namespace
@@ -345,7 +369,7 @@ constexpr uint32_t kSettableStatusFlags = ZX_FS_FLAG_APPEND;
 // connection (excluding rights).
 constexpr uint32_t kStatusFlags = kSettableStatusFlags | ZX_FS_FLAG_VNODE_REF_ONLY;
 
-zx_status_t Connection::ObjectClone(uint32_t flags, zx_handle_t object) {
+zx_status_t Connection::NodeClone(uint32_t flags, zx_handle_t object) {
     zx::channel channel(object);
 
     bool describe;
@@ -380,26 +404,29 @@ zx_status_t Connection::ObjectClone(uint32_t flags, zx_handle_t object) {
     return ZX_OK;
 }
 
-zx_status_t Connection::ObjectClose(fidl_txn_t* txn) {
+zx_status_t Connection::NodeClose(fidl_txn_t* txn) {
     zx_status_t status;
     if (IsPathOnly(flags_)) {
         status = ZX_OK;
     } else {
         status = vnode_->Close();
     }
-    fuchsia_io_ObjectClose_reply(txn, status);
+    fuchsia_io_NodeClose_reply(txn, status);
 
     return ERR_DISPATCHER_DONE;
 }
 
-zx_status_t Connection::ObjectBind(const char* interface_name_data, size_t interface_name_size) {
-    fprintf(stderr, "ObjectBind not yet implemented\n");
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
-zx_status_t Connection::ObjectDescribe(fidl_txn_t* txn) {
-    fprintf(stderr, "ObjectDescribe not yet implemented\n");
-    return ZX_ERR_NOT_SUPPORTED;
+zx_status_t Connection::NodeDescribe(fidl_txn_t* txn) {
+    zxrio_node_info_t info;
+    memset(&info, 0, sizeof(info));
+    zx_status_t status = GetNodeInfo(vnode_, flags_, &info);
+    if (status != ZX_OK) {
+        return status;
+    }
+    // See static_asserts in zxrio_process_open_response which ensure that this
+    // cast makes sense.
+    auto fidl_info = reinterpret_cast<fuchsia_io_NodeInfo*>(&info);
+    return fuchsia_io_NodeDescribe_reply(txn, fidl_info);
 }
 
 zx_status_t Connection::NodeSync(fidl_txn_t* txn) {
@@ -464,123 +491,8 @@ zx_status_t Connection::NodeSetAttr(uint32_t flags,
 zx_status_t Connection::NodeIoctl(uint32_t opcode, uint64_t max_out,
                                   const zx_handle_t* handles, size_t handles_count,
                                   const uint8_t* in_data, size_t in_count, fidl_txn_t* txn) {
-    zx::handle handle;
-    if (handles_count == 1) {
-        handle.reset(handles[0]);
-        if (IOCTL_KIND(opcode) != IOCTL_KIND_SET_HANDLE) {
-            return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_INVALID_ARGS, nullptr, 0, nullptr, 0);
-        }
-        if (in_count < sizeof(zx_handle_t)) {
-            in_count = sizeof(zx_handle_t);
-        }
-    } else if (handles_count > 1) {
-        zx_handle_close_many(handles, handles_count);
-        return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_INVALID_ARGS, nullptr, 0, nullptr, 0);
-    }
-    if (IsPathOnly(flags_)) {
-        return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_BAD_HANDLE, nullptr, 0, nullptr, 0);
-    }
-    if ((in_count > FDIO_IOCTL_MAX_INPUT) || (max_out > FDIO_IOCTL_MAX_INPUT)) {
-        return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_INVALID_ARGS, nullptr, 0, nullptr, 0);
-    }
-
-    uint8_t out[max_out];
-    zx_handle_t* handles_out = reinterpret_cast<zx_handle_t*>(out);
-    uint8_t in_buf[FDIO_IOCTL_MAX_INPUT];
-    // The sending side copied the handle into msg->handle[0]
-    // so that it would be sent via channel_write().  Here we
-    // copy the local version back into the space in the buffer
-    // that the original occupied.
-    size_t hsize = handles_count * sizeof(zx_handle_t);
-    zx_handle_t h = handle.release();
-    memcpy(in_buf, &h, hsize);
-    memcpy(in_buf + hsize, (void*)((uintptr_t)in_data + hsize), in_count - hsize);
-
-    // Some ioctls operate on the connection only, and don't
-    // require a call to Vfs::Ioctl
-    bool do_ioctl = true;
-    size_t actual = 0;
-    zx_status_t status;
-    switch (opcode) {
-    case IOCTL_VFS_MOUNT_FS:
-    case IOCTL_VFS_MOUNT_MKDIR_FS:
-        // Mounting requires ADMIN privileges
-        if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
-            vfs_unmount_handle(h, 0);
-            return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_ACCESS_DENIED, nullptr, 0, nullptr, 0);
-        }
-        // If our permissions validate, fall through to the VFS ioctl
-        break;
-    case IOCTL_VFS_GET_TOKEN: {
-        // Ioctls which act on Connection
-        if (max_out != sizeof(zx_handle_t)) {
-            return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_INVALID_ARGS, nullptr, 0, nullptr, 0);
-        }
-        zx::event returned_token;
-        status = vfs_->VnodeToToken(vnode_, &token_, &returned_token);
-        if (status == ZX_OK) {
-            actual = sizeof(zx_handle_t);
-            handles_out[0] = returned_token.release();
-        }
-        do_ioctl = false;
-        break;
-    }
-    case IOCTL_VFS_UNMOUNT_FS: {
-        // Unmounting ioctls require Connection privileges
-        if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
-            return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_ACCESS_DENIED, nullptr, 0, nullptr, 0);
-        }
-        // "IOCTL_VFS_UNMOUNT_FS" is fatal to the requesting connections.
-        Vfs::ShutdownCallback closure([ch = fbl::move(channel_),
-                                       ctxn = zxfidl_txn_copy(txn)]
-                                      (zx_status_t status) mutable {
-            fuchsia_io_NodeIoctl_reply(&ctxn.txn, status, nullptr, 0, nullptr, 0);
-        });
-        Vfs* vfs = vfs_;
-        Terminate(/* call_close= */ true);
-        vfs->Shutdown(fbl::move(closure));
-        return ERR_DISPATCHER_ASYNC;
-    }
-    case IOCTL_VFS_UNMOUNT_NODE:
-    case IOCTL_VFS_GET_DEVICE_PATH:
-        // Unmounting ioctls require Connection privileges
-        if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
-            return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_ACCESS_DENIED, nullptr, 0, nullptr, 0);
-        }
-        // If our permissions validate, fall through to the VFS ioctl
-        break;
-    }
-
-    if (do_ioctl) {
-        status = vfs_->Ioctl(vnode_, opcode, in_buf, in_count, out, max_out,
-                             &actual);
-        if (status == ZX_ERR_NOT_SUPPORTED && handles_count > 0) {
-            zx_handle_close(h);
-        }
-    }
-
-    if (status != ZX_OK) {
-        return fuchsia_io_NodeIoctl_reply(txn, status, nullptr, 0, nullptr, 0);
-    }
-
-    handles_count = 0;
-    switch (IOCTL_KIND(opcode)) {
-    case IOCTL_KIND_DEFAULT:
-        break;
-    case IOCTL_KIND_GET_HANDLE:
-        handles_count = 1;
-        break;
-    case IOCTL_KIND_GET_TWO_HANDLES:
-        handles_count = 2;
-        break;
-    case IOCTL_KIND_GET_THREE_HANDLES:
-        handles_count = 3;
-        break;
-    }
-
-    ZX_DEBUG_ASSERT(actual <= static_cast<size_t>(max_out));
-
-    return fuchsia_io_NodeIoctl_reply(txn, ZX_OK, handles_out, handles_count, out, actual);
+    zx_handle_close_many(handles, handles_count);
+    return fuchsia_io_NodeIoctl_reply(txn, ZX_ERR_NOT_SUPPORTED, nullptr, 0, nullptr, 0);
 }
 
 zx_status_t Connection::FileRead(uint64_t count, fidl_txn_t* txn) {
@@ -649,9 +561,9 @@ zx_status_t Connection::FileWriteAt(const uint8_t* data_data, size_t data_count,
 }
 
 zx_status_t Connection::FileSeek(int64_t offset, fuchsia_io_SeekOrigin start, fidl_txn_t* txn) {
-    static_assert(SEEK_SET == fuchsia_io_SeekOrigin_Start, "");
-    static_assert(SEEK_CUR == fuchsia_io_SeekOrigin_Current, "");
-    static_assert(SEEK_END == fuchsia_io_SeekOrigin_End, "");
+    static_assert(SEEK_SET == fuchsia_io_SeekOrigin_START, "");
+    static_assert(SEEK_CUR == fuchsia_io_SeekOrigin_CURRENT, "");
+    static_assert(SEEK_END == fuchsia_io_SeekOrigin_END, "");
 
     if (IsPathOnly(flags_)) {
         return fuchsia_io_FileSeek_reply(txn, ZX_ERR_BAD_HANDLE, offset_);
@@ -747,12 +659,6 @@ zx_status_t Connection::FileGetVmo(uint32_t flags, fidl_txn_t* txn) {
     return fuchsia_io_FileGetVmo_reply(txn, status, handle);
 }
 
-zx_status_t Connection::FileGetVmoAt(uint32_t flags, uint64_t offset,
-                                     uint64_t length, fidl_txn_t* txn) {
-    fprintf(stderr, "FileGetVmoAt not yet implemented\n");
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
 zx_status_t Connection::DirectoryOpen(uint32_t flags, uint32_t mode, const char* path_data,
                                       size_t path_size, zx_handle_t object) {
     zx::channel channel(object);
@@ -834,20 +740,94 @@ zx_status_t Connection::DirectoryLink(const char* src_data, size_t src_size,
     return fuchsia_io_DirectoryLink_reply(txn, status);
 }
 
+zx_status_t Connection::DirectoryWatch(uint32_t mask, uint32_t options, zx_handle_t handle,
+                                       fidl_txn_t* txn) {
+    zx::channel watcher(handle);
+    zx_status_t status = vnode_->WatchDir(vfs_, mask, options, fbl::move(watcher));
+    return fuchsia_io_DirectoryWatch_reply(txn, status);
+}
+
+zx_status_t Connection::DirectoryAdminMount(zx_handle_t remote, fidl_txn_t* txn) {
+    if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
+        vfs_unmount_handle(remote, 0);
+        return fuchsia_io_DirectoryAdminMount_reply(txn, ZX_ERR_ACCESS_DENIED);
+    }
+    MountChannel c = MountChannel(remote);
+    zx_status_t status = vfs_->InstallRemote(vnode_, fbl::move(c));
+    return fuchsia_io_DirectoryAdminMount_reply(txn, status);;
+}
+
+zx_status_t Connection::DirectoryAdminMountAndCreate(zx_handle_t remote, const char* name,
+                                                     size_t name_size, uint32_t flags,
+                                                     fidl_txn_t* txn) {
+    if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
+        vfs_unmount_handle(remote, 0);
+        return fuchsia_io_DirectoryAdminMount_reply(txn, ZX_ERR_ACCESS_DENIED);
+    }
+    fbl::StringPiece str(name, name_size);
+    zx_status_t status = vfs_->MountMkdir(vnode_, fbl::move(str), MountChannel(remote), flags);
+    return fuchsia_io_DirectoryAdminMount_reply(txn, status);
+}
+
+zx_status_t Connection::DirectoryAdminUnmount(fidl_txn_t* txn) {
+    if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
+        return fuchsia_io_DirectoryAdminUnmount_reply(txn, ZX_ERR_ACCESS_DENIED);
+    }
+    vfs_->UninstallAll(ZX_TIME_INFINITE);
+
+    // Unmount is fatal to the requesting connections.
+    Vfs::ShutdownCallback closure([ch = fbl::move(channel_),
+                                   ctxn = zxfidl_txn_copy(txn)]
+                                  (zx_status_t status) mutable {
+        fuchsia_io_DirectoryAdminUnmount_reply(&ctxn.txn, status);
+    });
+    Vfs* vfs = vfs_;
+    Terminate(/* call_close= */ true);
+    vfs->Shutdown(fbl::move(closure));
+    return ERR_DISPATCHER_ASYNC;
+}
+
+zx_status_t Connection::DirectoryAdminUnmountNode(fidl_txn_t* txn) {
+    if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
+        return fuchsia_io_DirectoryAdminUnmountNode_reply(txn, ZX_ERR_ACCESS_DENIED, ZX_HANDLE_INVALID);
+    }
+    zx::channel c;
+    zx_status_t status = vfs_->UninstallRemote(vnode_, &c);
+    return fuchsia_io_DirectoryAdminUnmountNode_reply(txn, status, c.release());
+}
+
+zx_status_t Connection::DirectoryAdminQueryFilesystem(fidl_txn_t* txn) {
+    fuchsia_io_FilesystemInfo info;
+    zx_status_t status = vnode_->QueryFilesystem(&info);
+    return fuchsia_io_DirectoryAdminQueryFilesystem_reply(txn, status,
+                                                          status == ZX_OK ? &info : nullptr);
+}
+
+zx_status_t Connection::DirectoryAdminGetDevicePath(fidl_txn_t* txn) {
+    if (!(flags_ & ZX_FS_RIGHT_ADMIN)) {
+        return fuchsia_io_DirectoryAdminGetDevicePath_reply(txn, ZX_ERR_ACCESS_DENIED, nullptr, 0);
+    }
+
+    char name[fuchsia_io_MAX_PATH];
+    size_t actual = 0;
+    zx_status_t status = vnode_->GetDevicePath(sizeof(name), name, &actual);
+    return fuchsia_io_DirectoryAdminGetDevicePath_reply(txn, status, name, actual);
+}
+
 zx_status_t Connection::HandleMessage(fidl_msg_t* msg, fidl_txn_t* txn) {
     fidl_message_header_t* hdr = reinterpret_cast<fidl_message_header_t*>(msg->bytes);
-    if (hdr->ordinal >= fuchsia_io_ObjectCloneOrdinal &&
-        hdr->ordinal <= fuchsia_io_ObjectOnOpenOrdinal) {
-        return fuchsia_io_Object_dispatch(this, txn, msg, &kObjectOps);
-    } else if (hdr->ordinal >= fuchsia_io_NodeSyncOrdinal &&
-               hdr->ordinal <= fuchsia_io_NodeIoctlOrdinal) {
+    if (hdr->ordinal >= fuchsia_io_NodeCloneOrdinal &&
+        hdr->ordinal <= fuchsia_io_NodeIoctlOrdinal) {
         return fuchsia_io_Node_dispatch(this, txn, msg, &kNodeOps);
     } else if (hdr->ordinal >= fuchsia_io_FileReadOrdinal &&
-               hdr->ordinal <= fuchsia_io_FileGetVmoAtOrdinal) {
+               hdr->ordinal <= fuchsia_io_FileGetVmoOrdinal) {
         return fuchsia_io_File_dispatch(this, txn, msg, &kFileOps);
     } else if (hdr->ordinal >= fuchsia_io_DirectoryOpenOrdinal &&
-               hdr->ordinal <= fuchsia_io_DirectoryLinkOrdinal) {
+               hdr->ordinal <= fuchsia_io_DirectoryWatchOrdinal) {
         return fuchsia_io_Directory_dispatch(this, txn, msg, &kDirectoryOps);
+    } else if (hdr->ordinal >= fuchsia_io_DirectoryAdminMountOrdinal &&
+               hdr->ordinal <= fuchsia_io_DirectoryAdminGetDevicePathOrdinal) {
+        return fuchsia_io_DirectoryAdmin_dispatch(this, txn, msg, &kDirectoryAdminOps);
     } else {
         fprintf(stderr, "connection.cpp: Unsupported FIDL operation: 0x%x\n", hdr->ordinal);
         zx_handle_close_many(msg->handles, msg->num_handles);

@@ -6,6 +6,7 @@
 
 #include <ddk/driver.h>
 #include <ddk/io-buffer.h>
+#include <ddk/mmio-buffer.h>
 #include <zircon/boot/image.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
@@ -42,14 +43,25 @@ typedef struct {
 } pdev_board_info_t;
 
 typedef struct {
+    // Offset from beginning of VMO where the mmio region begins.
+    zx_off_t offset;
+    // Size of mmio region.
+    size_t size;
+    zx_handle_t vmo;
+} pdev_mmio_t;
+
+typedef struct {
+    zx_status_t (*get_mmio)(void* ctx, uint32_t index, pdev_mmio_t* out_mmio);
     zx_status_t (*map_mmio)(void* ctx, uint32_t index, uint32_t cache_policy, void** out_vaddr,
                             size_t* out_size, zx_paddr_t* out_paddr, zx_handle_t* out_handle);
-    zx_status_t (*map_interrupt)(void* ctx, uint32_t index, uint32_t flags, zx_handle_t* out_handle);
+    zx_status_t (*map_interrupt)(void* ctx, uint32_t index, uint32_t flags,
+                                 zx_handle_t* out_handle);
     zx_status_t (*get_bti)(void* ctx, uint32_t index, zx_handle_t* out_handle);
     zx_status_t (*get_device_info)(void* ctx, pdev_device_info_t* out_info);
     zx_status_t (*get_board_info)(void* ctx, pdev_board_info_t* out_info);
     zx_status_t (*device_add)(void* ctx, uint32_t index, device_add_args_t* args,
                               zx_device_t** out);
+    zx_status_t (*get_protocol)(void* ctx, uint32_t proto_id, uint32_t index, void* out_protocol);
 } platform_device_protocol_ops_t;
 
 typedef struct {
@@ -57,6 +69,13 @@ typedef struct {
     void* ctx;
 } platform_device_protocol_t;
 
+// Returns an MMIO region encoded in a VMO. "index" is relative to the list of MMIOs for the device.
+static inline zx_status_t pdev_get_mmio(const platform_device_protocol_t* pdev, uint32_t index,
+                                        pdev_mmio_t* out_mmio) {
+    return pdev->ops->get_mmio(pdev->ctx, index, out_mmio);
+}
+
+// TODO(surajmalhotra): Deprecate pdev_map_mmio* APIs.
 // Maps an MMIO region. "index" is relative to the list of MMIOs for the device.
 static inline zx_status_t pdev_map_mmio(const platform_device_protocol_t* pdev, uint32_t index,
                                         uint32_t cache_policy, void** out_vaddr, size_t* out_size,
@@ -110,6 +129,11 @@ static inline zx_status_t pdev_device_add(const platform_device_protocol_t* pdev
     return pdev->ops->device_add(pdev->ctx, index, args, out);
 }
 
+static inline zx_status_t pdev_get_protocol(const platform_device_protocol_t* pdev,
+                                            uint32_t proto_id, uint32_t index, void* out_protocol) {
+    return pdev->ops->get_protocol(pdev->ctx, proto_id, index, out_protocol);
+}
+
 // MMIO mapping helper.
 static inline zx_status_t pdev_map_mmio_buffer(const platform_device_protocol_t* pdev,
                                                uint32_t index, uint32_t cache_policy,
@@ -132,6 +156,18 @@ static inline zx_status_t pdev_map_mmio_buffer(const platform_device_protocol_t*
     }
     zx_handle_close(vmo_handle);
     return status;
+}
+
+static inline zx_status_t pdev_map_mmio_buffer2(const platform_device_protocol_t* pdev,
+                                               uint32_t index, uint32_t cache_policy,
+                                               mmio_buffer_t* buffer) {
+    pdev_mmio_t mmio;
+
+    zx_status_t status = pdev_get_mmio(pdev, index, &mmio);
+    if (status != ZX_OK) {
+        return status;
+    }
+    return mmio_buffer_init(buffer, mmio.offset, mmio.size, mmio.vmo, cache_policy);
 }
 
 __END_CDECLS;

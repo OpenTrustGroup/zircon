@@ -10,7 +10,6 @@
 #include <debug.h>
 #include <zircon/compiler.h>
 
-#if defined(WITH_LIB_CONSOLE)
 #include <lib/console.h>
 
 #include <assert.h>
@@ -25,8 +24,7 @@ STATIC_COMMAND("sleep_tests", "tests sleep", &sleep_tests)
 STATIC_COMMAND("bench", "miscellaneous benchmarks", &benchmarks)
 STATIC_COMMAND("fibo", "threaded fibonacci", &fibo)
 STATIC_COMMAND("spinner", "create a spinning thread", &spinner)
-STATIC_COMMAND("timer_tests", "tests timers", &timer_tests)
+STATIC_COMMAND("timer_diag", "prints timer diagnostics", &timer_diag)
+STATIC_COMMAND("timer_stress", "runs a timer stress test", &timer_stress)
 STATIC_COMMAND("uart_tests", "tests uart Tx", &uart_tests)
 STATIC_COMMAND_END(tests);
-
-#endif

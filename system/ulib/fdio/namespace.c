@@ -14,6 +14,7 @@
 #include <zircon/processargs.h>
 #include <zircon/device/vfs.h>
 
+#include <fuchsia/io/c/fidl.h>
 #include <lib/fdio/namespace.h>
 #include <lib/fdio/remoteio.h>
 #include <lib/fdio/util.h>
@@ -239,6 +240,7 @@ static zx_status_t ns_walk_locked(mxvn_t** _vn, const char** _path) {
     }
 }
 
+__EXPORT
 zx_status_t fdio_ns_connect(fdio_ns_t* ns, const char* path,
                             uint32_t flags, zx_handle_t h) {
     mxvn_t* vn = &ns->root;
@@ -275,6 +277,7 @@ fail0:
     return r;
 }
 
+__EXPORT
 zx_status_t fdio_ns_open(fdio_ns_t* ns, const char* path, uint32_t flags, zx_handle_t* out) {
     zx_handle_t h;
     if (zx_channel_create(0, &h, out) != ZX_OK) {
@@ -328,17 +331,15 @@ static zx_status_t mxdir_open(fdio_t* io, const char* path,
 
 static zx_status_t fill_dirent(vdirent_t* de, size_t delen,
                                const char* name, size_t len, uint32_t type) {
-    size_t sz = sizeof(vdirent_t) + len + 1;
+    size_t sz = sizeof(vdirent_t) + len;
 
-    // round up to uint32 aligned
-    if (sz & 3)
-        sz = (sz + 3) & (~3);
-    if (sz > delen)
+    if (sz > delen || len > NAME_MAX) {
         return ZX_ERR_INVALID_ARGS;
-    de->size = sz;
+    }
+    de->ino = fuchsia_io_INO_UNKNOWN;
+    de->size = len;
     de->type = type;
     memcpy(de->name, name, len);
-    de->name[len] = 0;
     return sz;
 }
 
@@ -366,7 +367,7 @@ static zx_status_t mxdir_readdir_locked(mxdir_t* dir, void* buf, size_t len) {
 static zx_status_t mxdir_get_attr(fdio_t* io, vnattr_t* attr) {
     memset(attr, 0, sizeof(*attr));
     attr->mode = V_TYPE_DIR | V_IRUSR;
-    attr->inode = 1;
+    attr->inode = fuchsia_io_INO_UNKNOWN;
     attr->nlink = 1;
     return ZX_OK;
 }
@@ -392,8 +393,8 @@ static zx_status_t mxdir_unlink(fdio_t* io, const char* path, size_t len) {
     return ZX_ERR_UNAVAILABLE;
 }
 
-ssize_t mxdir_ioctl(fdio_t* io, uint32_t op, const void* in_buf,
-                    size_t in_len, void* out_buf, size_t out_len) {
+static ssize_t mxdir_ioctl(fdio_t* io, uint32_t op, const void* in_buf,
+                           size_t in_len, void* out_buf, size_t out_len) {
     return ZX_ERR_NOT_SUPPORTED;
 }
 
@@ -446,6 +447,7 @@ static fdio_t* fdio_dir_create_locked(fdio_ns_t* ns, mxvn_t* vn) {
     return &dir->io;
 }
 
+__EXPORT
 zx_status_t fdio_ns_create(fdio_ns_t** out) {
     // +1 is for the "" name
     fdio_ns_t* ns = fdio_alloc(sizeof(fdio_ns_t) + 1);
@@ -457,6 +459,7 @@ zx_status_t fdio_ns_create(fdio_ns_t** out) {
     return ZX_OK;
 }
 
+__EXPORT
 zx_status_t fdio_ns_destroy(fdio_ns_t* ns) {
     mtx_lock(&ns->lock);
     if (ns->refcount != 0) {
@@ -470,6 +473,7 @@ zx_status_t fdio_ns_destroy(fdio_ns_t* ns) {
     }
 }
 
+__EXPORT
 zx_status_t fdio_ns_bind(fdio_ns_t* ns, const char* path, zx_handle_t remote) {
     LOG(1, "BIND '%s' %x\n", path, remote);
     if (remote == ZX_HANDLE_INVALID) {
@@ -542,6 +546,7 @@ done:
     return r;
 }
 
+__EXPORT
 zx_status_t fdio_ns_bind_fd(fdio_ns_t* ns, const char* path, int fd) {
     zx_handle_t handle[FDIO_MAX_HANDLES];
     uint32_t type[FDIO_MAX_HANDLES];
@@ -591,6 +596,7 @@ fdio_t* fdio_ns_open_root(fdio_ns_t* ns) {
     return io;
 }
 
+__EXPORT
 int fdio_ns_opendir(fdio_ns_t* ns) {
     fdio_t* io = fdio_ns_open_root(ns);
     if (io == NULL) {
@@ -605,6 +611,7 @@ int fdio_ns_opendir(fdio_ns_t* ns) {
     return fd;
 }
 
+__EXPORT
 zx_status_t fdio_ns_chdir(fdio_ns_t* ns) {
     fdio_t* io = fdio_ns_open_root(ns);
     if (io == NULL) {
@@ -692,6 +699,7 @@ static zx_status_t ns_export_copy(void* cookie, const char* path,
     return ZX_OK;
 }
 
+__EXPORT
 zx_status_t fdio_ns_export(fdio_ns_t* ns, fdio_flat_namespace_t** out) {
     export_state_t es;
     es.bytes = sizeof(fdio_flat_namespace_t);
@@ -736,6 +744,7 @@ zx_status_t fdio_ns_export(fdio_ns_t* ns, fdio_flat_namespace_t** out) {
     return status;
 }
 
+__EXPORT
 zx_status_t fdio_ns_export_root(fdio_flat_namespace_t** out) {
     zx_status_t status;
     mtx_lock(&fdio_lock);

@@ -11,8 +11,11 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 
+#include <fbl/intrusive_double_list.h>
+
 #include <lib/fdio/remoteio.h>
 
+#include <zircon/compiler.h>
 #include <zircon/fidl.h>
 #include <zircon/thread_annotations.h>
 #include <zircon/types.h>
@@ -20,6 +23,7 @@
 #include <threads.h>
 #include <stdint.h>
 
+__BEGIN_CDECLS
 
 // Handle IDs for USER0 handles
 #define ID_HJOBROOT 4
@@ -30,13 +34,12 @@
 
 // Safe external APIs are in device.h and device_internal.h
 
-typedef struct zx_driver {
+typedef struct zx_driver : fbl::DoublyLinkedListable<zx_driver*> {
     const char* name;
     zx_driver_rec_t* driver_rec;
     const zx_driver_ops_t* ops;
     void* ctx;
     const char* libname;
-    list_node_t node;
     zx_status_t status;
 } zx_driver_t;
 
@@ -147,3 +150,5 @@ static inline void DM_UNLOCK(void) __TA_RELEASE(&__devhost_api_lock) {
     mtx_unlock(&__devhost_api_lock);
 }
 #endif
+
+__END_CDECLS

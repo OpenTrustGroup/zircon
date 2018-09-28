@@ -139,10 +139,8 @@ static zx_status_t set_bitrate(void* ctx, uint32_t bus_id, uint32_t bitrate) {
     return static_cast<i915::Controller*>(ctx)->SetBitrate(bus_id, bitrate);
 }
 
-static zx_status_t transact(void* ctx, uint32_t bus_id, uint16_t address, const void* write_buf,
-                            size_t write_length, void* read_buf, size_t read_length) {
-    return static_cast<i915::Controller*>(ctx)->Transact(
-            bus_id, address, write_buf, write_length, read_buf, read_length);
+static zx_status_t transact(void* ctx, uint32_t bus_id, i2c_impl_op_t* ops, size_t count) {
+    return static_cast<i915::Controller*>(ctx)->Transact(bus_id, ops, count);
 }
 
 static i2c_impl_protocol_ops_t i2c_ops = {
@@ -702,6 +700,8 @@ void Controller::InitDisplays() {
             if (!LoadHardwareState(ddi, device)) {
                 ddi_needs_reset[ddi] = true;
                 device_needs_init[ddi] = device;
+            } else {
+                device->InitBacklight();
             }
         }
     }
@@ -767,8 +767,7 @@ void Controller::CallOnDisplaysChanged(DisplayDevice** added, uint32_t added_cou
     for (unsigned i = 0; i < added_count; i++) {
         added_args[i].display_id = added[i]->id();
         added_args[i].edid_present = true;
-        added_args[i].panel.edid.data = nullptr;
-        added_args[i].panel.edid.i2c_bus_id = added[i]->i2c_bus_id();
+        added_args[i].panel.i2c_bus_id = added[i]->i2c_bus_id();
         added_args[i].pixel_formats = supported_formats;
         added_args[i].pixel_format_count = static_cast<uint32_t>(fbl::count_of(supported_formats));
         added_args[i].cursor_infos = cursor_infos;
@@ -1762,21 +1761,21 @@ zx_status_t Controller::SetBitrate(uint32_t bus_id, uint32_t bitrate) {
     return ZX_OK;
 }
 
-zx_status_t Controller::Transact(uint32_t bus_id, uint16_t address, const void* write_buf,
-                                 size_t write_length, void* read_buf, size_t read_length) {
-    if (write_length > kMaxTxSize || read_length > kMaxTxSize) {
+zx_status_t Controller::Transact(uint32_t bus_id, i2c_impl_op_t* ops, size_t count) {
+    for (unsigned i = 0; i < count; i++) {
+        if (ops[i].length > kMaxTxSize) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+    }
+    if (!ops[count - 1].stop) {
         return ZX_ERR_INVALID_ARGS;
     }
 
-    const uint8_t* wb = static_cast<const uint8_t*>(write_buf);
-    uint8_t wl = static_cast<uint8_t>(write_length);
-    uint8_t* rb = static_cast<uint8_t*>(read_buf);
-    uint8_t rl = static_cast<uint8_t>(read_length);
     if (bus_id < registers::kDdiCount) {
-        return gmbus_i2cs_[bus_id].I2cTransact(address, wb, wl, rb, rl);
+        return gmbus_i2cs_[bus_id].I2cTransact(ops, count);
     } else if (bus_id < 2 * registers::kDdiCount) {
         bus_id -= registers::kDdiCount;
-        return dp_auxs_[bus_id].I2cTransact(address, wb, wl, rb, rl);
+        return dp_auxs_[bus_id].I2cTransact(ops, count);
     } else {
         return ZX_ERR_NOT_FOUND;
     }

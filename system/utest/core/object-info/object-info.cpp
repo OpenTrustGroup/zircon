@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <fbl/algorithm.h>
+
 #define LOCAL_TRACE 0
 #define LTRACEF(str, x...)                                  \
     do {                                                    \
@@ -322,7 +324,7 @@ bool process_maps_smoke() {
         // All entries should be children of the root VMAR.
         EXPECT_GT(entry->depth, 1u, msg);
         EXPECT_TRUE(entry->type >= ZX_INFO_MAPS_TYPE_ASPACE &&
-                        entry->type < ZX_INFO_MAPS_TYPE_LAST,
+                        entry->type <= ZX_INFO_MAPS_TYPE_MAPPING,
                     msg);
 
         if (entry->type == ZX_INFO_MAPS_TYPE_VMAR &&
@@ -878,14 +880,14 @@ bool handle_count_valid() {
     ASSERT_EQ(zx_event_create(0u, &event[0]), ZX_OK);
     EXPECT_EQ(handle_count_or_zero(event[0]), 1u);
 
-    for (size_t i = 1; i != countof(event); ++i) {
+    for (size_t i = 1; i != fbl::count_of(event); ++i) {
         ASSERT_EQ(zx_handle_duplicate(
                       event[0], ZX_RIGHT_SIGNAL, &event[i]),
                   ZX_OK);
         EXPECT_EQ(handle_count_or_zero(event[0]), i + 1);
     }
 
-    for (size_t i = countof(event) - 1; i != 0; --i) {
+    for (size_t i = fbl::count_of(event) - 1; i != 0; --i) {
         ASSERT_EQ(zx_handle_close(event[i]), ZX_OK);
         EXPECT_EQ(handle_count_or_zero(event[0]), i);
     }
@@ -964,7 +966,7 @@ RUN_TEST((self_fails<ZX_INFO_PROCESS_MAPS, zx_info_maps_t>))
 RUN_TEST((wrong_handle_type_fails<ZX_INFO_PROCESS_MAPS, zx_info_maps_t, get_test_job>));
 RUN_TEST((wrong_handle_type_fails<ZX_INFO_PROCESS_MAPS, zx_info_maps_t, zx_thread_self>));
 RUN_TEST((missing_rights_fails<ZX_INFO_PROCESS_MAPS, zx_info_maps_t, get_test_process,
-                               ZX_RIGHT_READ>));
+                               ZX_RIGHT_INSPECT>));
 
 RUN_TEST(process_vmos_smoke);
 RUN_MULTI_ENTRY_TESTS(ZX_INFO_PROCESS_VMOS, zx_info_vmo_t, get_test_process);
@@ -972,7 +974,7 @@ RUN_TEST((self_fails<ZX_INFO_PROCESS_VMOS, zx_info_vmo_t>))
 RUN_TEST((wrong_handle_type_fails<ZX_INFO_PROCESS_VMOS, zx_info_vmo_t, get_test_job>));
 RUN_TEST((wrong_handle_type_fails<ZX_INFO_PROCESS_VMOS, zx_info_vmo_t, zx_thread_self>));
 RUN_TEST((missing_rights_fails<ZX_INFO_PROCESS_VMOS, zx_info_vmo_t, get_test_process,
-                               ZX_RIGHT_READ>));
+                               ZX_RIGHT_INSPECT>));
 
 RUN_TEST(job_processes_smoke);
 RUN_MULTI_ENTRY_TESTS(ZX_INFO_JOB_PROCESSES, zx_koid_t, get_test_job);

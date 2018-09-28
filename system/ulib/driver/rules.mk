@@ -18,16 +18,21 @@ MODULE_SO_NAME := driver
 MODULE_COMPILEFLAGS := -fvisibility=hidden
 
 MODULE_SRCS := \
-	$(DEVMGR_SRCS)/devhost.c \
-	$(DEVMGR_SRCS)/devhost-api.c \
-	$(DEVMGR_SRCS)/devhost-core.c \
-	$(DEVMGR_SRCS)/devhost-rpc-server.c \
-	$(DEVMGR_SRCS)/devhost-shared.c \
+	$(DEVMGR_SRCS)/devhost.cpp \
+	$(DEVMGR_SRCS)/devhost-api.cpp \
+	$(DEVMGR_SRCS)/devhost-core.cpp \
+	$(DEVMGR_SRCS)/devhost-rpc-server.cpp \
+	$(DEVMGR_SRCS)/devhost-shared.cpp \
 
 MODULE_FIDL_LIBS := \
     system/fidl/fuchsia-io \
 
-MODULE_STATIC_LIBS := system/ulib/ddk system/ulib/fidl system/ulib/sync system/ulib/port
+MODULE_STATIC_LIBS := \
+    system/ulib/ddk \
+    system/ulib/fbl \
+    system/ulib/fidl \
+    system/ulib/sync \
+    system/ulib/port \
 
 MODULE_LIBS := system/ulib/fdio system/ulib/zircon system/ulib/c
 

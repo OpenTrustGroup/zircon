@@ -7,6 +7,7 @@
 
 #include <ddk/debug.h>
 #include <ddk/protocol/platform-defs.h>
+#include <fbl/algorithm.h>
 #include <zircon/driver/binding.h>
 
 #include "aml-pcie-clk.h"
@@ -14,8 +15,6 @@
 
 namespace pcie {
 namespace aml {
-
-const size_t kRstGpio = 0;
 
 const size_t kElbMmio = 0;
 const size_t kCfgMmio = 1;
@@ -41,7 +40,7 @@ zx_status_t AmlPcieDevice::InitProtocols() {
         return st;
     }
 
-    st = gpio_config_out(&gpio_, kRstGpio, 0);
+    st = gpio_config_out(&gpio_, 0);
     if (st != ZX_OK) {
         zxlogf(ERROR, "aml_pcie: failed to configure rst gpio, st = %d", st);
         return st;
@@ -144,7 +143,7 @@ device_add_args_t pci_dev_args = []() {
     result.name = "aml-dw-pcie";
     result.ops = &aml_pcie_device_proto,
     result.props = props;
-    result.prop_count = countof(props);
+    result.prop_count = fbl::count_of(props);
 
     return result;
 }();
@@ -195,9 +194,9 @@ zx_status_t AmlPcieDevice::Init() {
     }
 
     // Whack the reset gpio.
-    gpio_write(&gpio_, kRstGpio, 0);
+    gpio_write(&gpio_, 0);
     zx_nanosleep(zx_deadline_after(ZX_MSEC(10)));
-    gpio_write(&gpio_, kRstGpio, 1);
+    gpio_write(&gpio_, 1);
 
     st = pcie_->EstablishLink(&atu_cfg_, &atu_io_, &atu_mem_);
     if (st != ZX_OK) {

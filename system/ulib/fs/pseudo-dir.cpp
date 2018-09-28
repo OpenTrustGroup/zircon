@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 
 #include <fbl/auto_lock.h>
+#include <fuchsia/io/c/fidl.h>
 
 namespace fs {
 
@@ -44,15 +45,17 @@ void PseudoDir::Notify(fbl::StringPiece name, unsigned event) {
     watcher_.Notify(name, event);
 }
 
-zx_status_t PseudoDir::WatchDir(Vfs* vfs, const vfs_watch_dir_t* cmd) {
-    return watcher_.WatchDir(vfs, this, cmd);
+zx_status_t PseudoDir::WatchDir(fs::Vfs* vfs, uint32_t mask, uint32_t options,
+                                zx::channel watcher) {
+    return watcher_.WatchDir(vfs, this, mask, options, fbl::move(watcher));
 }
 
 zx_status_t PseudoDir::Readdir(vdircookie_t* cookie, void* data, size_t len, size_t* out_actual) {
     fs::DirentFiller df(data, len);
     zx_status_t r = 0;
     if (cookie->n < kDotId) {
-        if ((r = df.Next(".", VTYPE_TO_DTYPE(V_TYPE_DIR))) != ZX_OK) {
+        uint64_t ino = fuchsia_io_INO_UNKNOWN;
+        if ((r = df.Next(".", VTYPE_TO_DTYPE(V_TYPE_DIR), ino)) != ZX_OK) {
             *out_actual = df.BytesFilled();
             return r;
         }
@@ -69,10 +72,10 @@ zx_status_t PseudoDir::Readdir(vdircookie_t* cookie, void* data, size_t len, siz
         if ((r = it->node()->Getattr(&attr)) != ZX_OK) {
             continue;
         }
-        if ((r = df.Next(it->name().ToStringPiece(),
-                         VTYPE_TO_DTYPE(attr.mode))) != ZX_OK) {
+        if (df.Next(it->name().ToStringPiece(),
+                         VTYPE_TO_DTYPE(attr.mode), attr.inode) != ZX_OK) {
             *out_actual = df.BytesFilled();
-            return r;
+            return ZX_OK;
         }
         cookie->n = it->id();
     }
@@ -94,9 +97,9 @@ zx_status_t PseudoDir::AddEntry(fbl::String name, fbl::RefPtr<fs::Vnode> vn) {
         return ZX_ERR_ALREADY_EXISTS;
     }
 
-    Notify(name.ToStringPiece(), VFS_WATCH_EVT_ADDED);
+    Notify(name.ToStringPiece(), fuchsia_io_WATCH_EVENT_ADDED);
     auto entry = fbl::make_unique<Entry>(next_node_id_++,
-                                                fbl::move(name), fbl::move(vn));
+                                         fbl::move(name), fbl::move(vn));
     entries_by_name_.insert(entry.get());
     entries_by_id_.insert(fbl::move(entry));
     return ZX_OK;
@@ -109,7 +112,7 @@ zx_status_t PseudoDir::RemoveEntry(fbl::StringPiece name) {
     if (it != entries_by_name_.end()) {
         entries_by_name_.erase(it);
         entries_by_id_.erase(it->id());
-        Notify(name, VFS_WATCH_EVT_REMOVED);
+        Notify(name, fuchsia_io_WATCH_EVENT_REMOVED);
         return ZX_OK;
     }
 
@@ -120,7 +123,7 @@ void PseudoDir::RemoveAllEntries() {
     fbl::AutoLock lock(&mutex_);
 
     for (auto& entry : entries_by_name_) {
-        Notify(entry.name().ToStringPiece(), VFS_WATCH_EVT_REMOVED);
+        Notify(entry.name().ToStringPiece(), fuchsia_io_WATCH_EVENT_REMOVED);
     }
     entries_by_name_.clear();
     entries_by_id_.clear();

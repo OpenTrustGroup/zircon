@@ -27,8 +27,12 @@ namespace {
 
 class Fixture : private trace::TraceHandler {
 public:
-    Fixture(trace_buffering_mode_t mode, size_t buffer_size)
-        : loop_(&kAsyncLoopConfigNoAttachToThread),
+    Fixture(attach_to_thread_t attach_to_thread,
+            trace_buffering_mode_t mode, size_t buffer_size)
+        : attach_to_thread_(attach_to_thread),
+          loop_(attach_to_thread == kAttachToThread
+                ? &kAsyncLoopConfigAttachToThread
+                : &kAsyncLoopConfigNoAttachToThread),
           buffering_mode_(mode),
           buffer_(new uint8_t[buffer_size], buffer_size) {
         zx_status_t status = zx::event::create(0u, &trace_stopped_);
@@ -46,13 +50,33 @@ public:
             return;
 
         trace_running_ = true;
-        loop_.StartThread("trace test");
+
+        if (attach_to_thread_ == kNoAttachToThread) {
+            loop_.StartThread("trace test");
+        }
 
         // Asynchronously start the engine.
         zx_status_t status = trace_start_engine(loop_.dispatcher(), this,
                                                 buffering_mode_,
                                                 buffer_.get(), buffer_.size());
         ZX_DEBUG_ASSERT_MSG(status == ZX_OK, "status=%d", status);
+    }
+
+    void StopEngine() {
+        ZX_DEBUG_ASSERT(trace_running_);
+        zx_status_t status = trace_stop_engine(ZX_OK);
+        ZX_DEBUG_ASSERT_MSG(status == ZX_OK, "status=%d", status);
+    }
+
+    void Shutdown() {
+        // Shut down the loop (implicitly joins the thread we started
+        // earlier). When this completes we know the trace engine is
+        // really stopped.
+        loop_.Shutdown();
+
+        ZX_DEBUG_ASSERT(observed_stopped_callback_);
+
+        trace_running_ = false;
     }
 
     void StopTracing(bool hard_shutdown) {
@@ -63,21 +87,25 @@ public:
         // If we're performing a hard shutdown, skip this step and begin immediately
         // tearing down the loop.  The trace engine should stop itself.
         if (!hard_shutdown) {
-            zx_status_t status = trace_stop_engine(ZX_OK);
-            ZX_DEBUG_ASSERT_MSG(status == ZX_OK, "status=%d", status);
+            StopEngine();
 
-            status = trace_stopped_.wait_one(ZX_EVENT_SIGNALED,
-                                             zx::deadline_after(zx::msec(1000)), nullptr);
-            ZX_DEBUG_ASSERT_MSG(status == ZX_OK, "status=%d", status);
+            zx_status_t status;
+            while (trace_state() != TRACE_STOPPED) {
+                if (attach_to_thread_ == kNoAttachToThread) {
+                    status = trace_stopped_.wait_one(
+                        ZX_EVENT_SIGNALED, zx::deadline_after(zx::msec(100)),
+                        nullptr);
+                    ZX_DEBUG_ASSERT_MSG(status == ZX_OK || status == ZX_ERR_TIMED_OUT,
+                                        "status=%d", status);
+                } else {
+                    // Finish up any remaining tasks. The engine may have queued some.
+                    status = loop_.RunUntilIdle();
+                    ZX_DEBUG_ASSERT_MSG(status == ZX_OK, "status=%d", status);
+                }
+            }
         }
 
-        // Shut down the loop (implicily joins the thread we started earlier).
-        // When this completes we know the trace engine is really stopped.
-        loop_.Shutdown();
-
-        ZX_DEBUG_ASSERT(observed_stopped_callback_);
-
-        trace_running_ = false;
+        Shutdown();
     }
 
     bool WaitBufferFullNotification() {
@@ -85,6 +113,10 @@ public:
                                             zx::deadline_after(zx::msec(1000)), nullptr);
         buffer_full_.signal(ZX_EVENT_SIGNALED, 0u);
         return status == ZX_OK;
+    }
+
+    async::Loop& loop() {
+        return loop_;
     }
 
     zx_status_t disposition() const {
@@ -159,6 +191,7 @@ private:
         buffer_full_.signal(0u, ZX_EVENT_SIGNALED);
     }
 
+    attach_to_thread_t attach_to_thread_;
     async::Loop loop_;
     trace_buffering_mode_t buffering_mode_;
     fbl::Array<uint8_t> buffer_;
@@ -182,9 +215,10 @@ struct FixtureSquelch {
     regex_t regex;
 };
 
-void fixture_set_up(trace_buffering_mode_t mode, size_t buffer_size) {
+void fixture_set_up(attach_to_thread_t attach_to_thread,
+                    trace_buffering_mode_t mode, size_t buffer_size) {
     ZX_DEBUG_ASSERT(!g_fixture);
-    g_fixture = new Fixture(mode, buffer_size);
+    g_fixture = new Fixture(attach_to_thread, mode, buffer_size);
 }
 
 void fixture_tear_down(void) {
@@ -206,6 +240,21 @@ void fixture_stop_tracing() {
 void fixture_stop_tracing_hard() {
     ZX_DEBUG_ASSERT(g_fixture);
     g_fixture->StopTracing(true);
+}
+
+void fixture_stop_engine() {
+    ZX_DEBUG_ASSERT(g_fixture);
+    g_fixture->StopEngine();
+}
+
+void fixture_shutdown() {
+    ZX_DEBUG_ASSERT(g_fixture);
+    g_fixture->Shutdown();
+}
+
+async_loop_t* fixture_async_loop(void) {
+    ZX_DEBUG_ASSERT(g_fixture);
+    return g_fixture->loop().loop();
 }
 
 zx_status_t fixture_get_disposition(void) {

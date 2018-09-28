@@ -5,6 +5,7 @@
 #pragma once
 
 #include <zircon/compiler.h>
+#include <zircon/device/audio.h>
 #include <zircon/types.h>
 #include <zircon/pixelformat.h>
 
@@ -75,13 +76,8 @@ typedef struct added_display_args {
     // undefined, and drivers should ignore it in check_configuration and apply_configuration.
     bool edid_present;
     union {
-        struct {
-            // TODO(stevensd): Remove these when vim2 stops using them
-            const uint8_t* data;
-            uint16_t length;
-            // the bus_id to use to read this display's edid from the device's i2c protocol
-            uint32_t i2c_bus_id;
-        } edid;
+        // the bus_id to use to read this display's edid from the device's i2c protocol
+        uint32_t i2c_bus_id;
         // the display's parameters if an edid is not present
         display_params_t params;
     } panel;
@@ -103,6 +99,15 @@ typedef struct added_display_args {
     // Out parameters will be populated before on_displays_changed returns.
     bool is_hdmi_out;
     bool is_standard_srgb_out;
+
+    uint32_t audio_format_count;
+
+    // All strings are null-terminated. |manufacturer_id| is guaranteed to have
+    // length 3, all other strings may be empty.
+    char manufacturer_id[4];
+    const char* manufacturer_name; // non-null
+    char monitor_name[14];
+    char monitor_serial[14];
 } added_display_args_t;
 
 // The client will not make any ZX_PROTOCOL_DISPLAY_CONTROLLER_IMPL calls into the device
@@ -125,6 +130,9 @@ typedef struct display_controller_cb {
     // displayed, in increasing z-order.
     void (*on_display_vsync)(void* ctx, uint64_t display_id, zx_time_t timestamp,
                              void** handles, uint32_t handle_count);
+
+    zx_status_t (*get_audio_format)(void* ctx, uint64_t display_id, uint32_t fmt_idx,
+                                    audio_stream_format_range_t* fmt_out);
 } display_controller_cb_t;
 
 #define ALPHA_DISABLE 0

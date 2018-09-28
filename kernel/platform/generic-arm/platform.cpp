@@ -46,9 +46,7 @@
 
 #include <lib/console.h>
 #include <lib/memory_limit.h>
-#if WITH_LIB_DEBUGLOG
 #include <lib/debuglog.h>
-#endif
 #if WITH_PANIC_BACKTRACE
 #include <kernel/thread.h>
 #endif
@@ -113,9 +111,7 @@ void platform_panic_start(void) {
     halt_other_cpus();
 
     if (atomic_swap(&panic_started, 1) == 0) {
-#if WITH_LIB_DEBUGLOG
         dlog_bluescreen_init();
-#endif
     }
 }
 
@@ -162,36 +158,25 @@ static void platform_cpu_init(void) {
     for (uint cluster = 0; cluster < cpu_cluster_count; cluster++) {
         for (uint cpu = 0; cpu < cpu_cluster_cpus[cluster]; cpu++) {
             if (cluster != 0 || cpu != 0) {
-                // allocate a stack for the cpu's boot thread
-                kstack_t stack{};
-                zx_status_t err = vm_allocate_kstack(&stack);
-                ASSERT(err == ZX_OK);
-
-                void* sp = reinterpret_cast<void*>(stack.top);
-                void* unsafe_sp = nullptr;
-#if __has_feature(safe_stack)
-                unsafe_sp = reinterpret_cast<void*>(stack.unsafe_base + stack.size);
-#endif
-
-                // set the stack info in the arch layer
-                arm64_set_secondary_sp(cluster, cpu, sp, unsafe_sp);
+                // create a stack for the cpu we're about to start
+                zx_status_t status = arm64_create_secondary_stack(cluster, cpu);
+                DEBUG_ASSERT(status == ZX_OK);
 
                 // start the cpu
-                err = platform_start_cpu(cluster, cpu);
+                status = platform_start_cpu(cluster, cpu);
 
-                if (err != ZX_OK) {
-                    vm_free_kstack(&stack);
+                if (status != ZX_OK) {
+                    // TODO(maniscalco): Is continuing really the right thing to do here?
+
+                    // start failed, free the stack
+                    zx_status_t status = arm64_free_secondary_stack(cluster, cpu);
+                    DEBUG_ASSERT(status == ZX_OK);
                     continue;
                 }
 
                 // the cpu booted
                 //
-                // note, we're leaking the stack because we don't know if the initial thread has
-                // completed yet
-                //
-                // TODO(maniscalco): in a future change, rework the allocation so that it's stored
-                // in the static _init_thread array (arch.cpp) and can be freed when the boot thread
-                // terminates (ZX-2547)
+                // bootstrap thread is now responsible for freeing its stack
             }
         }
     }
@@ -472,10 +457,8 @@ void platform_halt(platform_halt_action suggested_action, platform_halt_reason r
     }
 
     if (reason == HALT_REASON_SW_PANIC) {
-#if WITH_LIB_DEBUGLOG
         thread_print_current_backtrace();
         dlog_bluescreen_halt();
-#endif
         if (!halt_on_panic) {
             power_reboot(REBOOT_NORMAL);
             printf("reboot failed\n");

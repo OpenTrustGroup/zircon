@@ -18,39 +18,6 @@ __BEGIN_CDECLS
 
 // clang-format off
 
-// FIDL Ordinals
-
-// Object
-#define ZXFIDL_CLONE      0x80000001
-#define ZXFIDL_CLOSE      0x80000002
-#define ZXFIDL_ON_OPEN    0x80000007
-
-// Node
-#define ZXFIDL_SYNC       0x81000001
-#define ZXFIDL_STAT       0x81000002
-#define ZXFIDL_SETATTR    0x81000003
-#define ZXFIDL_IOCTL      0x81000004
-
-// File
-#define ZXFIDL_READ       0x82000001
-#define ZXFIDL_READ_AT    0x82000002
-#define ZXFIDL_WRITE      0x82000003
-#define ZXFIDL_WRITE_AT   0x82000004
-#define ZXFIDL_SEEK       0x82000005
-#define ZXFIDL_TRUNCATE   0x82000006
-#define ZXFIDL_GET_FLAGS  0x82000007
-#define ZXFIDL_SET_FLAGS  0x82000008
-#define ZXFIDL_GET_VMO    0x82000009
-
-// Directory
-#define ZXFIDL_OPEN       0x83000001
-#define ZXFIDL_UNLINK     0x83000002
-#define ZXFIDL_READDIR    0x83000003
-#define ZXFIDL_REWIND     0x83000004
-#define ZXFIDL_GET_TOKEN  0x83000005
-#define ZXFIDL_RENAME     0x83000006
-#define ZXFIDL_LINK       0x83000007
-
 // Fuchsia-io limits.
 //
 // TODO(FIDL-127): Compute these values with the "union of all fuchsia-io"
@@ -124,25 +91,18 @@ typedef struct {
         struct {
             zx_handle_t e;
         } device;
-        struct {
-            zx_handle_t s;
-        } socket;
     };
-} zxrio_object_info_t;
+} zxrio_node_info_t;
 
 #define ZXRIO_DESCRIBE_HDR_SZ       (__builtin_offsetof(zxrio_describe_t, extra))
 
 // A one-way message which may be emitted by the server without an
 // accompanying request. Optionally used as a part of the Open handshake.
 typedef struct {
-    zx_txid_t txid;                    // FIDL message header
-    uint32_t reserved0;                // Padding
-    uint32_t flags;
-    uint32_t op;
-
+    fidl_message_header_t hdr;
     zx_status_t status;
-    zxrio_object_info_t* extra_ptr;
-    zxrio_object_info_t extra;
+    zxrio_node_info_t* extra_ptr;
+    zxrio_node_info_t extra;
 } zxrio_describe_t;
 
 #define FDIO_MMAP_FLAG_READ    (1u << 0)
@@ -161,12 +121,6 @@ typedef struct {
 static_assert(FDIO_MMAP_FLAG_READ == ZX_VM_PERM_READ, "Vmar / Mmap flags should be aligned");
 static_assert(FDIO_MMAP_FLAG_WRITE == ZX_VM_PERM_WRITE, "Vmar / Mmap flags should be aligned");
 static_assert(FDIO_MMAP_FLAG_EXEC == ZX_VM_PERM_EXECUTE, "Vmar / Mmap flags should be aligned");
-
-typedef struct zxrio_mmap_data {
-    size_t offset;
-    uint64_t length;
-    int32_t flags;
-} zxrio_mmap_data_t;
 
 static_assert(FDIO_CHUNK_SIZE >= PATH_MAX, "FDIO_CHUNK_SIZE must be large enough to contain paths");
 

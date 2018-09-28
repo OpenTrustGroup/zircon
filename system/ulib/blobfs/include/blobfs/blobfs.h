@@ -31,6 +31,7 @@
 #include <fs/trace.h>
 #include <fs/vfs.h>
 #include <fs/vnode.h>
+#include <fuchsia/io/c/fidl.h>
 #include <lib/async/cpp/wait.h>
 #include <lib/fzl/mapped-vmo.h>
 #include <lib/zx/event.h>
@@ -50,7 +51,6 @@ class Compressor;
 class VnodeBlob;
 class WritebackWork;
 
-using ReadTxn = fs::ReadTxn<kBlobfsBlockSize, Blobfs>;
 using digest::Digest;
 
 typedef uint32_t BlobFlags;
@@ -96,9 +96,6 @@ public:
     }
 
     bool IsDirectory() const { return flags_ & kBlobFlagDirectory; }
-
-    zx_status_t Ioctl(uint32_t op, const void* in_buf, size_t in_len,
-                      void* out_buf, size_t out_len, size_t* out_actual) final;
 
     bool DeletionQueued() const {
         return flags_ & kBlobFlagDeletable;
@@ -204,7 +201,7 @@ private:
 
     // Vnode I/O operations
     zx_status_t GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
-                           zxrio_object_info_t* extra) final;
+                           zxrio_node_info_t* extra) final;
     zx_status_t ValidateFlags(uint32_t flags) final;
     zx_status_t Readdir(fs::vdircookie_t* cookie, void* dirents, size_t len,
                         size_t* out_actual) final;
@@ -218,6 +215,8 @@ private:
     zx_status_t Create(fbl::RefPtr<fs::Vnode>* out, fbl::StringPiece name,
                        uint32_t mode) final;
     zx_status_t Truncate(size_t len) final;
+    zx_status_t QueryFilesystem(fuchsia_io_FilesystemInfo* out) final;
+    zx_status_t GetDevicePath(size_t buffer_len, char* out_name, size_t* out_len) final;
     zx_status_t Unlink(fbl::StringPiece name, bool must_be_dir) final;
     zx_status_t GetVmo(int flags, zx_handle_t* out) final;
     void Sync(SyncCallback closure) final;
@@ -303,10 +302,41 @@ struct MerkleRootTraits {
     }
 };
 
-class Blobfs : public fs::ManagedVfs, public fbl::RefCounted<Blobfs> {
+class Blobfs : public fs::ManagedVfs, public fbl::RefCounted<Blobfs>,
+               public fs::TransactionHandler {
 public:
     DISALLOW_COPY_ASSIGN_AND_MOVE(Blobfs);
     friend class VnodeBlob;
+
+    ////////////////
+    // fs::ManagedVfs interface.
+
+    void Shutdown(fs::Vfs::ShutdownCallback closure) final;
+
+    ////////////////
+    // fs::TransactionHandler interface.
+
+    uint32_t FsBlockSize() const final {
+        return kBlobfsBlockSize;
+    }
+
+    uint32_t DeviceBlockSize() const final {
+        return block_info_.block_size;
+    }
+
+    groupid_t BlockGroupID() final {
+        thread_local groupid_t group_ = next_group_.fetch_add(1);
+        ZX_ASSERT_MSG(group_ < MAX_TXN_GROUP_COUNT, "Too many threads accessing block device");
+        return group_;
+    }
+
+    zx_status_t Transaction(block_fifo_request_t* requests, size_t count) final {
+        TRACE_DURATION("blobfs", "Blobfs::Transaction", "count", count);
+        return fifo_client_.Transaction(requests, count);
+    }
+
+    ////////////////
+    // Other methods.
 
     static zx_status_t Create(fbl::unique_fd blockfd, const blobfs_info_t* info,
                               fbl::unique_ptr<Blobfs>* out);
@@ -329,7 +359,6 @@ public:
     // Returns the capacity of the writeback buffer, in blocks.
     size_t WritebackCapacity() const { return writeback_->Capacity(); }
 
-    void Shutdown(fs::Vfs::ShutdownCallback closure) final;
     virtual ~Blobfs();
 
     // Invokes "open" on the root directory.
@@ -363,18 +392,6 @@ public:
     zx_status_t AttachVmo(zx_handle_t vmo, vmoid_t* out);
     // Release an allocated vmoid.
     zx_status_t DetachVmo(vmoid_t vmoid);
-
-    zx_status_t Transaction(block_fifo_request_t* requests, size_t count) {
-        TRACE_DURATION("blobfs", "Blobfs::Transaction", "count", count);
-        return fifo_client_.Transaction(requests, count);
-    }
-    uint32_t BlockSize() const { return block_info_.block_size; }
-
-    groupid_t BlockGroupID() {
-        thread_local groupid_t group_ = next_group_.fetch_add(1);
-        ZX_ASSERT_MSG(group_ < MAX_TXN_GROUP_COUNT, "Too many threads accessing block device");
-        return group_;
-    }
 
     // If possible, attempt to resize the blobfs partition.
     // Add one additional slice for inodes.

@@ -34,7 +34,7 @@
 static const uint32_t chipsel[2] = {NAND_CE0, NAND_CE1};
 
 struct aml_controller_params aml_params = {
-    8,
+    8, /* Overwritten using BCH setting from page0 */
     2,
     /* The 2 following values are overwritten by page0 contents */
     1,                /* rand-mode is 1 for page0 */
@@ -98,6 +98,36 @@ uint32_t aml_get_ecc_pagesize(aml_raw_nand_t* raw_nand, uint32_t ecc_mode) {
         break;
     }
     return ecc_page;
+}
+
+int aml_get_ecc_strength(uint32_t ecc_mode) {
+    int ecc_strength;
+
+    switch (ecc_mode) {
+    case AML_ECC_BCH8:
+    case AML_ECC_BCH8_1K:
+        ecc_strength = 8;
+        break;
+    case AML_ECC_BCH24_1K:
+        ecc_strength = 24;
+        break;
+    case AML_ECC_BCH30_1K:
+        ecc_strength = 30;
+        break;
+    case AML_ECC_BCH40_1K:
+        ecc_strength = 40;
+        break;
+    case AML_ECC_BCH50_1K:
+        ecc_strength = 50;
+        break;
+    case AML_ECC_BCH60_1K:
+        ecc_strength = 60;
+        break;
+    default:
+        ecc_strength = -1;
+        break;
+    }
+    return ecc_strength;
 }
 
 static void aml_cmd_idle(aml_raw_nand_t* raw_nand, uint32_t time) {
@@ -269,32 +299,48 @@ static zx_status_t aml_set_oob_byte(aml_raw_nand_t* raw_nand,
  * Returns the maximum bitflips corrected on this NAND page
  * (the maximum bitflips across all of the ECC pages in this page).
  */
-static int aml_get_ecc_corrections(aml_raw_nand_t* raw_nand, int ecc_pages) {
+static int aml_get_ecc_corrections(aml_raw_nand_t* raw_nand, int ecc_pages,
+                                   uint32_t nand_page) {
     struct aml_info_format* info;
     int bitflips = 0;
-    uint8_t zero_cnt;
+    uint8_t zero_bits;
 
     for (int i = 0; i < ecc_pages; i++) {
         info = aml_info_ptr(raw_nand, i);
         if (info->ecc.eccerr_cnt == AML_ECC_UNCORRECTABLE_CNT) {
-            /*
-             * Why are we checking for zero_cnt here ?
-             * Per Amlogic HW architect, this is to deal with
-             * blank NAND pages. The entire blank page is 0xff.
-             * When read with scrambler, the page will be ECC
-             * uncorrectable, but if the total of zeroes in this
-             * page is less than a threshold, then we know this is
-             * blank page.
-             */
-            zero_cnt = info->zero_cnt & AML_ECC_UNCORRECTABLE_CNT;
-            if (raw_nand->controller_params.rand_mode &&
-                (zero_cnt < raw_nand->controller_params.ecc_strength)) {
-                zxlogf(ERROR, "%s: Returning ECC failure\n",
-                       __func__);
+            if (!raw_nand->controller_params.rand_mode) {
+                zxlogf(ERROR, "%s: ECC failure (non-randomized)@%u\n", __func__, nand_page);
+                raw_nand->stats.failed++;
                 return ECC_CHECK_RETURN_FF;
             }
-            raw_nand->stats.failed++;
+            /*
+             * Why are we checking for zero_bits here ?
+             * To deal with blank NAND pages. A blank page is entirely 0xff.
+             * When read with scrambler, the page will be ECC uncorrectable,
+             * In theory, if there is a single zero-bit in the page, then that
+             * page is not a blank page. But in practice, even fresh NAND chips
+             * report a few errors on the read of a page (including blank pages)
+             * so we make allowance for a few bitflips. The threshold against
+             * which we test the zero-bits is one under which we can correct
+             * the bitflips when the page is written to. One option is to set
+             * this threshold to be exactly the ECC strength (this is aggressive).
+             * TODO(srmohan): What should the correct threshold be ? We could
+             * conservatively set this to a small value, or we could have this
+             * depend on the quality of the NAND, the wear of the NAND etc.
+             */
+            zero_bits = info->zero_bits & AML_ECC_UNCORRECTABLE_CNT;
+            if (zero_bits >= raw_nand->controller_params.ecc_strength) {
+                zxlogf(ERROR, "%s: ECC failure (randomized)@%u zero_bits=%u\n",
+                       __func__, nand_page, zero_bits);
+                raw_nand->stats.failed++;
+                return ECC_CHECK_RETURN_FF;
+            }
+            zxlogf(INFO, "%s: Blank Page@%u\n", __func__, nand_page);
             continue;
+        }
+        if (info->ecc.eccerr_cnt != 0) {
+            zxlogf(INFO, "%s: Corrected %u ECC errors@%u\n",
+                   __func__, info->ecc.eccerr_cnt, nand_page);
         }
         raw_nand->stats.ecc_corrected += info->ecc.eccerr_cnt;
         bitflips = MAX(bitflips, info->ecc.eccerr_cnt);
@@ -469,14 +515,6 @@ static zx_status_t aml_read_page_hwecc(void* ctx,
             return ZX_ERR_IO;
     } else
         ecc_pages = 1;
-    /*
-     * Flush and invalidate (only invalidate is really needed), the
-     * info and data buffers before kicking off DMA into them.
-     */
-    io_buffer_cache_flush_invalidate(&raw_nand->data_buffer, 0,
-                                     raw_nand->writesize);
-    io_buffer_cache_flush_invalidate(&raw_nand->info_buffer, 0,
-                                     ecc_pages * sizeof(struct aml_info_format));
     /* Send the page address into the controller */
     onfi_command(&raw_nand->raw_nand_proto, NAND_CMD_READ0, 0x00,
                  nand_page, raw_nand->chipsize, raw_nand->chip_delay,
@@ -506,7 +544,11 @@ static zx_status_t aml_read_page_hwecc(void* ctx,
                __func__, status);
         return status;
     }
-    aml_queue_rb(raw_nand);
+    status = aml_queue_rb(raw_nand);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "%s: aml_queue_rb failed %d\n", __func__, status);
+        return ZX_ERR_IO;
+    }
     status = aml_check_ecc_pages(raw_nand, ecc_pages);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: aml_check_ecc_pages failed %d\n",
@@ -524,7 +566,7 @@ static zx_status_t aml_read_page_hwecc(void* ctx,
     }
     if (oob != NULL)
         status = aml_get_oob_byte(raw_nand, oob);
-    ecc_c = aml_get_ecc_corrections(raw_nand, ecc_pages);
+    ecc_c = aml_get_ecc_corrections(raw_nand, ecc_pages, nand_page);
     if (ecc_c < 0) {
         zxlogf(ERROR, "%s: Uncorrectable ECC error on read\n",
                __func__);
@@ -564,13 +606,9 @@ static zx_status_t aml_write_page_hwecc(void* ctx,
         ecc_pages = 1;
     if (data != NULL) {
         memcpy(raw_nand->data_buf, data, raw_nand->writesize);
-        io_buffer_cache_flush(&raw_nand->data_buffer, 0,
-                              raw_nand->writesize);
     }
     if (oob != NULL) {
         aml_set_oob_byte(raw_nand, oob, ecc_pages);
-        io_buffer_cache_flush_invalidate(&raw_nand->info_buffer, 0,
-                                         ecc_pages * sizeof(struct aml_info_format));
     }
 
     onfi_command(&raw_nand->raw_nand_proto, NAND_CMD_SEQIN, 0x00, nand_page,
@@ -863,6 +901,15 @@ static zx_status_t aml_nand_init_from_page0(aml_raw_nand_t* raw_nand) {
         (page0->nand_setup.cfg.d32 >> 19) & 0x1;
     raw_nand->controller_params.bch_mode =
         (page0->nand_setup.cfg.d32 >> 14) & 0x7;
+
+    raw_nand->controller_params.ecc_strength =
+        aml_get_ecc_strength(raw_nand->controller_params.bch_mode);
+    if (raw_nand->controller_params.ecc_strength < 0) {
+        zxlogf(INFO, "%s: BAD ECC strength computed from BCH Mode\n", __func__);
+        free(data);
+        return ZX_ERR_BAD_STATE;
+    }
+
     zxlogf(INFO, "%s: NAND BCH Mode is %s\n", __func__,
            aml_ecc_string(raw_nand->controller_params.bch_mode));
     free(data);
@@ -878,10 +925,16 @@ static zx_status_t aml_raw_nand_allocbufs(aml_raw_nand_t* raw_nand) {
                status);
         return status;
     }
+    /*
+     * The iobuffers MUST be uncachable. Making these cachable, with
+     * cache flush/invalidate at the right places in the code does not
+     * work. We see data corruptions caused by speculative cache prefetching
+     * done by ARM. Note also that these corruptions are not easily reproducible.
+     */
     status = io_buffer_init(&raw_nand->data_buffer,
                             raw_nand->bti_handle,
                             raw_nand->writesize,
-                            IO_BUFFER_RW | IO_BUFFER_CONTIG);
+                            IO_BUFFER_UNCACHED | IO_BUFFER_RW | IO_BUFFER_CONTIG);
     if (status != ZX_OK) {
         zxlogf(ERROR,
                "raw_nand_test_allocbufs: io_buffer_init(data_buffer) failed\n");
@@ -892,7 +945,7 @@ static zx_status_t aml_raw_nand_allocbufs(aml_raw_nand_t* raw_nand) {
     status = io_buffer_init(&raw_nand->info_buffer,
                             raw_nand->bti_handle,
                             raw_nand->writesize,
-                            IO_BUFFER_RW | IO_BUFFER_CONTIG);
+                            IO_BUFFER_UNCACHED | IO_BUFFER_RW | IO_BUFFER_CONTIG);
     if (status != ZX_OK) {
         zxlogf(ERROR,
                "raw_nand_test_allocbufs: io_buffer_init(info_buffer) failed\n");

@@ -65,7 +65,7 @@ extern uint64_t arm_gicv2_gicv_offset;
 #define GICD_PIDR2 (GICD_OFFSET + 0xfe8)
 #define GICD_PIDR3 (GICD_OFFSET + 0xfec)
 
-/* we might need to check that we're not a gic v3, in which case look for the v3 PIDR2 reg */
+// we might need to check that we're not a gic v3, in which case look for the v3 PIDR2 reg
 #define GICD_V3_PIDR2 (GICD_OFFSET + 0xffe8)
 
 // Virtual interface control registers.

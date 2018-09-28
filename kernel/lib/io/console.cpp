@@ -21,9 +21,7 @@
 #include <string.h>
 #include <vm/vm.h>
 
-#if WITH_LIB_DEBUGLOG
 #include <lib/debuglog.h>
-#endif
 
 /* routines for dealing with main console io */
 
@@ -55,15 +53,12 @@ void __kernel_console_write(const char* str, size_t len) {
 
 static void __kernel_stdout_write(const char *str, size_t len)
 {
-#if WITH_LIB_DEBUGLOG
-    if (dlog_write(0, str, len)) {
-        __kernel_console_write(str, len);
-        __kernel_serial_write(str, len);
+    if (dlog_bypass() == false) {
+        if (dlog_write(0, str, len) == ZX_OK)
+            return;
     }
-#else
     __kernel_console_write(str, len);
     __kernel_serial_write(str, len);
-#endif
 }
 
 #if WITH_DEBUG_LINEBUFFER

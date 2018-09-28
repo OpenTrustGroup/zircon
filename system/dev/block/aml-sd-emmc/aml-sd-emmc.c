@@ -242,9 +242,9 @@ static zx_status_t aml_sd_emmc_set_bus_width(void* ctx, uint32_t bw) {
 }
 
 static zx_status_t aml_sd_emmc_do_tuning_transfer(aml_sd_emmc_t* dev, uint8_t* tuning_res,
-                                                  size_t blk_pattern_size) {
+                                                  size_t blk_pattern_size, uint32_t tuning_cmd_idx) {
     sdmmc_req_t tuning_req = {
-        .cmd_idx = MMC_SEND_TUNING_BLOCK,
+        .cmd_idx = tuning_cmd_idx,
         .cmd_flags = MMC_SEND_TUNING_BLOCK_FLAGS,
         .arg = 0,
         .blockcount = 1,
@@ -256,7 +256,8 @@ static zx_status_t aml_sd_emmc_do_tuning_transfer(aml_sd_emmc_t* dev, uint8_t* t
 }
 
 static bool aml_sd_emmc_tuning_test_delay(aml_sd_emmc_t* dev, const uint8_t* blk_pattern,
-                                          size_t blk_pattern_size, uint32_t adj_delay) {
+                                          size_t blk_pattern_size, uint32_t adj_delay,
+                                          uint32_t tuning_cmd_idx) {
     mtx_lock(&dev->mtx);
     aml_sd_emmc_regs_t* regs = dev->regs;
     uint32_t adjust_reg = regs->sd_emmc_adjust;
@@ -272,7 +273,7 @@ static bool aml_sd_emmc_tuning_test_delay(aml_sd_emmc_t* dev, const uint8_t* blk
     size_t n;
     for (n = 0; n < AML_SD_EMMC_ADJ_DELAY_TEST_ATTEMPTS; n++) {
         uint8_t tuning_res[512] = {0};
-        status = aml_sd_emmc_do_tuning_transfer(dev, tuning_res, blk_pattern_size);
+        status = aml_sd_emmc_do_tuning_transfer(dev, tuning_res, blk_pattern_size, tuning_cmd_idx);
         if (status != ZX_OK || memcmp(blk_pattern, tuning_res, blk_pattern_size)) {
             break;
         }
@@ -284,12 +285,14 @@ static zx_status_t aml_sd_emmc_tuning_calculate_best_window(aml_sd_emmc_t* dev,
                                                             const uint8_t* tuning_blk,
                                                             size_t tuning_blk_size,
                                                             uint32_t cur_clk_div, int* best_start,
-                                                            uint32_t* best_size) {
+                                                            uint32_t* best_size,
+                                                            uint32_t tuning_cmd_idx) {
     int cur_win_start = -1, best_win_start = -1;
     uint32_t cycle_begin_win_size = 0, cur_win_size = 0, best_win_size = 0;
 
     for (uint32_t adj_delay = 0; adj_delay < cur_clk_div; adj_delay++) {
-        if (aml_sd_emmc_tuning_test_delay(dev, tuning_blk, tuning_blk_size, adj_delay)) {
+        if (aml_sd_emmc_tuning_test_delay(dev, tuning_blk, tuning_blk_size, adj_delay,
+                                          tuning_cmd_idx)) {
             if (cur_win_start < 0) {
                 cur_win_start = adj_delay;
             }
@@ -333,7 +336,7 @@ static zx_status_t aml_sd_emmc_tuning_calculate_best_window(aml_sd_emmc_t* dev,
     return ZX_OK;
 }
 
-static zx_status_t aml_sd_emmc_perform_tuning(void* ctx) {
+static zx_status_t aml_sd_emmc_perform_tuning(void* ctx, uint32_t tuning_cmd_idx) {
     aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
     mtx_lock(&dev->mtx);
 
@@ -365,10 +368,11 @@ static zx_status_t aml_sd_emmc_perform_tuning(void* ctx) {
 
     do {
         aml_sd_emmc_tuning_calculate_best_window(dev, tuning_blk, tuning_blk_size,
-                                                 clk_div, &best_win_start, &best_win_size);
+                                                 clk_div, &best_win_start, &best_win_size,
+                                                 tuning_cmd_idx);
         if (best_win_size == 0) {
             // Lower the frequency and try again
-            zxlogf(TRACE, "Tuning failed. Reducing the frequency and trying again\n");
+            zxlogf(INFO, "Tuning failed. Reducing the frequency and trying again\n");
             mtx_lock(&dev->mtx);
             clk_val = regs->sd_emmc_clock;
             clk_div = get_bits(clk_val, AML_SD_EMMC_CLOCK_CFG_DIV_MASK,
@@ -478,9 +482,9 @@ static void aml_sd_emmc_init_regs(aml_sd_emmc_t* dev) {
 static void aml_sd_emmc_hw_reset(void* ctx) {
     aml_sd_emmc_t* dev = (aml_sd_emmc_t*)ctx;
     mtx_lock(&dev->mtx);
-    gpio_config_out(&dev->gpio, 0, 0);
+    gpio_config_out(&dev->gpio, 0);
     usleep(10 * 1000);
-    gpio_write(&dev->gpio, 0, 1);
+    gpio_write(&dev->gpio, 1);
     usleep(10 * 1000);
     aml_sd_emmc_init_regs(dev);
     mtx_unlock(&dev->mtx);
@@ -660,6 +664,8 @@ static void aml_sd_emmc_setup_cmd_desc(aml_sd_emmc_t* dev, sdmmc_req_t* req,
     }
     update_bits(&cmd_info, AML_SD_EMMC_CMD_INFO_CMD_IDX_MASK, AML_SD_EMMC_CMD_INFO_CMD_IDX_LOC,
                 AML_SD_EMMC_COMMAND(req->cmd_idx));
+    update_bits(&cmd_info, AML_SD_EMMC_CMD_INFO_TIMEOUT_MASK, AML_SD_EMMC_CMD_INFO_TIMEOUT_LOC,
+                AML_SD_EMMC_DEFAULT_CMD_TIMEOUT);
     cmd_info &= ~AML_SD_EMMC_CMD_INFO_ERROR;
     cmd_info |= AML_SD_EMMC_CMD_INFO_OWNER;
     cmd_info &= ~AML_SD_EMMC_CMD_INFO_END_OF_CHAIN;
@@ -752,6 +758,8 @@ static zx_status_t aml_sd_emmc_setup_data_descs_dma(aml_sd_emmc_t* dev, sdmmc_re
             desc->cmd_info |= AML_SD_EMMC_CMD_INFO_DATA_WR;
         }
         desc->cmd_info |= AML_SD_EMMC_CMD_INFO_OWNER;
+        update_bits(&desc->cmd_info, AML_SD_EMMC_CMD_INFO_TIMEOUT_MASK,
+                    AML_SD_EMMC_CMD_INFO_TIMEOUT_LOC, AML_SD_EMMC_DEFAULT_CMD_TIMEOUT);
         desc->cmd_info &= ~AML_SD_EMMC_CMD_INFO_ERROR;
 
         uint32_t blocksize = req->blocksize;
@@ -942,27 +950,6 @@ static zx_protocol_device_t aml_sd_emmc_device_proto = {
     .release = aml_sd_emmc_release,
 };
 
-static zx_status_t aml_sd_emmc_get_sdio_oob_irq(void* ctx, zx_handle_t* oob_irq_handle) {
-    aml_sd_emmc_t* dev = ctx;
-
-    if (dev->gpio_count <= 1) {
-        return ZX_OK;
-    }
-
-    zx_status_t st = gpio_config_in(&dev->gpio, 1, GPIO_NO_PULL);
-    if (st != ZX_OK) {
-        zxlogf(ERROR, "aml_sd_emmc_get_oob_irq: gpio_config failed: %d\n", st);
-        return st;
-    }
-
-    st = gpio_get_interrupt(&dev->gpio, 1, ZX_INTERRUPT_MODE_LEVEL_LOW, oob_irq_handle);
-    if (st != ZX_OK) {
-        zxlogf(ERROR, "aml_sd_emmc_get_oob_irq: gpio_get_interrupt failed: %d\n", st);
-        return st;
-    }
-    return ZX_OK;
-}
-
 static sdmmc_protocol_ops_t aml_sdmmc_proto = {
     .host_info = aml_sd_emmc_host_info,
     .set_signal_voltage = aml_sd_emmc_set_signal_voltage,
@@ -972,7 +959,6 @@ static sdmmc_protocol_ops_t aml_sdmmc_proto = {
     .hw_reset = aml_sd_emmc_hw_reset,
     .perform_tuning = aml_sd_emmc_perform_tuning,
     .request = aml_sd_emmc_request,
-    .get_sdio_oob_irq = aml_sd_emmc_get_sdio_oob_irq,
 };
 
 static zx_status_t aml_sd_emmc_bind(void* ctx, zx_device_t* parent) {
@@ -1064,6 +1050,7 @@ static zx_status_t aml_sd_emmc_bind(void* ctx, zx_device_t* parent) {
     } else {
         dev->info.max_transfer_size = AML_SD_EMMC_MAX_PIO_DATA_SIZE;
     }
+    dev->info.max_transfer_size_non_dma = AML_SD_EMMC_MAX_PIO_DATA_SIZE;
 
     dev->max_freq = dev_config.max_freq;
     dev->min_freq = dev_config.min_freq;

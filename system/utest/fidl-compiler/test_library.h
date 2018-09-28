@@ -6,6 +6,7 @@
 #define ZIRCON_SYSTEM_UTEST_FIDL_COMPILER_TEST_LIBRARY_H_
 
 #include <fidl/flat_ast.h>
+#include <fidl/json_generator.h>
 #include <fidl/lexer.h>
 #include <fidl/parser.h>
 #include <fidl/source_file.h>
@@ -24,7 +25,7 @@ public:
         : source_file_(MakeSourceFile(filename, raw_source_code)),
           lexer_(source_file_, &identifier_table_),
           parser_(&lexer_, &error_reporter_),
-          library_(std::make_unique<fidl::flat::Library>(&compiled_libraries_, &error_reporter_)) {
+          library_(std::make_unique<fidl::flat::Library>(&all_libraries_, &error_reporter_)) {
     }
 
     bool AddDependentLibrary(TestLibrary& dependent_library) {
@@ -32,12 +33,11 @@ public:
         // libraries, which we usurp here to move it into the current library
         // under test. This would be made clearer with a helper object which
         // owned all libraries under test.
-        std::vector<fidl::StringView> final_library_name = dependent_library.library_->name();
-        auto iter = compiled_libraries_.emplace(
-            std::move(final_library_name),
-            std::unique_ptr<fidl::flat::Library>(dependent_library.library_.get()));
+        if (!all_libraries_.Insert(std::unique_ptr<fidl::flat::Library>(dependent_library.library_.get()))) {
+            return false;
+        }
         dependent_library.library_.release();
-        return iter.second;
+        return true;
     }
 
     bool Parse(std::unique_ptr<fidl::raw::File> &ast_ptr) {
@@ -50,6 +50,12 @@ public:
         return parser_.Ok() &&
                library_->ConsumeFile(std::move(ast)) &&
                library_->Compile();
+    }
+
+    std::string GenerateJSON() {
+        auto json_generator = fidl::JSONGenerator(library_.get());
+        auto out = json_generator.Produce();
+        return out.str();
     }
 
     bool AddSourceFile(const std::string& filename, const std::string& raw_source_code) {
@@ -104,7 +110,7 @@ private:
     fidl::ErrorReporter error_reporter_;
     fidl::Lexer lexer_;
     fidl::Parser parser_;
-    std::map<std::vector<fidl::StringView>, std::unique_ptr<fidl::flat::Library>> compiled_libraries_;
+    fidl::flat::Libraries all_libraries_;
     std::unique_ptr<fidl::flat::Library> library_;
 };
 

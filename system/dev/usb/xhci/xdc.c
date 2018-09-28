@@ -38,8 +38,8 @@
 #define OUT_EP_ADDR            0x01
 #define IN_EP_ADDR             0x81
 
-#define MAX_REQS               10
-#define MAX_REQ_SIZE           4096
+#define MAX_REQS               30
+#define MAX_REQ_SIZE           (16 * 1024)
 
 typedef struct xdc_instance {
     zx_device_t* zxdev;
@@ -727,11 +727,12 @@ static zx_status_t xdc_write(xdc_t* xdc, uint32_t stream_id, const void* buf, si
     };
     usb_request_t* req = usb_request_pool_get(&xdc->free_write_reqs, header.total_length);
     if (!req) {
-        zx_status_t status = usb_request_alloc(&req, xdc->bti_handle,
-                                               header.total_length, OUT_EP_ADDR);
+        zx_status_t status = usb_request_alloc(&req, header.total_length, OUT_EP_ADDR);
         if (status != ZX_OK) {
             goto out;
         }
+        req->complete_cb = xdc_write_complete;
+        req->cookie = xdc;
     }
 
     usb_request_copyto(req, &header, header_len, 0);
@@ -1198,7 +1199,7 @@ static zx_status_t xdc_init_internal(xdc_t* xdc) {
     // Allocate the usb requests for write / read.
     for (int i = 0; i < MAX_REQS; i++) {
         usb_request_t* req;
-        zx_status_t status = usb_request_alloc(&req, xdc->bti_handle, MAX_REQ_SIZE, OUT_EP_ADDR);
+        zx_status_t status = usb_request_alloc(&req, MAX_REQ_SIZE, OUT_EP_ADDR);
         if (status != ZX_OK) {
             zxlogf(ERROR, "xdc failed to alloc write usb requests, err: %d\n", status);
             return status;
@@ -1209,7 +1210,7 @@ static zx_status_t xdc_init_internal(xdc_t* xdc) {
     }
     for (int i = 0; i < MAX_REQS; i++) {
         usb_request_t* req;
-        zx_status_t status = usb_request_alloc(&req, xdc->bti_handle, MAX_REQ_SIZE, IN_EP_ADDR);
+        zx_status_t status = usb_request_alloc(&req, MAX_REQ_SIZE, IN_EP_ADDR);
         if (status != ZX_OK) {
             zxlogf(ERROR, "xdc failed to alloc read usb requests, err: %d\n", status);
             return status;

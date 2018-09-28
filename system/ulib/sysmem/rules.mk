@@ -11,6 +11,8 @@ MODULE_TYPE := userlib
 MODULE_SRCS := \
     $(LOCAL_DIR)/sysmem.cpp
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_FIDL_LIBS := \
     system/fidl/fuchsia-sysmem
 
@@ -20,10 +22,13 @@ MODULE_HEADER_DEPS := \
 MODULE_STATIC_LIBS := \
     system/ulib/async \
     system/ulib/fidl \
+    system/ulib/fbl \
+    system/ulib/zx \
 
 MODULE_LIBS := \
-    system/ulib/fdio \
     system/ulib/c \
+    system/ulib/fdio \
+    system/ulib/syslog \
     system/ulib/zircon
 
 include make/module.mk

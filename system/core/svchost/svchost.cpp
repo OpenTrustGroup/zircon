@@ -104,7 +104,6 @@ zx_status_t publish_tracelink(const fbl::RefPtr<fs::PseudoDir>& dir) {
 static constexpr const char* deprecated_services[] = {
     // remove amber.Control when CP-50 is resolved
     "fuchsia.amber.Control",
-    "fuchsia.cobalt.EncoderFactory",
     "fuchsia.cobalt.LoggerFactory",
     "fuchsia.devicesettings.DeviceSettingsManager",
     "fuchsia.logger.Log",
@@ -121,9 +120,6 @@ static constexpr const char* deprecated_services[] = {
     "fuchsia.sys.Environment",
     "fuchsia.sys.Launcher",
     "fuchsia.wlan.service.Wlan",
-    // fdio name for Netstack. Will be removed with the new interfaces defined
-    // in NET-863.
-    "net.Netstack",
     // TODO(IN-458): This entry is temporary, until IN-458 is resolved.
     "fuchsia.tracing.TraceController",
     nullptr,

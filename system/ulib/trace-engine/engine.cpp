@@ -4,6 +4,7 @@
 
 #include <trace-engine/handler.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #include <zircon/assert.h>
@@ -60,8 +61,9 @@ trace_handler_t* g_handler{nullptr};
 struct Observer {
     // The event handle that we notify the observer through.
     zx_handle_t event;
-    // Set to true when the observer has notified us it has updated its
-    // state after being notified tracing has started.
+    // Set to true when the engine starts to indicate we're waiting for this
+    // observer to call us back, via |trace_notify_observer_updated()|, that
+    // it has started. When it does call us back this is set back to false.
     bool awaiting_update_after_start;
 };
 fbl::Vector<Observer> g_observers __TA_GUARDED(g_engine_mutex);
@@ -291,8 +293,8 @@ void trace_engine_request_save_buffer(uint32_t wrapped_count,
         if (context) {
             auto tcontext = reinterpret_cast<trace_context_t*>(context);
             tcontext->HandleSaveRollingBufferRequest(wrapped_count, durable_data_end);
+            trace_release_prolonged_context(context);
         }
-        trace_release_prolonged_context(context);
     });
 }
 
@@ -369,6 +371,9 @@ void handle_context_released(async_dispatcher_t* dispatcher) {
 
         // After this point, it's possible for the engine to be restarted.
         g_state.store(TRACE_STOPPED, fbl::memory_order_relaxed);
+
+        // Notify observers that the state changed.
+        notify_observers_locked();
     }
 
     // Notify the handler about the final disposition.
@@ -401,14 +406,15 @@ void handle_hard_shutdown(async_dispatcher_t* dispatcher) {
 
     // Uh oh.
     auto context_refs = g_context_refs.load(fbl::memory_order_relaxed);
-    printf("Timed out waiting for %u buffer, %u prolonged trace context\n"
-           "references (raw 0x%x) to be released after %lu ns\n"
-           "while the asynchronous dispatcher was shutting down.\n"
-           "Tracing will no longer be available in this process.",
-           get_buffer_context_refs(context_refs),
-           get_prolonged_context_refs(context_refs),
-           context_refs,
-           kSynchronousShutdownTimeout.get());
+    fprintf(stderr,
+            "TraceEngine: Timed out waiting for %u buffer, %u prolonged trace context\n"
+            "references (raw 0x%x) to be released after %lu ns\n"
+            "while the asynchronous dispatcher was shutting down.\n"
+            "Tracing will no longer be available in this process.",
+            get_buffer_context_refs(context_refs),
+            get_prolonged_context_refs(context_refs),
+            context_refs,
+            kSynchronousShutdownTimeout.get());
 }
 
 void handle_event(async_dispatcher_t* dispatcher, async_wait_t* wait,

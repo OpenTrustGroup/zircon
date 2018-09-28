@@ -5,14 +5,14 @@
 #pragma once
 
 #include "display-device.h"
+#include <ddk/protocol/i2c-impl.h>
 
 namespace i915 {
 
 class GMBusI2c {
 public:
     GMBusI2c(registers::Ddi ddi);
-    zx_status_t I2cTransact(uint32_t index, const uint8_t* write_buf,
-                            uint8_t write_length, uint8_t* read_buf, uint8_t read_length);
+    zx_status_t I2cTransact(i2c_impl_op_t* ops, size_t count);
 
     void set_mmio_space(hwreg::RegisterIo* mmio_space) {
         fbl::AutoLock lock(&lock_);
@@ -46,6 +46,8 @@ private:
     bool PipeConfigEpilogue(const display_mode_t& mode,
                             registers::Pipe pipe, registers::Trans trans) final;
     bool ComputeDpllState(uint32_t pixel_clock_10khz, struct dpll_state* config) final;
+    // Hdmi doesn't need the clock rate when chaning the transcoder
+    uint32_t LoadClockRateForTranscoder(registers::Trans transcoder) final { return 0; }
 
     bool CheckPixelRate(uint64_t pixel_rate) final;
 

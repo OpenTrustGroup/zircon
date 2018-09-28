@@ -21,12 +21,12 @@ zx_status_t Vnode::Serve(fs::Vfs* vfs, zx::channel channel, uint32_t flags) {
 }
 
 zx_status_t Vnode::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
-                              zxrio_object_info_t* extra) {
-    *type = FDIO_PROTOCOL_SERVICE;
+                              zxrio_node_info_t* extra) {
+    *type = fuchsia_io_NodeInfoTag_service;
     return ZX_OK;
 }
 
-zx_status_t Vnode::WatchDir(Vfs* vfs, const vfs_watch_dir_t* cmd) {
+zx_status_t Vnode::WatchDir(Vfs* vfs, uint32_t mask, uint32_t options, zx::channel watcher) {
     return ZX_ERR_NOT_SUPPORTED;
 }
 #endif
@@ -77,11 +77,6 @@ zx_status_t Vnode::Create(fbl::RefPtr<Vnode>* out, fbl::StringPiece name, uint32
     return ZX_ERR_NOT_SUPPORTED;
 }
 
-zx_status_t Vnode::Ioctl(uint32_t op, const void* in_buf, size_t in_len,
-                         void* out_buf, size_t out_len, size_t* out_actual) {
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
 zx_status_t Vnode::Unlink(fbl::StringPiece name, bool must_be_dir) {
     return ZX_ERR_NOT_SUPPORTED;
 }
@@ -109,6 +104,15 @@ void Vnode::Sync(SyncCallback closure) {
 }
 
 #ifdef __Fuchsia__
+
+zx_status_t Vnode::QueryFilesystem(fuchsia_io_FilesystemInfo* out) {
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t Vnode::GetDevicePath(size_t buffer_len, char* out_name, size_t* out_len) {
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
 zx_status_t Vnode::AttachRemote(MountChannel h) {
     return ZX_ERR_NOT_SUPPORTED;
 }
@@ -133,21 +137,17 @@ void Vnode::SetRemote(zx::channel remote) {
 DirentFiller::DirentFiller(void* ptr, size_t len)
     : ptr_(static_cast<char*>(ptr)), pos_(0), len_(len) {}
 
-zx_status_t DirentFiller::Next(fbl::StringPiece name, uint32_t type) {
+zx_status_t DirentFiller::Next(fbl::StringPiece name, uint8_t type, uint64_t ino) {
     vdirent_t* de = reinterpret_cast<vdirent_t*>(ptr_ + pos_);
-    size_t sz = sizeof(vdirent_t) + name.length() + 1;
+    size_t sz = sizeof(vdirent_t) + name.length();
 
-    // round up to uint32 aligned
-    if (sz & 3) {
-        sz = (sz + 3) & (~3);
-    }
-    if (sz > len_ - pos_) {
+    if (sz > len_ - pos_ || name.length() > NAME_MAX) {
         return ZX_ERR_INVALID_ARGS;
     }
-    de->size = static_cast<uint32_t>(sz);
+    de->ino = ino;
+    de->size = static_cast<uint8_t>(name.length());
     de->type = type;
     memcpy(de->name, name.data(), name.length());
-    de->name[name.length()] = 0;
     pos_ += sz;
     return ZX_OK;
 }

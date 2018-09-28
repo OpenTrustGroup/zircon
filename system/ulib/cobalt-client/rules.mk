@@ -8,10 +8,13 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_SRCS += \
+    $(LOCAL_DIR)/collector.cpp \
     $(LOCAL_DIR)/counter.cpp \
     $(LOCAL_DIR)/histogram.cpp \
-    $(LOCAL_DIR)/observation_buffer.cpp \
+    $(LOCAL_DIR)/event_buffer.cpp \
 
 MODULE_STATIC_LIBS := \
     system/ulib/fbl \

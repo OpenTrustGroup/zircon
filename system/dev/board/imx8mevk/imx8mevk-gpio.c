@@ -7,10 +7,10 @@
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
 
+#include <limits.h>
+#include <soc/imx8m/imx8m-gpio.h>
 #include <soc/imx8m/imx8m-hw.h>
 #include <soc/imx8m/imx8m-iomux.h>
-#include <soc/imx8m/imx8m-gpio.h>
-#include <limits.h>
 
 #include "imx8mevk.h"
 
@@ -41,8 +41,7 @@ static const pbus_mmio_t gpio_mmios[] = {
     {
         .base = IMX8M_AIPS_IOMUXC_BASE,
         .length = IMX8M_AIPS_LENGTH,
-    }
-};
+    }};
 
 static const pbus_irq_t gpio_irqs[] = {
     {
@@ -99,13 +98,13 @@ static pbus_dev_t gpio_dev = {
 };
 
 zx_status_t imx8m_gpio_init(imx8mevk_bus_t* bus) {
-    zx_status_t status = pbus_protocol_device_add(&bus->pbus, ZX_PROTOCOL_GPIO, &gpio_dev);
+    zx_status_t status = pbus_protocol_device_add(&bus->pbus, ZX_PROTOCOL_GPIO_IMPL, &gpio_dev);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: pbus_protocol_device_add failed %d\n", __FUNCTION__, status);
         return status;
     }
 
-    status = device_get_protocol(bus->parent, ZX_PROTOCOL_GPIO, &bus->gpio);
+    status = device_get_protocol(bus->parent, ZX_PROTOCOL_GPIO_IMPL, &bus->gpio);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s: device_get_protocol failed %d\n", __FUNCTION__, status);
         return status;
@@ -119,7 +118,7 @@ zx_status_t imx8m_gpio_init(imx8mevk_bus_t* bus) {
         },
         {
             // I2C SDA Pin
-            .gpio = IMX_GPIO_PIN(5,17),
+            .gpio = IMX_GPIO_PIN(5, 17),
         },
     };
 

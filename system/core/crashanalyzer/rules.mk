@@ -12,7 +12,8 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/crashanalyzer.cpp
 
 MODULE_FIDL_LIBS := \
-    system/fidl/fuchsia-crash
+    system/fidl/fuchsia-crash \
+    system/fidl/fuchsia-mem \
 
 MODULE_HEADER_DEPS := \
     system/ulib/svc \
@@ -25,6 +26,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/fidl \
     system/ulib/pretty \
     system/ulib/runtime \
+    system/ulib/zircon-internal \
     system/ulib/zxcpp
 
 MODULE_LIBS := \

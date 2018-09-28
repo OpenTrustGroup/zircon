@@ -91,15 +91,15 @@ void PmmNode::AddFreePages(list_node* list) TA_NO_THREAD_SAFETY_ANALYSIS {
     LTRACEF("free count now %" PRIu64 "\n", free_count_);
 }
 
-vm_page_t* PmmNode::AllocPage(uint alloc_flags, paddr_t* pa) {
+zx_status_t PmmNode::AllocPage(uint alloc_flags, vm_page_t** page_out, paddr_t* pa_out) {
     Guard<fbl::Mutex> guard{&lock_};
 
     vm_page* page = list_remove_head_type(&free_list_, vm_page, queue_node);
-    if (!page)
-        return nullptr;
+    if (!page) {
+        return ZX_ERR_NO_MEMORY;
+    }
 
     DEBUG_ASSERT(free_count_ > 0);
-
     free_count_--;
 
     DEBUG_ASSERT(page->is_free());
@@ -110,31 +110,38 @@ vm_page_t* PmmNode::AllocPage(uint alloc_flags, paddr_t* pa) {
     CheckFreeFill(page);
 #endif
 
-    if (pa) {
-        *pa = page->paddr();
+    if (pa_out) {
+        *pa_out = page->paddr();
+    }
+
+    if (page_out) {
+        *page_out = page;
     }
 
     LTRACEF("allocating page %p, pa %#" PRIxPTR "\n", page, page->paddr());
 
-    return page;
+    return ZX_OK;
 }
 
-size_t PmmNode::AllocPages(size_t count, uint alloc_flags, list_node* list) {
+zx_status_t PmmNode::AllocPages(size_t count, uint alloc_flags, list_node* list) {
     LTRACEF("count %zu\n", count);
 
     // list must be initialized prior to calling this
     DEBUG_ASSERT(list);
 
-    if (count == 0)
-        return 0;
+    if (unlikely(count == 0)) {
+        return ZX_OK;
+    }
 
     Guard<fbl::Mutex> guard{&lock_};
 
-    size_t allocated = 0;
-    while (allocated < count) {
+    while (count > 0) {
         vm_page* page = list_remove_head_type(&free_list_, vm_page, queue_node);
-        if (!page)
-            return allocated;
+        if (unlikely(!page)) {
+            // free pages that have already been allocated
+            FreeListLocked(list);
+            return ZX_ERR_NO_MEMORY;
+        }
 
         LTRACEF("allocating page %p, pa %#" PRIxPTR "\n", page, page->paddr());
 
@@ -150,18 +157,21 @@ size_t PmmNode::AllocPages(size_t count, uint alloc_flags, list_node* list) {
         page->state = VM_PAGE_STATE_ALLOC;
         list_add_tail(list, &page->queue_node);
 
-        allocated++;
+        count--;
     }
 
-    return allocated;
+    return ZX_OK;
 }
 
-size_t PmmNode::AllocRange(paddr_t address, size_t count, list_node* list) {
+zx_status_t PmmNode::AllocRange(paddr_t address, size_t count, list_node* list) {
     LTRACEF("address %#" PRIxPTR ", count %zu\n", address, count);
+
+    // list must be initialized prior to calling this
+    DEBUG_ASSERT(list);
 
     size_t allocated = 0;
     if (count == 0)
-        return 0;
+        return ZX_OK;
 
     address = ROUNDDOWN(address, PAGE_SIZE);
 
@@ -181,8 +191,7 @@ size_t PmmNode::AllocRange(paddr_t address, size_t count, list_node* list) {
 
             page->state = VM_PAGE_STATE_ALLOC;
 
-            if (list)
-                list_add_tail(list, &page->queue_node);
+            list_add_tail(list, &page->queue_node);
 
             allocated++;
             address += PAGE_SIZE;
@@ -193,19 +202,27 @@ size_t PmmNode::AllocRange(paddr_t address, size_t count, list_node* list) {
             break;
     }
 
-    LTRACEF("returning allocated count %zu\n", allocated);
+    if (allocated != count) {
+        // we were not able to allocate the entire run, free these pages
+        FreeListLocked(list);
+        return ZX_ERR_NOT_FOUND;
+    }
 
-    return allocated;
+    return ZX_OK;
 }
 
-size_t PmmNode::AllocContiguous(const size_t count, uint alloc_flags, uint8_t alignment_log2,
+zx_status_t PmmNode::AllocContiguous(const size_t count, uint alloc_flags, uint8_t alignment_log2,
                                 paddr_t* pa, list_node* list) {
     LTRACEF("count %zu, align %u\n", count, alignment_log2);
 
     if (count == 0)
-        return 0;
+        return ZX_OK;
     if (alignment_log2 < PAGE_SIZE_SHIFT)
         alignment_log2 = PAGE_SIZE_SHIFT;
+
+    // pa and list must be valid pointers
+    DEBUG_ASSERT(pa);
+    DEBUG_ASSERT(list);
 
     Guard<fbl::Mutex> guard{&lock_};
 
@@ -214,8 +231,7 @@ size_t PmmNode::AllocContiguous(const size_t count, uint alloc_flags, uint8_t al
         if (!p)
             continue;
 
-        if (pa)
-            *pa = p->paddr();
+        *pa = p->paddr();
 
         // remove the pages from the run out of the free list
         for (size_t i = 0; i < count; i++, p++) {
@@ -233,59 +249,18 @@ size_t PmmNode::AllocContiguous(const size_t count, uint alloc_flags, uint8_t al
             CheckFreeFill(p);
 #endif
 
-            if (list)
-                list_add_tail(list, &p->queue_node);
+            list_add_tail(list, &p->queue_node);
         }
 
-        return count;
+        return ZX_OK;
     }
 
     LTRACEF("couldn't find run\n");
-    return 0;
+    return ZX_ERR_NOT_FOUND;
 }
 
-size_t PmmNode::Free(list_node* list) {
-    LTRACEF("list %p\n", list);
-
-    DEBUG_ASSERT(list);
-
-    Guard<fbl::Mutex> guard{&lock_};
-
-    uint count = 0;
-    while (!list_is_empty(list)) {
-        vm_page* page = list_remove_head_type(list, vm_page, queue_node);
-
-        LTRACEF("page %p state %u\n", page, page->state);
-        DEBUG_ASSERT(page->state != VM_PAGE_STATE_OBJECT || page->object.pin_count == 0);
-        DEBUG_ASSERT(!page->is_free());
-
-#if PMM_ENABLE_FREE_FILL
-        FreeFill(page);
-#endif
-
-        // remove it from its old queue
-        if (list_in_list(&page->queue_node))
-            list_delete(&page->queue_node);
-
-        // mark it free
-        page->state = VM_PAGE_STATE_FREE;
-
-        // add it to the free queue
-        list_add_head(&free_list_, &page->queue_node);
-
-        free_count_++;
-        count++;
-    }
-
-    LTRACEF("returning count %u\n", count);
-
-    return count;
-}
-
-void PmmNode::Free(vm_page* page) {
-    LTRACEF("page %p, pa %#" PRIxPTR "\n", page, page->paddr());
-
-    Guard<fbl::Mutex> guard{&lock_};
+void PmmNode::FreePageLocked(vm_page* page) {
+    LTRACEF("page %p state %u paddr %#" PRIxPTR "\n", page, page->state, page->paddr());
 
     DEBUG_ASSERT(page->state != VM_PAGE_STATE_OBJECT || page->object.pin_count == 0);
     DEBUG_ASSERT(!page->is_free());
@@ -305,6 +280,28 @@ void PmmNode::Free(vm_page* page) {
     list_add_head(&free_list_, &page->queue_node);
 
     free_count_++;
+}
+
+void PmmNode::FreePage(vm_page* page) {
+    Guard<fbl::Mutex> guard{&lock_};
+
+    FreePageLocked(page);
+}
+
+void PmmNode::FreeListLocked(list_node* list) {
+    DEBUG_ASSERT(list);
+
+    while (!list_is_empty(list)) {
+        vm_page* page = list_remove_head_type(list, vm_page, queue_node);
+
+        FreePageLocked(page);
+    }
+}
+
+void PmmNode::FreeList(list_node* list) {
+    Guard<fbl::Mutex> guard{&lock_};
+
+    FreeListLocked(list);
 }
 
 // okay if accessed outside of a lock

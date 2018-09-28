@@ -5,9 +5,10 @@
 #include <ddk/binding.h>
 #include <ddk/debug.h>
 #include <ddk/device.h>
+#include <ddk/protocol/usb-composite.h>
 #include <ddk/usb/usb.h>
 #include <lib/sync/completion.h>
-#include <zircon/device/usb.h>
+#include <zircon/device/usb-device.h>
 #include <zircon/device/usb-tester.h>
 #include <zircon/hw/usb.h>
 
@@ -360,15 +361,7 @@ static zx_status_t usb_tester_isoch_loopback(usb_tester_t* usb_tester,
     }
 
     // Find the current frame so we can schedule OUT and IN requests to start simultaneously.
-    uint64_t frame;
-    size_t read_len;
-    status = device_ioctl(usb_tester->parent, IOCTL_USB_GET_CURRENT_FRAME,
-                          NULL, 0, &frame, sizeof(frame), &read_len);
-    if (status != ZX_OK || read_len != sizeof(frame)) {
-        zxlogf(ERROR, "failed to get frame, err: %d, read %lu, want %lu\n",
-               status, read_len, sizeof(frame));
-        goto done;
-    }
+    uint64_t frame = usb_get_current_frame(&usb_tester->usb);
     // Adds some delay so we don't miss the scheduled start frame.
     uint64_t start_frame = frame + ISOCH_START_FRAME_DELAY;
     zxlogf(TRACE, "scheduling isoch loopback to start on frame %lu\n", start_frame);
@@ -424,8 +417,17 @@ static zx_status_t usb_tester_ioctl(void* ctx, uint32_t op, const void* in_buf, 
         *out_actual = sizeof(*result);
         return ZX_OK;
     }
+    case IOCTL_USB_GET_DEVICE_DESC: {
+        usb_device_descriptor_t* descriptor = out_buf;
+        if (out_len < sizeof(*descriptor)) {
+            return ZX_ERR_BUFFER_TOO_SMALL;
+        }
+        usb_get_device_descriptor(&usb_tester->usb, descriptor);
+        *out_actual = sizeof(*descriptor);
+        return ZX_OK;
+    }
     default:
-        return device_ioctl(usb_tester->parent, op, in_buf, in_len, out_buf, out_len, out_actual);
+        return ZX_ERR_NOT_SUPPORTED;
     }
 }
 
@@ -469,7 +471,13 @@ static zx_status_t usb_tester_bind(void* ctx, zx_device_t* device) {
     if (status != ZX_OK) {
         goto error_return;
     }
-    status = usb_claim_additional_interfaces(&usb_tester->usb, want_interface, NULL);
+
+    usb_composite_protocol_t usb_composite;
+    status = device_get_protocol(device, ZX_PROTOCOL_USB, &usb_composite);
+    if (status != ZX_OK) {
+        goto error_return;
+    }
+    status = usb_claim_additional_interfaces(&usb_composite, want_interface, NULL);
     if (status != ZX_OK) {
         goto error_return;
     }

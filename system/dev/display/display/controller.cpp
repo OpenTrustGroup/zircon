@@ -5,6 +5,7 @@
 #include <ddk/debug.h>
 #include <fbl/auto_lock.h>
 #include <lib/async/cpp/task.h>
+#include <audio-proto-utils/format-utils.h>
 #include <zircon/device/display-controller.h>
 
 #include "controller.h"
@@ -25,9 +26,15 @@ void on_display_vsync(void* ctx, uint64_t display, zx_time_t timestamp,
                                                            handles, handle_count);
 }
 
+zx_status_t get_audio_format(void* ctx, uint64_t display_id, uint32_t fmt_idx,
+                             audio_stream_format_range_t* fmt_out) {
+    return static_cast<display::Controller*>(ctx)->GetAudioFormat(display_id, fmt_idx, fmt_out);
+}
+
 display_controller_cb_t dc_cb = {
     .on_displays_changed = on_displays_changed,
     .on_display_vsync = on_display_vsync,
+    .get_audio_format = get_audio_format,
 };
 
 typedef struct i2c_bus {
@@ -37,22 +44,15 @@ typedef struct i2c_bus {
 
 edid::ddc_i2c_transact ddc_tx = [](void* ctx, edid::ddc_i2c_msg_t* msgs, uint32_t count) -> bool {
     auto i2c = static_cast<i2c_bus_t*>(ctx);
-    // TODO(ZX-2487): Remove the special casing when the i2c_impl API gets updated
-    if (count == 3) {
-        ZX_ASSERT(!msgs[0].is_read);
-        if (i2c_impl_transact(i2c->i2c, i2c->bus_id,
-                              msgs->addr, msgs->buf, msgs->length, nullptr, 0)) {
-            return false;
-        }
-        msgs++;
+    i2c_impl_op_t ops[count];
+    for (unsigned i = 0; i < count; i++) {
+        ops[i].address = msgs[i].addr;
+        ops[i].buf = msgs[i].buf;
+        ops[i].length = msgs[i].length;
+        ops[i].is_read = msgs[i].is_read;
+        ops[i].stop = i == (count - 1);
     }
-    ZX_ASSERT(!msgs[0].is_read);
-    ZX_ASSERT(msgs[1].is_read);
-    ZX_ASSERT(msgs[0].addr == msgs[1].addr);
-
-    return i2c_impl_transact(i2c->i2c, i2c->bus_id,
-                             msgs[0].addr, msgs[0].buf, msgs[0].length,
-                             msgs[1].buf, msgs[1].length) == ZX_OK;
+    return i2c_impl_transact(i2c->i2c, i2c->bus_id, ops, count) == ZX_OK;
 };
 
 } // namespace
@@ -78,7 +78,7 @@ void Controller::PopulateDisplayMode(const edid::timing_params_t& params, displa
     static_assert(MODE_FLAG_DOUBLE_CLOCKED == edid::timing_params::kDoubleClocked, "");
 }
 
-bool Controller::PopulateDisplayTimings(DisplayInfo* info) {
+void Controller::PopulateDisplayTimings(const fbl::RefPtr<DisplayInfo>& info) {
     // Go through all the display mode timings and record whether or not
     // a basic layer configuration is acceptable.
     layer_t test_layer = {};
@@ -91,12 +91,12 @@ bool Controller::PopulateDisplayTimings(DisplayInfo* info) {
     test_config.layer_count = 1;
     test_config.layers = test_layers;
 
-    for (auto timing : info->edid) {
-        uint32_t width = timing.horizontal_addressable;
-        uint32_t height = timing.vertical_addressable;
+    for (auto timing = edid::timing_iterator(&info->edid); timing.is_valid(); ++timing) {
+        uint32_t width = timing->horizontal_addressable;
+        uint32_t height = timing->vertical_addressable;
         bool duplicate = false;
         for (auto& existing_timing : info->edid_timings) {
-            if (existing_timing.vertical_refresh_e2 == timing.vertical_refresh_e2
+            if (existing_timing.vertical_refresh_e2 == timing->vertical_refresh_e2
                     && existing_timing.horizontal_addressable == width
                     && existing_timing.vertical_addressable == height) {
                 duplicate = true;
@@ -110,7 +110,7 @@ bool Controller::PopulateDisplayTimings(DisplayInfo* info) {
             test_layer.cfg.primary.src_frame.height = height;
             test_layer.cfg.primary.dest_frame.width = width;
             test_layer.cfg.primary.dest_frame.height = height;
-            PopulateDisplayMode(timing, &test_config.mode);
+            PopulateDisplayMode(*timing, &test_config.mode);
 
             uint32_t display_cfg_result;
             uint32_t layer_result = 0;
@@ -119,7 +119,7 @@ bool Controller::PopulateDisplayTimings(DisplayInfo* info) {
                                           display_layer_results, 1);
             if (display_cfg_result == CONFIG_DISPLAY_OK) {
                 fbl::AllocChecker ac;
-                info->edid_timings.push_back(timing, &ac);
+                info->edid_timings.push_back(*timing, &ac);
                 if (!ac.check()) {
                     zxlogf(WARN, "Edid skip allocation failed\n");
                     break;
@@ -127,24 +127,120 @@ bool Controller::PopulateDisplayTimings(DisplayInfo* info) {
             }
         }
     }
+}
 
-    // It's possible that the display could be removed after the mutex is unlocked, but
-    // that gets taken care of with the disconnect hotplug event.
-    bool res = !info->edid_timings.is_empty();
-    return res;
+void Controller::PopulateDisplayAudio(const fbl::RefPtr<DisplayInfo>& info) {
+    fbl::AllocChecker ac;
+
+    // Displays which support any audio are required to support basic
+    // audio, so just bail if that bit isn't set.
+    if (!info->edid.supports_basic_audio()) {
+        return;
+    }
+
+    // TODO(ZX-2607): Revisit dedupe/merge logic once the audio API takes a stance. First, this
+    // code always adds the basic audio formats before processing the SADs, which is likely
+    // redundant on some hardware (the spec isn't clear about whether or not the basic audio formats
+    // should also be included in the SADs). Second, this code assumes that the SADs are compact
+    // and not redundant, which is not guaranteed.
+
+    // Add the range for basic audio support.
+    audio_stream_format_range_t range;
+    range.min_channels = 2;
+    range.max_channels = 2;
+    range.sample_formats = AUDIO_SAMPLE_FORMAT_16BIT;
+    range.min_frames_per_second = 32000;
+    range.max_frames_per_second = 48000;
+    range.flags = ASF_RANGE_FLAG_FPS_48000_FAMILY | ASF_RANGE_FLAG_FPS_44100_FAMILY;
+
+    info->edid_audio_.push_back(range, &ac);
+    if (!ac.check()) {
+        zxlogf(ERROR, "Out of memory attempting to construct supported format list.\n");
+        return;
+    }
+
+    for (auto it = edid::audio_data_block_iterator(&info->edid); it.is_valid(); ++it) {
+        if (it->format() != edid::ShortAudioDescriptor::kLPcm)  {
+            // TODO(stevensd): Add compressed formats when audio format supports it
+            continue;
+        }
+        audio_stream_format_range_t range;
+
+        constexpr audio_sample_format_t zero_format = static_cast<audio_sample_format_t>(0);
+        range.sample_formats = static_cast<audio_sample_format_t>(
+            (it->lpcm_24() ? AUDIO_SAMPLE_FORMAT_24BIT_PACKED | AUDIO_SAMPLE_FORMAT_24BIT_IN32
+                           : zero_format)
+            | (it->lpcm_20() ? AUDIO_SAMPLE_FORMAT_20BIT_PACKED | AUDIO_SAMPLE_FORMAT_20BIT_IN32
+                           : zero_format)
+            | (it->lpcm_16() ? AUDIO_SAMPLE_FORMAT_16BIT : zero_format));
+
+        range.min_channels = 1;
+        range.max_channels = static_cast<uint8_t>(it->num_channels_minus_1() + 1);
+
+        // Now build continuous ranges of sample rates in the each family
+        static constexpr struct {
+            const uint32_t flag, val;
+        } kRateLut[7] = {
+            { edid::ShortAudioDescriptor::kHz32,   32000 },
+            { edid::ShortAudioDescriptor::kHz44,   44100 },
+            { edid::ShortAudioDescriptor::kHz48,   48000 },
+            { edid::ShortAudioDescriptor::kHz88,   88200 },
+            { edid::ShortAudioDescriptor::kHz96,   96000 },
+            { edid::ShortAudioDescriptor::kHz176, 176400 },
+            { edid::ShortAudioDescriptor::kHz192, 192000 },
+        };
+
+        for (uint32_t i = 0; i < fbl::count_of(kRateLut); ++i) {
+            if (!(it->sampling_frequencies & kRateLut[i].flag)) {
+                continue;
+            }
+            range.min_frames_per_second = kRateLut[i].val;
+
+            if (audio::utils::FrameRateIn48kFamily(kRateLut[i].val)) {
+                range.flags = ASF_RANGE_FLAG_FPS_48000_FAMILY;
+            } else {
+                range.flags = ASF_RANGE_FLAG_FPS_44100_FAMILY;
+            }
+
+            // We found the start of a range.  At this point, we are guaranteed
+            // to add at least one new entry into the set of format ranges.
+            // Find the end of this range.
+            uint32_t j;
+            for (j = i + 1; j < fbl::count_of(kRateLut); ++j) {
+                if (!(it->bitrate & kRateLut[j].flag)) {
+                    break;
+                }
+
+                if (audio::utils::FrameRateIn48kFamily(kRateLut[j].val)) {
+                    range.flags |= ASF_RANGE_FLAG_FPS_48000_FAMILY;
+                } else {
+                    range.flags |= ASF_RANGE_FLAG_FPS_44100_FAMILY;
+                }
+            }
+
+            i = j - 1;
+            range.max_frames_per_second = kRateLut[i].val;
+
+            info->edid_audio_.push_back(range, &ac);
+            if (!ac.check()) {
+                zxlogf(ERROR, "Out of memory attempting to construct supported format list.\n");
+                return;
+            }
+        }
+    }
 }
 
 void Controller::OnDisplaysChanged(added_display_args_t* displays_added, uint32_t added_count,
                                    uint64_t* displays_removed, uint32_t removed_count) {
-    fbl::unique_ptr<fbl::unique_ptr<DisplayInfo>[]> added_success;
+    fbl::unique_ptr<fbl::RefPtr<DisplayInfo>[]> added_success;
     fbl::unique_ptr<uint64_t[]> removed;
     fbl::unique_ptr<async::Task> task;
     uint32_t added_success_count = 0;
 
     fbl::AllocChecker ac;
     if (added_count) {
-        added_success = fbl::unique_ptr<fbl::unique_ptr<DisplayInfo>[]>(
-                new (&ac) fbl::unique_ptr<DisplayInfo>[added_count]);
+        added_success = fbl::unique_ptr<fbl::RefPtr<DisplayInfo>[]>(
+                new (&ac) fbl::RefPtr<DisplayInfo>[added_count]);
         if (!ac.check()) {
             zxlogf(ERROR, "No memory when processing hotplug\n");
             return;
@@ -166,9 +262,23 @@ void Controller::OnDisplaysChanged(added_display_args_t* displays_added, uint32_
 
     fbl::AutoLock lock(&mtx_);
 
+    for (unsigned i = 0; i < removed_count; i++) {
+        auto target = displays_.erase(displays_removed[i]);
+        if (target) {
+            image_node_t* n;
+            while ((n = list_remove_head_type(&target->images, image_node_t, link))) {
+                n->self->StartRetire();
+                n->self->OnRetire();
+                n->self.reset();
+            }
+        } else {
+            zxlogf(TRACE, "Unknown display %ld removed\n", displays_removed[i]);
+        }
+    }
+
     for (unsigned i = 0; i < added_count; i++) {
         fbl::AllocChecker ac, ac2;
-        fbl::unique_ptr<DisplayInfo> info = fbl::make_unique_checked<DisplayInfo>(&ac);
+        fbl::RefPtr<DisplayInfo> info = fbl::AdoptRef(new (&ac) DisplayInfo);
         if (!ac.check()) {
             zxlogf(INFO, "Out of memory when processing display hotplug\n");
             break;
@@ -196,26 +306,7 @@ void Controller::OnDisplaysChanged(added_display_args_t* displays_added, uint32_
                display_params.cursor_info_count * sizeof(cursor_info_t));
 
         info->has_edid = display_params.edid_present;
-        if (info->has_edid && display_params.panel.edid.data) {
-            // TODO(stevensd): Remove this branch when vim2 is moved to i2c ops
-            info->edid_data_ = fbl::Array<uint8_t>(
-                    new (&ac) uint8_t[display_params.panel.edid.length],
-                    display_params.panel.edid.length);
-            if (!ac.check()) {
-                zxlogf(INFO, "Out of memory when processing display hotplug\n");
-                break;
-            }
-            memcpy(info->edid_data_.get(),
-                   display_params.panel.edid.data,
-                   display_params.panel.edid.length);
-
-            const char* edid_err = "No preferred timing";
-            if (!info->edid.Init(info->edid_data_.get(),
-                                 static_cast<uint16_t>(info->edid_data_.size()), &edid_err)) {
-                zxlogf(TRACE, "Failed to parse edid \"%s\"\n", edid_err);
-                continue;
-            }
-        } else if (info->has_edid) {
+        if (info->has_edid) {
             if (!has_i2c_ops_) {
                 zxlogf(ERROR, "Presented edid display with no i2c bus\n");
                 continue;
@@ -234,12 +325,8 @@ void Controller::OnDisplaysChanged(added_display_args_t* displays_added, uint32_
                 }
                 edid_attempt++;
 
-                struct i2c_bus i2c = { &i2c_ops_, display_params.panel.edid.i2c_bus_id };
+                struct i2c_bus i2c = { &i2c_ops_, display_params.panel.i2c_bus_id };
                 success = info->edid.Init(&i2c, ddc_tx, &edid_err);
-                if (success && !info->edid.CheckForHdmi(&display_params.is_hdmi_out)) {
-                    edid_err = "Failed to parse edid for hdmi";
-                    success = false;
-                }
             } while (!success && edid_attempt < kEdidRetries);
 
             if (!success) {
@@ -247,61 +334,72 @@ void Controller::OnDisplaysChanged(added_display_args_t* displays_added, uint32_
                 continue;
             }
 
+            PopulateDisplayAudio(info);
+            if (zxlog_level_enabled_etc(DDK_LOG_TRACE) && info->edid_audio_.size()) {
+                zxlogf(TRACE, "Supported audio formats:\n");
+                for (auto range : info->edid_audio_) {
+                    for (auto rate : audio::utils::FrameRateEnumerator(range)) {
+                        zxlogf(TRACE, "  rate=%d, channels=[%d, %d], sample=%x\n",
+                               rate, range.min_channels, range.max_channels,
+                               range.sample_formats);
+                    }
+                }
+            }
+
+            display_params.is_hdmi_out = info->edid.is_hdmi();
             display_params.is_standard_srgb_out = info->edid.is_standard_rgb();
+            display_params.audio_format_count = static_cast<uint32_t>(info->edid_audio_.size());
+
+            static_assert(sizeof(display_params.monitor_name) ==
+                    sizeof(edid::Descriptor::Monitor::data) + 1, "Possible overflow");
+            static_assert(sizeof(display_params.monitor_name) ==
+                    sizeof(edid::Descriptor::Monitor::data) + 1, "Possible overflow");
+            strcpy(display_params.manufacturer_id, info->edid.manufacturer_id());
+            strcpy(display_params.monitor_name, info->edid.monitor_name());
+            strcpy(display_params.monitor_serial, info->edid.monitor_serial());
+            display_params.manufacturer_name = info->edid.manufacturer_name();
 
             if (zxlog_level_enabled_etc(DDK_LOG_TRACE)) {
-                char c1, c2, c3;
-                info->edid.manufacturer_id(&c1, &c2, &c3);
-                zxlogf(TRACE, "Manufacturer %c%c%c, product %04x\n",
-                       c1, c2, c3, info->edid.product_code());
+                const char* manufacturer = strlen(info->edid.manufacturer_name())
+                        ? info->edid.manufacturer_name() : info->edid.manufacturer_id();
+                zxlogf(TRACE, "Manufacturer \"%s\", product %d, name \"%s\", serial \"%s\"\n",
+                       manufacturer, info->edid.product_code(),
+                       info->edid.monitor_name(), info->edid.monitor_serial());
                 info->edid.Print([](const char* str) {zxlogf(TRACE, "%s", str);});
             }
         } else {
             info->params = display_params.panel.params;
         }
 
-        added_success[added_success_count++] = fbl::move(info);
+        if (displays_.insert_or_find(info)) {
+            added_success[added_success_count++] = fbl::move(info);
+        } else {
+            zxlogf(INFO, "Ignoring duplicate display\n");
+        }
     }
 
     task->set_handler([this,
                        added_ptr = added_success.release(), removed_ptr = removed.release(),
-                       added_success_capture = added_success_count, removed_count]
+                       added_success_count, removed_count]
                        (async_dispatcher_t* dispatcher, async::Task* task, zx_status_t status) {
             if (status == ZX_OK) {
-                uint32_t added_success_count = added_success_capture;
                 for (unsigned i = 0; i < added_success_count; i++) {
-                    if (added_ptr[i]->has_edid
-                            && !PopulateDisplayTimings(added_ptr[i].get())) {
-                        zxlogf(WARN, "Ignoring display with no compatible edid timings\n");
-
-                        added_ptr[i] = fbl::move(added_ptr[--added_success_count]);
-                        i--;
+                    if (added_ptr[i]->has_edid) {
+                        PopulateDisplayTimings(added_ptr[i]);
                     }
                 }
                 fbl::AutoLock lock(&mtx_);
 
-                for (unsigned i = 0; i < removed_count; i++) {
-                    auto target = displays_.erase(removed_ptr[i]);
-                    if (target) {
-                        image_node_t* n;
-                        while ((n = list_remove_head_type(&target->images, image_node_t, link))) {
-                            n->self->StartRetire();
-                            n->self->OnRetire();
-                            n->self.reset();
-                        }
-                    } else {
-                        zxlogf(TRACE, "Unknown display %ld removed\n", removed_ptr[i]);
-                    }
-                }
-
                 uint64_t added_ids[added_success_count];
                 uint32_t final_added_success_count = 0;
                 for (unsigned i = 0; i < added_success_count; i++) {
-                    uint64_t id = added_ptr[i]->id;
-                    if (displays_.insert_or_find(fbl::move(added_ptr[i]))) {
-                        added_ids[final_added_success_count++] = id;
+                    // Dropping some add events can result in spurious removes, but
+                    // those are filtered out in the clients.
+                    if (!added_ptr[i]->has_edid || !added_ptr[i]->edid_timings.is_empty()) {
+                        added_ids[final_added_success_count++] = added_ptr[i]->id;
+                        added_ptr[i]->init_done = true;
                     } else {
-                        zxlogf(INFO, "Ignoring duplicate display\n");
+                        zxlogf(WARN, "Ignoring display with no compatible edid timings\n");
                     }
                 }
 
@@ -437,6 +535,26 @@ void Controller::OnDisplayVsync(uint64_t display_id, zx_time_t timestamp,
             cur->self.reset();
         }
     }
+}
+
+zx_status_t Controller::GetAudioFormat(uint64_t display_id, uint32_t fmt_idx,
+                                       audio_stream_format_range_t* fmt_out) {
+    fbl::AutoLock lock(&mtx_);
+    auto display = displays_.find(display_id);
+    if (!display.IsValid()) {
+        return ZX_ERR_NOT_FOUND;
+    }
+
+    if (!display->has_edid) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
+    if (fmt_idx > display->edid_audio_.size()) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+
+    *fmt_out = display->edid_audio_[fmt_idx];
+    return ZX_OK;
 }
 
 void Controller::ApplyConfig(DisplayConfig* configs[], int32_t count,
@@ -673,7 +791,9 @@ zx_status_t Controller::DdkOpenAt(zx_device_t** dev_out, const char* path, uint3
                         uint64_t current_displays[displays_.size()];
                         int idx = 0;
                         for (const DisplayInfo& display : displays_) {
-                            current_displays[idx++] = display.id;
+                            if (display.init_done) {
+                                current_displays[idx++] = display.id;
+                            }
                         }
                         client_ptr->OnDisplaysChanged(current_displays, idx, nullptr, 0);
                     }

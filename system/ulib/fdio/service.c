@@ -60,6 +60,7 @@ static fdio_ops_t zx_svc_ops = {
     .shutdown = fdio_default_shutdown,
 };
 
+__EXPORT
 fdio_t* fdio_service_create(zx_handle_t h) {
     zxsvc_t* svc = fdio_alloc(sizeof(*svc));
     if (svc == NULL) {
@@ -73,6 +74,7 @@ fdio_t* fdio_service_create(zx_handle_t h) {
     return &svc->io;
 }
 
+__EXPORT
 zx_status_t fdio_get_service_handle(int fd, zx_handle_t* out) {
     mtx_lock(&fdio_lock);
     if ((fd < 0) || (fd >= FDIO_MAX_FD) || (fdio_fdtab[fd] == NULL)) {
@@ -102,8 +104,8 @@ zx_status_t fdio_get_service_handle(int fd, zx_handle_t* out) {
             zxrio_t* rio = (zxrio_t*) io;
             *out = rio->h;
             rio->h = ZX_HANDLE_INVALID;
-            zx_handle_close(rio->h2);
-            rio->h2 = ZX_HANDLE_INVALID;
+            zx_handle_close(rio->event);
+            rio->event = ZX_HANDLE_INVALID;
             r = ZX_OK;
         } else {
             r = ZX_ERR_NOT_SUPPORTED;
@@ -112,4 +114,20 @@ zx_status_t fdio_get_service_handle(int fd, zx_handle_t* out) {
         fdio_release(io);
         return r;
     }
+}
+
+__EXPORT
+zx_handle_t __fdio_borrow_channel(fdio_t* io) {
+    if (io == NULL) {
+        return ZX_HANDLE_INVALID;
+    }
+
+    if (io->ops == &zx_svc_ops) {
+        zxsvc_t* svc = (zxsvc_t*) io;
+        return svc->h;
+    } else if (io->ops == &zx_remote_ops) {
+        zxrio_t* rio = (zxrio_t*) io;
+        return rio->h;
+    }
+    return ZX_HANDLE_INVALID;
 }

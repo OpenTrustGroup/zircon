@@ -9,7 +9,7 @@
 #include <ddk/binding.h>
 #include <ddk/debug.h>
 #include <ddk/device.h>
-#include <ddk/protocol/gpio.h>
+#include <ddk/protocol/gpio-impl.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-defs.h>
 #include <ddk/protocol/platform-device.h>
@@ -22,6 +22,7 @@
 #define GPIO_INTERRUPT_POLARITY_SHIFT   16
 #define MAX_GPIO_INDEX                  255
 #define BITS_PER_GPIO_INTERRUPT         8
+#define BITS_PER_FILTER_SELECT          4
 
 #define READ32_GPIO_REG(index, offset)              readl(io_buffer_virt(&gpio->mmios[index]) + offset*4)
 #define WRITE32_GPIO_REG(index, offset, value)      writel(value, io_buffer_virt(&gpio->mmios[index]) + offset*4)
@@ -61,7 +62,7 @@ typedef struct {
 
 typedef struct {
     platform_device_protocol_t pdev;
-    gpio_protocol_t gpio;
+    gpio_impl_protocol_t gpio;
     zx_device_t* zxdev;
     io_buffer_t mmios[2];    // separate MMIO for AO domain
     io_buffer_t mmio_interrupt;
@@ -357,7 +358,8 @@ static zx_status_t aml_gpio_get_interrupt(void *ctx, uint32_t pin,
 
     // Configure Interrupt Select Filter
     regval = READ32_GPIO_INTERRUPT_REG(interrupt->filter_select_offset);
-    WRITE32_GPIO_INTERRUPT_REG(interrupt->filter_select_offset, regval | (0x7 << index));
+    WRITE32_GPIO_INTERRUPT_REG(interrupt->filter_select_offset,
+                               regval | (0x7 << (index * BITS_PER_FILTER_SELECT)));
     interrupt->irq_status |= 1 << index;
     interrupt->irq_info[index] = pin;
 fail:
@@ -413,7 +415,7 @@ static zx_status_t aml_gpio_set_polarity(void *ctx, uint32_t pin,
     return ZX_OK;
 }
 
-static gpio_protocol_ops_t gpio_ops = {
+static gpio_impl_protocol_ops_t gpio_ops = {
     .config_in = aml_gpio_config_in,
     .config_out = aml_gpio_config_out,
     .set_alt_function = aml_gpio_set_alt_function,
@@ -521,7 +523,7 @@ static zx_status_t aml_gpio_bind(void* ctx, zx_device_t* parent) {
     gpio->gpio_interrupt->irq_status = 0;
     gpio->gpio.ops = &gpio_ops;
     gpio->gpio.ctx = gpio;
-    pbus_register_protocol(&pbus, ZX_PROTOCOL_GPIO, &gpio->gpio, NULL, NULL);
+    pbus_register_protocol(&pbus, ZX_PROTOCOL_GPIO_IMPL, &gpio->gpio, NULL, NULL);
     gpio->gpio_interrupt->irq_info = calloc(gpio->gpio_interrupt->irq_count,
                                      sizeof(uint8_t));
     if (!gpio->gpio_interrupt->irq_info) {

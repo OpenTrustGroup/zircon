@@ -28,18 +28,21 @@
 #define G12A_HIFI_PLL_CNTL3 0x6a285c00
 #define G12A_HIFI_PLL_CNTL4 0x65771290
 #define G12A_HIFI_PLL_CNTL5 0x39272000
+#define G12A_HIFI_PLL_CNTL6 0x56540000
 
 #define G12A_SYS_PLL_CNTL1 0x00000000
 #define G12A_SYS_PLL_CNTL2 0x00000000
 #define G12A_SYS_PLL_CNTL3 0x48681c00
 #define G12A_SYS_PLL_CNTL4 0x88770290
 #define G12A_SYS_PLL_CNTL5 0x39272000
+#define G12A_SYS_PLL_CNTL6 0x56540000
 
 #define G12A_GP0_PLL_CNTL1 0x00000000
 #define G12A_GP0_PLL_CNTL2 0x00000000
 #define G12A_GP0_PLL_CNTL3 0x48681c00
 #define G12A_GP0_PLL_CNTL4 0x33771290
 #define G12A_GP0_PLL_CNTL5 0x39272000
+#define G12A_GP0_PLL_CNTL6 0x56540000
 
 // HHI register offsets (all are 32-bit registers)
 #define HHI_GP0_PLL_CNTL0           (0x10 << 2)
@@ -51,6 +54,7 @@
 #define HHI_HIFI_PLL_CNTL3          (0x39 << 2)
 #define HHI_HIFI_PLL_CNTL4          (0x3a << 2)
 #define HHI_HIFI_PLL_CNTL5          (0x3b << 2)
+#define HHI_HIFI_PLL_CNTL6          (0x3c << 2)
 
 #define HHI_MPLL_CNTL0              (0x9e << 2)
 #define HHI_MPLL_CNTL1              (0x9f << 2)
@@ -76,6 +80,7 @@
 #define HHI_SYS_PLL_CNTL3           (0xc0 << 2)
 #define HHI_SYS_PLL_CNTL4           (0xc1 << 2)
 #define HHI_SYS_PLL_CNTL5           (0xc2 << 2)
+#define HHI_SYS_PLL_CNTL6           (0xc3 << 2)
 
 #define HHI_GP0_PLL_CNTL0           (0x10 << 2)
 #define HHI_GP0_PLL_CNTL1           (0x11 << 2)
@@ -86,6 +91,7 @@
 #define HHI_GP0_PLL_CNTL6           (0x16 << 2)
 
 // HHI PLL register bitfield definitions
+#define HHI_PLL_LOCK           (1 << 31)
 #define HHI_PLL_CNTL0_EN       (1 << 28)
 #define HHI_PLL_CNTL0_RESET    (1 << 29)
 #define HHI_PLL_CNTL0_M_SHIFT  (0)
@@ -175,6 +181,12 @@ zx_status_t s905d2_pll_set_rate(aml_pll_dev_t* pll, uint64_t freq);
     valid divider values have been written to the control registers.
 */
 zx_status_t s905d2_pll_ena(aml_pll_dev_t* pll);
+
+/*
+    Disable the selected pll.  Returns if the pll was actually enabled
+    when the call was made.
+*/
+bool s905d2_pll_disable(aml_pll_dev_t* pll_dev);
 
 /*
     Look for freq in pll rate table.  Returns ZX_ERR_NOT_SUPPORTED if the rate

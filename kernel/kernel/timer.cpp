@@ -283,10 +283,7 @@ bool timer_cancel(timer_t* timer) {
 
     // mark the timer as canceled
     timer->cancel = true;
-    smp_mb();
-
-    // wake up any spinners on the cancel signal
-    arch_spinloop_signal();
+    mb();
 
     // see if we're trying to cancel the timer we're currently in the middle of handling
     if (unlikely(timer->active_cpu == (int)cpu)) {
@@ -405,10 +402,7 @@ void timer_tick(zx_time_t now) {
 
         // mark it not busy
         timer->active_cpu = -1;
-        smp_mb();
-
-        // make sure any spinners wake up
-        arch_spinloop_signal();
+        mb();
     }
 
     // get the deadline of the event at the head of the queue (if any)
@@ -468,6 +462,10 @@ void timer_transition_off_cpu(uint old_cpu) {
         // we just modified the head of the timer queue
         update_platform_timer(cpu, new_head->scheduled_time);
     }
+
+    // the old cpu has no tasks left, so reset the deadlines
+    percpu[old_cpu].preempt_timer_deadline = ZX_TIME_INFINITE;
+    percpu[old_cpu].next_timer_deadline = ZX_TIME_INFINITE;
 }
 
 void timer_thaw_percpu(void) {
@@ -476,6 +474,8 @@ void timer_thaw_percpu(void) {
 
     uint cpu = arch_curr_cpu_num();
 
+    // reset next_timer_deadline so that update_platform_timer will reconfigure the timer
+    percpu[cpu].next_timer_deadline = ZX_TIME_INFINITE;
     zx_time_t deadline = percpu[cpu].preempt_timer_deadline;
 
     timer_t* t = list_peek_head_type(&percpu[cpu].timer_queue, timer_t, node);
@@ -523,7 +523,6 @@ static void dump_timer_queues(char* buf, size_t len) {
     }
 }
 
-#if WITH_LIB_CONSOLE
 #include <lib/console.h>
 
 static int cmd_timers(int argc, const cmd_args* argv, uint32_t flags) {
@@ -549,5 +548,3 @@ STATIC_COMMAND_START
 STATIC_COMMAND_MASKED("timers", "dump the current kernel timer queues", &cmd_timers, CMD_AVAIL_NORMAL)
 #endif
 STATIC_COMMAND_END(kernel);
-
-#endif // WITH_LIB_CONSOLE

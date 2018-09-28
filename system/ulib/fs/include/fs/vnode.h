@@ -15,16 +15,17 @@
 #include <fbl/macros.h>
 #include <fbl/ref_counted_internal.h>
 #include <fbl/ref_ptr.h>
+#include <fs/ref_counted.h>
+#include <fs/vfs.h>
 #include <lib/fdio/io.h>
 #include <lib/fdio/remoteio.h>
 #include <lib/fdio/vfs.h>
-#include <fs/ref_counted.h>
-#include <fs/vfs.h>
 #include <zircon/assert.h>
 #include <zircon/compiler.h>
 #include <zircon/types.h>
 
 #ifdef __Fuchsia__
+#include <fuchsia/io/c/fidl.h>
 #include <lib/zx/channel.h>
 #endif // __Fuchsia__
 
@@ -99,9 +100,9 @@ public:
     // may be returned by this vnode.
     // The usage of this field is dependent on the |type|.
     virtual zx_status_t GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
-                                   zxrio_object_info_t* extra);
+                                   zxrio_node_info_t* extra);
 
-    virtual zx_status_t WatchDir(Vfs* vfs, const vfs_watch_dir_t* cmd);
+    virtual zx_status_t WatchDir(Vfs* vfs, uint32_t mask, uint32_t options, zx::channel watcher);
 #endif
 
     // Closes vn. Will be called once for each successful Open().
@@ -134,11 +135,6 @@ public:
 
     // Set attributes of vn.
     virtual zx_status_t Setattr(const vnattr_t* a);
-
-    // Performs the given ioctl op on vn.
-    // On success, returns the number of bytes received.
-    virtual zx_status_t Ioctl(uint32_t op, const void* in_buf, size_t in_len,
-                              void* out_buf, size_t out_len, size_t* out_actual);
 
     // Acquire a vmo from a vnode.
     //
@@ -196,6 +192,12 @@ public:
     virtual void Notify(fbl::StringPiece name, unsigned event);
 
 #ifdef __Fuchsia__
+    // Return information about the underlying filesystem, if desired.
+    virtual zx_status_t QueryFilesystem(fuchsia_io_FilesystemInfo* out);
+
+    // Returns the name of the device backing the filesystem, if one exists.
+    virtual zx_status_t GetDevicePath(size_t buffer_len, char* out_name, size_t* out_len);
+
     // Attaches a handle to the vnode, if possible. Otherwise, returns an error.
     virtual zx_status_t AttachRemote(MountChannel h);
 
@@ -237,7 +239,7 @@ public:
 
     // Attempts to add the name to the end of the dirent buffer
     // which is returned by readdir.
-    zx_status_t Next(fbl::StringPiece name, uint32_t type);
+    zx_status_t Next(fbl::StringPiece name, uint8_t type, uint64_t ino);
 
     zx_status_t BytesFilled() const {
         return static_cast<zx_status_t>(pos_);

@@ -5,7 +5,7 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
-#if WITH_DEV_PCIE
+#if WITH_KERNEL_PCIE
 #include <dev/interrupt/arm_gicv2m_msi.h>
 #include <dev/pcie_bus_driver.h>
 #include <dev/pcie_platform.h>
@@ -54,22 +54,28 @@ public:
 static void arm_gicv2_pcie_init(const void* driver_data, uint32_t length) {
     ASSERT(length >= sizeof(dcfg_arm_gicv2_driver_t));
     const dcfg_arm_gicv2_driver_t* driver =
-            reinterpret_cast<const dcfg_arm_gicv2_driver_t*>(driver_data);
+        reinterpret_cast<const dcfg_arm_gicv2_driver_t*>(driver_data);
 
-    if (!driver->use_msi)
-        return;
+    // based on whether or not ZBI says we support MSI, initialize the v2m allocator
+    zx_status_t res;
+    bool use_msi;
+    if (driver->use_msi) {
+        dprintf(SPEW, "GICv2 MSI init\n");
 
-    dprintf(SPEW, "GICv2 MSI init\n");
+        // Initialize the MSI allocator
+        res = arm_gicv2m_msi_init();
+        if (res != ZX_OK) {
+            TRACEF("Failed to initialize MSI allocator (res = %d).  PCI will be "
+                   "restricted to legacy IRQ mode.\n",
+                   res);
+        }
+        use_msi = (res == ZX_OK);
+    } else {
+        use_msi = false;
+    }
 
-    /* Initialize the MSI allocator */
-    zx_status_t res = arm_gicv2m_msi_init();
-    if (res != ZX_OK)
-        TRACEF("Failed to initialize MSI allocator (res = %d).  PCI will be "
-               "restricted to legacy IRQ mode.\n",
-               res);
-
-    /* Initialize the PCI platform supported based on whether or not we support MSI */
-    static ArmGicV2PciePlatformSupport platform_pcie_support(res == ZX_OK);
+    // Initialize the PCI platform supported based on whether or not we support MSI
+    static ArmGicV2PciePlatformSupport platform_pcie_support(use_msi);
 
     res = PcieBusDriver::InitializeDriver(platform_pcie_support);
     if (res != ZX_OK) {
@@ -81,4 +87,4 @@ static void arm_gicv2_pcie_init(const void* driver_data, uint32_t length) {
 
 LK_PDEV_INIT(arm_gicv2_pcie_init, KDRV_ARM_GIC_V2, arm_gicv2_pcie_init, LK_INIT_LEVEL_PLATFORM);
 
-#endif // if WITH_DEV_PCIE
+#endif // if WITH_KERNEL_PCIE

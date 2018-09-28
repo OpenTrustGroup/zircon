@@ -945,9 +945,9 @@ static void imx_sdhci_hw_reset(void* ctx) {
 
     mtx_lock(&dev->mtx);
 
-    gpio_write(&dev->gpio, 0, 0);
+    gpio_write(&dev->gpio, 0);
     usleep(10000);
-    gpio_write(&dev->gpio, 0, 1);
+    gpio_write(&dev->gpio, 1);
 
     dev->info.caps |= SDMMC_HOST_CAP_AUTO_CMD12;
 
@@ -1024,7 +1024,7 @@ unlock_out:
 }
 
 /* SDMMC PROTOCOL Implementations: perform_tuning */
-static zx_status_t imx_sdhci_perform_tuning(void* ctx) {
+static zx_status_t imx_sdhci_perform_tuning(void* ctx, uint32_t tuning_cmd_idx) {
     SDHCI_FUNC_ENTRY_LOG;
     imx_sdhci_device_t* dev = ctx;
     uint32_t regVal;
@@ -1032,7 +1032,7 @@ static zx_status_t imx_sdhci_perform_tuning(void* ctx) {
     mtx_lock(&dev->mtx);
 
     sdmmc_req_t req = {
-        .cmd_idx = MMC_SEND_TUNING_BLOCK,
+        .cmd_idx = tuning_cmd_idx,
         .cmd_flags = MMC_SEND_TUNING_BLOCK_FLAGS,
         .arg = 0,
         .blockcount = 0,
@@ -1079,11 +1079,6 @@ static zx_status_t imx_sdhci_perform_tuning(void* ctx) {
    return ZX_OK;
 }
 
-static zx_status_t imx_sdhci_get_oob_irq(void* ctx, zx_handle_t *oob_irq_handle) {
-    // Currently we do not support SDIO
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
 static sdmmc_protocol_ops_t sdmmc_proto = {
     .host_info = imx_sdhci_host_info,
     .set_signal_voltage = imx_sdhci_set_signal_voltage,
@@ -1093,7 +1088,6 @@ static sdmmc_protocol_ops_t sdmmc_proto = {
     .hw_reset = imx_sdhci_hw_reset,
     .perform_tuning = imx_sdhci_perform_tuning,
     .request = imx_sdhci_request,
-    .get_sdio_oob_irq = imx_sdhci_get_oob_irq,
 };
 
 static void imx_sdhci_unbind(void* ctx) {
@@ -1171,7 +1165,7 @@ static zx_status_t imx_sdhci_bind(void* ctx, zx_device_t* parent) {
     dev->base_clock = IMX8M_SDHCI_BASE_CLOCK; // TODO: Better way of obtaining this info
 
     // Toggle the reset button
-    if (gpio_config_out(&dev->gpio, 0, 0) != ZX_OK) {
+    if (gpio_config_out(&dev->gpio, 0) != ZX_OK) {
         SDHCI_ERROR("Could not configure RESET pin as output\n");
         goto fail;
     }
@@ -1213,6 +1207,7 @@ static zx_status_t imx_sdhci_bind(void* ctx, zx_device_t* parent) {
         dev->dma_mode = false;
         dev->info.max_transfer_size = BLOCK_MAX_TRANSFER_UNBOUNDED;
 #endif
+    dev->info.max_transfer_size_non_dma = BLOCK_MAX_TRANSFER_UNBOUNDED;
 
     // Disable all interrupts
     dev->regs->int_signal_en = 0;

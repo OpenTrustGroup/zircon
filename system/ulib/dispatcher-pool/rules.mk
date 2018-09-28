@@ -8,10 +8,13 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_SRCS += \
     $(LOCAL_DIR)/dispatcher-channel.cpp \
     $(LOCAL_DIR)/dispatcher-event-source.cpp \
     $(LOCAL_DIR)/dispatcher-execution-domain.cpp \
+    $(LOCAL_DIR)/dispatcher-interrupt.cpp \
     $(LOCAL_DIR)/dispatcher-thread-pool.cpp \
     $(LOCAL_DIR)/dispatcher-timer.cpp \
     $(LOCAL_DIR)/dispatcher-wakeup-event.cpp \

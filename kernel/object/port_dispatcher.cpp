@@ -150,7 +150,7 @@ StateObserver::Flags PortObserver::MaybeQueue(zx_signals_t new_state, uint64_t c
     // the packet arena size artificially.  See ZX-2166 for details.
     auto status = port_->Queue(&packet_, new_state, count);
 
-    if ((type_ == ZX_PKT_TYPE_SIGNAL_ONE) || (status < 0))
+    if ((type_ == ZX_PKT_TYPE_SIGNAL_ONE) || (status != ZX_OK))
         return kNeedRemoval;
 
     return 0;
@@ -168,7 +168,7 @@ PortAllocator* PortDispatcher::DefaultPortAllocator() {
 
 zx_status_t PortDispatcher::Create(uint32_t options, fbl::RefPtr<Dispatcher>* dispatcher,
                                    zx_rights_t* rights) {
-    if (options && options != PORT_BIND_TO_INTERRUPT) {
+    if (options && options != ZX_PORT_BIND_TO_INTERRUPT) {
         return ZX_ERR_INVALID_ARGS;
     }
     fbl::AllocChecker ac;
@@ -223,7 +223,7 @@ zx_status_t PortDispatcher::QueueUser(const zx_port_packet_t& packet) {
     port_packet->packet.type = ZX_PKT_TYPE_USER;
 
     auto status = Queue(port_packet, 0u, 0u);
-    if (status < 0)
+    if (status != ZX_OK)
         port_packet->Free();
     return status;
 }
@@ -285,7 +285,7 @@ zx_status_t PortDispatcher::Dequeue(zx_time_t deadline, zx_port_packet_t* out_pa
     canary_.Assert();
 
     while (true) {
-        if (options_ == PORT_BIND_TO_INTERRUPT) {
+        if (options_ == ZX_PORT_BIND_TO_INTERRUPT) {
             Guard<SpinLock, IrqSave> guard{&spinlock_};
             PortInterruptPacket* port_interrupt_packet = interrupt_packets_.pop_front();
             if (port_interrupt_packet != nullptr) {

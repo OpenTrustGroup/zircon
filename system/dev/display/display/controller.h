@@ -30,16 +30,21 @@ class ClientProxy;
 class Controller;
 class DisplayConfig;
 
-class DisplayInfo : public IdMappable<fbl::unique_ptr<DisplayInfo>> {
+class DisplayInfo : public IdMappable<fbl::RefPtr<DisplayInfo>>,
+                    public fbl::RefCounted<DisplayInfo> {
 public:
     bool has_edid;
     edid::Edid edid;
     fbl::Vector<edid::timing_params_t> edid_timings;
+    fbl::Vector<audio_stream_format_range_t> edid_audio_;
     display_params_t params;
 
     fbl::Array<uint8_t> edid_data_;
     fbl::Array<zx_pixel_format_t> pixel_formats_;
     fbl::Array<cursor_info_t> cursor_infos_;
+
+    // Flag indicating that the display is ready to be published to clients.
+    bool init_done = false;
 
     // A list of all images which have been sent to display driver. For multiple
     // images which are displayed at the same time, images with a lower z-order
@@ -78,6 +83,8 @@ public:
                            uint64_t* displays_removed, uint32_t removed_count);
     void OnDisplayVsync(uint64_t display_id, zx_time_t timestamp,
                         void** handles, uint32_t handle_count);
+    zx_status_t GetAudioFormat(uint64_t display_id, uint32_t fmt_idx,
+                               audio_stream_format_range_t* fmt_out);
     void OnClientDead(ClientProxy* client);
     void SetVcMode(uint8_t mode);
     void ShowActiveDisplay();
@@ -105,7 +112,8 @@ public:
     mtx_t* mtx() { return &mtx_; }
 private:
     void HandleClientOwnershipChanges() __TA_REQUIRES(mtx_);
-    bool PopulateDisplayTimings(DisplayInfo* info) __TA_EXCLUDES(mtx_);
+    void PopulateDisplayTimings(const fbl::RefPtr<DisplayInfo>& info) __TA_EXCLUDES(mtx_);
+    void PopulateDisplayAudio(const fbl::RefPtr<DisplayInfo>& info);
 
     // mtx_ is a global lock on state shared among clients.
     mtx_t mtx_;

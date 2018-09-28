@@ -212,6 +212,10 @@ static noreturn void bootstrap(zx_handle_t log, zx_handle_t bootstrap_pipe) {
     // Later bootfs sections will be processed by devmgr.
     zx_handle_t bootfs_vmo = bootdata_get_bootfs(log, vmar_self, bootdata_vmo);
 
+    // TODO(mdempsky): Push further down the stack? Seems unnecessary to
+    // mark the entire bootfs VMO as executable.
+    zx_vmo_replace_as_executable(bootfs_vmo, ZX_HANDLE_INVALID, &bootfs_vmo);
+
     // Pass the decompressed bootfs VMO on.
     handles[nhandles + EXTRA_HANDLE_BOOTFS] = bootfs_vmo;
     handle_info[nhandles + EXTRA_HANDLE_BOOTFS] =
@@ -348,7 +352,7 @@ noreturn void _start(void* start_arg) {
     zx_handle_t log = ZX_HANDLE_INVALID;
     zx_debuglog_create(ZX_HANDLE_INVALID, 0, &log);
     if (log == ZX_HANDLE_INVALID)
-        printl(log, "zx_log_create failed, using zx_debug_write instead");
+        printl(log, "zx_debuglog_create failed, using zx_debug_write instead");
 
     zx_handle_t bootstrap_pipe = (uintptr_t)start_arg;
     bootstrap(log, bootstrap_pipe);

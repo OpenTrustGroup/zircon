@@ -15,6 +15,8 @@
 #include <lib/zx/vmar.h>
 #include <fbl/type_support.h>
 
+#include "utils.h"
+
 namespace trace {
 namespace internal {
 
@@ -42,24 +44,53 @@ TraceHandlerImpl::~TraceHandlerImpl() {
     ZX_DEBUG_ASSERT(status == ZX_OK || status == ZX_ERR_NOT_FOUND);
 }
 
-zx_status_t TraceHandlerImpl::StartEngine(async_dispatcher_t* dispatcher,
-                                          trace_buffering_mode_t buffering_mode,
-                                          zx::vmo buffer, zx::fifo fifo,
-                                          fbl::Vector<fbl::String> enabled_categories) {
+void TraceHandlerImpl::StartEngine(async_dispatcher_t* dispatcher,
+                                   trace_buffering_mode_t buffering_mode,
+                                   zx::vmo buffer, zx::fifo fifo,
+                                   fbl::Vector<fbl::String> enabled_categories) {
     ZX_DEBUG_ASSERT(buffer);
     ZX_DEBUG_ASSERT(fifo);
 
+    // If the engine isn't stopped flag an error. No one else should be
+    // starting/stopping the engine so testing this here is ok.
+    switch (trace_state()) {
+    case TRACE_STOPPED:
+        break;
+    case TRACE_STOPPING:
+        fprintf(stderr, "TraceHandler for process %" PRIu64
+                ": cannot start engine, still stopping from previous trace\n",
+                GetPid());
+        return;
+    case TRACE_STARTED:
+        // We can get here if the app errantly tried to create two providers.
+        // This is a bug in the app, provide extra assistance for diagnosis.
+        // Including the pid here has been extraordinarily helpful.
+        fprintf(stderr, "TraceHandler for process %" PRIu64
+                ": engine is already started. Is there perchance two"
+                " providers in this app?\n",
+                GetPid());
+        return;
+    default:
+        __UNREACHABLE;
+    }
+
     uint64_t buffer_num_bytes;
     zx_status_t status = buffer.get_size(&buffer_num_bytes);
-    if (status != ZX_OK)
-        return status;
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceHandler: error getting buffer size, status=%d(%s)\n",
+                status, zx_status_get_string(status));
+        return;
+    }
 
     uintptr_t buffer_ptr;
     status = zx::vmar::root_self()->map(
         0u, buffer, 0u, buffer_num_bytes,
         ZX_VM_PERM_READ | ZX_VM_PERM_WRITE, &buffer_ptr);
-    if (status != ZX_OK)
-        return status;
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceHandler: error mapping buffer, status=%d(%s)\n",
+                status, zx_status_get_string(status));
+        return;
+    }
 
     auto handler = new TraceHandlerImpl(reinterpret_cast<void*>(buffer_ptr),
                                         buffer_num_bytes, fbl::move(fifo),
@@ -67,28 +98,39 @@ zx_status_t TraceHandlerImpl::StartEngine(async_dispatcher_t* dispatcher,
 
     status = handler->fifo_wait_.Begin(dispatcher);
     if (status != ZX_OK) {
+        fprintf(stderr, "TraceHandler: error starting fifo wait, status=%d(%s)\n",
+                status, zx_status_get_string(status));
         delete handler;
-        return status;
+        return;
     }
 
     status = trace_start_engine(dispatcher, handler, buffering_mode,
                                 handler->buffer_, handler->buffer_num_bytes_);
     if (status != ZX_OK) {
+        fprintf(stderr, "TraceHandler: error starting engine, status=%d(%s)\n",
+                status, zx_status_get_string(status));
         delete handler;
-        return status;
+        return;
     }
 
     // The handler will be destroyed in |TraceStopped()|.
-    return ZX_OK;
 }
 
-zx_status_t TraceHandlerImpl::StopEngine() {
+void TraceHandlerImpl::StopEngine() {
     auto status = trace_stop_engine(ZX_OK);
     if (status != ZX_OK) {
-        printf("Failed to stop engine, status %s(%d)\n",
-               zx_status_get_string(status), status);
+        // During shutdown this can happen twice: once for the Stop() request
+        // and once when the channel is closed. Don't print anything for this
+        // case, it suggests an error that isn't there. We could keep track of
+        // this ourselves, but that has its own problems: Best just have one
+        // place that records engine state: in the engine.
+        if (status == ZX_ERR_BAD_STATE && trace_state() == TRACE_STOPPED) {
+            // this is ok
+        } else {
+            fprintf(stderr, "TraceHandler: Failed to stop engine, status=%d(%s)\n",
+                    status, zx_status_get_string(status));
+        }
     }
-    return status;
 }
 
 void TraceHandlerImpl::HandleFifo(async_dispatcher_t* dispatcher,
@@ -101,13 +143,14 @@ void TraceHandlerImpl::HandleFifo(async_dispatcher_t* dispatcher,
         return;
     }
     if (status != ZX_OK) {
-        printf("TraceHandler: FIFO wait failed: status=%d\n", status);
+        fprintf(stderr, "TraceHandler: FIFO wait failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
     } else if (signal->observed & ZX_FIFO_READABLE) {
         if (ReadFifoMessage()) {
             if (wait->Begin(dispatcher) == ZX_OK) {
                 return;
             }
-            printf("TraceHandler: Error re-registering FIFO wait\n");
+            fprintf(stderr, "TraceHandler: Error re-registering FIFO wait\n");
         }
     } else {
         ZX_DEBUG_ASSERT(signal->observed & ZX_FIFO_PEER_CLOSED);
@@ -122,7 +165,7 @@ bool TraceHandlerImpl::ReadFifoMessage() {
     auto status = fifo_.read(sizeof(packet), &packet, 1u, nullptr);
     ZX_DEBUG_ASSERT(status == ZX_OK);
     if (packet.reserved != 0) {
-        printf("TraceHandler: Reserved field non-zero from TraceManager: %u\n",
+        fprintf(stderr, "TraceHandler: Reserved field non-zero from TraceManager: %u\n",
                packet.reserved);
         return false;
     }
@@ -131,23 +174,23 @@ bool TraceHandlerImpl::ReadFifoMessage() {
         auto wrapped_count = packet.data32;
         auto durable_data_end = packet.data64;
 #if 0 // TODO(DX-367): Don't delete this, save for conversion to syslog.
-        printf("TraceHandler: Received buffer_saved message"
-               ", wrapped_count=%u, durable_data_end=0x%" PRIx64 "\n",
-               wrapped_count, durable_data_end);
+        fprintf(stderr, "TraceHandler: Received buffer_saved message"
+                ", wrapped_count=%u, durable_data_end=0x%" PRIx64 "\n",
+                wrapped_count, durable_data_end);
 #endif
         status = MarkBufferSaved(wrapped_count, durable_data_end);
         if (status == ZX_ERR_BAD_STATE) {
             // This happens when tracing has stopped. Ignore it.
         } else if (status != ZX_OK) {
-            printf("TraceHandler: MarkBufferSaved failed: status=%d\n",
-                   status);
+            fprintf(stderr, "TraceHandler: MarkBufferSaved failed: status=%d\n",
+                    status);
             return false;
         }
         break;
     }
     default:
-        printf("TraceHandler: Bad request from TraceManager: %u\n",
-               packet.request);
+        fprintf(stderr, "TraceHandler: Bad request from TraceManager: %u\n",
+                packet.request);
         return false;
     }
 

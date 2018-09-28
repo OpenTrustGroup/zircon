@@ -28,6 +28,7 @@
 #include <object/socket_dispatcher.h>
 #include <object/thread_dispatcher.h>
 #include <object/vm_address_region_dispatcher.h>
+#include <object/vm_object_dispatcher.h>
 
 #include <fbl/ref_ptr.h>
 
@@ -162,7 +163,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
 
         // grab a reference to the dispatcher
         fbl::RefPtr<ProcessDispatcher> process;
-        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &process);
+        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &process);
         if (error < 0)
             return error;
 
@@ -250,7 +251,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
 
         // grab a reference to the dispatcher
         fbl::RefPtr<ThreadDispatcher> thread;
-        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &thread);
+        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &thread);
         if (error < 0)
             return error;
 
@@ -270,7 +271,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
 
         // grab a reference to the dispatcher
         fbl::RefPtr<ThreadDispatcher> thread;
-        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &thread);
+        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &thread);
         if (error < 0)
             return error;
 
@@ -290,7 +291,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
 
         // grab a reference to the dispatcher
         fbl::RefPtr<ThreadDispatcher> thread;
-        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &thread);
+        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &thread);
         if (error < 0)
             return error;
 
@@ -311,7 +312,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
         // Grab a reference to the dispatcher. Only supports processes for
         // now, but could support jobs or threads in the future.
         fbl::RefPtr<ProcessDispatcher> process;
-        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ,
+        auto error = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT,
                                                  &process);
         if (error < 0)
             return error;
@@ -329,8 +330,8 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     case ZX_INFO_PROCESS_MAPS: {
         fbl::RefPtr<ProcessDispatcher> process;
         zx_status_t status =
-            up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &process);
-        if (status < 0)
+            up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &process);
+        if (status != ZX_OK)
             return status;
         if (process.get() == up) {
             // Not safe to look at yourself: the user buffer will live
@@ -359,8 +360,8 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     case ZX_INFO_PROCESS_VMOS: {
         fbl::RefPtr<ProcessDispatcher> process;
         zx_status_t status =
-            up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &process);
-        if (status < 0)
+            up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &process);
+        if (status != ZX_OK)
             return status;
         if (process.get() == up) {
             // Not safe to look at yourself: the user buffer will live
@@ -386,10 +387,39 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
         }
         return status;
     }
+    case ZX_INFO_VMO: {
+        // lookup the dispatcher from handle
+        fbl::RefPtr<VmObjectDispatcher> vmo;
+        zx_status_t status = up->GetDispatcher(handle, &vmo);
+        if (status < 0)
+            return status;
+        auto vmos = _buffer.reinterpret<zx_info_vmo_t>();
+        zx_info_vmo_t entry;
+
+        entry = vmo->GetVmoInfo();
+        if (vmos.copy_array_to_user(&entry, 1, 0) != ZX_OK) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+        if (_actual) {
+            size_t count = 1;
+            zx_status_t status = _actual.copy_to_user(count);
+            if (status != ZX_OK)
+                return status;
+        }
+        // Avail returned is 0, since we were just asked to read
+        // the info for a single vmo, hence nothing more is available (?)
+        if (_avail) {
+            size_t count = 0;
+            zx_status_t status = _avail.copy_to_user(count);
+            if (status != ZX_OK)
+                return status;
+        }
+        return status;
+    }
     case ZX_INFO_VMAR: {
         fbl::RefPtr<VmAddressRegionDispatcher> vmar;
-        zx_status_t status = up->GetDispatcher(handle, &vmar);
-        if (status < 0)
+        zx_status_t status = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &vmar);
+        if (status != ZX_OK)
             return status;
 
         auto real_vmar = vmar->vmar();
@@ -527,7 +557,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     case ZX_INFO_RESOURCE: {
         // grab a reference to the dispatcher
         fbl::RefPtr<ResourceDispatcher> resource;
-        zx_status_t error = up->GetDispatcherWithRights(handle, ZX_RIGHT_NONE, &resource);
+        zx_status_t error = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &resource);
         if (error != ZX_OK) {
             return error;
         }
@@ -545,7 +575,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     }
     case ZX_INFO_HANDLE_COUNT: {
         fbl::RefPtr<Dispatcher> dispatcher;
-        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &dispatcher);
+        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &dispatcher);
         if (status != ZX_OK)
             return status;
 
@@ -557,7 +587,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     }
     case ZX_INFO_BTI: {
         fbl::RefPtr<BusTransactionInitiatorDispatcher> dispatcher;
-        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &dispatcher);
+        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &dispatcher);
         if (status != ZX_OK)
             return status;
 
@@ -571,7 +601,7 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
     }
     case ZX_INFO_PROCESS_HANDLE_STATS: {
         fbl::RefPtr<ProcessDispatcher> process;
-        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_READ, &process);
+        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &process);
         if (status != ZX_OK)
             return status;
 
@@ -584,6 +614,19 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
             ++info.handle_count[dispatcher->get_type()];
             return ZX_OK;
         });
+
+        return single_record_result(
+            _buffer, buffer_size, _actual, _avail, &info, sizeof(info));
+    }
+
+    case ZX_INFO_SOCKET: {
+        fbl::RefPtr<SocketDispatcher> socket;
+        auto status = up->GetDispatcherWithRights(handle, ZX_RIGHT_INSPECT, &socket);
+        if (status != ZX_OK)
+            return status;
+
+        zx_info_socket_t info = {};
+        socket->GetInfo(&info);
 
         return single_record_result(
             _buffer, buffer_size, _actual, _avail, &info, sizeof(info));

@@ -20,6 +20,7 @@
 #include <lib/fdio/debug.h>
 #include <lib/fdio/io.h>
 #include <lib/fdio/remoteio.h>
+#include <fbl/algorithm.h>
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_lock.h>
 #include <fbl/unique_ptr.h>
@@ -57,9 +58,8 @@ zx_status_t add_vmofile(fbl::RefPtr<VnodeDir> vnb, const char* path, zx_handle_t
             if (path[0] == 0) {
                 return ZX_ERR_INVALID_ARGS;
             }
-            bool vmofile = true;
-            return vnb->vfs()->CreateFromVmo(vnb.get(), vmofile,
-                                             fbl::StringPiece(path, strlen(path)), vmo, off, len);
+            return vnb->vfs()->CreateFromVmo(vnb.get(), fbl::StringPiece(path, strlen(path)),
+                                             vmo, off, len);
         } else {
             if (nextpath == path) {
                 return ZX_ERR_INVALID_ARGS;
@@ -87,7 +87,7 @@ zx_status_t add_vmofile(fbl::RefPtr<VnodeDir> vnb, const char* path, zx_handle_t
 
 fbl::RefPtr<memfs::VnodeDir> SystemfsRoot() {
     if (memfs::systemfs_root == nullptr) {
-        zx_status_t r = memfs::createFilesystem("system", &memfs::system_vfs, &memfs::systemfs_root);
+        zx_status_t r = memfs::CreateFilesystem("system", &memfs::system_vfs, &memfs::systemfs_root);
         if (r < 0) {
             printf("fatal error %d allocating 'system' file system\n", r);
             __builtin_trap();
@@ -98,7 +98,7 @@ fbl::RefPtr<memfs::VnodeDir> SystemfsRoot() {
 
 fbl::RefPtr<memfs::VnodeDir> MemfsRoot() {
     if (memfs::memfs_root == nullptr) {
-        zx_status_t r = memfs::createFilesystem("tmp", &memfs::root_vfs, &memfs::memfs_root);
+        zx_status_t r = memfs::CreateFilesystem("tmp", &memfs::root_vfs, &memfs::memfs_root);
         if (r < 0) {
             printf("fatal error %d allocating 'tmp' file system\n", r);
             __builtin_trap();
@@ -109,7 +109,7 @@ fbl::RefPtr<memfs::VnodeDir> MemfsRoot() {
 
 fbl::RefPtr<memfs::VnodeDir> DevfsRoot() {
     if (memfs::devfs_root == nullptr) {
-        zx_status_t r = memfs::createFilesystem("dev", &memfs::root_vfs, &memfs::devfs_root);
+        zx_status_t r = memfs::CreateFilesystem("dev", &memfs::root_vfs, &memfs::devfs_root);
         if (r < 0) {
             printf("fatal error %d allocating 'device' file system\n", r);
             __builtin_trap();
@@ -120,7 +120,7 @@ fbl::RefPtr<memfs::VnodeDir> DevfsRoot() {
 
 fbl::RefPtr<memfs::VnodeDir> BootfsRoot() {
     if (memfs::bootfs_root == nullptr) {
-        zx_status_t r = memfs::createFilesystem("boot", &memfs::root_vfs, &memfs::bootfs_root);
+        zx_status_t r = memfs::CreateFilesystem("boot", &memfs::root_vfs, &memfs::bootfs_root);
         if (r < 0) {
             printf("fatal error %d allocating 'boot' file system\n", r);
             __builtin_trap();
@@ -152,10 +152,10 @@ zx_status_t systemfs_add_file(const char* path, zx_handle_t vmo, zx_off_t off, s
 static const char* mount_points[] = {
     "/data", "/volume", "/system", "/install", "/blob", "/pkgfs"
 };
-static fbl::RefPtr<fs::Vnode> mount_nodes[countof(mount_points)];
+static fbl::RefPtr<fs::Vnode> mount_nodes[fbl::count_of(mount_points)];
 
 zx_status_t vfs_install_fs(const char* path, zx_handle_t h) {
-    for (unsigned n = 0; n < countof(mount_points); n++) {
+    for (unsigned n = 0; n < fbl::count_of(mount_points); n++) {
         if (!strcmp(path, mount_points[n])) {
             return memfs::root_vfs.InstallRemote(mount_nodes[n], fs::MountChannel(h));
         }
@@ -168,7 +168,7 @@ zx_status_t vfs_install_fs(const char* path, zx_handle_t h) {
 // Hardcoded initialization function to create/access global root directory
 VnodeDir* vfs_create_global_root() {
     if (memfs::global_root == nullptr) {
-        zx_status_t r = memfs::createFilesystem("<root>", &memfs::root_vfs, &memfs::global_root);
+        zx_status_t r = memfs::CreateFilesystem("<root>", &memfs::root_vfs, &memfs::global_root);
         if (r < 0) {
             printf("fatal error %d allocating root file system\n", r);
             __builtin_trap();
@@ -178,7 +178,7 @@ VnodeDir* vfs_create_global_root() {
         memfs::root_vfs.MountSubtree(memfs::global_root.get(), BootfsRoot());
         memfs::root_vfs.MountSubtree(memfs::global_root.get(), MemfsRoot());
 
-        for (unsigned n = 0; n < countof(mount_points); n++) {
+        for (unsigned n = 0; n < fbl::count_of(mount_points); n++) {
             fbl::StringPiece pathout;
 
             r = memfs::root_vfs.Open(memfs::global_root, &mount_nodes[n],

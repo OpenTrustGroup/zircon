@@ -63,10 +63,10 @@
 #include <vm/vm_object_physical.h>
 #include <lib/ktrace.h>
 #include <lib/pci/pio.h>
-#include <zircon/device/cpu-trace/cpu-perf.h>
-#include <zircon/device/cpu-trace/intel-pm.h>
+#include <lib/zircon-internal/device/cpu-trace/cpu-perf.h>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm.h>
 #include <lib/zircon-internal/ktrace.h>
-#include <zircon/mtrace.h>
+#include <lib/zircon-internal/mtrace.h>
 #include <zircon/thread_annotations.h>
 #include <zxcpp/new.h>
 #include <pow2.h>
@@ -85,14 +85,14 @@
 typedef enum {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
     symbol ## _ID = CPUPERF_MAKE_EVENT_ID(CPUPERF_UNIT_MISC, id),
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
 } misc_event_id_t;
 
 // h/w address of misc events.
 typedef enum {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
     symbol ## _OFFSET = offset,
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
 } misc_event_offset_t;
 
 // TODO(dje): Freeze-on-PMI doesn't work in skylake.
@@ -156,7 +156,7 @@ const uint16_t supported_mem_device_ids[] = {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
     && (offset >= UNC_IMC_STATS_BEGIN && (offset + size/8) <= UNC_IMC_STATS_END + 1)
 static_assert(1
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
     , "");
 
 // These aren't constexpr as we iterate to fill in values for each counter.
@@ -519,9 +519,17 @@ static unsigned x86_perfmon_lookup_fixed_counter(cpuperf_event_id_t id) {
     switch (CPUPERF_EVENT_ID_EVENT(id)) {
 #define DEF_FIXED_EVENT(symbol, id, regnum, flags, name, description) \
     case id: return regnum;
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
     default: return IPM_MAX_FIXED_COUNTERS;
     }
+}
+
+size_t get_max_space_needed_for_all_records(PerfmonState* state) {
+    size_t num_events = (state->num_used_programmable +
+                         state->num_used_fixed +
+                         state->num_used_misc);
+    return (sizeof(cpuperf_time_record_t) +
+            num_events * kMaxEventRecordSize);
 }
 
 static void x86_perfmon_write_header(cpuperf_record_header_t* hdr,
@@ -820,7 +828,7 @@ static zx_status_t x86_ipm_verify_misc_config(
             switch (CPUPERF_EVENT_ID_EVENT(id)) {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
             case id: break;
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
             default:
                 TRACEF("Invalid misc event id |misc_ids[%zu]|\n", i);
                 return ZX_ERR_INVALID_ARGS;
@@ -955,7 +963,7 @@ static void x86_ipm_stage_misc_config(const zx_x86_ipm_config_t* config,
         switch (CPUPERF_EVENT_ID_EVENT(state->misc_ids[i])) {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
         case id:
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
             state->need_mchbar = true;
             break;
         default:
@@ -1521,6 +1529,100 @@ zx_status_t x86_ipm_start() {
 }
 
 // This is invoked via mp_sync_exec which thread safety analysis cannot follow.
+static void x86_ipm_write_last_records(PerfmonState* state, uint32_t cpu) TA_NO_THREAD_SAFETY_ANALYSIS {
+    PerfmonCpuData* data = &state->cpu_data[cpu];
+    cpuperf_record_header_t* next = data->buffer_next;
+
+    zx_time_t now = rdtsc();
+    next = x86_perfmon_write_time_record(next, CPUPERF_EVENT_ID_NONE, now);
+
+    // If the counter triggers interrupts then the PMI handler will
+    // continually reset it to its initial value. To keep things simple
+    // just always subtract out the initial value from the current value
+    // and write the difference out. For non-interrupt triggering events
+    // the user should normally initialize the counter to zero to get
+    // correct results.
+    // Counters that don't trigger interrupts could overflow and we won't
+    // necessarily catch it, but there's nothing we can do about it.
+    // We can handle the overflowed-once case, which should catch the
+    // vast majority of cases.
+    // TODO(dje): Counters that trigger interrupts should never have
+    // an overflowed value here, but that's what I'm seeing.
+
+    for (unsigned i = 0; i < state->num_used_programmable; ++i) {
+        cpuperf_event_id_t id = state->programmable_ids[i];
+        DEBUG_ASSERT(id != 0);
+        uint64_t count = read_msr(IA32_PMC_FIRST + i);
+        if (count >= state->programmable_initial_value[i]) {
+            count -= state->programmable_initial_value[i];
+        } else {
+            // The max counter value is generally not 64 bits.
+            count += (perfmon_max_programmable_counter_value -
+                      state->programmable_initial_value[i] + 1);
+        }
+        next = x86_perfmon_write_count_record(next, id, count);
+    }
+    for (unsigned i = 0; i < state->num_used_fixed; ++i) {
+        cpuperf_event_id_t id = state->fixed_ids[i];
+        DEBUG_ASSERT(id != 0);
+        unsigned hw_num = state->fixed_hw_map[i];
+        DEBUG_ASSERT(hw_num < perfmon_num_fixed_counters);
+        uint64_t count = read_msr(IA32_FIXED_CTR0 + hw_num);
+        if (count >= state->fixed_initial_value[i]) {
+            count -= state->fixed_initial_value[i];
+        } else {
+            // The max counter value is generally not 64 bits.
+            count += (perfmon_max_fixed_counter_value -
+                      state->fixed_initial_value[i] + 1);
+        }
+        next = x86_perfmon_write_count_record(next, id, count);
+    }
+    // Misc events are currently all non-cpu-specific.
+    // Just report for cpu 0. See pmi_interrupt_handler.
+    if (cpu == 0) {
+        for (unsigned i = 0; i < state->num_used_misc; ++i) {
+            cpuperf_event_id_t id = state->misc_ids[i];
+            ReadMiscResult typed_value = read_misc_event(state, id);
+            switch (typed_value.type) {
+            case CPUPERF_RECORD_COUNT:
+                next = x86_perfmon_write_count_record(next, id, typed_value.value);
+                break;
+            case CPUPERF_RECORD_VALUE:
+                next = x86_perfmon_write_value_record(next, id, typed_value.value);
+                break;
+            default:
+                __UNREACHABLE;
+            }
+        }
+    }
+
+    data->buffer_next = next;
+}
+
+// This is invoked via mp_sync_exec which thread safety analysis cannot follow.
+static void x86_ipm_finalize_buffer(PerfmonState* state, uint32_t cpu) TA_NO_THREAD_SAFETY_ANALYSIS {
+    LTRACEF("Collecting last data for cpu %u\n", cpu);
+
+    PerfmonCpuData* data = &state->cpu_data[cpu];
+    cpuperf_buffer_header_t* hdr = data->buffer_start;
+
+    // KISS. There may be enough space to write some of what we want to write
+    // here, but don't try. Just use the same simple check that
+    // |pmi_interrupt_handler()| does.
+    size_t space_needed = get_max_space_needed_for_all_records(state);
+    if (reinterpret_cast<char*>(data->buffer_next) + space_needed > data->buffer_end) {
+        hdr->flags |= CPUPERF_BUFFER_FLAG_FULL;
+        LTRACEF("Buffer overflow on cpu %u\n", cpu);
+    } else {
+        x86_ipm_write_last_records(state, cpu);
+    }
+
+    hdr->capture_end =
+        reinterpret_cast<char*>(data->buffer_next) -
+        reinterpret_cast<char*>(data->buffer_start);
+}
+
+// This is invoked via mp_sync_exec which thread safety analysis cannot follow.
 static void x86_ipm_stop_cpu_task(void* raw_context) TA_NO_THREAD_SAFETY_ANALYSIS {
     // Disable all counters ASAP.
     write_msr(IA32_PERF_GLOBAL_CTRL, 0);
@@ -1533,99 +1635,11 @@ static void x86_ipm_stop_cpu_task(void* raw_context) TA_NO_THREAD_SAFETY_ANALYSI
     auto state = reinterpret_cast<PerfmonState*>(raw_context);
     auto cpu = arch_curr_cpu_num();
     auto data = &state->cpu_data[cpu];
-    auto now = rdtsc();
 
     // Retrieve final event values and write into the trace buffer.
 
     if (data->buffer_start) {
-        LTRACEF("Collecting last data for cpu %u\n", cpu);
-        auto hdr = data->buffer_start;
-        auto next = data->buffer_next;
-        auto last =
-            reinterpret_cast<cpuperf_record_header_t*>(data->buffer_end) - 1;
-
-        next = x86_perfmon_write_time_record(next, CPUPERF_EVENT_ID_NONE, now);
-
-        // If the counter triggers interrupts then the PMI handler will
-        // continually reset it to its initial value. To keep things simple
-        // just always subtract out the initial value from the current value
-        // and write the difference out. For non-interrupt triggering events
-        // the user should normally initialize the counter to zero to get
-        // correct results.
-        // Counters that don't trigger interrupts could overflow and we won't
-        // necessarily catch it, but there's nothing we can do about it.
-        // We can handle the overflowed-once case, which should catch the
-        // vast majority of cases.
-        // TODO(dje): Counters that trigger interrupts should never have
-        // an overflowed value here, but that's what I'm seeing.
-
-        for (unsigned i = 0; i < state->num_used_programmable; ++i) {
-            if (next > last) {
-                hdr->flags |= CPUPERF_BUFFER_FLAG_FULL;
-                break;
-            }
-            cpuperf_event_id_t id = state->programmable_ids[i];
-            DEBUG_ASSERT(id != 0);
-            uint64_t count = read_msr(IA32_PMC_FIRST + i);
-            if (count >= state->programmable_initial_value[i]) {
-                count -= state->programmable_initial_value[i];
-            } else {
-                // The max counter value is generally not 64 bits.
-                count += (perfmon_max_programmable_counter_value -
-                          state->programmable_initial_value[i] + 1);
-            }
-            next = x86_perfmon_write_count_record(next, id, count);
-        }
-        for (unsigned i = 0; i < state->num_used_fixed; ++i) {
-            if (next > last) {
-                hdr->flags |= CPUPERF_BUFFER_FLAG_FULL;
-                break;
-            }
-            cpuperf_event_id_t id = state->fixed_ids[i];
-            DEBUG_ASSERT(id != 0);
-            unsigned hw_num = state->fixed_hw_map[i];
-            DEBUG_ASSERT(hw_num < perfmon_num_fixed_counters);
-            uint64_t count = read_msr(IA32_FIXED_CTR0 + hw_num);
-            if (count >= state->fixed_initial_value[i]) {
-                count -= state->fixed_initial_value[i];
-            } else {
-                // The max counter value is generally not 64 bits.
-                count += (perfmon_max_fixed_counter_value -
-                          state->fixed_initial_value[i] + 1);
-            }
-            next = x86_perfmon_write_count_record(next, id, count);
-        }
-        // Misc events are currently all non-cpu-specific.
-        // Just report for cpu 0. See pmi_interrupt_handler.
-        if (cpu == 0) {
-            for (unsigned i = 0; i < state->num_used_misc; ++i) {
-                if (next > last) {
-                    hdr->flags |= CPUPERF_BUFFER_FLAG_FULL;
-                    break;
-                }
-                cpuperf_event_id_t id = state->misc_ids[i];
-                ReadMiscResult typed_value = read_misc_event(state, id);
-                switch (typed_value.type) {
-                case CPUPERF_RECORD_COUNT:
-                    next = x86_perfmon_write_count_record(next, id, typed_value.value);
-                    break;
-                case CPUPERF_RECORD_VALUE:
-                    next = x86_perfmon_write_value_record(next, id, typed_value.value);
-                    break;
-                default:
-                    __UNREACHABLE;
-                }
-            }
-        }
-
-        data->buffer_next = next;
-        hdr->capture_end =
-            reinterpret_cast<char*>(data->buffer_next) -
-            reinterpret_cast<char*>(data->buffer_start);
-
-        if (hdr->flags & CPUPERF_BUFFER_FLAG_FULL) {
-            LTRACEF("Buffer overflow on cpu %u\n", cpu);
-        }
+        x86_ipm_finalize_buffer(state, cpu);
     }
 
     x86_perfmon_clear_overflow_indicators();
@@ -1726,11 +1740,7 @@ static bool pmi_interrupt_handler(x86_iframe_t *frame, PerfmonState* state) {
 
     // Rather than continually checking if we have enough space, just
     // conservatively check for the maximum amount we'll need.
-    size_t space_needed = (sizeof(cpuperf_time_record_t) +
-                           (state->num_used_programmable +
-                            state->num_used_fixed +
-                            state->num_used_misc) *
-                           kMaxEventRecordSize);
+    size_t space_needed = get_max_space_needed_for_all_records(state);
     if (reinterpret_cast<char*>(data->buffer_next) + space_needed > data->buffer_end) {
         TRACEF("cpu %u: @%" PRIi64 " pmi buffer full\n", cpu, now);
         data->buffer_start->flags |= CPUPERF_BUFFER_FLAG_FULL;

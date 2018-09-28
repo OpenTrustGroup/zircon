@@ -13,14 +13,14 @@ MODULE_TYPE := userapp
 MODULE_GROUP := core
 
 MODULE_SRCS += \
-    $(LOCAL_DIR)/bootfs.c \
-    $(LOCAL_DIR)/devhost-shared.c \
-    $(LOCAL_DIR)/devmgr.c \
-    $(LOCAL_DIR)/devmgr-binding.c \
-    $(LOCAL_DIR)/devmgr-coordinator.c \
-    $(LOCAL_DIR)/devmgr-devfs.c \
-    $(LOCAL_DIR)/devmgr-drivers.c \
-    $(LOCAL_DIR)/devmgr-fdio.c
+    $(LOCAL_DIR)/bootfs.cpp \
+    $(LOCAL_DIR)/devhost-shared.cpp \
+    $(LOCAL_DIR)/devmgr.cpp \
+    $(LOCAL_DIR)/devmgr-binding.cpp \
+    $(LOCAL_DIR)/devmgr-coordinator.cpp \
+    $(LOCAL_DIR)/devmgr-devfs.cpp \
+    $(LOCAL_DIR)/devmgr-drivers.cpp \
+    $(LOCAL_DIR)/devmgr-fdio.cpp
 
 # userboot supports loading via the dynamic linker, so libc (system/ulib/c)
 # can be linked dynamically.  But it doesn't support any means to look
@@ -31,6 +31,7 @@ MODULE_SRCS += \
 MODULE_FIDL_LIBS := \
     system/fidl/fuchsia-crash \
     system/fidl/fuchsia-io \
+    system/fidl/fuchsia-mem \
 
 # ddk is needed only for ddk/device.h
 MODULE_HEADER_DEPS := \
@@ -47,6 +48,10 @@ MODULE_STATIC_LIBS := \
     third_party/ulib/lz4 \
     system/ulib/port \
     system/ulib/driver-info \
+    system/ulib/memfs \
+    system/ulib/fs \
+    system/ulib/fbl \
+    system/ulib/zx \
 
 MODULE_LIBS := \
     system/ulib/async.default \
@@ -67,10 +72,10 @@ MODULE_TYPE := userapp
 MODULE_GROUP := core
 
 MODULE_SRCS := \
-    $(LOCAL_DIR)/bootfs.c \
-    $(LOCAL_DIR)/block-watcher.c \
-    $(LOCAL_DIR)/devmgr-fdio.c \
-    $(LOCAL_DIR)/fshost.c \
+    $(LOCAL_DIR)/bootfs.cpp \
+    $(LOCAL_DIR)/block-watcher.cpp \
+    $(LOCAL_DIR)/devmgr-fdio.cpp \
+    $(LOCAL_DIR)/fshost.cpp \
     $(LOCAL_DIR)/vfs-rpc.cpp
 
 MODULE_STATIC_LIBS := \
@@ -131,7 +136,7 @@ MODULE_TYPE := userapp
 MODULE_GROUP := core
 
 MODULE_SRCS := \
-	$(LOCAL_DIR)/devhost-main.c
+	$(LOCAL_DIR)/devhost-main.cpp
 
 MODULE_LIBS := system/ulib/driver system/ulib/fdio system/ulib/c
 
@@ -147,8 +152,8 @@ MODULE_TYPE := driver
 MODULE_NAME := dmctl
 
 MODULE_SRCS := \
-	$(LOCAL_DIR)/dmctl.c \
-	$(LOCAL_DIR)/devhost-shared.c \
+	$(LOCAL_DIR)/dmctl.cpp \
+	$(LOCAL_DIR)/devhost-shared.cpp \
 
 MODULE_STATIC_LIBS := system/ulib/ddk system/ulib/port
 

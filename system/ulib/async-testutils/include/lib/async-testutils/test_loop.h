@@ -37,18 +37,15 @@ public:
     // Returns the current fake clock time.
     zx::time Now() const;
 
-    // Advances the fake clock time to |time|, if |time| is greater than the
-    // current time; else, nothing happens.
-    void AdvanceTimeTo(zx::time time);
-
-    // Advances the fake clock time by |delta|.
-    void AdvanceTimeBy(zx::duration delta);
-
     // Quits the message loop. If called while running, it will immediately
     // exit and dispatch no further tasks or waits; if called before running,
     // then next call to run will immediately exit. Further calls to run will
     // dispatch as usual.
     void Quit();
+
+    // Advances the fake clock time by the smallest possible amount.
+    // This doesn't run the loop.
+    void AdvanceTimeByEpsilon();
 
     // Dispatches all waits and all tasks with deadlines up until |deadline|,
     // progressively advancing the fake clock.
@@ -64,6 +61,9 @@ public:
     // time, progressively advancing the fake clock.
     // Returns true iff any tasks or waits were invoked during the run.
     bool RunUntilIdle();
+
+    // The initial value of the state of the TestLoop.
+    uint32_t initial_state() { return initial_state_; }
 
 private:
     // An implementation of LoopInterface.
@@ -84,8 +84,10 @@ private:
     // Encapsulation of the async_dispatcher_t dispatch methods.
     fbl::Vector<fbl::unique_ptr<TestLoopDispatcher>> dispatchers_;
 
-    // A pseudo-random number used to determinisitically determine the
+    // The seed of a pseudo-random number used to determinisitically determine the
     // dispatching order across |dispatchers_|.
+    uint32_t initial_state_;
+    // The current state of the pseudo-random generator.
     uint32_t state_;
 
     // Quit state of the loop.

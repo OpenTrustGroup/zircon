@@ -11,6 +11,7 @@
 #include <kernel/cmdline.h>
 #include <kernel/mp.h>
 #include <kernel/thread.h>
+#include <lib/debuglog.h>
 #include <libzbi/zbi-cpp.h>
 #include <mexec.h>
 #include <object/process_dispatcher.h>
@@ -28,10 +29,6 @@
 #include <zircon/syscalls/resource.h>
 #include <zircon/syscalls/system.h>
 #include <zircon/types.h>
-
-#if WITH_LIB_DEBUGLOG
-#include <lib/debuglog.h>
-#endif
 
 #include "system_priv.h"
 
@@ -55,7 +52,8 @@ static zx_status_t identity_page_allocate(fbl::RefPtr<VmAspace>* new_aspace,
     // Start by obtaining an unused physical page. This address will eventually
     // be the physical/virtual address of our identity mapped page.
     paddr_t pa;
-    if (pmm_alloc_page(0, &pa) == nullptr) {
+    result = pmm_alloc_page(0, &pa);
+    if (result != ZX_OK) {
         return ZX_ERR_NO_MEMORY;
     }
 
@@ -114,9 +112,9 @@ static zx_status_t vmo_coalesce_pages(zx_handle_t vmo_hdl, const size_t extra_by
     const size_t num_pages = ROUNDUP(vmo_size + extra_bytes, PAGE_SIZE) / PAGE_SIZE;
 
     paddr_t base_addr;
-    const size_t allocated = pmm_alloc_contiguous(num_pages, PMM_ALLOC_FLAG_ANY,
-                                                  0, &base_addr, nullptr);
-    if (allocated < num_pages) {
+    list_node list = LIST_INITIAL_VALUE(list);
+    st = pmm_alloc_contiguous(num_pages, PMM_ALLOC_FLAG_ANY, 0, &base_addr, &list);
+    if (st != ZX_OK) {
         // TODO(gkalsi): Free pages allocated by pmm_alloc_contiguous pages
         //               and return an error.
         panic("Failed to allocate contiguous memory");
@@ -362,10 +360,8 @@ static void platform_graceful_halt(platform_halt_action action) {
     thread_migrate_to_cpu(BOOT_CPU_ID);
     platform_halt_secondary_cpus();
 
-#if WITH_LIB_DEBUGLOG
     // Delay shutdown of debuglog to ensure log messages emitted by above calls will be written.
     dlog_shutdown();
-#endif
 
     platform_halt(action, HALT_REASON_SW_RESET);
     panic("ERROR: failed to halt the platform\n");

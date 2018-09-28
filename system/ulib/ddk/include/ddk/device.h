@@ -237,7 +237,7 @@ zx_device_t* device_get_parent(zx_device_t* dev);
 //     protocol_xyz_ops_t* ops;
 //     void* ctx;
 // } protocol_xyz_t;
-zx_status_t device_get_protocol(zx_device_t* dev, uint32_t proto_id, void* protocol);
+zx_status_t device_get_protocol(const zx_device_t* dev, uint32_t proto_id, void* protocol);
 
 
 // Direct Device Ops Functions
@@ -260,11 +260,14 @@ zx_status_t device_ioctl(zx_device_t* dev, uint32_t op,
 zx_status_t device_get_metadata(zx_device_t* dev, uint32_t type, void* buf, size_t buflen,
                                 size_t* actual);
 
-// adds metadata to a specific device
+// Adds metadata to a specific device.
 zx_status_t device_add_metadata(zx_device_t* dev, uint32_t type, const void* data, size_t length);
 
 
-// adds metadata to be provided to future devices matching the specified topo path
+// Adds metadata to be provided to future devices matching the specified topo path.
+// Drivers may use this to publish metadata to a driver with a topo path that matches
+// itself or one of its children. Only drivers running in the "sys" devhost may publish
+// metadata to arbitrary topo paths.
 zx_status_t device_publish_metadata(zx_device_t* dev, const char* path, uint32_t type,
                                     const void* data, size_t length);
 

@@ -8,7 +8,9 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
-MODULE_SRCS := $(LOCAL_DIR)/edid.cpp $(LOCAL_DIR)/timings.cpp
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
+MODULE_SRCS := $(LOCAL_DIR)/edid.cpp $(LOCAL_DIR)/timings.cpp $(LOCAL_DIR)/eisa_vid_lut.cpp
 MODULE_STATIC_LIBS := system/ulib/hwreg
 MODULE_LIBS := system/ulib/fbl
 

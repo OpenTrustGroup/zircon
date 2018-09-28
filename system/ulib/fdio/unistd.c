@@ -22,6 +22,7 @@
 #include <threads.h>
 #include <unistd.h>
 
+#include <fuchsia/io/c/fidl.h>
 #include <zircon/assert.h>
 #include <zircon/compiler.h>
 #include <zircon/device/vfs.h>
@@ -30,6 +31,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/time.h>
 
+#include <fuchsia/io/c/fidl.h>
 #include <lib/fdio/debug.h>
 #include <lib/fdio/io.h>
 #include <lib/fdio/namespace.h>
@@ -57,6 +59,7 @@ fdio_state_t __fdio_global_state = {
 // Attaches an fdio to an fdtab slot.
 // The fdio must have been upref'd on behalf of the
 // fdtab prior to binding.
+__EXPORT
 int fdio_bind_to_fd(fdio_t* io, int fd, int starting_fd) {
     fdio_t* io_to_close = NULL;
 
@@ -108,6 +111,7 @@ free_fd_found:
 // and is not in active use (an io operation underway, etc),
 // detach it from the fdtab and return it with a single
 // refcount.
+__EXPORT
 zx_status_t fdio_unbind_from_fd(int fd, fdio_t** out) {
     zx_status_t status;
     mtx_lock(&fdio_lock);
@@ -138,6 +142,7 @@ done:
     return status;
 }
 
+__EXPORT
 fdio_t* __fdio_fd_to_io(int fd) {
     if ((fd < 0) || (fd >= FDIO_MAX_FD)) {
         return NULL;
@@ -277,6 +282,7 @@ static fdio_t* fdio_iodir(const char** path, int dirfd) {
 //
 // out is expected to be PATH_MAX bytes long.
 // Sets is_dir to 'true' if the path is a directory, and 'false' otherwise.
+__EXPORT
 zx_status_t __fdio_cleanpath(const char* in, char* out, size_t* outlen, bool* is_dir) {
     if (in[0] == 0) {
         strcpy(out, ".");
@@ -516,10 +522,10 @@ static zx_status_t __fdio_opendir_containing(fdio_t** io, const char* path, char
     return __fdio_opendir_containing_at(io, AT_FDCWD, path, name);
 }
 
-
 // hook into libc process startup
 // this is called prior to main to set up the fdio world
 // and thus does not use the fdio_lock
+__EXPORT
 void __libc_extensions_init(uint32_t handle_count,
                             zx_handle_t handle[],
                             uint32_t handle_info[],
@@ -547,33 +553,63 @@ void __libc_extensions_init(uint32_t handle_count,
         unsigned arg_fd = arg & (~FDIO_FLAG_USE_FOR_STDIO);
 
         switch (PA_HND_TYPE(handle_info[n])) {
-        case PA_FDIO_REMOTE:
+        case PA_FDIO_REMOTE: {
             // remote objects may have a second handle
             // which is for signaling events
+            zx_handle_t event = ZX_HANDLE_INVALID;
             if (((n + 1) < handle_count) &&
                 (handle_info[n] == handle_info[n + 1])) {
-                fdio_fdtab[arg_fd] = fdio_remote_create(h, handle[n + 1]);
-                handle_info[n + 1] = 0;
+                // TODO: Remove this case once all clients migrate to providing
+                // a single handle for PA_FDIO_REMOTE.
+                event = handle[n + 1];
+                handle_info[n + 1] = ZX_HANDLE_INVALID;
             } else {
-                fdio_fdtab[arg_fd] = fdio_remote_create(h, 0);
+                fuchsia_io_NodeInfo info;
+                memset(&info, 0, sizeof(info));
+                zx_status_t status = fuchsia_io_NodeDescribe(h, &info);
+                if (status != ZX_OK) {
+                    LOG(1, "fdio: Failed to describe fd=%d (rio) status=%d (%s)\n",
+                        arg_fd, status, zx_status_get_string(status));
+                    zx_handle_close(h);
+                    continue;
+                }
+
+                switch (info.tag) {
+                case fuchsia_io_NodeInfoTag_file:
+                    event = info.file.event;
+                    break;
+                case fuchsia_io_NodeInfoTag_device:
+                    event = info.device.event;
+                    break;
+                default:
+                    event = ZX_HANDLE_INVALID;
+                    break;
+                }
             }
+
+            fdio_fdtab[arg_fd] = fdio_remote_create(h, event);
+            fdio_fdtab[arg_fd]->dupcount++;
             LOG(1, "fdio: inherit fd=%d (rio)\n", arg_fd);
-            fdio_fdtab[arg_fd]->dupcount++;
             break;
-        case PA_FDIO_PIPE:
-            fdio_fdtab[arg_fd] = fdio_pipe_create(h);
+        }
+        case PA_FDIO_SOCKET: {
+            fdio_t* io = NULL;
+            zx_status_t status = fdio_acquire_socket(h, &io);
+            if (status != ZX_OK) {
+                LOG(1, "fdio: Failed to acquire for fd=%d (socket) status=%d (%s)\n",
+                    arg_fd, status, zx_status_get_string(status));
+                zx_handle_close(h);
+                continue;
+            }
+            fdio_fdtab[arg_fd] = io;
             fdio_fdtab[arg_fd]->dupcount++;
-            LOG(1, "fdio: inherit fd=%d (pipe)\n", arg_fd);
+            LOG(1, "fdio: inherit fd=%d (socket)\n", arg_fd);
             break;
+        }
         case PA_FDIO_LOGGER:
             fdio_fdtab[arg_fd] = fdio_logger_create(h);
             fdio_fdtab[arg_fd]->dupcount++;
             LOG(1, "fdio: inherit fd=%d (log)\n", arg_fd);
-            break;
-        case PA_FDIO_SOCKET:
-            fdio_fdtab[arg] = fdio_socket_create(h, IOFLAG_SOCKET_CONNECTED);
-            fdio_fdtab[arg]->dupcount++;
-            LOG(1, "fdio: inherit fd=%d (socket)\n", arg_fd);
             break;
         case PA_NS_DIR:
             // we always contine here to not steal the
@@ -644,6 +680,7 @@ void __libc_extensions_init(uint32_t handle_count,
 // Clean up during process teardown. This runs after atexit hooks in
 // libc. It continues to hold the fdio lock until process exit, to
 // prevent other threads from racing on file descriptors.
+__EXPORT
 void __libc_extensions_fini(void) __TA_ACQUIRE(&fdio_lock) {
     mtx_lock(&fdio_lock);
     for (int fd = 0; fd < FDIO_MAX_FD; fd++) {
@@ -659,6 +696,7 @@ void __libc_extensions_fini(void) __TA_ACQUIRE(&fdio_lock) {
     }
 }
 
+__EXPORT
 zx_status_t fdio_ns_install(fdio_ns_t* ns) {
     fdio_t* io = fdio_ns_open_root(ns);
     if (io == NULL) {
@@ -689,6 +727,7 @@ zx_status_t fdio_ns_install(fdio_ns_t* ns) {
     return status;
 }
 
+__EXPORT
 zx_status_t fdio_ns_get_installed(fdio_ns_t** ns) {
     zx_status_t status = ZX_OK;
     mtx_lock(&fdio_lock);
@@ -701,10 +740,12 @@ zx_status_t fdio_ns_get_installed(fdio_ns_t** ns) {
     return status;
 }
 
+__EXPORT
 zx_status_t fdio_clone_cwd(zx_handle_t* handles, uint32_t* types) {
     return fdio_cwd_handle->ops->clone(fdio_cwd_handle, handles, types);
 }
 
+__EXPORT
 zx_status_t fdio_clone_fd(int fd, int newfd, zx_handle_t* handles, uint32_t* types) {
     zx_status_t r;
     fdio_t* io;
@@ -721,6 +762,7 @@ zx_status_t fdio_clone_fd(int fd, int newfd, zx_handle_t* handles, uint32_t* typ
     return r;
 }
 
+__EXPORT
 zx_status_t fdio_transfer_fd(int fd, int newfd, zx_handle_t* handles, uint32_t* types) {
     fdio_t* io;
     zx_status_t status;
@@ -738,6 +780,7 @@ zx_status_t fdio_transfer_fd(int fd, int newfd, zx_handle_t* handles, uint32_t* 
     return status;
 }
 
+__EXPORT
 ssize_t fdio_ioctl(int fd, int op, const void* in_buf, size_t in_len, void* out_buf, size_t out_len) {
     fdio_t* io;
     if ((io = fd_to_io(fd)) == NULL) {
@@ -768,6 +811,7 @@ zx_status_t fdio_wait(fdio_t* io, uint32_t events, zx_time_t deadline,
     return status;
 }
 
+__EXPORT
 zx_status_t fdio_wait_fd(int fd, uint32_t events, uint32_t* _pending, zx_time_t deadline) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL)
@@ -843,6 +887,7 @@ int fdio_status_to_errno(zx_status_t status) {
 // The functions from here on provide implementations of fd and path
 // centric posix-y io operations.
 
+__EXPORT
 ssize_t readv(int fd, const struct iovec* iov, int num) {
     ssize_t count = 0;
     ssize_t r;
@@ -863,6 +908,7 @@ ssize_t readv(int fd, const struct iovec* iov, int num) {
     return count;
 }
 
+__EXPORT
 ssize_t writev(int fd, const struct iovec* iov, int num) {
     ssize_t count = 0;
     ssize_t r;
@@ -883,6 +929,7 @@ ssize_t writev(int fd, const struct iovec* iov, int num) {
     return count;
 }
 
+__EXPORT
 zx_status_t _mmap_file(size_t offset, size_t len, zx_vm_option_t zx_options, int flags, int fd,
                        off_t fd_off, uintptr_t* out) {
     fdio_t* io;
@@ -910,6 +957,7 @@ zx_status_t _mmap_file(size_t offset, size_t len, zx_vm_option_t zx_options, int
     return ZX_OK;
 }
 
+__EXPORT
 int unlinkat(int dirfd, const char* path, int flags) {
     char name[NAME_MAX + 1];
     fdio_t* io;
@@ -923,6 +971,7 @@ int unlinkat(int dirfd, const char* path, int flags) {
     return STATUS(r);
 }
 
+__EXPORT
 ssize_t read(int fd, void* buf, size_t count) {
     if (buf == NULL && count > 0) {
         return ERRNO(EINVAL);
@@ -944,6 +993,7 @@ ssize_t read(int fd, void* buf, size_t count) {
     return status < 0 ? STATUS(status) : status;
 }
 
+__EXPORT
 ssize_t write(int fd, const void* buf, size_t count) {
     if (buf == NULL && count > 0) {
         return ERRNO(EINVAL);
@@ -965,6 +1015,7 @@ ssize_t write(int fd, const void* buf, size_t count) {
     return status < 0 ? STATUS(status) : status;
 }
 
+__EXPORT
 ssize_t preadv(int fd, const struct iovec* iov, int count, off_t ofs) {
     ssize_t iov_count = 0;
     ssize_t r;
@@ -986,6 +1037,7 @@ ssize_t preadv(int fd, const struct iovec* iov, int count, off_t ofs) {
     return iov_count;
 }
 
+__EXPORT
 ssize_t pread(int fd, void* buf, size_t size, off_t ofs) {
     if (buf == NULL && size > 0) {
         return ERRNO(EINVAL);
@@ -1007,6 +1059,7 @@ ssize_t pread(int fd, void* buf, size_t size, off_t ofs) {
     return status < 0 ? STATUS(status) : status;
 }
 
+__EXPORT
 ssize_t pwritev(int fd, const struct iovec* iov, int count, off_t ofs) {
     ssize_t iov_count = 0;
     ssize_t r;
@@ -1028,6 +1081,7 @@ ssize_t pwritev(int fd, const struct iovec* iov, int count, off_t ofs) {
     return iov_count;
 }
 
+__EXPORT
 ssize_t pwrite(int fd, const void* buf, size_t size, off_t ofs) {
     if (buf == NULL && size > 0) {
         return ERRNO(EINVAL);
@@ -1049,6 +1103,7 @@ ssize_t pwrite(int fd, const void* buf, size_t size, off_t ofs) {
     return status < 0 ? STATUS(status) : status;
 }
 
+__EXPORT
 int close(int fd) {
     mtx_lock(&fdio_lock);
     if ((fd < 0) || (fd >= FDIO_MAX_FD) || (fdio_fdtab[fd] == NULL)) {
@@ -1084,14 +1139,17 @@ static int fdio_dup(int oldfd, int newfd, int starting_fd) {
     return fd;
 }
 
+__EXPORT
 int dup2(int oldfd, int newfd) {
     return fdio_dup(oldfd, newfd, 0);
 }
 
+__EXPORT
 int dup(int oldfd) {
     return fdio_dup(oldfd, -1, 0);
 }
 
+__EXPORT
 int dup3(int oldfd, int newfd, int flags) {
     // dup3 differs from dup2 in that it fails with EINVAL, rather
     // than being a no op, on being given the same fd for both old and
@@ -1108,6 +1166,7 @@ int dup3(int oldfd, int newfd, int flags) {
     return fdio_dup(oldfd, newfd, 0);
 }
 
+__EXPORT
 int fcntl(int fd, int cmd, ...) {
 // Note that it is not safe to pull out the int out of the
 // variadic arguments at the top level, as callers are not
@@ -1219,6 +1278,7 @@ int fcntl(int fd, int cmd, ...) {
 #undef GET_INT_ARG
 }
 
+__EXPORT
 off_t lseek(int fd, off_t offset, int whence) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -1272,10 +1332,12 @@ static int truncateat(int dirfd, const char* path, off_t len) {
     return STATUS(r);
 }
 
+__EXPORT
 int truncate(const char* path, off_t len) {
     return truncateat(AT_FDCWD, path, len);
 }
 
+__EXPORT
 int ftruncate(int fd, off_t len) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -1324,11 +1386,11 @@ static int two_path_op_at(uint32_t op, int olddirfd, const char* oldpath,
         goto newparent_open;
     }
 
-    if (op == ZXFIDL_RENAME) {
+    if (op == fuchsia_io_DirectoryRenameOrdinal) {
         status = io_oldparent->ops->rename(io_oldparent, oldname,
                                            strlen(oldname), token, newname,
                                            strlen(newname));
-    } else if (op == ZXFIDL_LINK) {
+    } else if (op == fuchsia_io_DirectoryLinkOrdinal) {
         status = io_oldparent->ops->link(io_oldparent, oldname, strlen(oldname),
                                          token, newname, strlen(newname));
     } else {
@@ -1344,18 +1406,22 @@ oldparent_open:
     return STATUS(status);
 }
 
+__EXPORT
 int renameat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath) {
-    return two_path_op_at(ZXFIDL_RENAME, olddirfd, oldpath, newdirfd, newpath);
+    return two_path_op_at(fuchsia_io_DirectoryRenameOrdinal, olddirfd, oldpath, newdirfd, newpath);
 }
 
+__EXPORT
 int rename(const char* oldpath, const char* newpath) {
-    return two_path_op_at(ZXFIDL_RENAME, AT_FDCWD, oldpath, AT_FDCWD, newpath);
+    return two_path_op_at(fuchsia_io_DirectoryRenameOrdinal, AT_FDCWD, oldpath, AT_FDCWD, newpath);
 }
 
+__EXPORT
 int link(const char* oldpath, const char* newpath) {
-    return two_path_op_at(ZXFIDL_LINK, AT_FDCWD, oldpath, AT_FDCWD, newpath);
+    return two_path_op_at(fuchsia_io_DirectoryLinkOrdinal, AT_FDCWD, oldpath, AT_FDCWD, newpath);
 }
 
+__EXPORT
 int unlink(const char* path) {
     return unlinkat(AT_FDCWD, path, 0);
 }
@@ -1389,6 +1455,7 @@ static int vopenat(int dirfd, const char* path, int flags, va_list args) {
     return fd;
 }
 
+__EXPORT
 int open(const char* path, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
@@ -1397,6 +1464,7 @@ int open(const char* path, int flags, ...) {
     return ret;
 }
 
+__EXPORT
 int openat(int dirfd, const char* path, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
@@ -1405,10 +1473,12 @@ int openat(int dirfd, const char* path, int flags, ...) {
     return ret;
 }
 
+__EXPORT
 int mkdir(const char* path, mode_t mode) {
     return mkdirat(AT_FDCWD, path, mode);
 }
 
+__EXPORT
 int mkdirat(int dirfd, const char* path, mode_t mode) {
     fdio_t* io = NULL;
     zx_status_t r;
@@ -1423,6 +1493,7 @@ int mkdirat(int dirfd, const char* path, mode_t mode) {
     return 0;
 }
 
+__EXPORT
 int fsync(int fd) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -1433,6 +1504,7 @@ int fsync(int fd) {
     return STATUS(r);
 }
 
+__EXPORT
 int fdatasync(int fd) {
     // TODO(smklein): fdatasync does not need to flush metadata under certain
     // circumstances -- however, for now, this implementation will appear
@@ -1440,6 +1512,7 @@ int fdatasync(int fd) {
     return fsync(fd);
 }
 
+__EXPORT
 int syncfs(int fd) {
     // TODO(smklein): Currently, fsync syncs the entire filesystem, not just
     // the target file descriptor. These functions should use different sync
@@ -1447,6 +1520,7 @@ int syncfs(int fd) {
     return fsync(fd);
 }
 
+__EXPORT
 int fstat(int fd, struct stat* s) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -1457,6 +1531,7 @@ int fstat(int fd, struct stat* s) {
     return r;
 }
 
+__EXPORT
 int fstatat(int dirfd, const char* fn, struct stat* s, int flags) {
     fdio_t* io;
     zx_status_t r;
@@ -1472,14 +1547,17 @@ int fstatat(int dirfd, const char* fn, struct stat* s, int flags) {
     return STATUS(r);
 }
 
+__EXPORT
 int stat(const char* fn, struct stat* s) {
     return fstatat(AT_FDCWD, fn, s, 0);
 }
 
+__EXPORT
 int lstat(const char* path, struct stat* buf) {
     return stat(path, buf);
 }
 
+__EXPORT
 char* realpath(const char* restrict filename, char* restrict resolved) {
     ssize_t r;
     struct stat st;
@@ -1547,6 +1625,7 @@ static zx_status_t zx_utimens(fdio_t* io, const struct timespec times[2],
     return io->ops->set_attr(io, &vn);
 }
 
+__EXPORT
 int utimensat(int dirfd, const char *fn,
               const struct timespec times[2], int flags) {
     fdio_t* io;
@@ -1569,6 +1648,7 @@ int utimensat(int dirfd, const char *fn,
     return STATUS(r);
 }
 
+__EXPORT
 int futimens(int fd, const struct timespec times[2]) {
     fdio_t* io = fd_to_io(fd);
     zx_status_t r = zx_utimens(io, times, 0);
@@ -1576,6 +1656,7 @@ int futimens(int fd, const struct timespec times[2]) {
     return STATUS(r);
 }
 
+__EXPORT
 int pipe2(int pipefd[2], int flags) {
     const int allowed_flags = O_NONBLOCK | O_CLOEXEC;
     if (flags & ~allowed_flags) {
@@ -1606,10 +1687,30 @@ int pipe2(int pipefd[2], int flags) {
     return 0;
 }
 
+__EXPORT
 int pipe(int pipefd[2]) {
     return pipe2(pipefd, 0);
 }
 
+__EXPORT
+int socketpair(int domain, int type, int protocol, int fd[2]) {
+    if (type != SOCK_STREAM) {  // TODO(jamesr): SOCK_DGRAM
+        errno = EPROTOTYPE;
+        return -1;
+    }
+    if (domain != AF_UNIX) {
+        errno = EAFNOSUPPORT;
+        return -1;
+    }
+    if (protocol != 0) {
+        errno = EPROTONOSUPPORT;
+        return -1;
+    }
+
+    return pipe(fd);
+}
+
+__EXPORT
 int faccessat(int dirfd, const char* filename, int amode, int flag) {
     // For now, we just check to see if the file exists, until we
     // model permissions. But first, check that the flags and amode
@@ -1639,6 +1740,7 @@ int faccessat(int dirfd, const char* filename, int amode, int flag) {
     return STATUS(status);
 }
 
+__EXPORT
 char* getcwd(char* buf, size_t size) {
     char tmp[PATH_MAX];
     if (buf == NULL) {
@@ -1678,6 +1780,7 @@ void fdio_chdir(fdio_t* io, const char* path) {
     mtx_unlock(&fdio_cwd_lock);
 }
 
+__EXPORT
 int chdir(const char* path) {
     fdio_t* io;
     zx_status_t r;
@@ -1714,6 +1817,7 @@ static DIR* internal_opendir(int fd) {
     return dir;
 }
 
+__EXPORT
 DIR* opendir(const char* name) {
     int fd = open(name, O_RDONLY | O_DIRECTORY);
     if (fd < 0)
@@ -1724,6 +1828,7 @@ DIR* opendir(const char* name) {
     return dir;
 }
 
+__EXPORT
 DIR* fdopendir(int fd) {
     // Check the fd for validity, but we'll just store the fd
     // number so we don't save the fdio_t pointer.
@@ -1739,43 +1844,51 @@ DIR* fdopendir(int fd) {
     return internal_opendir(fd);
 }
 
+__EXPORT
 int closedir(DIR* dir) {
     close(dir->fd);
     free(dir);
     return 0;
 }
 
+__EXPORT
 struct dirent* readdir(DIR* dir) {
     mtx_lock(&dir->lock);
     struct dirent* de = &dir->de;
     for (;;) {
         if (dir->size >= sizeof(vdirent_t)) {
             vdirent_t* vde = (void*)dir->ptr;
-            if (dir->size >= vde->size) {
-                dir->ptr += vde->size;
-                dir->size -= vde->size;
-                if (vde->name[0] != '\0') {
-                    size_t namelen = strlen(vde->name) + 1;
-                    // Traditionally d_ino==0 indicates a deleted entry that
-                    // should be ignored.  No standard requires that d_ino
-                    // be nonzero, but it's good to avoid tripping up old
-                    // code that checks for d_ino==0.
-                    de->d_ino = 42;
-                    de->d_off = 0;
-                    // The d_reclen field is nonstandard, but existing code
-                    // may expect it to be useful as an upper bound on the
-                    // length of the name.
-                    de->d_reclen = offsetof(struct dirent, d_name) + namelen;
-                    de->d_type = vde->type;
-                    memcpy(de->d_name, vde->name, namelen);
-                    break;
-                } else {
-                    // skip nameless entries.
-                    // (they may be generated by filtering filesystems)
-                    continue;
-                }
+
+            if (dir->size < vde->size + sizeof(vdirent_t)) {
+                // This buffer is corrupted (not large enough to hold a name).
+                // Reset it.
+                dir->ptr = NULL;
+                dir->size = 0;
+                break;
             }
-            dir->size = 0;
+
+            dir->ptr += vde->size + sizeof(vdirent_t);
+            dir->size -= vde->size + sizeof(vdirent_t);
+
+            if (vde->size == 0) {
+                // Skip nameless entries.
+                // (they may be generated by filtering filesystems)
+                continue;
+            }
+
+            // The remaining portion of the buffer is large
+            // enough to hold the dirent name.
+            size_t namelen = vde->size;
+            de->d_ino = vde->ino;
+            de->d_off = 0;
+            // The d_reclen field is nonstandard, but existing code
+            // may expect it to be useful as an upper bound on the
+            // length of the name.
+            de->d_reclen = offsetof(struct dirent, d_name) + namelen + 1;
+            de->d_type = vde->type;
+            memcpy(de->d_name, vde->name, namelen);
+            de->d_name[namelen] = '\0';
+            break;
         }
         int64_t cmd = (dir->ptr == NULL) ? READDIR_CMD_RESET : READDIR_CMD_NONE;
         int r = getdirents(dir->fd, dir->data, DIR_BUFSIZE, cmd);
@@ -1791,6 +1904,7 @@ struct dirent* readdir(DIR* dir) {
     return de;
 }
 
+__EXPORT
 void rewinddir(DIR* dir) {
     mtx_lock(&dir->lock);
     dir->size = 0;
@@ -1798,10 +1912,12 @@ void rewinddir(DIR* dir) {
     mtx_unlock(&dir->lock);
 }
 
+__EXPORT
 int dirfd(DIR* dir) {
     return dir->fd;
 }
 
+__EXPORT
 int isatty(int fd) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -1825,6 +1941,7 @@ int isatty(int fd) {
     return ret;
 }
 
+__EXPORT
 mode_t umask(mode_t mask) {
     mode_t oldmask;
     mtx_lock(&fdio_lock);
@@ -1834,6 +1951,7 @@ mode_t umask(mode_t mask) {
     return oldmask;
 }
 
+__EXPORT
 int fdio_handle_fd(zx_handle_t h, zx_signals_t signals_in, zx_signals_t signals_out,
                    bool shared_handle) {
     fdio_t* io = fdio_waitable_create(h, signals_in, signals_out, shared_handle);
@@ -1847,15 +1965,18 @@ int fdio_handle_fd(zx_handle_t h, zx_signals_t signals_in, zx_signals_t signals_
 
 // from fdio/private.h, to support message-loop integration
 
+__EXPORT
 void __fdio_wait_begin(fdio_t* io, uint32_t events,
                        zx_handle_t* handle_out, zx_signals_t* signals_out) {
     return io->ops->wait_begin(io, events, handle_out, signals_out);
 }
 
+__EXPORT
 void __fdio_wait_end(fdio_t* io, zx_signals_t signals, uint32_t* events_out) {
     return io->ops->wait_end(io, signals, events_out);
 }
 
+__EXPORT
 void __fdio_release(fdio_t* io) {
     fdio_release(io);
 }
@@ -1864,6 +1985,7 @@ void __fdio_release(fdio_t* io) {
 // TODO: getrlimit(RLIMIT_NOFILE, ...)
 #define MAX_POLL_NFDS 1024
 
+__EXPORT
 int ppoll(struct pollfd* fds, nfds_t n,
           const struct timespec* timeout_ts, const sigset_t* sigmask) {
     if (sigmask) {
@@ -1962,12 +2084,14 @@ int ppoll(struct pollfd* fds, nfds_t n,
     return (r == ZX_OK || r == ZX_ERR_TIMED_OUT) ? nfds : ERROR(r);
 }
 
+__EXPORT
 int poll(struct pollfd* fds, nfds_t n, int timeout) {
     struct timespec timeout_ts = {timeout / 1000, (timeout % 1000) * 1000000};
     struct timespec* ts = timeout >= 0 ? &timeout_ts : NULL;
     return ppoll(fds, n, ts, NULL);
 }
 
+__EXPORT
 int select(int n, fd_set* restrict rfds, fd_set* restrict wfds, fd_set* restrict efds,
            struct timeval* restrict tv) {
     if (n > FD_SETSIZE || n < 1) {
@@ -2081,6 +2205,7 @@ int select(int n, fd_set* restrict rfds, fd_set* restrict wfds, fd_set* restrict
     return (r == ZX_OK || r == ZX_ERR_TIMED_OUT) ? nfds : ERROR(r);
 }
 
+__EXPORT
 int ioctl(int fd, int req, ...) {
     fdio_t* io;
     if ((io = fd_to_io(fd)) == NULL) {
@@ -2094,6 +2219,7 @@ int ioctl(int fd, int req, ...) {
     return STATUS(r);
 }
 
+__EXPORT
 ssize_t sendto(int fd, const void* buf, size_t buflen, int flags, const struct sockaddr* addr, socklen_t addrlen) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -2104,6 +2230,7 @@ ssize_t sendto(int fd, const void* buf, size_t buflen, int flags, const struct s
     return r < 0 ? STATUS(r) : r;
 }
 
+__EXPORT
 ssize_t recvfrom(int fd, void* restrict buf, size_t buflen, int flags, struct sockaddr* restrict addr, socklen_t* restrict addrlen) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -2117,6 +2244,7 @@ ssize_t recvfrom(int fd, void* restrict buf, size_t buflen, int flags, struct so
     return r < 0 ? STATUS(r) : r;
 }
 
+__EXPORT
 ssize_t sendmsg(int fd, const struct msghdr *msg, int flags) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -2127,6 +2255,7 @@ ssize_t sendmsg(int fd, const struct msghdr *msg, int flags) {
     return r < 0 ? STATUS(r) : r;
 }
 
+__EXPORT
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -2137,6 +2266,7 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
     return r < 0 ? STATUS(r) : r;
 }
 
+__EXPORT
 int shutdown(int fd, int how) {
     fdio_t* io;
     if ((io = fd_to_io(fd)) == NULL) {
@@ -2153,39 +2283,49 @@ int shutdown(int fd, int how) {
     return STATUS(r);
 }
 
+__EXPORT
 int fstatfs(int fd, struct statfs* buf) {
-    char buffer[sizeof(vfs_query_info_t) + MAX_FS_NAME_LEN + 1];
-    vfs_query_info_t* info = (vfs_query_info_t*)buffer;
-
-    ssize_t rv = ioctl_vfs_query_fs(fd, info, sizeof(buffer) - 1);
-    if (rv < 0) {
-        return ERRNO(fdio_status_to_errno(rv));
+    fdio_t* io;
+    if ((io = fd_to_io(fd)) == NULL) {
+        return ERRNO(EBADF);
+    }
+    zx_handle_t handle = __fdio_borrow_channel(io);
+    if (handle == ZX_HANDLE_INVALID) {
+        fdio_release(io);
+        return ERRNO(ENOTSUP);
+    }
+    zx_status_t status;
+    fuchsia_io_FilesystemInfo info;
+    zx_status_t io_status = fuchsia_io_DirectoryAdminQueryFilesystem(handle, &status, &info);
+    fdio_release(io);
+    if (io_status != ZX_OK) {
+        return ERRNO(fdio_status_to_errno(io_status));
+    } else if (status != ZX_OK) {
+        return ERRNO(fdio_status_to_errno(status));
     }
 
-    if ((size_t)rv < sizeof(vfs_query_info_t) || (size_t)rv >= sizeof(buffer)) {
-        return ERRNO(EIO);
-    }
-    buffer[rv] = '\0';
+    info.name[fuchsia_io_MAX_FS_NAME_BUFFER - 1] = '\0';
 
     struct statfs stats = {};
 
-    if (info->block_size) {
-        stats.f_bsize = info->block_size;
-        stats.f_blocks = info->total_bytes / stats.f_bsize;
-        stats.f_bfree = stats.f_blocks - info->used_bytes / stats.f_bsize;
+    if (info.block_size) {
+        stats.f_bsize = info.block_size;
+        stats.f_blocks = info.total_bytes / stats.f_bsize;
+        stats.f_bfree = stats.f_blocks - info.used_bytes / stats.f_bsize;
     }
     stats.f_bavail = stats.f_bfree;
-    stats.f_files = info->total_nodes;
-    stats.f_ffree = info->total_nodes - info->used_nodes;
-    stats.f_namelen = info->max_filename_size;
-    stats.f_type = info->fs_type;
-    stats.f_fsid.__val[0] = info->fs_id;
-    stats.f_fsid.__val[1] = info->fs_id >> 32;
+    stats.f_files = info.total_nodes;
+    stats.f_ffree = info.total_nodes - info.used_nodes;
+    stats.f_namelen = info.max_filename_size;
+    stats.f_type = info.fs_type;
+    stats.f_fsid.__val[0] = info.fs_id;
+    stats.f_fsid.__val[1] = info.fs_id >> 32;
 
     *buf = stats;
     return 0;
 }
 
+__EXPORT
 int statfs(const char* path, struct statfs* buf) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
@@ -2196,6 +2336,7 @@ int statfs(const char* path, struct statfs* buf) {
     return rv;
 }
 
+__EXPORT
 int _fd_open_max(void) {
     return FDIO_MAX_FD;
 }

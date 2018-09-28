@@ -63,20 +63,30 @@ int Ft3x27Device::Thread() {
 }
 
 zx_status_t Ft3x27Device::InitPdev() {
-    zx_status_t status = device_get_protocol(parent_, ZX_PROTOCOL_I2C, &i2c_);
+    platform_device_protocol_t pdev;
+
+    zx_status_t status = device_get_protocol(parent_, ZX_PROTOCOL_PLATFORM_DEV, &pdev);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "ft3x27: failed to acquire pdev\n");
+        return status;
+    }
+
+    status = device_get_protocol(parent_, ZX_PROTOCOL_I2C, &i2c_);
     if (status != ZX_OK) {
         zxlogf(ERROR, "ft3x27: failed to acquire i2c\n");
         return status;
     }
 
-    status = device_get_protocol(parent_, ZX_PROTOCOL_GPIO, &gpio_);
-    if (status != ZX_OK) {
-        return status;
+    for (uint32_t i = 0; i < FT_PIN_COUNT; i++) {
+        status = pdev_get_protocol(&pdev, ZX_PROTOCOL_GPIO, i, &gpios_[i]);
+        if (status != ZX_OK) {
+            return status;
+        }
     }
 
-    gpio_config_in(&gpio_, FT_INT_PIN, GPIO_NO_PULL);
+    gpio_config_in(&gpios_[FT_INT_PIN], GPIO_NO_PULL);
 
-    status = gpio_get_interrupt(&gpio_, FT_INT_PIN,
+    status = gpio_get_interrupt(&gpios_[FT_INT_PIN],
                                 ZX_INTERRUPT_MODE_EDGE_LOW,
                                 irq_.reset_and_get_address());
     if (status != ZX_OK) {
@@ -218,13 +228,13 @@ zx_status_t Ft3x27Device::HidBusStart(ddk::HidBusIfcProxy proxy) {
 //  intended mostly for debug purposes
 uint8_t Ft3x27Device::Read(uint8_t addr) {
     uint8_t rbuf;
-    i2c_transact_sync(&i2c_, kI2cIndex, &addr, 1, &rbuf, 1);
+    i2c_write_read_sync(&i2c_, &addr, 1, &rbuf, 1);
     return rbuf;
 }
 
 zx_status_t Ft3x27Device::Read(uint8_t addr, uint8_t* buf, uint8_t len) {
 
-    zx_status_t status = i2c_transact_sync(&i2c_, kI2cIndex, &addr, 1, buf, len);
+    zx_status_t status = i2c_write_read_sync(&i2c_, &addr, 1, buf, len);
     if (status != ZX_OK) {
         zxlogf(ERROR, "Failed to read i2c - %d\n", status);
         return status;

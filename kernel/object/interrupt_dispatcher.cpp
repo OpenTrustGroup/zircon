@@ -72,14 +72,8 @@ bool InterruptDispatcher::SendPacketLocked(zx_time_t timestamp) {
 
 zx_status_t InterruptDispatcher::Trigger(zx_time_t timestamp) {
 
-    // TODO(braval): Currently @johngro's driver uses zx_interrupt_trigger
-    // to wake up a thread waiting on a physical interrupt
-    // Once his driver adopts the interrupt with ports bounded, we can enforce
-    // the below condition again
-    /*
-    if (!(interrupt_.flags & INTERRUPT_VIRTUAL))
+    if (!(flags_ & INTERRUPT_VIRTUAL))
         return ZX_ERR_BAD_STATE;
-    */
 
     // Using AutoReschedDisable is necessary for correctness to prevent
     // context-switching to the woken thread while holding spinlock_.
@@ -133,6 +127,10 @@ void InterruptDispatcher::InterruptHandler() {
 }
 
 zx_status_t InterruptDispatcher::Destroy() {
+    // Using AutoReschedDisable is necessary for correctness to prevent
+    // context-switching to the woken thread while holding spinlock_.
+    AutoReschedDisable resched_disable;
+    resched_disable.Disable();
     Guard<SpinLock, IrqSave> guard{&spinlock_};
 
     MaskInterrupt();
@@ -177,6 +175,10 @@ zx_status_t InterruptDispatcher::Bind(fbl::RefPtr<PortDispatcher> port_dispatche
 }
 
 zx_status_t InterruptDispatcher::Ack() {
+    // Using AutoReschedDisable is necessary for correctness to prevent
+    // context-switching to the woken thread while holding spinlock_.
+    AutoReschedDisable resched_disable;
+    resched_disable.Disable();
     Guard<SpinLock, IrqSave> guard{&spinlock_};
     if (port_dispatcher_ == nullptr) {
         return ZX_ERR_BAD_STATE;

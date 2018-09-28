@@ -76,7 +76,7 @@ static zx_status_t read_file_into_vmo(fdio_t* io, zx_handle_t* out_vmo) {
             size_t chunk = size < MAX_WINDOW ? size : MAX_WINDOW;
             size_t window = (chunk + PAGE_SIZE - 1) & -PAGE_SIZE;
             uintptr_t start = 0;
-            status = zx_vmar_map(current_vmar_handle, 
+            status = zx_vmar_map(current_vmar_handle,
                 ZX_VM_PERM_READ | ZX_VM_PERM_WRITE,
                 0, *out_vmo, offset, window, &start);
             if (status != ZX_OK) {
@@ -126,6 +126,7 @@ static zx_status_t copy_file_vmo(fdio_t* io, zx_handle_t* out_vmo) {
     return status;
 }
 
+__EXPORT
 zx_status_t fdio_get_vmo_copy(int fd, zx_handle_t* out_vmo) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -136,6 +137,7 @@ zx_status_t fdio_get_vmo_copy(int fd, zx_handle_t* out_vmo) {
     return status;
 }
 
+__EXPORT
 zx_status_t fdio_get_vmo_clone(int fd, zx_handle_t* out_vmo) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -146,10 +148,7 @@ zx_status_t fdio_get_vmo_clone(int fd, zx_handle_t* out_vmo) {
     return status;
 }
 
-zx_status_t fdio_get_vmo(int fd, zx_handle_t* out_vmo) {
-    return fdio_get_vmo_copy(fd, out_vmo);
-}
-
+__EXPORT
 zx_status_t fdio_get_vmo_exact(int fd, zx_handle_t* out_vmo) {
     fdio_t* io = fd_to_io(fd);
     if (io == NULL) {
@@ -161,8 +160,4 @@ zx_status_t fdio_get_vmo_exact(int fd, zx_handle_t* out_vmo) {
     fdio_release(io);
 
     return status;
-}
-
-zx_status_t fdio_get_exact_vmo(int fd, zx_handle_t* out_vmo) {
-    return fdio_get_vmo_exact(fd, out_vmo);
 }

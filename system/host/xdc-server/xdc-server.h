@@ -20,14 +20,32 @@ public:
 
     void SetStreamId(uint32_t stream_id);
     void SetConnected(bool connected);
+    // Returns whether the set of client events we are polling for has changed.
+    bool UpdatePollState(bool usb_writable);
+
+    // Queues a completed read transfer to be written to the client.
+    void AddCompletedRead(std::unique_ptr<UsbHandler::Transfer> transfer);
+    // Writes data from completed read transfers to the client until there are
+    // no transfers left, or the client is currently unavailable to accept data.
+    void ProcessCompletedReads(const std::unique_ptr<UsbHandler>& usb_handler);
+    // Writes data read from the client to the usb handler.
+    zx_status_t ProcessWrites(const std::unique_ptr<UsbHandler>& usb_handler);
+    // Returns any unused transfers to the usb handler.
+    void ReturnTransfers(const std::unique_ptr<UsbHandler>& usb_handler);
 
     int fd()             const { return fd_.get(); }
+    // Returns the set of client events we should poll for.
+    short events()       const { return events_; }
     bool registered()    const { return registered_; }
     uint32_t stream_id() const { return stream_id_; }
     bool connected()     const { return connected_; }
+    // Returns true if we have read data from the client not yet sent to the usb handler.
+    bool has_write_data() const { return pending_write_ && pending_write_->request_length() > 0; }
 
 private:
     fbl::unique_fd fd_;
+
+    short events_ = 0;
 
     // Whether the client has registered a stream id.
     bool     registered_ = false;
@@ -35,6 +53,10 @@ private:
     // True if the client has registered a stream id,
     // and that stream id is also registered on the xdc device side.
     bool     connected_  = false;
+
+    std::vector<std::unique_ptr<UsbHandler::Transfer>> completed_reads_;
+    // Data read from the client, to be sent to the usb handler.
+    std::unique_ptr<UsbHandler::Transfer> pending_write_;
 };
 
 class XdcServer {
@@ -50,6 +72,8 @@ public:
 
 private:
     bool Init();
+
+    void UpdateClientPollEvents();
 
     // Updates poll_fds_ with any newly added or removed usb handler fds.
     void UpdateUsbHandlerFds();

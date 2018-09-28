@@ -11,7 +11,7 @@
 
 #include "i2c-impl-internal.h"
 
-// DDK I2C protocol support.
+// DDK I2C implementation protocol support.
 //
 // :: Proxies ::
 //
@@ -21,7 +21,7 @@
 // :: Mixins ::
 //
 // ddk::I2cImplProtocol is a mixin class that simplifies writing DDK drivers that
-// implement the I2C protocol.
+// implement the I2C implementation protocol.
 //
 // :: Examples ::
 //
@@ -35,8 +35,7 @@
 //     I2cImplDevice(zx_device_t* parent)
 //       : I2cImplDeviceType("my-i2c-impl-device", parent) {}
 //
-//    zx_status_t I2cTransact(uint32_t index, const void* write_buf, size_t write_length,
-//                            size_t read_length, i2c_complete_cb complete_cb, void* cookie);
+//    zx_status_t Transact(uint32_t bus_id, uint16_t address, i2c_impl_op_t* ops, size_t count);
 //    zx_status_t I2cGetMaxTransferSize(uint32_t index, size_t* out_size);
 //     ...
 // };
@@ -70,13 +69,11 @@ private:
         return static_cast<D*>(ctx)->I2cImplGetMaxTransferSize(bus_id, out_size);
     }
     static zx_status_t I2cImplSetBitRate(void* ctx, uint32_t bus_id, uint32_t bitrate) {
-        return static_cast<D*>(ctx)->I2cImplGetMaxTransferSize(bus_id, bitrate);
+        return static_cast<D*>(ctx)->I2cImplSetBitRate(bus_id, bitrate);
     }
-    static zx_status_t I2cImplTransact(void* ctx, uint32_t bus_id, uint16_t address,
-                                       const void* write_buf, size_t write_length, void* read_buf,
-                                       size_t read_length) {
-        return static_cast<D*>(ctx)->I2cImplTransact(bus_id, address, write_buf, write_length,
-                                                     read_buf, read_length);
+    static zx_status_t I2cImplTransact(void* ctx, uint32_t bus_id, i2c_impl_op_t* ops,
+                                       size_t count) {
+        return static_cast<D*>(ctx)->I2cImplTransact(bus_id, ops, count);
     }
 };
 
@@ -99,10 +96,8 @@ public:
     zx_status_t SetBitRate(uint32_t bus_id, uint32_t bitrate) {
         return ops_->set_bitrate(ctx_, bus_id, bitrate);
     }
-    zx_status_t Transact(uint32_t bus_id, uint16_t address, const void* write_buf,
-                         size_t write_length, void* read_buf, size_t read_length) {
-        return ops_->transact(ctx_, bus_id, address, write_buf,  write_length, read_buf,
-                              read_length);
+    zx_status_t Transact(uint32_t bus_id, i2c_impl_op_t* ops, size_t count) {
+        return ops_->transact(ctx_, bus_id, ops, count);
     }
 
 private:

@@ -54,7 +54,9 @@ zx_status_t Bcache::Writeblk(blk_t bno, const void* data) {
 }
 
 int Bcache::Sync() {
-    return fsync(fd_.get());
+    fs::WriteTxn sync_txn(this);
+    sync_txn.EnqueueFlush();
+    return sync_txn.Transact();
 }
 
 zx_status_t Bcache::Create(fbl::unique_ptr<Bcache>* out, fbl::unique_fd fd, uint32_t blockmax) {
@@ -88,8 +90,14 @@ zx_status_t Bcache::Create(fbl::unique_ptr<Bcache>* out, fbl::unique_fd fd, uint
 }
 
 #ifdef __Fuchsia__
-ssize_t Bcache::GetDevicePath(char* out, size_t out_len) {
-    return ioctl_device_get_topo_path(fd_.get(), out, out_len);
+zx_status_t Bcache::GetDevicePath(size_t buffer_len, char* out_name, size_t* out_len) {
+    ssize_t r = ioctl_device_get_topo_path(fd_.get(), out_name, buffer_len);
+    if (r < 0) {
+        return static_cast<zx_status_t>(r);
+    }
+    *out_len = r;
+    return ZX_OK;
+
 }
 
 zx_status_t Bcache::AttachVmo(zx_handle_t vmo, vmoid_t* out) const {

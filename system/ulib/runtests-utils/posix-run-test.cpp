@@ -14,6 +14,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <fbl/algorithm.h>
 #include <fbl/auto_call.h>
 #include <unittest/unittest.h>
 
@@ -61,8 +62,8 @@ fbl::unique_ptr<Result> PosixRunTest(const char* argv[],
     // Construct the array of whitelisted environment variable strings of the
     // form "<name>=<value>".  The env_strings array just keeps the underlying
     // std::string objects alive so the envp pointers remain valid.
-    std::string env_strings[countof(kEnvironmentWhitelist)];
-    const char* envp[countof(env_strings) + 1];  // +1 for null terminator.
+    std::string env_strings[fbl::count_of(kEnvironmentWhitelist)];
+    const char* envp[fbl::count_of(env_strings) + 1];  // +1 for null terminator.
     size_t i = 0;
     for (const char* var : kEnvironmentWhitelist) {
         const char* val = getenv(var);

@@ -30,14 +30,11 @@
 #include <blobfs/blobfs.h>
 #include <blobfs/format.h>
 
-#include <zircon/crashlogger.h>
-
 namespace blobfs {
 
 class Blobfs;
 class VnodeBlob;
 class WritebackWork;
-using ReadTxn = fs::ReadTxn<kBlobfsBlockSize, Blobfs>;
 
 typedef struct {
     zx_handle_t vmo;

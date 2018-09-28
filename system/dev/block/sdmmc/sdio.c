@@ -87,13 +87,12 @@ zx_status_t sdio_rw_data(void *ctx, uint8_t fn_idx, sdio_rw_txn_t *txn) {
     uint32_t func_blk_size = (dev->sdio_dev.funcs[fn_idx]).cur_blk_size;
     uint32_t rem_blocks = (func_blk_size == 0) ? 0 : (data_size / func_blk_size);
     uint32_t data_processed = 0;
-
     while (rem_blocks > 0) {
         uint32_t num_blocks = 1;
-        //TODO (ravoorir) : Re-enable multi block support after fixing the
-        //multi block failures.
         if (mbs) {
-            uint32_t max_host_blocks = (dev->host_info.max_transfer_size) / (func_blk_size);
+            uint32_t max_host_blocks;
+            max_host_blocks = use_dma ? ((dev->host_info.max_transfer_size) / func_blk_size) :
+                                      ((dev->host_info.max_transfer_size_non_dma) / func_blk_size);
             // multiblock is supported, determine max number of blocks per cmd
             num_blocks = MIN(MIN(SDIO_IO_RW_EXTD_MAX_BLKS_PER_CMD, max_host_blocks), rem_blocks);
         }
@@ -188,11 +187,6 @@ static zx_status_t sdio_write_data16(sdmmc_device_t *dev, uint8_t fn_idx, uint32
     }
 
     return ZX_OK;
-}
-
-zx_status_t sdio_get_oob_irq_host(void *ctx, zx_handle_t *oob_irq) {
-    sdmmc_device_t *dev = ctx;
-    return sdmmc_get_sdio_oob_irq(&dev->host, oob_irq);
 }
 
 zx_status_t sdio_get_device_hw_info(void *ctx, sdio_hw_info_t *dev_info) {
@@ -738,8 +732,28 @@ static zx_status_t sdio_init_func(sdmmc_device_t *dev, uint8_t fn_idx) {
     return st;
 }
 
-zx_status_t sdmmc_probe_sdio(sdmmc_device_t* dev) {
+zx_status_t sdmmc_sdio_reset(sdmmc_device_t* dev) {
     zx_status_t st = ZX_OK;
+    uint8_t abort_byte;
+
+    st = sdio_io_rw_direct(dev, false, 0, SDIO_CIA_CCCR_ASx_ABORT_SEL_CR_ADDR, 0, &abort_byte);
+    if (st != ZX_OK) {
+        abort_byte = SDIO_CIA_CCCR_ASx_ABORT_SOFT_RESET;
+    } else {
+        abort_byte |= SDIO_CIA_CCCR_ASx_ABORT_SOFT_RESET;
+    }
+    return sdio_io_rw_direct(dev, true, 0, SDIO_CIA_CCCR_ASx_ABORT_SEL_CR_ADDR, abort_byte, NULL);
+}
+
+
+zx_status_t sdmmc_probe_sdio(sdmmc_device_t* dev) {
+    zx_status_t st = sdmmc_sdio_reset(dev);
+
+    if ((st = sdmmc_go_idle(dev)) != ZX_OK) {
+      zxlogf(ERROR, "sdmmc: SDMMC_GO_IDLE_STATE failed, retcode = %d\n", st);
+      return st;
+    }
+
     uint32_t ocr;
     if ((st = sdio_send_op_cond(dev, 0, &ocr)) != ZX_OK) {
         zxlogf(ERROR, "sdmmc_probe_sdio: SDIO_SEND_OP_COND failed, retcode = %d\n", st);
@@ -791,7 +805,8 @@ zx_status_t sdmmc_probe_sdio(sdmmc_device_t* dev) {
         }
     }
 
-    if (sdio_is_uhs_supported(dev->sdio_dev.hw_info.caps)) {
+    //TODO(ravoorir):Re-enable ultra high speed when wifi stack is more stable.
+    /* if (sdio_is_uhs_supported(dev->sdio_dev.hw_info.caps)) {
         if ((st = sdio_switch_bus_width(dev, SDIO_BW_4BIT)) != ZX_OK) {
             zxlogf(ERROR, "sdmmc_probe_sdio: Swtiching to 4-bit bus width failed, retcode = %d\n",
                    st);
@@ -801,10 +816,19 @@ zx_status_t sdmmc_probe_sdio(sdmmc_device_t* dev) {
             zxlogf(ERROR, "sdmmc_probe_sdio: Switching to high speed failed, retcode = %d\n", st);
             goto high_speed;
         }
+        uint32_t hw_caps = dev->sdio_dev.hw_info.caps;
+
+        if ((hw_caps & SDIO_CARD_UHS_SDR104) || (hw_caps & SDIO_CARD_UHS_SDR50)) {
+            st = sdmmc_perform_tuning(&dev->host, SD_SEND_TUNING_BLOCK);
+            if (st != ZX_OK) {
+                zxlogf(ERROR, "mmc: tuning failed %d\n", st);
+                goto high_speed;
+            }
+        }
         goto complete;
     }
 
-high_speed:
+high_speed: */
     if (dev->sdio_dev.hw_info.caps & SDIO_CARD_HIGH_SPEED) {
         if ((st = sdio_switch_hs(dev)) != ZX_OK) {
             zxlogf(ERROR, "sdmmc_probe_sdio: Switching to high speed failed, retcode = %d\n", st);

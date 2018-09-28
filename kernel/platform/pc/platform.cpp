@@ -17,7 +17,7 @@
 #include <arch/x86/cpu_topology.h>
 #include <arch/x86/mmu.h>
 #include <assert.h>
-#if defined(WITH_DEV_PCIE)
+#if defined(WITH_KERNEL_PCIE)
 #include <dev/pcie_bus_driver.h>
 #endif
 #include <dev/uart.h>
@@ -624,7 +624,12 @@ const size_t kTotalPageTableCount = kNumL2PageTables + kNumL3PageTables + kNumL4
 static void alloc_pages_greater_than(paddr_t lower_bound, size_t count, paddr_t* paddrs) {
     struct list_node list = LIST_INITIAL_VALUE(list);
     while (count) {
-        const size_t actual = pmm_alloc_range(lower_bound, count, &list);
+        // TODO: replace with pmm routine that can allocate not in a range
+        size_t actual = 0;
+        zx_status_t status = pmm_alloc_range(lower_bound, count, &list);
+        if (status == ZX_OK) {
+            actual = count;
+        }
 
         for (size_t i = 0; i < actual; i++) {
             paddrs[count - (i + 1)] = lower_bound + PAGE_SIZE * i;
@@ -663,7 +668,7 @@ void platform_mexec_prep(uintptr_t new_bootimage_addr, size_t new_bootimage_len)
     // Leaving PCI running will also leave DMA running which may cause memory
     // corruption after boot.
     // Disabling PCI may cause devices to fail to enumerate after boot.
-#ifdef WITH_DEV_PCIE
+#ifdef WITH_KERNEL_PCIE
     if (cmdline_get_bool("kernel.mexec-pci-shutdown", true)) {
         PcieBusDriver::GetDriver()->DisableBus();
     }

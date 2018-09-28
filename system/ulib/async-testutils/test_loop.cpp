@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(joshuseaton): Once std lands in Zircon, simplify everything below.
+
 #include <lib/async-testutils/test_loop.h>
 
 #include <stdlib.h>
 
 #include <fbl/algorithm.h>
-#include <fbl/intrusive_wavl_tree.h>
 #include <lib/async-testutils/time-keeper.h>
 #include <lib/async/default.h>
 #include <lib/zircon-internal/xorshiftrand.h>
@@ -44,50 +45,6 @@ uint32_t GetRandomSeed() {;
     return random_seed;
 }
 
-// Timer abstractions to be 'fired' as time is advanced.
-class TimerList : public fbl::WAVLTreeContainable<fbl::unique_ptr<TimerList>> {
-public:
-    TimerList(zx::time deadline, TimerDispatcher* dispatcher)
-        : deadline_(deadline), dispatchers_({dispatcher}) {}
-
-    zx::time Deadline() const { return deadline_; }
-
-    void AddDispatcher(TimerDispatcher* dispatcher) {
-        for (const auto& td : dispatchers_){
-            if (dispatcher == td) { return; }
-        }
-        dispatchers_.push_back(dispatcher);
-    }
-
-    // Removes |dispatcher| from |dispatchers_| and returns true iff there are
-    // elements still left in the latter.
-    bool RemoveDispatcher(TimerDispatcher* dispatcher) {
-        for (size_t i = 0; i < dispatchers_.size(); ++i) {
-            if (dispatcher == dispatchers_[i]) {
-                dispatchers_.erase(i);
-                break;
-            }
-        }
-        return !dispatchers_.is_empty();
-    }
-
-    void Fire() {
-        for (const auto& dispatcher : dispatchers_) {
-          dispatcher->FireTimer();
-        }
-        while(!dispatchers_.is_empty()) {
-            dispatchers_.pop_back();
-        }
-    }
-
-    // Trait implementation for fbl::WAVLTree.
-    zx::time GetKey() const { return deadline_; }
-
-private:
-    const zx::time deadline_;
-    fbl::Vector<TimerDispatcher*> dispatchers_;
-};
-
 } // namespace
 
 class TestLoop::TestLoopTimeKeeper : public TimeKeeper {
@@ -98,42 +55,70 @@ public:
     zx::time Now() const override { return current_time_; }
 
     void RegisterTimer(zx::time deadline, TimerDispatcher* dispatcher) override {
-        // If |deadline| has passed, signal expiration immediately.
         if (deadline <= current_time_) {
             dispatcher->FireTimer();
             return;
         }
-        auto iter = fake_timers_.find(deadline);
-        if (iter.IsValid()) {
-            iter->AddDispatcher(dispatcher);
-        } else {
-            fake_timers_.insert(
-                fbl::make_unique<TimerList>(deadline, dispatcher));
+
+        for (auto& entry : table_) {
+            if (entry.dispatcher == dispatcher) {
+                entry.deadlines.push_back(deadline);
+                return;
+            }
         }
+
+        DeadlinesByDispatcher entry{};
+        entry.dispatcher = dispatcher;
+        entry.deadlines.push_back(deadline);
+        table_.push_back(fbl::move(entry));
     }
 
     void CancelTimers(TimerDispatcher* dispatcher) override {
-      auto iter = fake_timers_.begin();
-      while (iter.IsValid()) {
-          auto current = iter++;
-          if (!current->RemoveDispatcher(dispatcher)) {
-              fake_timers_.erase(current);
-          }
-      }
+        size_t ind = 0;
+        for (; ind < table_.size(); ++ind){
+            if (table_[ind].dispatcher == dispatcher){
+                table_.erase(ind);
+                return;
+            }
+        }
     }
 
     void AdvanceTimeTo(zx::time time) {
         if (time < current_time_) { return; }
         current_time_ = time;
-        while (!fake_timers_.is_empty() && fake_timers_.front().Deadline() <= current_time_) {
-            fake_timers_.front().Fire();
-            fake_timers_.pop_front();
+
+        for (auto& entry : table_) {
+            if (entry.deadlines.size() == 0) {
+                continue;
+            }
+            zx::time min_deadline =
+              *fbl::min_element(entry.deadlines.begin(), entry.deadlines.end());
+            if (min_deadline > time){
+                continue;
+            }
+            entry.dispatcher->FireTimer();
+
+            size_t end = entry.deadlines.size() - 1;
+            for (size_t i = 0; i <= entry.deadlines.size(); ++i){
+                zx::time back = entry.deadlines[end];
+                entry.deadlines.pop_back();
+                if (back > time) {
+                    entry.deadlines.insert(0, back);
+                    continue;
+                }
+                --end;
+            }
         }
     }
 
 private:
+    struct DeadlinesByDispatcher {
+      TimerDispatcher* dispatcher;
+      fbl::Vector<zx::time> deadlines;
+    };
+
     zx::time current_time_;
-    fbl::WAVLTree<zx::time, fbl::unique_ptr<TimerList>> fake_timers_;
+    fbl::Vector<DeadlinesByDispatcher> table_;
 };
 
 
@@ -161,7 +146,7 @@ private:
 };
 
 TestLoop::TestLoop()
-    : time_keeper_(new TestLoopTimeKeeper()), state_(GetRandomSeed()) {
+    : time_keeper_(new TestLoopTimeKeeper()), initial_state_(GetRandomSeed()), state_(initial_state_) {
     dispatchers_.push_back(fbl::make_unique<TestLoopDispatcher>(time_keeper_.get()));
     async_set_default_dispatcher(dispatchers_[0].get());
 }
@@ -184,18 +169,14 @@ zx::time TestLoop::Now() const {
     return time_keeper_->Now();
 }
 
-void TestLoop::AdvanceTimeTo(zx::time time) {
-    time_keeper_->AdvanceTimeTo(time);
-}
-
-void TestLoop::AdvanceTimeBy(zx::duration delta) {
-    AdvanceTimeTo(Now() + delta);
-}
-
 void TestLoop::Quit() {
     has_quit_ = true;
 }
 
+
+void TestLoop::AdvanceTimeByEpsilon() {
+    time_keeper_->AdvanceTimeTo(Now() + zx::duration(1));
+}
 
 bool TestLoop::RunUntil(zx::time deadline) {
     ZX_ASSERT(!is_running_);
@@ -205,10 +186,10 @@ bool TestLoop::RunUntil(zx::time deadline) {
         if (!HasPendingWork()) {
             zx::time next_due_time = GetNextTaskDueTime();
             if (next_due_time > deadline) {
-                AdvanceTimeTo(deadline);
+                time_keeper_->AdvanceTimeTo(deadline);
                 break;
             }
-            AdvanceTimeTo(next_due_time);
+            time_keeper_->AdvanceTimeTo(next_due_time);
         }
 
         Randomize(&state_);

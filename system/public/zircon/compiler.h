@@ -33,6 +33,7 @@
 #define __SRAM __NO_INLINE __SECTION(".sram.text")
 #define __CONSTRUCTOR __attribute__((__constructor__))
 #define __DESTRUCTOR __attribute__((__destructor__))
+#define __RESTRICT __restrict
 
 #ifndef __clang__
 #define __LEAF_FN __attribute__((__leaf__))
@@ -45,11 +46,7 @@
 #define __LEAF_FN
 #define __OPTIMIZE(x)
 #define __EXTERNALLY_VISIBLE
-#ifndef DISABLE_THREAD_ANNOTATIONS
 #define __THREAD_ANNOTATION(x) __attribute__((x))
-#else
-#define __THREAD_ANNOTATION(x)
-#endif
 #define __NO_SAFESTACK __attribute__((__no_sanitize__("safe-stack")))
 #endif
 
@@ -94,12 +91,6 @@
 
 #if !defined(__DEPRECATE)
 #define __DEPRECATE __attribute__((__deprecated__))
-#endif
-
-#if ENABLE_DDK_DEPRECATIONS
-#define __DDK_DEPRECATE __DEPRECATE
-#else
-#define __DDK_DEPRECATE
 #endif
 
 /* TODO: add type check */

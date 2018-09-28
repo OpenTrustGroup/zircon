@@ -113,11 +113,11 @@ static void dsi_configure_dphy_pll(dsi_t* dsi) {
 }
 
 static void hdmi_gpio_init(dsi_t* dsi) {
-    gpio_protocol_t* gpio = &dsi->hdmi_gpio.gpio;
-    gpio_config_out(gpio, GPIO_MUX, 0);
-    gpio_config_out(gpio, GPIO_PD, 0);
-    gpio_config_in(gpio, GPIO_INT, GPIO_NO_PULL);
-    gpio_write(gpio, GPIO_MUX, 0);
+    gpio_protocol_t* gpios = dsi->hdmi_gpio.gpios;
+    gpio_config_out(&gpios[GPIO_MUX], 0);
+    gpio_config_out(&gpios[GPIO_PD], 0);
+    gpio_config_in(&gpios[GPIO_INT], GPIO_NO_PULL);
+    gpio_write(&gpios[GPIO_MUX], 0);
 }
 
 static void dsi_release(void* ctx) {
@@ -364,15 +364,25 @@ static zx_status_t dsi_bind(void* ctx, zx_device_t* parent) {
     }
 
     /* Obtain the I2C devices */
-    if (device_get_protocol(parent, ZX_PROTOCOL_I2C, &dsi->i2c_dev.i2c) != ZX_OK) {
+    if (pdev_get_protocol(&dsi->pdev, ZX_PROTOCOL_I2C, 0, &dsi->i2c_dev.i2c_main) != ZX_OK) {
+        zxlogf(ERROR, "%s: Could not obtain I2C Protocol\n", __FUNCTION__);
+        goto fail;
+    }
+    if (pdev_get_protocol(&dsi->pdev, ZX_PROTOCOL_I2C, 1, &dsi->i2c_dev.i2c_cec) != ZX_OK) {
+        zxlogf(ERROR, "%s: Could not obtain I2C Protocol\n", __FUNCTION__);
+        goto fail;
+    }
+    if (pdev_get_protocol(&dsi->pdev, ZX_PROTOCOL_I2C, 2, &dsi->i2c_dev.i2c_edid) != ZX_OK) {
         zxlogf(ERROR, "%s: Could not obtain I2C Protocol\n", __FUNCTION__);
         goto fail;
     }
 
     /* Obtain the GPIO devices */
-    if (device_get_protocol(parent, ZX_PROTOCOL_GPIO, &dsi->hdmi_gpio.gpio) != ZX_OK) {
-        zxlogf(ERROR, "%s: Could not obtain GPIO Protocol\n", __FUNCTION__);
-        goto fail;
+    for (uint32_t i = 0; i < countof(dsi->hdmi_gpio.gpios); i++) {
+        if (pdev_get_protocol(&dsi->pdev, ZX_PROTOCOL_GPIO, i, &dsi->hdmi_gpio.gpios[i]) != ZX_OK) {
+            zxlogf(ERROR, "%s: Could not obtain GPIO Protocol\n", __FUNCTION__);
+            goto fail;
+        }
     }
 
     hdmi_gpio_init(dsi);

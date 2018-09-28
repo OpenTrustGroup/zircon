@@ -4,6 +4,8 @@
 
 #include "provider_impl.h"
 
+#include <stdio.h>
+
 #include <fbl/algorithm.h>
 #include <fbl/type_support.h>
 #include <lib/async/default.h>
@@ -11,23 +13,20 @@
 #include <lib/fidl/coding.h>
 #include <zircon/assert.h>
 #include <zircon/process.h>
+#include <zircon/status.h>
 #include <zircon/syscalls.h>
 
 #include "handler_impl.h"
 #include "trace_provider.fidl.h"
+#include "utils.h"
 
 namespace trace {
 namespace internal {
 
-constexpr zx_signals_t SIGNAL_TRACING_STARTED = ZX_USER_SIGNAL_0;
-constexpr zx_signals_t SIGNAL_TRACING_CLOSED = ZX_USER_SIGNAL_1;
-
 TraceProviderImpl::TraceProviderImpl(async_dispatcher_t* dispatcher,
-                                     zx::channel channel,
-                                     zx::event start_event)
+                                     zx::channel channel)
     : dispatcher_(dispatcher),
-      connection_(this, fbl::move(channel)),
-      start_event_(fbl::move(start_event)) {
+      connection_(this, fbl::move(channel)) {
 }
 
 TraceProviderImpl::~TraceProviderImpl() = default;
@@ -35,45 +34,17 @@ TraceProviderImpl::~TraceProviderImpl() = default;
 void TraceProviderImpl::Start(trace_buffering_mode_t buffering_mode,
                               zx::vmo buffer, zx::fifo fifo,
                               fbl::Vector<fbl::String> enabled_categories) {
-    if (running_)
-        return;
-
-    zx_status_t status = TraceHandlerImpl::StartEngine(
+    TraceHandlerImpl::StartEngine(
         dispatcher_, buffering_mode, fbl::move(buffer), fbl::move(fifo),
         fbl::move(enabled_categories));
-    if (status == ZX_OK) {
-        running_ = true;
-        start_event_.signal(0u, SIGNAL_TRACING_STARTED);
-    }
 }
 
 void TraceProviderImpl::Stop() {
-    if (!running_)
-        return;
-
-    running_ = false;
-    start_event_.signal(SIGNAL_TRACING_STARTED, 0u);
     TraceHandlerImpl::StopEngine();
 }
 
 void TraceProviderImpl::OnClose() {
     Stop();
-    start_event_.signal(0u, SIGNAL_TRACING_CLOSED);
-}
-
-zx_status_t TraceProviderImpl::WaitForTracingStarted(zx::duration timeout) {
-    // This must be run on a thread other than provider's dispatcher thread.
-    ZX_DEBUG_ASSERT(async_get_default_dispatcher() != dispatcher_);
-    if (running_)
-        return ZX_OK;
-    zx_signals_t pending;
-    auto status = start_event_.wait_one(SIGNAL_TRACING_STARTED | SIGNAL_TRACING_CLOSED,
-                                        zx::deadline_after(timeout), &pending);
-    if (status != ZX_OK)
-        return status;
-    if (pending & SIGNAL_TRACING_STARTED)
-        return ZX_OK;
-    return ZX_ERR_CANCELED;
 }
 
 TraceProviderImpl::Connection::Connection(TraceProviderImpl* impl,
@@ -83,6 +54,8 @@ TraceProviderImpl::Connection::Connection(TraceProviderImpl* impl,
             ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED) {
     zx_status_t status = wait_.Begin(impl_->dispatcher_);
     if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: begin wait failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         Close();
     }
 }
@@ -95,14 +68,16 @@ void TraceProviderImpl::Connection::Handle(
     async_dispatcher_t* dispatcher, async::WaitBase* wait, zx_status_t status,
     const zx_packet_signal_t* signal) {
     if (status != ZX_OK) {
-        printf("TraceProvider wait failed: status=%d\n", status);
+        fprintf(stderr, "TraceProvider: wait failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
     } else if (signal->observed & ZX_CHANNEL_READABLE) {
         if (ReadMessage()) {
             if (wait_.Begin(dispatcher) == ZX_OK) {
                 return;
             }
         } else {
-            printf("TraceProvider received invalid FIDL message or failed to send reply.\n");
+            fprintf(stderr,
+                    "TraceProvider: received invalid FIDL message or failed to send reply\n");
         }
     } else {
         ZX_DEBUG_ASSERT(signal->observed & ZX_CHANNEL_PEER_CLOSED);
@@ -120,12 +95,13 @@ bool TraceProviderImpl::Connection::ReadMessage() {
         0u, buffer, sizeof(buffer), &num_bytes,
         handles, static_cast<uint32_t>(fbl::count_of(handles)), &num_handles);
     if (status != ZX_OK) {
-        printf("TraceProvider channel read failed\n");
+        fprintf(stderr, "TraceProvider: channel read failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return false;
     }
 
     if (!DecodeAndDispatch(buffer, num_bytes, handles, num_handles)) {
-        printf("TraceProvider DecodeAndDispatch failed\n");
+        fprintf(stderr, "TraceProvider: DecodeAndDispatch failed\n");
         zx_handle_close_many(handles, num_handles);
         return false;
     }
@@ -202,17 +178,6 @@ void TraceProviderImpl::Connection::Close() {
 } // namespace internal
 } // namespace trace
 
-static zx_koid_t get_pid() {
-    auto self = zx_process_self();
-    zx_info_handle_basic_t info;
-    zx_status_t status = zx_object_get_info(self, ZX_INFO_HANDLE_BASIC,
-                                            &info, sizeof(info), NULL, NULL);
-    if (status != ZX_OK) {
-        return ZX_KOID_INVALID;
-    }
-    return info.koid;
-}
-
 static zx_status_t ConnectToServiceRegistry(zx::channel* out_registry_client) {
     // Connect to the trace registry.
     zx::channel registry_client;
@@ -230,35 +195,44 @@ static zx_status_t ConnectToServiceRegistry(zx::channel* out_registry_client) {
     return ZX_OK;
 }
 
-trace_provider_t* trace_provider_create(async_dispatcher_t* dispatcher) {
+trace_provider_t* trace_provider_create_with_name(async_dispatcher_t* dispatcher,
+                                                  const char* name) {
     ZX_DEBUG_ASSERT(dispatcher);
 
     zx::channel registry_client;
     auto status = ConnectToServiceRegistry(&registry_client);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: connection failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
+    }
 
     // Create the channel to which we will bind the trace provider.
     zx::channel provider_client;
     zx::channel provider_service;
     status = zx::channel::create(0u, &provider_client, &provider_service);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: channel create failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
+    }
 
     // Register the trace provider.
     status = fuchsia_tracelink_RegistryRegisterTraceProvider(
-        registry_client.get(), provider_client.release());
-    if (status != ZX_OK)
+        registry_client.get(), provider_client.release(),
+        trace::internal::GetPid(), name, strlen(name));
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: registry failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
-
-    zx::event start_event;
-    status = zx::event::create(0u, &start_event);
-    if (status != ZX_OK)
-        return nullptr;
+    }
 
     return new trace::internal::TraceProviderImpl(dispatcher,
-                                                  fbl::move(provider_service),
-                                                  fbl::move(start_event));
+                                                  fbl::move(provider_service));
+}
+
+trace_provider_t* trace_provider_create(async_dispatcher_t* dispatcher) {
+    return trace_provider_create_with_name(dispatcher, "");
 }
 
 trace_provider_t* trace_provider_create_synchronously(async_dispatcher_t* dispatcher,
@@ -268,44 +242,44 @@ trace_provider_t* trace_provider_create_synchronously(async_dispatcher_t* dispat
 
     zx::channel registry_client;
     auto status = ConnectToServiceRegistry(&registry_client);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: connection failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
+    }
 
     // Create the channel to which we will bind the trace provider.
     zx::channel provider_client;
     zx::channel provider_service;
     status = zx::channel::create(0u, &provider_client, &provider_service);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: channel create failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
+    }
 
     // Register the trace provider.
     zx_status_t registry_status;
     bool manager_is_tracing_already;
     status = fuchsia_tracelink_RegistryRegisterTraceProviderSynchronously(
         registry_client.get(), provider_client.release(),
-        get_pid(), name, strlen(name),
+        trace::internal::GetPid(), name, strlen(name),
         &registry_status, &manager_is_tracing_already);
-    if (status != ZX_OK)
+    if (status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: RegisterTraceProviderSynchronously failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
-    if (registry_status != ZX_OK)
+    }
+    if (registry_status != ZX_OK) {
+        fprintf(stderr, "TraceProvider: registry failed: status=%d(%s)\n",
+                status, zx_status_get_string(status));
         return nullptr;
-
-    zx::event start_event;
-    status = zx::event::create(0u, &start_event);
-    if (status != ZX_OK)
-        return nullptr;
+    }
 
     if (out_manager_is_tracing_already)
         *out_manager_is_tracing_already = manager_is_tracing_already;
     return new trace::internal::TraceProviderImpl(dispatcher,
-                                                  fbl::move(provider_service),
-                                                  fbl::move(start_event));
-}
-
-zx_status_t trace_provider_wait_tracing_started(trace_provider_t* provider,
-                                                zx_duration_t timeout) {
-    auto p = reinterpret_cast<trace::internal::TraceProviderImpl*>(provider);
-    return p->WaitForTracingStarted(zx::duration(timeout));
+                                                  fbl::move(provider_service));
 }
 
 void trace_provider_destroy(trace_provider_t* provider) {

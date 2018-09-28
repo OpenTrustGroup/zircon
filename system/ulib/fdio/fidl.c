@@ -40,9 +40,9 @@ static zx_status_t txn_null_reply(fidl_txn_t* reply, const fidl_msg_t* msg) {
 }
 
 static zx_status_t handle_rpc_close(zxfidl_cb_t cb, void* cookie) {
-    fuchsia_io_ObjectCloseRequest request;
+    fuchsia_io_NodeCloseRequest request;
     memset(&request, 0, sizeof(request));
-    request.hdr.ordinal = ZXFIDL_CLOSE;
+    request.hdr.ordinal = fuchsia_io_NodeCloseOrdinal;
     fidl_msg_t msg = {
         .bytes = &request,
         .handles = NULL,
@@ -99,6 +99,7 @@ static zx_status_t handle_rpc(zx_handle_t h, zxfidl_cb_t cb, void* cookie) {
     return cb(&msg, &cnxn.txn, cookie);
 }
 
+__EXPORT
 zx_status_t zxfidl_handler(zx_handle_t h, zxfidl_cb_t cb, void* cookie) {
     if (h == ZX_HANDLE_INVALID) {
         return handle_rpc_close(cb, cookie);
@@ -109,9 +110,10 @@ zx_status_t zxfidl_handler(zx_handle_t h, zxfidl_cb_t cb, void* cookie) {
     }
 }
 
-// Always consumes cnxn.
+// Always consumes cnxn. Exported for the sake of vs-vnode tests
+__EXPORT
 zx_status_t fidl_clone_request(zx_handle_t srv, zx_handle_t cnxn, uint32_t flags) {
-    return fuchsia_io_ObjectClone(srv, flags, cnxn);
+    return fuchsia_io_NodeClone(srv, flags, cnxn);
 }
 
 // Always consumes cnxn.
@@ -122,7 +124,7 @@ zx_status_t fidl_open_request(zx_handle_t srv, zx_handle_t cnxn, uint32_t flags,
 
 zx_status_t fidl_close(zxrio_t* rio) {
     zx_status_t io_status, status;
-    if ((io_status = fuchsia_io_ObjectClose(zxrio_handle(rio), &status)) != ZX_OK) {
+    if ((io_status = fuchsia_io_NodeClose(zxrio_handle(rio), &status)) != ZX_OK) {
         return io_status;
     }
     return status;
@@ -180,9 +182,9 @@ zx_status_t fidl_readat(zxrio_t* rio, void* data, uint64_t length, off_t offset,
     return status;
 }
 
-static_assert(SEEK_SET == fuchsia_io_SeekOrigin_Start, "");
-static_assert(SEEK_CUR == fuchsia_io_SeekOrigin_Current, "");
-static_assert(SEEK_END == fuchsia_io_SeekOrigin_End, "");
+static_assert(SEEK_SET == fuchsia_io_SeekOrigin_START, "");
+static_assert(SEEK_CUR == fuchsia_io_SeekOrigin_CURRENT, "");
+static_assert(SEEK_END == fuchsia_io_SeekOrigin_END, "");
 
 zx_status_t fidl_seek(zxrio_t* rio, off_t offset, int whence, off_t* out) {
     zx_status_t io_status, status;

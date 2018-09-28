@@ -14,10 +14,14 @@
 #include <ddk/debug.h>
 #include <ddk/device.h>
 #include <ddk/driver.h>
+#include <ddk/metadata.h>
 #include <ddk/protocol/platform-defs.h>
+#include <fbl/algorithm.h>
 #include <fbl/auto_lock.h>
 #include <fbl/unique_ptr.h>
+#include <zircon/boot/driver-config.h>
 #include <zircon/boot/image.h>
+#include <zircon/device/sysinfo.h>
 #include <zircon/process.h>
 #include <zircon/syscalls/iommu.h>
 
@@ -30,7 +34,8 @@ zx_status_t PlatformBus::Proxy(platform_proxy_args_t* args) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
-    return proto_proxy->Proxy(args);
+    proto_proxy->Proxy(args);
+    return ZX_OK;
 }
 
 zx_status_t PlatformBus::GetBti(uint32_t iommu_index, uint32_t bti_id, zx_handle_t* out_handle) {
@@ -49,11 +54,12 @@ zx_status_t PlatformBus::RegisterProtocol(uint32_t proto_id, void* protocol,
     fbl::AllocChecker ac;
 
     switch (proto_id) {
-    case ZX_PROTOCOL_GPIO: {
+    case ZX_PROTOCOL_GPIO_IMPL: {
         if (proxy_cb != nullptr) {
             return ZX_ERR_INVALID_ARGS;
         }
-        gpio_.reset(new (&ac) ddk::GpioProtocolProxy(static_cast<gpio_protocol_t*>(protocol)));
+        gpio_.reset(new (&ac) ddk::GpioImplProtocolProxy(
+                                                static_cast<gpio_impl_protocol_t*>(protocol)));
         if (!ac.check()) {
             return ZX_ERR_NO_MEMORY;
         }
@@ -69,7 +75,7 @@ zx_status_t PlatformBus::RegisterProtocol(uint32_t proto_id, void* protocol,
             return status;
         }
 
-        i2c_impl_.reset(new (&ac) ddk::I2cImplProtocolProxy(proto));
+        i2c_.reset(new (&ac) ddk::I2cImplProtocolProxy(proto));
         if (!ac.check()) {
             return ZX_ERR_NO_MEMORY;
         }
@@ -215,15 +221,15 @@ zx_status_t PlatformBus::DdkGetProtocol(uint32_t proto_id, void* out) {
         proto->ops = &pbus_proto_ops_;
         return ZX_OK;
     }
-    case ZX_PROTOCOL_GPIO:
+    case ZX_PROTOCOL_GPIO_IMPL:
         if (gpio_ != nullptr) {
-            gpio_->GetProto(static_cast<gpio_protocol_t*>(out));
+            gpio_->GetProto(static_cast<gpio_impl_protocol_t*>(out));
             return ZX_OK;
         }
         break;
     case ZX_PROTOCOL_I2C_IMPL:
-        if (i2c_impl_ != nullptr) {
-            i2c_impl_->GetProto(static_cast<i2c_impl_protocol_t*>(out));
+        if (i2c_ != nullptr) {
+            i2c_->GetProto(static_cast<i2c_impl_protocol_t*>(out));
             return ZX_OK;
         }
         break;
@@ -306,6 +312,7 @@ zx_status_t PlatformBus::ReadZbi(zx::vmo zbi) {
     }
 
     bool got_platform_id = false;
+    uint8_t interrupt_controller_type = INTERRUPT_CONTROLLER_TYPE_UNKNOWN;
     zx_off_t metadata_offset = 0;
     len = zbi_length;
     off = sizeof(header);
@@ -334,6 +341,21 @@ zx_status_t PlatformBus::ReadZbi(zx::vmo zbi) {
             // This is optionally set later by the board driver.
             board_info_.board_revision = 0;
             got_platform_id = true;
+
+            // Publish board name to sysinfo driver
+            status = device_publish_metadata(parent(), "/dev/misc/sysinfo",
+                                             DEVICE_METADATA_BOARD_NAME, platform_id.board_name,
+                                             sizeof(platform_id.board_name));
+            if (status != ZX_OK) {
+                zxlogf(ERROR, "device_publish_metadata(board_name) failed: %d\n", status);
+                return status;
+            }
+        } else if (header.type == ZBI_TYPE_KERNEL_DRIVER) {
+            if (header.extra == KDRV_ARM_GIC_V2) {
+                interrupt_controller_type = INTERRUPT_CONTROLLER_TYPE_GIC_V2;
+            } else if (header.extra == KDRV_ARM_GIC_V3) {
+                interrupt_controller_type = INTERRUPT_CONTROLLER_TYPE_GIC_V3;
+            }
         } else if (ZBI_TYPE_DRV_METADATA(header.type)) {
             status = zbi.read(metadata + metadata_offset, off, itemlen);
             if (status != ZX_OK) {
@@ -344,6 +366,15 @@ zx_status_t PlatformBus::ReadZbi(zx::vmo zbi) {
         }
         off += itemlen;
         len -= itemlen;
+    }
+
+    // Publish interrupt controller type to sysinfo driver
+    status = device_publish_metadata(parent(), "/dev/misc/sysinfo",
+                                     DEVICE_METADATA_INTERRUPT_CONTROLLER_TYPE,
+                                     &interrupt_controller_type, sizeof(interrupt_controller_type));
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "device_publish_metadata(interrupt_controller_type) failed: %d\n", status);
+        return status;
     }
 
     if (!got_platform_id) {
@@ -414,13 +445,13 @@ zx_status_t PlatformBus::I2cInit(i2c_impl_protocol_t* i2c) {
 }
 
 zx_status_t PlatformBus::I2cTransact(uint32_t txid, rpc_i2c_req_t* req,
-                                     const pbus_i2c_channel_t* channel, const void* write_buf,
+                                     const pbus_i2c_channel_t* channel,
                                      zx_handle_t channel_handle) {
     if (channel->bus_id >= i2c_buses_.size()) {
         return ZX_ERR_OUT_OF_RANGE;
     }
     auto i2c_bus = i2c_buses_[channel->bus_id].get();
-    return i2c_bus->Transact(txid, req, channel->address, write_buf, channel_handle);
+    return i2c_bus->Transact(txid, req, channel->address, channel_handle);
 }
 
 void PlatformBus::DdkRelease() {
@@ -487,7 +518,7 @@ zx_status_t PlatformBus::Init(zx::vmo zbi) {
         {BIND_PLATFORM_DEV_PID, 0, board_info_.pid},
     };
 
-    return DdkAdd("platform", 0, props, countof(props));
+    return DdkAdd("platform", 0, props, fbl::count_of(props));
 }
 
 } // namespace platform_bus

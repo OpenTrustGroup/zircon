@@ -219,7 +219,8 @@ zx_status_t PlatformDevice::RpcGpioConfigIn(const DeviceResources* dr, uint32_t 
     return bus_->gpio()->ConfigIn(dr->gpio(index).gpio, flags);
 }
 
-zx_status_t PlatformDevice::RpcGpioConfigOut(const DeviceResources* dr, uint32_t index, uint8_t initial_value) {
+zx_status_t PlatformDevice::RpcGpioConfigOut(const DeviceResources* dr, uint32_t index,
+                                             uint8_t initial_value) {
     if (bus_->gpio() == nullptr) {
         return ZX_ERR_NOT_SUPPORTED;
     }
@@ -304,8 +305,8 @@ zx_status_t PlatformDevice::RpcGpioSetPolarity(const DeviceResources* dr, uint32
 }
 
 zx_status_t PlatformDevice::RpcI2cTransact(const DeviceResources* dr, uint32_t txid,
-                                           rpc_i2c_req_t* req, uint8_t* data, zx_handle_t channel) {
-    if (bus_->i2c_impl() == nullptr) {
+                                           rpc_i2c_req_t* req, zx_handle_t channel) {
+    if (bus_->i2c() == nullptr) {
         return ZX_ERR_NOT_SUPPORTED;
     }
     uint32_t index = req->index;
@@ -314,12 +315,12 @@ zx_status_t PlatformDevice::RpcI2cTransact(const DeviceResources* dr, uint32_t t
     }
     const pbus_i2c_channel_t& pdev_channel = dr->i2c_channel(index);
 
-    return bus_->I2cTransact(txid, req, &pdev_channel, data, channel);
+    return bus_->I2cTransact(txid, req, &pdev_channel, channel);
 }
 
 zx_status_t PlatformDevice::RpcI2cGetMaxTransferSize(const DeviceResources* dr, uint32_t index,
                                                      size_t* out_size) {
-    if (bus_->i2c_impl() == nullptr) {
+    if (bus_->i2c() == nullptr) {
         return ZX_ERR_NOT_SUPPORTED;
     }
     if (index >= dr->i2c_channel_count()) {
@@ -327,7 +328,7 @@ zx_status_t PlatformDevice::RpcI2cGetMaxTransferSize(const DeviceResources* dr, 
     }
     const pbus_i2c_channel_t& pdev_channel = dr->i2c_channel(index);
 
-    return bus_->i2c_impl()->GetMaxTransferSize(pdev_channel.bus_id, out_size);
+    return bus_->i2c()->GetMaxTransferSize(pdev_channel.bus_id, out_size);
 }
 
 zx_status_t PlatformDevice::RpcClkEnable(const DeviceResources* dr, uint32_t index) {
@@ -369,7 +370,7 @@ zx_status_t PlatformDevice::DdkRxrpc(zx_handle_t channel) {
     uint32_t resp_handle_count = 0;
 
     auto status = zx_channel_read(channel, 0, &req_buf, req_handles, sizeof(req_buf),
-                                  countof(req_handles), &actual, &req_handle_count);
+                                  fbl::count_of(req_handles), &actual, &req_handle_count);
     if (status != ZX_OK) {
         zxlogf(ERROR, "platform_dev_rxrpc: zx_channel_read failed %d\n", status);
         return status;
@@ -491,8 +492,7 @@ zx_status_t PlatformDevice::DdkRxrpc(zx_handle_t channel) {
             status = RpcI2cGetMaxTransferSize(dr, req->index, &resp->max_transfer);
             break;
         case I2C_TRANSACT: {
-            auto buf = reinterpret_cast<uint8_t*>(&req[1]);
-            status = RpcI2cTransact(dr, req_header->txid, req, buf, channel);
+            status = RpcI2cTransact(dr, req_header->txid, req, channel);
             if (status == ZX_OK) {
                 // If platform_i2c_transact succeeds, we return immmediately instead of calling
                 // zx_channel_write below. Instead we will respond in platform_i2c_complete().
@@ -536,11 +536,14 @@ zx_status_t PlatformDevice::DdkRxrpc(zx_handle_t channel) {
             .req_handles = req_handles,
             .req_handle_count = req_handle_count,
             .resp_handles = resp_handles,
-            .resp_handle_count = countof(resp_handles),
+            .resp_handle_count = fbl::count_of(resp_handles),
             .resp_actual_size = 0,
             .resp_actual_handles = 0,
         };
         status = bus_->Proxy(&args);
+        if (status == ZX_OK) {
+            status = args.resp->status;
+        }
         resp_len = args.resp_actual_size;
         resp_handle_count = args.resp_actual_handles;
         break;
@@ -593,7 +596,7 @@ zx_status_t PlatformDevice::Start() {
             {BIND_PLATFORM_DEV_DID, 0, did_},
         };
 
-        status = DdkAdd(name, device_add_flags, props, countof(props), ZX_PROTOCOL_PLATFORM_DEV,
+        status = DdkAdd(name, device_add_flags, props, fbl::count_of(props), ZX_PROTOCOL_PLATFORM_DEV,
                         argstr);
     }
 

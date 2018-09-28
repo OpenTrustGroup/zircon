@@ -289,7 +289,6 @@ static void validate_memset(void) {
     }
 }
 
-#if defined(WITH_LIB_CONSOLE)
 #include <lib/console.h>
 
 static int string_tests(int argc, const cmd_args* argv, uint32_t flags) {
@@ -307,7 +306,7 @@ static int string_tests(int argc, const cmd_args* argv, uint32_t flags) {
     size_t total_size = (BUFFER_SIZE + 256) * 4;
     size_t page_count = ROUNDUP(total_size, PAGE_SIZE) / PAGE_SIZE;
     paddr_t pa;
-    if (pmm_alloc_contiguous(page_count, 0, PAGE_SIZE_SHIFT, &pa, &list) != page_count) {
+    if (pmm_alloc_contiguous(page_count, 0, PAGE_SIZE_SHIFT, &pa, &list) != ZX_OK) {
         printf("failed to allocate %zu bytes of contiguous memory for test\n", total_size);
         return -1;
     }
@@ -351,5 +350,3 @@ static int string_tests(int argc, const cmd_args* argv, uint32_t flags) {
 STATIC_COMMAND_START
 STATIC_COMMAND("string", "memcpy tests", &string_tests)
 STATIC_COMMAND_END(stringtests);
-
-#endif

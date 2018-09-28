@@ -64,13 +64,10 @@ public:
     // Must be called at most once in the lifetime of the connection.
     zx_status_t Serve();
 
-    // Object Operations.
-    zx_status_t ObjectClone(uint32_t flags, zx_handle_t object);
-    zx_status_t ObjectClose(fidl_txn_t* txn);
-    zx_status_t ObjectBind(const char* interface_name_data, size_t interface_name_size);
-    zx_status_t ObjectDescribe(fidl_txn_t* txn);
-
     // Node Operations.
+    zx_status_t NodeClone(uint32_t flags, zx_handle_t object);
+    zx_status_t NodeClose(fidl_txn_t* txn);
+    zx_status_t NodeDescribe(fidl_txn_t* txn);
     zx_status_t NodeSync(fidl_txn_t* txn);
     zx_status_t NodeGetAttr(fidl_txn_t* txn);
     zx_status_t NodeSetAttr(uint32_t flags,
@@ -91,7 +88,6 @@ public:
     zx_status_t FileGetFlags(fidl_txn_t* txn);
     zx_status_t FileSetFlags(uint32_t flags, fidl_txn_t* txn);
     zx_status_t FileGetVmo(uint32_t flags, fidl_txn_t* txn);
-    zx_status_t FileGetVmoAt(uint32_t flags, uint64_t offset, uint64_t length, fidl_txn_t* txn);
 
     // Directory Operations.
     zx_status_t DirectoryOpen(uint32_t flags, uint32_t mode, const char* path_data,
@@ -104,6 +100,17 @@ public:
                                 const char* dst_data, size_t dst_size, fidl_txn_t* txn);
     zx_status_t DirectoryLink(const char* src_data, size_t src_size, zx_handle_t dst_parent_token,
                               const char* dst_data, size_t dst_size, fidl_txn_t* txn);
+    zx_status_t DirectoryWatch(uint32_t mask, uint32_t options, zx_handle_t watcher,
+                               fidl_txn_t* txn);
+
+    // DirectoryAdmin Operations.
+    zx_status_t DirectoryAdminMount(zx_handle_t remote, fidl_txn_t* txn);
+    zx_status_t DirectoryAdminMountAndCreate(zx_handle_t remote, const char* name, size_t name_size,
+                                             uint32_t flags, fidl_txn_t* txn);
+    zx_status_t DirectoryAdminUnmount(fidl_txn_t* txn);
+    zx_status_t DirectoryAdminUnmountNode(fidl_txn_t* txn);
+    zx_status_t DirectoryAdminQueryFilesystem(fidl_txn_t* txn);
+    zx_status_t DirectoryAdminGetDevicePath(fidl_txn_t* txn);
 
 private:
     void HandleSignals(async_dispatcher_t* dispatcher, async::WaitBase* wait, zx_status_t status,

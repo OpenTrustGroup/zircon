@@ -6,6 +6,7 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/debug.h>
+#include <ddk/metadata.h>
 #include <ddk/protocol/acpi.h>
 #include <ddk/protocol/pciroot.h>
 
@@ -29,6 +30,7 @@
 #include "errors.h"
 #include "init.h"
 #include "iommu.h"
+#include "methods.h"
 #include "nhlt.h"
 #include "pci.h"
 #include "pciroot.h"
@@ -463,7 +465,7 @@ static ACPI_STATUS acpi_ns_walk_callback(ACPI_HANDLE object, uint32_t nesting_le
     // TODO: This is a temporary workaround for ACPI device enumeration.
     } else if (!memcmp(&info->Name, "HDAS", 4)) {
         // We must have already seen at least one PCI root due to traversal order.
-        if (ctx->last_pci == -1) {
+        if (ctx->last_pci == 0xFF) {
             zxlogf(ERROR, "acpi: Found HDAS node, but no prior PCI root was discovered!\n");
         } else if (!(info->Valid & ACPI_VALID_ADR)) {
             zxlogf(ERROR, "acpi: no valid ADR found for HDA device\n");
@@ -503,10 +505,10 @@ static ACPI_STATUS acpi_ns_walk_callback(ACPI_HANDLE object, uint32_t nesting_le
             ctx->found_pci = (pcidev != NULL);
         }
         // Get the PCI base bus number
-        acpi_status = pci_get_bbn(object, &ctx->last_pci);
-        if (acpi_status != AE_OK) {
+        zx_status_t status = acpi_bbn_call(object, &ctx->last_pci);
+        if (status != ZX_OK) {
             zxlogf(ERROR, "acpi: failed to get PCI base bus number for device '%s' "
-                          "(acpi_status %u)\n", (const char*)&info->Name, acpi_status);
+                          "(status %u)\n", (const char*)&info->Name, status);
         }
         zxlogf(TRACE, "acpi: found pci root #%u\n", ctx->last_pci);
     } else if (!memcmp(hid, BATTERY_HID_STRING, HID_LENGTH)) {
@@ -546,7 +548,7 @@ static zx_status_t publish_acpi_devices(zx_device_t* parent) {
     publish_acpi_device_ctx_t ctx = {
         .parent = parent,
         .found_pci = false,
-        .last_pci = -1,
+        .last_pci = 0xFF,
     };
     ACPI_STATUS acpi_status = AcpiWalkNamespace(ACPI_TYPE_DEVICE,
                                                 ACPI_ROOT_OBJECT,
@@ -647,6 +649,16 @@ static zx_status_t acpi_drv_create(void* ctx, zx_device_t* parent, const char* n
         zxlogf(ERROR, "acpi: error %d in device_add(sys/acpi)\n", status);
         device_remove(sys_root);
         return status;
+    }
+
+    // TODO - retrieve more useful board name from ACPI data
+    const char board_name[] = { "pc" };
+
+    // Publish board name to sysinfo driver
+    status = device_publish_metadata(acpi_root, "/dev/misc/sysinfo", DEVICE_METADATA_BOARD_NAME,
+                                     board_name, sizeof(board_name));
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "device_publish_metadata(board_name) failed: %d\n", status);
     }
 
     publish_acpi_devices(acpi_root);

@@ -26,6 +26,7 @@ MODULE_COMPILEFLAGS := \
     -Isystem/uapp/lz4/include \
     -Isystem/host/fvm/include \
     -Isystem/ulib/fbl/include \
+    -Isystem/ulib/fit/include \
     -Isystem/ulib/fvm/include \
     -Isystem/ulib/digest/include \
     -Ithird_party/ulib/uboringssl/include \
@@ -47,9 +48,8 @@ MODULE_HOST_LIBS := \
     system/ulib/pretty.hostlib \
     system/ulib/minfs.hostlib \
     system/ulib/fbl.hostlib \
+    system/ulib/fs.hostlib \
     system/ulib/digest.hostlib \
     system/uapp/blobfs.hostlib \
-
-MODULE_DEFINES += DISABLE_THREAD_ANNOTATIONS
 
 include make/module.mk

@@ -9,6 +9,7 @@
 #include <soc/aml-s905d2/s905d2-hw.h>
 #include <soc/aml-s905d2/s905d2-gpio.h>
 #include <soc/aml-common/aml-sd-emmc.h>
+#include <wifi/wifi-config.h>
 
 #include "astro.h"
 
@@ -18,12 +19,26 @@ static const pbus_gpio_t wifi_gpios[] = {
     },
 };
 
+static const wifi_config_t wifi_config = {
+    .oob_irq_mode = ZX_INTERRUPT_MODE_LEVEL_HIGH,
+};
+
+static const pbus_metadata_t wifi_metadata[] = {
+    {
+        .type       = DEVICE_METADATA_PRIVATE,
+        .data       = &wifi_config,
+        .len        = sizeof(wifi_config),
+    }
+};
+
 static const pbus_dev_t sdio_children[] = {
     {
         // Wifi driver.
         .name = "astro-wifi",
         .gpios = wifi_gpios,
         .gpio_count = countof(wifi_gpios),
+        .metadata = wifi_metadata,
+        .metadata_count = countof(wifi_metadata),
     },
 };
 
@@ -59,11 +74,6 @@ static const pbus_bti_t aml_sd_emmc_btis[] = {
 static const pbus_gpio_t aml_sd_emmc_gpios[] = {
     {
         .gpio = S905D2_GPIOX(6),
-    },
-    {
-        // TODO remove this after Wifi adapter is updated to access its GPIOs
-        // using platform device protocol
-        .gpio = S905D2_WIFI_SDIO_WAKE_HOST,
     },
 };
 
@@ -108,13 +118,14 @@ zx_status_t aml_sdio_init(aml_bus_t* bus) {
     zx_status_t status;
 
     // set alternate functions to enable EMMC
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D0, S905D2_WIFI_SDIO_D0_FN);
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D1, S905D2_WIFI_SDIO_D1_FN);
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D2, S905D2_WIFI_SDIO_D2_FN);
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D3, S905D2_WIFI_SDIO_D3_FN);
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_CLK, S905D2_WIFI_SDIO_CLK_FN);
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_CMD, S905D2_WIFI_SDIO_CMD_FN);
-    gpio_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_WAKE_HOST, S905D2_WIFI_SDIO_WAKE_HOST_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D0, S905D2_WIFI_SDIO_D0_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D1, S905D2_WIFI_SDIO_D1_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D2, S905D2_WIFI_SDIO_D2_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_D3, S905D2_WIFI_SDIO_D3_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_CLK, S905D2_WIFI_SDIO_CLK_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_CMD, S905D2_WIFI_SDIO_CMD_FN);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_WIFI_SDIO_WAKE_HOST,
+                               S905D2_WIFI_SDIO_WAKE_HOST_FN);
     if ((status = pbus_device_add(&bus->pbus, &aml_sd_emmc_dev)) != ZX_OK) {
         zxlogf(ERROR, "aml_sdio_init could not add aml_sd_emmc_dev: %d\n", status);
         return status;

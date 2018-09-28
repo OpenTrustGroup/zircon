@@ -10,6 +10,8 @@ MODULE_TYPE := userlib
 
 MODULE_NAME := blobfs
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 COMMON_SRCS := \
     $(LOCAL_DIR)/lz4.cpp \
     $(LOCAL_DIR)/common.cpp \
@@ -74,7 +76,5 @@ MODULE_COMPILEFLAGS := \
     -Isystem/ulib/fs/include \
     -Isystem/ulib/fdio/include \
     -Isystem/ulib/bitmap/include \
-
-MODULE_DEFINES := DISABLE_THREAD_ANNOTATIONS
 
 include make/module.mk

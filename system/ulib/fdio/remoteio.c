@@ -51,35 +51,32 @@ zx_handle_t zxrio_handle(zxrio_t* rio) {
     return rio->h;
 }
 
-zx_status_t zxrio_object_extract_handle(const zxrio_object_info_t* info,
-                                        zx_handle_t* out) {
+// Acquire the additional handle from |info|.
+//
+// Returns |ZX_OK| if a handle was returned.
+// Returns |ZX_ERR_NOT_FOUND| if no handle can be returned.
+static zx_status_t zxrio_object_extract_handle(const zxrio_node_info_t* info,
+                                               zx_handle_t* out) {
     switch (info->tag) {
-    case FDIO_PROTOCOL_FILE:
+    case fuchsia_io_NodeInfoTag_file:
         if (info->file.e != ZX_HANDLE_INVALID) {
             *out = info->file.e;
             return ZX_OK;
         }
         break;
-    case FDIO_PROTOCOL_SOCKET_CONNECTED:
-    case FDIO_PROTOCOL_SOCKET:
-        if (info->socket.s != ZX_HANDLE_INVALID) {
-            *out = info->socket.s;
-            return ZX_OK;
-        }
-        break;
-    case FDIO_PROTOCOL_PIPE:
+    case fuchsia_io_NodeInfoTag_pipe:
         if (info->pipe.s != ZX_HANDLE_INVALID) {
             *out = info->pipe.s;
             return ZX_OK;
         }
         break;
-    case FDIO_PROTOCOL_VMOFILE:
+    case fuchsia_io_NodeInfoTag_vmofile:
         if (info->vmofile.v != ZX_HANDLE_INVALID) {
             *out = info->vmofile.v;
             return ZX_OK;
         }
         break;
-    case FDIO_PROTOCOL_DEVICE:
+    case fuchsia_io_NodeInfoTag_device:
         if (info->device.e != ZX_HANDLE_INVALID) {
             *out = info->device.e;
             return ZX_OK;
@@ -89,61 +86,19 @@ zx_status_t zxrio_object_extract_handle(const zxrio_object_info_t* info,
     return ZX_ERR_NOT_FOUND;
 }
 
-zx_status_t zxrio_close(fdio_t* io) {
+static zx_status_t zxrio_close(fdio_t* io) {
     zxrio_t* rio = (zxrio_t*)io;
 
     zx_status_t r = fidl_close(rio);
     zx_handle_t h = rio->h;
-    rio->h = 0;
+    rio->h = ZX_HANDLE_INVALID;
     zx_handle_close(h);
-    if (rio->h2 > 0) {
-        h = rio->h2;
-        rio->h2 = 0;
+    if (rio->event != ZX_HANDLE_INVALID) {
+        h = rio->event;
+        rio->event = ZX_HANDLE_INVALID;
         zx_handle_close(h);
     }
     return r;
-}
-
-// Synchronously (non-pipelined) open an object
-// The svc handle is only used to send a message
-static zx_status_t zxrio_sync_open_connection(zx_handle_t svc, uint32_t op,
-                                              uint32_t flags, uint32_t mode,
-                                              const char* path, size_t pathlen,
-                                              zxrio_describe_t* info, zx_handle_t* out) {
-    if (!(flags & ZX_FS_FLAG_DESCRIBE)) {
-        return ZX_ERR_INVALID_ARGS;
-    }
-
-    zx_status_t r;
-    zx_handle_t h;
-    zx_handle_t cnxn;
-    if ((r = zx_channel_create(0, &h, &cnxn)) != ZX_OK) {
-        return r;
-    }
-
-    switch (op) {
-    case ZXFIDL_CLONE:
-        r = fidl_clone_request(svc, cnxn, flags);
-        break;
-    case ZXFIDL_OPEN:
-        r = fidl_open_request(svc, cnxn, flags, mode, path, pathlen);
-        break;
-    default:
-        zx_handle_close(cnxn);
-        r = ZX_ERR_NOT_SUPPORTED;
-    }
-
-    if (r != ZX_OK) {
-        zx_handle_close(h);
-        return r;
-    }
-
-    if ((r = zxrio_process_open_response(h, info)) != ZX_OK) {
-        zx_handle_close(h);
-        return r;
-    }
-    *out = h;
-    return ZX_OK;
 }
 
 // Open an object without waiting for the response.
@@ -164,10 +119,10 @@ static zx_status_t zxrio_connect(zx_handle_t svc, zx_handle_t cnxn,
 
     zx_status_t r;
     switch (op) {
-    case ZXFIDL_CLONE:
+    case fuchsia_io_NodeCloneOrdinal:
         r = fidl_clone_request(svc, cnxn, flags);
         break;
-    case ZXFIDL_OPEN:
+    case fuchsia_io_DirectoryOpenOrdinal:
         r = fidl_open_request(svc, cnxn, flags, mode, name, len);
         break;
     default:
@@ -289,7 +244,7 @@ static off_t zxrio_seek(fdio_t* io, off_t offset, int whence) {
     return offset;
 }
 
-ssize_t zxrio_ioctl(fdio_t* io, uint32_t op, const void* in_buf,
+static ssize_t zxrio_ioctl(fdio_t* io, uint32_t op, const void* in_buf,
                     size_t in_len, void* out_buf, size_t out_len) {
     zxrio_t* rio = (zxrio_t*)io;
     if (in_len > FDIO_IOCTL_MAX_INPUT || out_len > FDIO_CHUNK_SIZE) {
@@ -315,27 +270,24 @@ static zx_status_t zxrio_decode_describe_handle(zxrio_describe_t* info,
 
     switch (info->extra.tag) {
     // Case: No extra handles expected
-    case FDIO_PROTOCOL_SERVICE:
-    case FDIO_PROTOCOL_DIRECTORY:
+    case fuchsia_io_NodeInfoTag_service:
+    case fuchsia_io_NodeInfoTag_directory:
         break;
     // Case: Extra handles optional
-    case FDIO_PROTOCOL_FILE:
+    case fuchsia_io_NodeInfoTag_file:
         handle_target = &info->extra.file.e;
         goto handle_optional;
-    case FDIO_PROTOCOL_DEVICE:
+    case fuchsia_io_NodeInfoTag_device:
         handle_target = &info->extra.device.e;
-        goto handle_optional;
-    case FDIO_PROTOCOL_SOCKET:
-        handle_target = &info->extra.socket.s;
         goto handle_optional;
 handle_optional:
         want_handle = *handle_target == FIDL_HANDLE_PRESENT;
         break;
     // Case: Extra handles required
-    case FDIO_PROTOCOL_PIPE:
+    case fuchsia_io_NodeInfoTag_pipe:
         handle_target = &info->extra.pipe.s;
         goto handle_required;
-    case FDIO_PROTOCOL_VMOFILE:
+    case fuchsia_io_NodeInfoTag_vmofile:
         handle_target = &info->extra.vmofile.v;
         goto handle_required;
 handle_required:
@@ -364,7 +316,14 @@ fail:
     return ZX_ERR_IO;
 }
 
-zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
+// Wait/Read from a new client connection, with the expectation of
+// acquiring an Open response.
+//
+// Shared implementation between RemoteIO and FIDL, since the response
+// message is aligned.
+//
+// Does not close |h|, even on error.
+static zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
     zx_object_wait_one(h, ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED,
                        ZX_TIME_INFINITE, NULL);
 
@@ -377,7 +336,7 @@ zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
     if (r != ZX_OK) {
         return r;
     }
-    if (dsize < ZXRIO_DESCRIBE_HDR_SZ || info->op != ZXFIDL_ON_OPEN) {
+    if (dsize < ZXRIO_DESCRIBE_HDR_SZ || info->hdr.ordinal != fuchsia_io_NodeOnOpenOrdinal) {
         r = ZX_ERR_IO;
     } else {
         r = info->status;
@@ -394,29 +353,32 @@ zx_status_t zxrio_process_open_response(zx_handle_t h, zxrio_describe_t* info) {
         return r;
     }
 
-    // Confirm that the objects "zxrio_describe_t" and "fuchsia_io_ObjectOnOpenEvent"
+    // Confirm that the objects "zxrio_describe_t" and "fuchsia_io_NodeOnOpenEvent"
     // are aligned enough to be compatible.
     //
-    // This is somewhat complicated by the fact that the "fuchsia_io_ObjectOnOpenEvent"
-    // object has an optional "fuchsia_io_ObjectInfo" secondary which exists immediately
+    // This is somewhat complicated by the fact that the "fuchsia_io_NodeOnOpenEvent"
+    // object has an optional "fuchsia_io_NodeInfo" secondary which exists immediately
     // following the struct.
     static_assert(__builtin_offsetof(zxrio_describe_t, extra) ==
-                  FIDL_ALIGN(sizeof(fuchsia_io_ObjectOnOpenEvent)),
+                  FIDL_ALIGN(sizeof(fuchsia_io_NodeOnOpenEvent)),
                   "RIO Description message doesn't align with FIDL response secondary");
-    static_assert(sizeof(zxrio_object_info_t) == sizeof(fuchsia_io_ObjectInfo),
-                  "RIO Object Info doesn't align with FIDL object info");
-    static_assert(__builtin_offsetof(zxrio_object_info_t, file.e) ==
-                  __builtin_offsetof(fuchsia_io_ObjectInfo, file.event), "Unaligned File");
-    static_assert(__builtin_offsetof(zxrio_object_info_t, pipe.s) ==
-                  __builtin_offsetof(fuchsia_io_ObjectInfo, pipe.socket), "Unaligned Pipe");
-    static_assert(__builtin_offsetof(zxrio_object_info_t, vmofile.v) ==
-                  __builtin_offsetof(fuchsia_io_ObjectInfo, vmofile.vmo), "Unaligned Vmofile");
-    static_assert(__builtin_offsetof(zxrio_object_info_t, device.e) ==
-                  __builtin_offsetof(fuchsia_io_ObjectInfo, device.event), "Unaligned Device");
+    static_assert(sizeof(zxrio_node_info_t) == sizeof(fuchsia_io_NodeInfo),
+                  "RIO Node Info doesn't align with FIDL object info");
+    static_assert(__builtin_offsetof(zxrio_node_info_t, file.e) ==
+                  __builtin_offsetof(fuchsia_io_NodeInfo, file.event), "Unaligned File");
+    static_assert(__builtin_offsetof(zxrio_node_info_t, pipe.s) ==
+                  __builtin_offsetof(fuchsia_io_NodeInfo, pipe.socket), "Unaligned Pipe");
+    static_assert(__builtin_offsetof(zxrio_node_info_t, vmofile.v) ==
+                  __builtin_offsetof(fuchsia_io_NodeInfo, vmofile.vmo), "Unaligned Vmofile");
+    static_assert(__builtin_offsetof(zxrio_node_info_t, device.e) ==
+                  __builtin_offsetof(fuchsia_io_NodeInfo, device.event), "Unaligned Device");
+    // Connection::NodeDescribe also relies on these static_asserts.
+    // fidl_describe also relies on these static_asserts.
 
     return zxrio_decode_describe_handle(info, extra_handle);
 }
 
+__EXPORT
 zx_status_t fdio_service_connect(const char* svcpath, zx_handle_t h) {
     if (svcpath == NULL) {
         zx_handle_close(h);
@@ -432,6 +394,7 @@ zx_status_t fdio_service_connect(const char* svcpath, zx_handle_t h) {
     return ZX_ERR_NOT_FOUND;
 }
 
+__EXPORT
 zx_status_t fdio_service_connect_at(zx_handle_t dir, const char* path, zx_handle_t h) {
     if (path == NULL) {
         zx_handle_close(h);
@@ -441,10 +404,11 @@ zx_status_t fdio_service_connect_at(zx_handle_t dir, const char* path, zx_handle
         zx_handle_close(h);
         return ZX_ERR_UNAVAILABLE;
     }
-    return zxrio_connect(dir, h, ZXFIDL_OPEN, ZX_FS_RIGHT_READABLE |
+    return zxrio_connect(dir, h, fuchsia_io_DirectoryOpenOrdinal, ZX_FS_RIGHT_READABLE |
                          ZX_FS_RIGHT_WRITABLE, 0755, path);
 }
 
+__EXPORT
 zx_status_t fdio_open_at(zx_handle_t dir, const char* path, uint32_t flags, zx_handle_t h) {
     if (path == NULL) {
         zx_handle_close(h);
@@ -454,9 +418,10 @@ zx_status_t fdio_open_at(zx_handle_t dir, const char* path, uint32_t flags, zx_h
         zx_handle_close(h);
         return ZX_ERR_UNAVAILABLE;
     }
-    return zxrio_connect(dir, h, ZXFIDL_OPEN, flags, 0755, path);
+    return zxrio_connect(dir, h, fuchsia_io_DirectoryOpenOrdinal, flags, 0755, path);
 }
 
+__EXPORT
 zx_handle_t fdio_service_clone(zx_handle_t svc) {
     zx_handle_t cli, srv;
     zx_status_t r;
@@ -466,7 +431,7 @@ zx_handle_t fdio_service_clone(zx_handle_t svc) {
     if ((r = zx_channel_create(0, &cli, &srv)) < 0) {
         return ZX_HANDLE_INVALID;
     }
-    if ((r = zxrio_connect(svc, srv, ZXFIDL_CLONE, ZX_FS_RIGHT_READABLE |
+    if ((r = zxrio_connect(svc, srv, fuchsia_io_NodeCloneOrdinal, ZX_FS_RIGHT_READABLE |
                            ZX_FS_RIGHT_WRITABLE, 0755, "")) < 0) {
         zx_handle_close(cli);
         return ZX_HANDLE_INVALID;
@@ -474,6 +439,7 @@ zx_handle_t fdio_service_clone(zx_handle_t svc) {
     return cli;
 }
 
+__EXPORT
 zx_status_t fdio_service_clone_to(zx_handle_t svc, zx_handle_t srv) {
     if (srv == ZX_HANDLE_INVALID) {
         return ZX_ERR_INVALID_ARGS;
@@ -482,17 +448,133 @@ zx_status_t fdio_service_clone_to(zx_handle_t svc, zx_handle_t srv) {
         zx_handle_close(srv);
         return ZX_ERR_INVALID_ARGS;
     }
-    return zxrio_connect(svc, srv, ZXFIDL_CLONE, ZX_FS_RIGHT_READABLE |
+    return zxrio_connect(svc, srv, fuchsia_io_NodeCloneOrdinal, ZX_FS_RIGHT_READABLE |
                          ZX_FS_RIGHT_WRITABLE, 0755, "");
 }
 
+zx_status_t fdio_acquire_socket(zx_handle_t socket, fdio_t** out_io) {
+    zx_info_socket_t info;
+    memset(&info, 0, sizeof(info));
+    zx_status_t status = zx_object_get_info(socket, ZX_INFO_SOCKET, &info, sizeof(info), NULL, NULL);
+    if (status != ZX_OK) {
+        zx_handle_close(socket);
+        return status;
+    }
+    fdio_t* io = NULL;
+    if ((info.options & ZX_SOCKET_HAS_CONTROL) != 0) {
+        // If the socket has a control plane, then the socket is either
+        // a stream or a datagram socket.
+        if ((info.options & ZX_SOCKET_DATAGRAM) != 0) {
+            io = fdio_socket_create_datagram(socket, IOFLAG_SOCKET_CONNECTED);
+        } else {
+            io = fdio_socket_create_stream(socket, IOFLAG_SOCKET_CONNECTED);
+        }
+    } else {
+        // Without a control plane, the socket is a pipe.
+        io = fdio_pipe_create(socket);
+    }
+    if (!io) {
+        return ZX_ERR_NO_RESOURCES;
+    }
+    *out_io = io;
+    return ZX_OK;
+}
+
+// Create a fdio (if possible) from handles and info.
+//
+// The Control channel is provided in |handle|, and auxillary
+// handles may be provided in the |info| object.
+//
+// This function always takes control of all handles.
+// They are transferred into the |out| object on success,
+// or closed on failure.
+static zx_status_t fdio_from_handles(zx_handle_t handle, zxrio_node_info_t* info,
+                                     fdio_t** out) {
+    // All failure cases which discard handles set r and break
+    // to the end. All other cases in which handle ownership is moved
+    // on return locally.
+    zx_status_t r;
+    fdio_t* io;
+    switch (info->tag) {
+    case fuchsia_io_NodeInfoTag_directory:
+    case fuchsia_io_NodeInfoTag_service:
+        if (handle == ZX_HANDLE_INVALID) {
+            r = ZX_ERR_INVALID_ARGS;
+            break;
+        }
+        io = fdio_remote_create(handle, 0);
+        xprintf("rio (%x,%x) -> %p\n", handle, 0, io);
+        if (io == NULL) {
+            return ZX_ERR_NO_RESOURCES;
+        }
+        *out = io;
+        return ZX_OK;
+    case fuchsia_io_NodeInfoTag_file:
+        if (info->file.e == ZX_HANDLE_INVALID) {
+            io = fdio_remote_create(handle, 0);
+            xprintf("rio (%x,%x) -> %p\n", handle, 0, io);
+        } else {
+            io = fdio_remote_create(handle, info->file.e);
+            xprintf("rio (%x,%x) -> %p\n", handle, info->file.e, io);
+        }
+        if (io == NULL) {
+            return ZX_ERR_NO_RESOURCES;
+        }
+        *out = io;
+        return ZX_OK;
+    case fuchsia_io_NodeInfoTag_device:
+        if (info->device.e == ZX_HANDLE_INVALID) {
+            io = fdio_remote_create(handle, 0);
+            xprintf("rio (%x,%x) -> %p\n", handle, 0, io);
+        } else {
+            io = fdio_remote_create(handle, info->device.e);
+            xprintf("rio (%x,%x) -> %p\n", handle, info->device.e, io);
+        }
+        if (io == NULL) {
+            return ZX_ERR_NO_RESOURCES;
+        }
+        *out = io;
+        return ZX_OK;
+    case fuchsia_io_NodeInfoTag_vmofile: {
+        if (info->vmofile.v == ZX_HANDLE_INVALID) {
+            r = ZX_ERR_INVALID_ARGS;
+            break;
+        }
+        *out = fdio_vmofile_create(handle, info->vmofile.v, info->vmofile.offset,
+                                   info->vmofile.length);
+        if (*out == NULL) {
+            return ZX_ERR_NO_RESOURCES;
+        }
+        return ZX_OK;
+    }
+    case fuchsia_io_NodeInfoTag_pipe: {
+        if (info->pipe.s == ZX_HANDLE_INVALID) {
+            r = ZX_ERR_INVALID_ARGS;
+            break;
+        }
+        zx_handle_close(handle);
+        return fdio_acquire_socket(info->pipe.s, out);
+    }
+    default:
+        printf("fdio_from_handles: Not supported\n");
+        r = ZX_ERR_NOT_SUPPORTED;
+        break;
+    }
+    zx_handle_t extra;
+    if (zxrio_object_extract_handle(info, &extra) == ZX_OK) {
+        zx_handle_close(extra);
+    }
+    zx_handle_close(handle);
+    return r;
+}
+
+__EXPORT
 zx_status_t fdio_create_fd(zx_handle_t* handles, uint32_t* types, size_t hcount,
                            int* fd_out) {
     fdio_t* io;
     zx_status_t r;
     int fd;
-    zxrio_object_info_t info;
-    zx_handle_t control_channel = ZX_HANDLE_INVALID;
+    zxrio_node_info_t info;
 
     // Pack additional handles into |info|, if possible.
     switch (PA_HND_TYPE(types[0])) {
@@ -508,30 +590,21 @@ zx_status_t fdio_create_fd(zx_handle_t* handles, uint32_t* types, size_t hcount,
             r = ZX_ERR_INVALID_ARGS;
             goto fail;
         }
-    case PA_FDIO_PIPE:
-        info.tag = FDIO_PROTOCOL_PIPE;
-        // Expected: Single pipe handle
+    case PA_FDIO_SOCKET:
+        info.tag = fuchsia_io_NodeInfoTag_pipe;
+        // Expected: Single socket handle
         if (hcount != 1) {
             r = ZX_ERR_INVALID_ARGS;
             goto fail;
         }
         info.pipe.s = handles[0];
         break;
-    case PA_FDIO_SOCKET:
-        info.tag = FDIO_PROTOCOL_SOCKET_CONNECTED;
-        // Expected: Single socket handle
-        if (hcount != 1) {
-            r = ZX_ERR_INVALID_ARGS;
-            goto fail;
-        }
-        info.socket.s = handles[0];
-        break;
     default:
         r = ZX_ERR_IO;
         goto fail;
     }
 
-    if ((r = fdio_from_handles(control_channel, &info, &io)) != ZX_OK) {
+    if ((r = fdio_from_handles(ZX_HANDLE_INVALID, &info, &io)) != ZX_OK) {
         return r;
     }
 
@@ -550,104 +623,57 @@ fail:
     return r;
 }
 
-zx_status_t fdio_from_handles(zx_handle_t handle, zxrio_object_info_t* info,
-                              fdio_t** out) {
-    // All failure cases which discard handles set r and break
-    // to the end. All other cases in which handle ownership is moved
-    // on return locally.
+// Synchronously (non-pipelined) open an object
+// The svc handle is only used to send a message
+static zx_status_t zxrio_sync_open_connection(zx_handle_t svc, uint32_t op,
+                                              uint32_t flags, uint32_t mode,
+                                              const char* path, size_t pathlen,
+                                              zxrio_describe_t* info, zx_handle_t* out) {
+    if (!(flags & ZX_FS_FLAG_DESCRIBE)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
     zx_status_t r;
-    fdio_t* io;
-    switch (info->tag) {
-    case FDIO_PROTOCOL_DIRECTORY:
-    case FDIO_PROTOCOL_SERVICE:
-        if (handle == ZX_HANDLE_INVALID) {
-            r = ZX_ERR_INVALID_ARGS;
-            break;
-        }
-        io = fdio_remote_create(handle, 0);
-        xprintf("rio (%x,%x) -> %p\n", handle, 0, io);
-        if (io == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        *out = io;
-        return ZX_OK;
-    case FDIO_PROTOCOL_FILE:
-        if (info->file.e == ZX_HANDLE_INVALID) {
-            io = fdio_remote_create(handle, 0);
-            xprintf("rio (%x,%x) -> %p\n", handle, 0, io);
-        } else {
-            io = fdio_remote_create(handle, info->file.e);
-            xprintf("rio (%x,%x) -> %p\n", handle, info->file.e, io);
-        }
-        if (io == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        *out = io;
-        return ZX_OK;
-    case FDIO_PROTOCOL_DEVICE:
-        if (info->device.e == ZX_HANDLE_INVALID) {
-            io = fdio_remote_create(handle, 0);
-            xprintf("rio (%x,%x) -> %p\n", handle, 0, io);
-        } else {
-            io = fdio_remote_create(handle, info->device.e);
-            xprintf("rio (%x,%x) -> %p\n", handle, info->device.e, io);
-        }
-        if (io == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        *out = io;
-        return ZX_OK;
-    case FDIO_PROTOCOL_PIPE:
-        if (handle != ZX_HANDLE_INVALID) {
-            r = ZX_ERR_INVALID_ARGS;
-            break;
-        } else if ((*out = fdio_pipe_create(info->pipe.s)) == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        return ZX_OK;
-    case FDIO_PROTOCOL_VMOFILE: {
-        if (info->vmofile.v == ZX_HANDLE_INVALID) {
-            r = ZX_ERR_INVALID_ARGS;
-            break;
-        }
-        // Currently, VMO Files don't use a client-side control channel.
-        zx_handle_close(handle);
-        *out = fdio_vmofile_create(info->vmofile.v, info->vmofile.offset,
-                                   info->vmofile.length);
-        if (*out == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        return ZX_OK;
+    zx_handle_t h;
+    zx_handle_t cnxn;
+    if ((r = zx_channel_create(0, &h, &cnxn)) != ZX_OK) {
+        return r;
     }
-    case FDIO_PROTOCOL_SOCKET_CONNECTED:
-    case FDIO_PROTOCOL_SOCKET: {
-        int flags = (info->tag == FDIO_PROTOCOL_SOCKET_CONNECTED) ? IOFLAG_SOCKET_CONNECTED : 0;
-        if (info->socket.s == ZX_HANDLE_INVALID) {
-            r = ZX_ERR_INVALID_ARGS;
-            break;
-        }
-        zx_handle_close(handle);
-        if ((*out = fdio_socket_create(info->socket.s, flags)) == NULL) {
-            return ZX_ERR_NO_RESOURCES;
-        }
-        return ZX_OK;
-    }
-    default:
-        printf("fdio_from_handles: Not supported\n");
-        r = ZX_ERR_NOT_SUPPORTED;
+
+    switch (op) {
+    case fuchsia_io_NodeCloneOrdinal:
+        r = fidl_clone_request(svc, cnxn, flags);
         break;
+    case fuchsia_io_DirectoryOpenOrdinal:
+        r = fidl_open_request(svc, cnxn, flags, mode, path, pathlen);
+        break;
+    default:
+        zx_handle_close(cnxn);
+        r = ZX_ERR_NOT_SUPPORTED;
     }
-    zx_handle_t extra;
-    if (zxrio_object_extract_handle(info, &extra) == ZX_OK) {
-        zx_handle_close(extra);
+
+    if (r != ZX_OK) {
+        zx_handle_close(h);
+        return r;
     }
-    zx_handle_close(handle);
-    return r;
+
+    if ((r = zxrio_process_open_response(h, info)) != ZX_OK) {
+        zx_handle_close(h);
+        return r;
+    }
+    *out = h;
+    return ZX_OK;
 }
 
-zx_status_t zxrio_getobject(zx_handle_t rio_h, uint32_t op, const char* name,
-                            uint32_t flags, uint32_t mode,
-                            zxrio_describe_t* info, zx_handle_t* out) {
+// Acquires a new connection to an object.
+//
+// Returns a description of the opened object in |info|, and
+// the control channel to the object in |out|.
+//
+// |info| may contain an additional handle.
+static zx_status_t zxrio_getobject(zx_handle_t rio_h, uint32_t op, const char* name,
+                                   uint32_t flags, uint32_t mode,
+                                   zxrio_describe_t* info, zx_handle_t* out) {
     if (name == NULL) {
         return ZX_ERR_INVALID_ARGS;
     }
@@ -665,13 +691,13 @@ zx_status_t zxrio_getobject(zx_handle_t rio_h, uint32_t op, const char* name,
         if ((r = zx_channel_create(0, &h0, &h1)) < 0) {
             return r;
         }
-        if ((r = zxrio_connect(rio_h, h1, ZXFIDL_OPEN, flags, mode, name)) < 0) {
+        if ((r = zxrio_connect(rio_h, h1, op, flags, mode, name)) < 0) {
             zx_handle_close(h0);
             return r;
         }
         // fake up a reply message since pipelined opens don't generate one
         info->status = ZX_OK;
-        info->extra.tag = FDIO_PROTOCOL_SERVICE;
+        info->extra.tag = fuchsia_io_NodeInfoTag_service;
         *out = h0;
         return ZX_OK;
     }
@@ -681,33 +707,14 @@ zx_status_t zxrio_open_handle(zx_handle_t h, const char* path, uint32_t flags,
                               uint32_t mode, fdio_t** out) {
     zx_handle_t control_channel;
     zxrio_describe_t info;
-    zx_status_t r = zxrio_getobject(h, ZXFIDL_OPEN, path, flags, mode, &info, &control_channel);
+    zx_status_t r = zxrio_getobject(h, fuchsia_io_DirectoryOpenOrdinal, path, flags, mode, &info, &control_channel);
     if (r < 0) {
         return r;
     }
     return fdio_from_handles(control_channel, &info.extra, out);
 }
 
-zx_status_t zxrio_open_handle_raw(zx_handle_t h, const char* path, uint32_t flags,
-                                  uint32_t mode, zx_handle_t *out) {
-    zx_handle_t control_channel;
-    zxrio_describe_t info;
-    zx_status_t r = zxrio_getobject(h, ZXFIDL_OPEN, path, flags, mode, &info, &control_channel);
-    if (r < 0) {
-        return r;
-    }
-    if (info.extra.tag == FDIO_PROTOCOL_SERVICE) {
-        *out = control_channel;
-        return ZX_OK;
-    }
-    zx_handle_t extracted;
-    if (zxrio_object_extract_handle(&info.extra, &extracted) == ZX_OK) {
-        zx_handle_close(extracted);
-    }
-    return ZX_ERR_WRONG_TYPE;
-}
-
-zx_status_t zxrio_open(fdio_t* io, const char* path, uint32_t flags, uint32_t mode, fdio_t** out) {
+static zx_status_t zxrio_open(fdio_t* io, const char* path, uint32_t flags, uint32_t mode, fdio_t** out) {
     zxrio_t* rio = (void*)io;
     return zxrio_open_handle(rio->h, path, flags, mode, out);
 }
@@ -716,38 +723,30 @@ static zx_status_t zxrio_clone(fdio_t* io, zx_handle_t* handles, uint32_t* types
     zxrio_t* rio = (void*)io;
     zx_handle_t h;
     zxrio_describe_t info;
-    zx_status_t r = zxrio_getobject(rio->h, ZXFIDL_CLONE, "", ZX_FS_FLAG_DESCRIBE, 0, &info, &h);
+    zx_status_t r = zxrio_getobject(rio->h, fuchsia_io_NodeCloneOrdinal, "", 0, 0, &info, &h);
     if (r < 0) {
         return r;
     }
     handles[0] = h;
     types[0] = PA_FDIO_REMOTE;
-    if (zxrio_object_extract_handle(&info.extra, &handles[1]) == ZX_OK) {
-        types[1] = PA_FDIO_REMOTE;
-        return 2;
-    }
     return 1;
 }
 
 static zx_status_t zxrio_unwrap(fdio_t* io, zx_handle_t* handles, uint32_t* types) {
     zxrio_t* rio = (void*)io;
     LOG(1, "fdio: zxrio_unwrap(%p,...)\n");
-    zx_status_t r;
     handles[0] = rio->h;
     types[0] = PA_FDIO_REMOTE;
-    if (rio->h2 != 0) {
-        handles[1] = rio->h2;
-        types[1] = PA_FDIO_REMOTE;
-        r = 2;
-    } else {
-        r = 1;
+    if (rio->event != ZX_HANDLE_INVALID) {
+        zx_handle_close(rio->event);
+        rio->event = ZX_HANDLE_INVALID;
     }
-    return r;
+    return 1;
 }
 
 static void zxrio_wait_begin(fdio_t* io, uint32_t events, zx_handle_t* handle, zx_signals_t* _signals) {
     zxrio_t* rio = (void*)io;
-    *handle = rio->h2;
+    *handle = rio->event;
 
     zx_signals_t signals = 0;
     // Manually add signals that don't fit within POLL_MASK
@@ -871,17 +870,18 @@ fdio_ops_t zx_remote_ops = {
     .shutdown = fdio_default_shutdown,
 };
 
-fdio_t* fdio_remote_create(zx_handle_t h, zx_handle_t e) {
+__EXPORT
+fdio_t* fdio_remote_create(zx_handle_t h, zx_handle_t event) {
     zxrio_t* rio = fdio_alloc(sizeof(*rio));
     if (rio == NULL) {
         zx_handle_close(h);
-        zx_handle_close(e);
+        zx_handle_close(event);
         return NULL;
     }
     rio->io.ops = &zx_remote_ops;
     rio->io.magic = FDIO_MAGIC;
     atomic_init(&rio->io.refcount, 1);
     rio->h = h;
-    rio->h2 = e;
+    rio->event = event;
     return &rio->io;
 }

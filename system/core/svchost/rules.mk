@@ -16,6 +16,7 @@ MODULE_FIDL_LIBS := \
     system/fidl/fuchsia-crash \
     system/fidl/fuchsia-io \
     system/fidl/fuchsia-logger \
+    system/fidl/fuchsia-mem \
     system/fidl/fuchsia-process \
     system/fidl/fuchsia-sysmem \
 
@@ -45,6 +46,7 @@ MODULE_LIBS := \
     system/ulib/launchpad \
     system/ulib/fdio \
     system/ulib/c \
+    system/ulib/syslog \
     system/ulib/trace-engine \
     system/ulib/zircon
 

@@ -4,6 +4,7 @@
 
 #include <ddk/driver.h>
 #include <endian.h>
+#include <math.h>
 #include <string.h>
 #include <zircon/assert.h>
 
@@ -453,17 +454,19 @@ zx_status_t DpAux::DpAuxWrite(uint32_t dp_cmd, uint32_t addr, const uint8_t* buf
     return ZX_OK;
 }
 
-zx_status_t DpAux::I2cTransact(uint32_t index, const uint8_t* write_buf, uint8_t write_length,
-                               uint8_t* read_buf, uint8_t read_length) {
+zx_status_t DpAux::I2cTransact(i2c_impl_op_t* ops, size_t count) {
     fbl::AutoLock lock(&lock_);
-    zx_status_t status = ZX_OK;
-    if (write_length) {
-        status = DpAuxWrite(DP_REQUEST_I2C_WRITE, index, write_buf, write_length);
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t* buf = static_cast<uint8_t*>(ops[i].buf);
+        uint8_t len = static_cast<uint8_t>(ops[i].length);
+        zx_status_t status = ops[i].is_read
+                ? DpAuxRead(DP_REQUEST_I2C_READ, ops[i].address, buf, len)
+                : DpAuxWrite(DP_REQUEST_I2C_WRITE, ops[i].address, buf, len);
+        if (status != ZX_OK) {
+            return status;
+        }
     }
-    if (status == ZX_OK && read_length) {
-        status = DpAuxRead(DP_REQUEST_I2C_READ, index, read_buf, read_length);
-    }
-    return status;
+    return ZX_OK;
 }
 
 bool DpAux::DpcdRead(uint32_t addr, uint8_t* buf, size_t size) {
@@ -915,6 +918,21 @@ bool DpDisplay::Query() {
             LOG_ERROR("Failed to read edp capabilities\n");
             return false;
         }
+
+        dpcd::EdpConfigCap config_cap;
+        dpcd::EdpGeneralCap1 general_cap;
+        dpcd::EdpBacklightCap backlight_cap;
+
+        config_cap.set_reg_value(dpcd_capability(dpcd::DPCD_EDP_CONFIG));
+        general_cap.set_reg_value(dpcd_edp_capability(dpcd::DPCD_EDP_GENERAL_CAP1));
+        backlight_cap.set_reg_value(dpcd_edp_capability(dpcd::DPCD_EDP_BACKLIGHT_CAP));
+
+        backlight_aux_power_ = config_cap.dpcd_display_ctrl_capable()
+                && general_cap.tcon_backlight_adjustment_cap()
+                && general_cap.backlight_aux_enable_cap();
+        backlight_aux_brightness_ = config_cap.dpcd_display_ctrl_capable()
+                && general_cap.tcon_backlight_adjustment_cap()
+                && backlight_cap.brightness_aux_set_cap();
     }
 
     dpcd::LaneCount max_lc;
@@ -1126,14 +1144,12 @@ bool DpDisplay::PipeConfigPreamble(const display_mode_t& mode,
     // encoding, which usually encodes an 8-bit data byte).
     uint32_t link_symbol_rate = link_raw_bit_rate / 10;
 
-    uint32_t bits_per_pixel = 24; // kPixelFormat
-
     // Configure ratios between pixel clock/bit rate and symbol clock/bit rate
     uint32_t link_m;
     uint32_t link_n;
     CalculateRatio(pixel_clock_rate, link_symbol_rate, &link_m, &link_n);
 
-    uint32_t pixel_bit_rate = pixel_clock_rate * bits_per_pixel;
+    uint32_t pixel_bit_rate = pixel_clock_rate * kBitsPerPixel;
     uint32_t total_link_bit_rate = link_symbol_rate * 8 * dp_lane_count_;
     ZX_DEBUG_ASSERT(pixel_bit_rate <= total_link_bit_rate); // Should be caught by CheckPixelRate
 
@@ -1189,33 +1205,18 @@ bool DpDisplay::PipeConfigEpilogue(const display_mode_t& mode,
     trans_conf.set_interlaced_mode(!!(mode.flags & MODE_FLAG_INTERLACED));
     trans_conf.WriteTo(mmio_space());
 
-    if (controller()->igd_opregion().IsEdp(ddi())) {
-        dpcd::EdpConfigCap config_cap;
-        dpcd::EdpGeneralCap1 general_cap;
-        dpcd::EdpBacklightCap backlight_cap;
+    return true;
+}
 
-        config_cap.set_reg_value(dpcd_capability(dpcd::DPCD_EDP_CONFIG));
-        general_cap.set_reg_value(dpcd_edp_capability(dpcd::DPCD_EDP_GENERAL_CAP1));
-        backlight_cap.set_reg_value(dpcd_edp_capability(dpcd::DPCD_EDP_BACKLIGHT_CAP));
-
-        backlight_aux_power_ = config_cap.dpcd_display_ctrl_capable()
-                && general_cap.tcon_backlight_adjustment_cap()
-                && general_cap.backlight_aux_enable_cap();
-        backlight_aux_brightness_ = config_cap.dpcd_display_ctrl_capable()
-                && general_cap.tcon_backlight_adjustment_cap()
-                && backlight_cap.brightness_aux_set_cap();
-
-        if (backlight_aux_brightness_) {
-            dpcd::EdpBacklightModeSet mode;
-            mode.set_brightness_ctrl_mode(mode.kAux);
-            if (!DpcdWrite(dpcd::DPCD_EDP_BACKLIGHT_MODE_SET, mode.reg_value_ptr(), 1)) {
-                LOG_ERROR("Failed to init backlight\n");
-                return false;
-            }
+bool DpDisplay::InitBacklightHw() {
+    if (backlight_aux_brightness_) {
+        dpcd::EdpBacklightModeSet mode;
+        mode.set_brightness_ctrl_mode(mode.kAux);
+        if (!DpcdWrite(dpcd::DPCD_EDP_BACKLIGHT_MODE_SET, mode.reg_value_ptr(), 1)) {
+            LOG_ERROR("Failed to init backlight\n");
+            return false;
         }
-        return SetBacklightOn(true);
     }
-
     return true;
 }
 
@@ -1385,6 +1386,16 @@ bool DpDisplay::CheckPixelRate(uint64_t pixel_rate) {
     // Multiply by 8/10 because of 8b/10b encoding
     uint64_t max_pixel_rate = (bit_rate * 8 / 10) / kBitsPerPixel;
     return pixel_rate <= max_pixel_rate;
+}
+
+uint32_t DpDisplay::LoadClockRateForTranscoder(registers::Trans transcoder) {
+    registers::TranscoderRegs trans_regs(transcoder);
+    uint32_t data_m = trans_regs.DataM().ReadFrom(mmio_space()).data_m_value();
+    uint32_t data_n = trans_regs.DataN().ReadFrom(mmio_space()).data_n_value();
+
+    double total_link_bit_rate_10khz = dp_link_rate_mhz_ * 100. * (8. / 10.) * dp_lane_count_;
+    double res = (data_m * total_link_bit_rate_10khz) / (data_n * kBitsPerPixel);
+    return static_cast<uint32_t>(round(res));
 }
 
 } // namespace i915

@@ -82,7 +82,7 @@ typedef struct sdmmc_host_info {
 #define SDMMC_HOST_CAP_AUTO_CMD12    (1 << 4)
     // Maximum data request size
     uint64_t max_transfer_size;
-
+    uint64_t max_transfer_size_non_dma;
     // Host specific preferences
     uint64_t prefs;
 #define SDMMC_HOST_PREFS_DISABLE_HS400         (1 << 0)
@@ -104,11 +104,9 @@ typedef struct sdmmc_protocol_ops {
     // issue a hw reset
     void (*hw_reset)(void* ctx);
     // perform tuning
-    zx_status_t (*perform_tuning)(void* ctx);
+    zx_status_t (*perform_tuning)(void* ctx, uint32_t cmd_idx);
     // issue a request
     zx_status_t (*request)(void* ctx, sdmmc_req_t* req);
-    // get out-of-bandwidth irq handle for SDIO
-    zx_status_t (*get_sdio_oob_irq)(void* ctx, zx_handle_t *oob_irq);
 } sdmmc_protocol_ops_t;
 
 typedef struct sdmmc_protocol {
@@ -118,11 +116,6 @@ typedef struct sdmmc_protocol {
 
 static inline zx_status_t sdmmc_host_info(sdmmc_protocol_t* sdmmc, sdmmc_host_info_t* info) {
     return sdmmc->ops->host_info(sdmmc->ctx, info);
-}
-
-static inline zx_status_t sdmmc_get_sdio_oob_irq(sdmmc_protocol_t* sdmmc,
-                                                 zx_handle_t *oob_irq_handle) {
-    return sdmmc->ops->get_sdio_oob_irq(sdmmc->ctx, oob_irq_handle);
 }
 
 static inline zx_status_t sdmmc_set_signal_voltage(sdmmc_protocol_t* sdmmc,
@@ -147,8 +140,8 @@ static inline void sdmmc_hw_reset(sdmmc_protocol_t* sdmmc) {
     sdmmc->ops->hw_reset(sdmmc->ctx);
 }
 
-static inline zx_status_t sdmmc_perform_tuning(sdmmc_protocol_t* sdmmc) {
-    return sdmmc->ops->perform_tuning(sdmmc->ctx);
+static inline zx_status_t sdmmc_perform_tuning(sdmmc_protocol_t* sdmmc, uint32_t cmd_idx) {
+    return sdmmc->ops->perform_tuning(sdmmc->ctx, cmd_idx);
 }
 
 static inline zx_status_t sdmmc_request(sdmmc_protocol_t* sdmmc, sdmmc_req_t* req) {

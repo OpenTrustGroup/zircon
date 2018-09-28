@@ -44,7 +44,7 @@
 #define IOCTL_FAMILY_BLOCK          0x13
 #define IOCTL_FAMILY_I2C            0x14
 #define IOCTL_FAMILY_TPM            0x15
-#define IOCTL_FAMILY_USB            0x16
+#define IOCTL_FAMILY_USB_DEVICE     0x16
 #define IOCTL_FAMILY_HID            0x17
 // 0x18 unused
 #define IOCTL_FAMILY_AUDIO          0x19
@@ -62,7 +62,7 @@
 #define IOCTL_FAMILY_PTY            0x25
 #define IOCTL_FAMILY_NETCONFIG      0x26
 #define IOCTL_FAMILY_ETHERTAP       0x27
-#define IOCTL_FAMILY_USB_DEVICE     0x28
+#define IOCTL_FAMILY_USB_PERIPHERAL 0x28
 #define IOCTL_FAMILY_USB_VIRT_BUS   0x29
 #define IOCTL_FAMILY_CPUPERF        0x2A
 #define IOCTL_FAMILY_POWER          0x30
@@ -81,6 +81,7 @@
 #define IOCTL_FAMILY_SKIP_BLOCK     0x3D
 #define IOCTL_FAMILY_USB_TEST       0x3E
 #define IOCTL_FAMILY_CLK            0x3F
+#define IOCTL_FAMILY_NAND_BROKER    0x40
 
 // IOCTL constructor
 // --K-FFNN

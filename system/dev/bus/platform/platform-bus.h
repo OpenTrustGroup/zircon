@@ -7,7 +7,7 @@
 #include <ddk/device.h>
 #include <ddktl/device.h>
 #include <ddktl/protocol/clk.h>
-#include <ddktl/protocol/gpio.h>
+#include <ddktl/protocol/gpio-impl.h>
 #include <ddktl/protocol/i2c-impl.h>
 #include <ddktl/protocol/iommu.h>
 #include <ddktl/protocol/platform-bus.h>
@@ -63,7 +63,7 @@ public:
 
     // Used by PlatformDevice to queue I2C transactions on an I2C bus.
     zx_status_t I2cTransact(uint32_t txid, rpc_i2c_req_t* req, const pbus_i2c_channel_t* channel,
-                            const void* write_buf, zx_handle_t channel_handle);
+                            zx_handle_t channel_handle);
 
     // Helper for PlatformDevice.
     zx_status_t GetBoardInfo(pdev_board_info_t* out_info);
@@ -73,8 +73,8 @@ public:
 
     // Protocol accessors for PlatformDevice.
     inline ddk::ClkProtocolProxy* clk() const { return clk_.get(); }
-    inline ddk::GpioProtocolProxy* gpio() const { return gpio_.get(); }
-    inline ddk::I2cImplProtocolProxy* i2c_impl() const { return i2c_impl_.get(); }
+    inline ddk::GpioImplProtocolProxy* gpio() const { return gpio_.get(); }
+    inline ddk::I2cImplProtocolProxy* i2c() const { return i2c_.get(); }
 
 private:
     // This class is a wrapper for a platform_proxy_cb_t added via pbus_register_protocol().
@@ -89,8 +89,8 @@ private:
         inline uint32_t GetKey() const { return proto_id_; }
         inline void GetProtocol(void* out) const { memcpy(out, &protocol_, sizeof(protocol_)); }
 
-        inline zx_status_t Proxy(platform_proxy_args_t* args) {
-            return proxy_cb_(args, proxy_cb_cookie_);
+        inline void Proxy(platform_proxy_args_t* args) {
+            proxy_cb_(args, proxy_cb_cookie_);
         }
 
     private:
@@ -116,9 +116,9 @@ private:
 
     // Protocols that are optionally provided by the board driver.
     fbl::unique_ptr<ddk::ClkProtocolProxy> clk_;
-    fbl::unique_ptr<ddk::GpioProtocolProxy> gpio_;
+    fbl::unique_ptr<ddk::GpioImplProtocolProxy> gpio_;
     fbl::unique_ptr<ddk::IommuProtocolProxy> iommu_;
-    fbl::unique_ptr<ddk::I2cImplProtocolProxy> i2c_impl_;
+    fbl::unique_ptr<ddk::I2cImplProtocolProxy> i2c_;
 
     // Completion used by WaitProtocol().
     sync_completion_t proto_completion_ __TA_GUARDED(proto_completion_mutex_);

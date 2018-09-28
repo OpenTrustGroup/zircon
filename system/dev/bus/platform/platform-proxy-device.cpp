@@ -18,6 +18,8 @@
 #include <ddk/protocol/platform-device.h>
 #include <fbl/auto_call.h>
 #include <fbl/unique_ptr.h>
+#include <lib/zx/vmar.h>
+#include <lib/zx/vmo.h>
 
 #include "platform-proxy.h"
 #include "proxy-protocol.h"
@@ -30,91 +32,97 @@
 
 namespace platform_bus {
 
-zx_status_t ProxyDevice::GpioConfigIn(void* ctx, uint32_t index, uint32_t flags) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioConfigIn(void* ctx, uint32_t flags) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_CONFIG_IN;
-    req.index = index;
+    req.index = gpio_ctx->index;
     req.flags = flags;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                              sizeof(resp));
 }
 
-zx_status_t ProxyDevice::GpioConfigOut(void* ctx, uint32_t index, uint8_t initial_value) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioConfigOut(void* ctx, uint8_t initial_value) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_CONFIG_OUT;
-    req.index = index;
+    req.index = gpio_ctx->index;
     req.value = initial_value;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                              sizeof(resp));
 }
 
-zx_status_t ProxyDevice::GpioSetAltFunction(void* ctx, uint32_t index, uint64_t function) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioSetAltFunction(void* ctx, uint64_t function) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_SET_ALT_FUNCTION;
-    req.index = index;
+    req.index = gpio_ctx->index;
     req.alt_function = function;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                              sizeof(resp));
 }
 
-zx_status_t ProxyDevice::GpioGetInterrupt(void* ctx, uint32_t index, uint32_t flags,
-                                          zx_handle_t* out_handle) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioGetInterrupt(void* ctx, uint32_t flags, zx_handle_t* out_handle) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_GET_INTERRUPT;
-    req.index = index;
+    req.index = gpio_ctx->index;
     req.flags = flags;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header, sizeof(resp),
                               nullptr, 0, out_handle, 1, nullptr);
 }
 
-zx_status_t ProxyDevice::GpioSetPolarity(void* ctx, uint32_t index, uint32_t polarity) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioSetPolarity(void* ctx, uint32_t polarity) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_SET_POLARITY;
-    req.index = index;
+    req.index = gpio_ctx->index;
     req.polarity = polarity;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                              sizeof(resp));
 }
 
-zx_status_t ProxyDevice::GpioReleaseInterrupt(void* ctx, uint32_t index) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioReleaseInterrupt(void* ctx) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_RELEASE_INTERRUPT;
-    req.index = index;
+    req.index = gpio_ctx->index;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                              sizeof(resp));
 }
 
-zx_status_t ProxyDevice::GpioRead(void* ctx, uint32_t index, uint8_t* out_value) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioRead(void* ctx, uint8_t* out_value) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_READ;
-    req.index = index;
+    req.index = gpio_ctx->index;
 
     auto status = thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                                     sizeof(resp));
@@ -126,26 +134,28 @@ zx_status_t ProxyDevice::GpioRead(void* ctx, uint32_t index, uint8_t* out_value)
     return ZX_OK;
 }
 
-zx_status_t ProxyDevice::GpioWrite(void* ctx, uint32_t index, uint8_t value) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::GpioWrite(void* ctx, uint8_t value) {
+    auto gpio_ctx = static_cast<GpioCtx*>(ctx);
+    auto thiz = gpio_ctx->thiz;
     rpc_gpio_req_t req = {};
     rpc_gpio_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_GPIO;
     req.header.op = GPIO_WRITE;
-    req.index = index;
+    req.index = gpio_ctx->index;
     req.value = value;
 
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                              sizeof(resp));
 }
 
-zx_status_t ProxyDevice::I2cGetMaxTransferSize(void* ctx, uint32_t index, size_t* out_size) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::I2cGetMaxTransferSize(void* ctx, size_t* out_size) {
+    auto i2c_ctx = static_cast<I2cCtx*>(ctx);
+    auto thiz = i2c_ctx->thiz;
     rpc_i2c_req_t req = {};
     rpc_i2c_rsp_t resp = {};
     req.header.proto_id = ZX_PROTOCOL_I2C;
     req.header.op = I2C_GET_MAX_TRANSFER;
-    req.index = index;
+    req.index = i2c_ctx->index;
 
     auto status = thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp.header,
                                     sizeof(resp));
@@ -155,42 +165,66 @@ zx_status_t ProxyDevice::I2cGetMaxTransferSize(void* ctx, uint32_t index, size_t
     return status;
 }
 
-zx_status_t ProxyDevice::I2cTransact(void* ctx, uint32_t index, const void* write_buf,
-                                     size_t write_length, size_t read_length,
-                                     i2c_complete_cb complete_cb, void* cookie) {
-    ProxyDevice* thiz = static_cast<ProxyDevice*>(ctx);
+zx_status_t ProxyDevice::I2cGetInterrupt(void* ctx, uint32_t flags, zx_handle_t* out_handle) {
+    return ZX_ERR_NOT_SUPPORTED;
+}
 
-    if (!read_length && !write_length) {
+zx_status_t ProxyDevice::I2cTransact(void* ctx, i2c_op_t* ops, size_t cnt,
+                                     i2c_transact_cb transact_cb, void* cookie) {
+    auto i2c_ctx = static_cast<I2cCtx*>(ctx);
+    auto thiz = i2c_ctx->thiz;
+    size_t writes_length = 0;
+    size_t reads_length = 0;
+    for (size_t i = 0; i < cnt; ++i) {
+        if (ops[i].is_read) {
+            reads_length += ops[i].length;
+        } else {
+            writes_length += ops[i].length;
+        }
+    }
+    if (!writes_length && !reads_length) {
         return ZX_ERR_INVALID_ARGS;
     }
-    if (write_length > I2C_MAX_TRANSFER_SIZE || read_length > I2C_MAX_TRANSFER_SIZE) {
-        return ZX_ERR_OUT_OF_RANGE;
+
+    size_t req_length = sizeof(rpc_i2c_req_t) + cnt * sizeof(i2c_rpc_op_t) + writes_length;
+    if (req_length >= PROXY_MAX_TRANSFER_SIZE) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    uint8_t req_buffer[PROXY_MAX_TRANSFER_SIZE];
+    auto req = reinterpret_cast<rpc_i2c_req_t*>(req_buffer);
+    req->header.proto_id = ZX_PROTOCOL_I2C;
+    req->header.op = I2C_TRANSACT;
+    req->index = i2c_ctx->index;
+    req->cnt = cnt;
+    req->transact_cb = transact_cb;
+    req->cookie = cookie;
+
+    auto rpc_ops = reinterpret_cast<i2c_rpc_op_t*>(req + 1);
+    ZX_ASSERT(cnt < I2C_MAX_RW_OPS);
+    for (size_t i = 0; i < cnt; ++i) {
+        rpc_ops[i].length = ops[i].length;
+        rpc_ops[i].is_read = ops[i].is_read;
+        rpc_ops[i].stop = ops[i].stop;
+    }
+    uint8_t* p_writes = reinterpret_cast<uint8_t*>(rpc_ops) + cnt * sizeof(i2c_rpc_op_t);
+    for (size_t i = 0; i < cnt; ++i) {
+        if (!ops[i].is_read) {
+            memcpy(p_writes, ops[i].buf, ops[i].length);
+            p_writes += ops[i].length;
+        }
     }
 
-    struct {
-        rpc_i2c_req_t i2c;
-        uint8_t data[I2C_MAX_TRANSFER_SIZE];
-    } req = {};
-    req.i2c.header.proto_id = ZX_PROTOCOL_I2C;
-    req.i2c.header.op = I2C_TRANSACT;
-    req.i2c.index = index;
-    req.i2c.write_length = write_length;
-    req.i2c.read_length = read_length;
-    req.i2c.complete_cb = complete_cb;
-    req.i2c.cookie = cookie;
-    struct {
-        rpc_i2c_rsp_t i2c;
-        uint8_t data[I2C_MAX_TRANSFER_SIZE];
-    } resp;
-
-    if (write_length) {
-        memcpy(req.data, write_buf, write_length);
+    const size_t resp_length = sizeof(rpc_i2c_rsp_t) + reads_length;
+    if (resp_length >= PROXY_MAX_TRANSFER_SIZE) {
+        return ZX_ERR_INVALID_ARGS;
     }
+    uint8_t resp_buffer[PROXY_MAX_TRANSFER_SIZE];
+    rpc_i2c_rsp_t* rsp = reinterpret_cast<rpc_i2c_rsp_t*>(resp_buffer);
     uint32_t actual;
-    auto status = thiz->proxy_->Rpc(thiz->device_id_, &req.i2c.header,
-                                    static_cast<uint32_t>(sizeof(req.i2c) + write_length),
-                                    &resp.i2c.header, sizeof(resp), nullptr, 0, nullptr, 0,
-                                    &actual);
+    auto status = thiz->proxy_->Rpc(thiz->device_id_, &req->header,
+                                    static_cast<uint32_t>(req_length),
+                                    &rsp->header, static_cast<uint32_t>(resp_length),
+                                    nullptr, 0, nullptr, 0, &actual);
     if (status != ZX_OK) {
         return status;
     }
@@ -199,13 +233,24 @@ zx_status_t ProxyDevice::I2cTransact(void* ctx, uint32_t index, const void* writ
     // due to the fact that it is unsafe to respond asynchronously on the devmgr rxrpc channel.
     // In the future we may want to redo the plumbing to allow this to be truly asynchronous.
 
-    if (actual - sizeof(resp.i2c) != read_length) {
+    if (actual != resp_length) {
         status = ZX_ERR_INTERNAL;
     } else {
-        status = resp.i2c.header.status;
+        status = rsp->header.status;
     }
-    if (complete_cb) {
-        complete_cb(status, resp.data, resp.i2c.cookie);
+    if (transact_cb) {
+        i2c_op_t read_ops[I2C_MAX_RW_OPS];
+        size_t read_ops_cnt = 0;
+        uint8_t* p_reads = reinterpret_cast<uint8_t*>(rsp + 1);
+        for (size_t i = 0; i < cnt; ++i) {
+            if (ops[i].is_read) {
+                read_ops[read_ops_cnt] = ops[i];
+                read_ops[read_ops_cnt].buf = p_reads;
+                read_ops_cnt++;
+                p_reads += ops[i].length;
+            }
+        }
+        transact_cb(status, read_ops, read_ops_cnt, rsp->cookie);
     }
 
     return ZX_OK;
@@ -233,20 +278,18 @@ zx_status_t ProxyDevice::ClkDisable(void* ctx, uint32_t index) {
     return thiz->proxy_->Rpc(thiz->device_id_, &req.header, sizeof(req), &resp, sizeof(resp));
 }
 
-zx_status_t ProxyDevice::MapMmio(uint32_t index, uint32_t cache_policy, void** out_vaddr,
-                                 size_t* out_size, zx_paddr_t* out_paddr,
-                                 zx_handle_t* out_handle) {
+zx_status_t ProxyDevice::GetMmio(uint32_t index, pdev_mmio_t* out_mmio) {
     if (index >= mmios_.size()) {
         return ZX_ERR_OUT_OF_RANGE;
     }
 
-    Mmio* mmio = &mmios_[index];
-    zx_paddr_t vmo_base = ROUNDDOWN(mmio->base, PAGE_SIZE);
-    size_t vmo_size = ROUNDUP(mmio->base + mmio->length - vmo_base, PAGE_SIZE);
-    zx_handle_t vmo_handle;
+    const Mmio& mmio = mmios_[index];
+    const zx_paddr_t vmo_base = ROUNDDOWN(mmio.base, PAGE_SIZE);
+    const size_t vmo_size = ROUNDUP(mmio.base + mmio.length - vmo_base, PAGE_SIZE);
+    zx::vmo vmo;
 
-    zx_status_t status = zx_vmo_create_physical(mmio->resource.get(), vmo_base, vmo_size,
-                                                &vmo_handle);
+    zx_status_t status = zx_vmo_create_physical(mmio.resource.get(), vmo_base, vmo_size,
+                                                vmo.reset_and_get_address());
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s %s: creating vmo failed %d\n", name_, __FUNCTION__, status);
         return status;
@@ -254,38 +297,68 @@ zx_status_t ProxyDevice::MapMmio(uint32_t index, uint32_t cache_policy, void** o
 
     char name[32];
     snprintf(name, sizeof(name), "%s mmio %u", name_, index);
-    status = zx_object_set_property(vmo_handle, ZX_PROP_NAME, name, sizeof(name));
+    status = vmo.set_property(ZX_PROP_NAME, name, sizeof(name));
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s %s: setting vmo name failed %d\n", name_, __FUNCTION__, status);
-        goto fail;
+        return status;
     }
 
-    status = zx_vmo_set_cache_policy(vmo_handle, cache_policy);
+    out_mmio->offset = mmio.base - vmo_base;
+    out_mmio->vmo = vmo.release();
+    out_mmio->size = mmio.length;
+    return ZX_OK;
+}
+
+// TODO(surajmalhotra): Remove after migrating all clients off.
+zx_status_t ProxyDevice::MapMmio(uint32_t index, uint32_t cache_policy, void** out_vaddr,
+                                 size_t* out_size, zx_paddr_t* out_paddr,
+                                 zx_handle_t* out_handle) {
+    if (index >= mmios_.size()) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+
+    const Mmio& mmio = mmios_[index];
+    const zx_paddr_t vmo_base = ROUNDDOWN(mmio.base, PAGE_SIZE);
+    const size_t vmo_size = ROUNDUP(mmio.base + mmio.length - vmo_base, PAGE_SIZE);
+    zx::vmo vmo;
+
+    zx_status_t status = zx_vmo_create_physical(mmio.resource.get(), vmo_base, vmo_size,
+                                                vmo.reset_and_get_address());
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "%s %s: creating vmo failed %d\n", name_, __FUNCTION__, status);
+        return status;
+    }
+
+    char name[32];
+    snprintf(name, sizeof(name), "%s mmio %u", name_, index);
+    status = vmo.set_property(ZX_PROP_NAME, name, sizeof(name));
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "%s %s: setting vmo name failed %d\n", name_, __FUNCTION__, status);
+        return status;
+    }
+
+    status = vmo.set_cache_policy(cache_policy);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s %s: setting cache policy failed %d\n", name_, __FUNCTION__, status);
-        goto fail;
+        return status;
     }
 
     uintptr_t virt;
-    status = zx_vmar_map(zx_vmar_root_self(),
-                         ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_MAP_RANGE,
-                         0, vmo_handle, 0, vmo_size, &virt);
+    status = zx::vmar::root_self()->map(0, vmo, 0, vmo_size, ZX_VM_PERM_READ |
+                                        ZX_VM_PERM_WRITE | ZX_VM_MAP_RANGE, &virt);
     if (status != ZX_OK) {
         zxlogf(ERROR, "%s %s: mapping vmar failed %d\n", name_, __FUNCTION__, status);
-        goto fail;
+        return status;
     }
 
-    *out_size = mmio->length;
+    *out_size = mmio.length;
     if (out_paddr) {
-        *out_paddr = mmio->base;
+        *out_paddr = mmio.base;
     }
-    *out_vaddr = reinterpret_cast<void*>(virt + (mmio->base - vmo_base));
-    *out_handle = vmo_handle;
+    *out_vaddr = reinterpret_cast<void*>(virt + (mmio.base - vmo_base));
+    *out_handle = vmo.release();
     return ZX_OK;
 
-fail:
-    zx_handle_close(vmo_handle);
-    return status;
 }
 
 zx_status_t ProxyDevice::MapInterrupt(uint32_t index, uint32_t flags, zx_handle_t* out_handle) {
@@ -362,6 +435,35 @@ zx_status_t ProxyDevice::DeviceAdd(uint32_t index, device_add_args_t* args, zx_d
     return CreateChild(zxdev(), resp.device_id, proxy_, args);
 }
 
+zx_status_t ProxyDevice::GetProtocol(uint32_t proto_id, uint32_t index, void* out_protocol) {
+    // Return the GPIO protocol for the given index.
+    if (proto_id == ZX_PROTOCOL_GPIO) {
+        if (index >= gpio_ctxs_.size()) {
+            return ZX_ERR_OUT_OF_RANGE;
+        }
+        auto proto = static_cast<gpio_protocol_t*>(out_protocol);
+        proto->ops = &gpio_proto_ops_;
+        proto->ctx = &gpio_ctxs_[index];
+        return ZX_OK;
+    }
+
+    if (proto_id == ZX_PROTOCOL_I2C) {
+        if (index >= i2c_ctxs_.size()) {
+            return ZX_ERR_OUT_OF_RANGE;
+        }
+        auto proto = static_cast<i2c_protocol_t*>(out_protocol);
+        proto->ops = &i2c_proto_ops_;
+        proto->ctx = &i2c_ctxs_[index];
+        return ZX_OK;
+    }
+
+    // For other protocols, fall through to DdkGetProtocol if index is zero
+    if (index != 0) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+    return DdkGetProtocol(proto_id, out_protocol);
+}
+
 zx_status_t ProxyDevice::CreateRoot(zx_device_t* parent, fbl::RefPtr<PlatformProxy> proxy) {
     fbl::AllocChecker ac;
     auto dev = fbl::make_unique_checked<ProxyDevice>(&ac,parent, ROOT_DEVICE_ID, proxy);
@@ -411,6 +513,7 @@ ProxyDevice::ProxyDevice(zx_device_t* parent, uint32_t device_id,
     gpio_proto_ops_.set_polarity = GpioSetPolarity;
     i2c_proto_ops_.transact = I2cTransact;
     i2c_proto_ops_.get_max_transfer_size = I2cGetMaxTransferSize;
+    i2c_proto_ops_.get_interrupt = I2cGetInterrupt;
 }
 
 zx_status_t ProxyDevice::InitCommon() {
@@ -476,6 +579,32 @@ zx_status_t ProxyDevice::InitCommon() {
 
         zxlogf(SPEW, "%s: received IRQ %u (irq %#x handle %#x)\n", name_, i, irq.irq,
                irq.resource.get());
+    }
+
+    uint32_t gpio_count = info.gpio_count;
+    if (gpio_count > 0) {
+        gpio_ctxs_.reset(new (&ac) GpioCtx[gpio_count], gpio_count);
+        if (!ac.check()) {
+            return ZX_ERR_NO_MEMORY;
+        }
+
+        for (uint32_t i = 0; i < info.gpio_count; i++) {
+            gpio_ctxs_[i].thiz = this;
+            gpio_ctxs_[i].index = i;
+        }
+    }
+
+    uint32_t i2c_count = info.i2c_channel_count;
+    if (i2c_count > 0) {
+        i2c_ctxs_.reset(new (&ac) I2cCtx[i2c_count], i2c_count);
+        if (!ac.check()) {
+            return ZX_ERR_NO_MEMORY;
+        }
+
+        for (uint32_t i = 0; i < i2c_count; i++) {
+            i2c_ctxs_[i].thiz = this;
+            i2c_ctxs_[i].index = i;
+        }
     }
 
     return ZX_OK;
@@ -560,18 +689,37 @@ zx_status_t ProxyDevice::DdkGetProtocol(uint32_t proto_id, void* out) {
     }
 
     // Finally, protocols provided by platform bus.
+    proto->ctx = this;
     switch (proto_id) {
     case ZX_PROTOCOL_PLATFORM_DEV: {
         proto->ops = &pdev_proto_ops_;
         break;
     }
     case ZX_PROTOCOL_GPIO: {
+        auto count = gpio_ctxs_.size();
+        if (count == 0) {
+            return ZX_ERR_NOT_SUPPORTED;
+        } else if (count > 1) {
+            zxlogf(ERROR, "%s: device has more than one GPIO\n", __func__);
+            return ZX_ERR_BAD_STATE;
+        }
+        // Return zeroth GPIO resource.
         proto->ops = &gpio_proto_ops_;
-        break;
+        proto->ctx = &gpio_ctxs_[0];
+        return ZX_OK;
     }
     case ZX_PROTOCOL_I2C: {
+        auto count = i2c_ctxs_.size();
+        if (count == 0) {
+            return ZX_ERR_NOT_SUPPORTED;
+        } else if (count > 1) {
+            zxlogf(ERROR, "%s: device has more than one I2C channel\n", __func__);
+            return ZX_ERR_BAD_STATE;
+        }
+        // Return zeroth I2C resource.
         proto->ops = &i2c_proto_ops_;
-        break;
+        proto->ctx = &i2c_ctxs_[0];
+        return ZX_OK;
     }
     case ZX_PROTOCOL_CLK: {
         proto->ops = &clk_proto_ops_;
@@ -580,8 +728,6 @@ zx_status_t ProxyDevice::DdkGetProtocol(uint32_t proto_id, void* out) {
     default:
         return proxy_->GetProtocol(proto_id, out);;
     }
-
-    proto->ctx = this;
     return ZX_OK;
 }
 

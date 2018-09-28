@@ -9,6 +9,7 @@
 
 #include <fbl/algorithm.h>
 #include <fbl/auto_lock.h>
+#include <fuchsia/io/c/fidl.h>
 #include <zircon/assert.h>
 #include <zircon/syscalls.h>
 
@@ -108,7 +109,7 @@ zx_status_t VmoFile::Write(const void* data, size_t length, size_t offset, size_
 }
 
 zx_status_t VmoFile::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type,
-                                zxrio_object_info_t* extra) {
+                                zxrio_node_info_t* extra) {
     ZX_DEBUG_ASSERT(!IsWritable(flags) || writable_); // checked by the VFS
 
     zx::vmo vmo;
@@ -119,7 +120,7 @@ zx_status_t VmoFile::GetHandles(uint32_t flags, zx_handle_t* hnd, uint32_t* type
     }
 
     *hnd = vmo.release();
-    *type = FDIO_PROTOCOL_VMOFILE;
+    *type = fuchsia_io_NodeInfoTag_vmofile;
     extra->vmofile.offset = offset;
     extra->vmofile.length = length_;
     return ZX_OK;

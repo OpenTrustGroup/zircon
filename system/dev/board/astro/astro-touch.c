@@ -26,7 +26,7 @@ static const pbus_gpio_t touch_gpios[] = {
 
 static const pbus_i2c_channel_t ft3x27_touch_i2c[] = {
     {
-        .bus_id = 1,
+        .bus_id = ASTRO_I2C_2,
         .address = 0x38,
     },
 };
@@ -42,11 +42,30 @@ static pbus_dev_t ft3x27_touch_dev = {
     .gpio_count = countof(touch_gpios),
 };
 
+static const pbus_i2c_channel_t gt92xx_touch_i2c[] = {
+    {
+        .bus_id = ASTRO_I2C_2,
+        .address = 0x5d,
+    },
+};
+
+static pbus_dev_t gt92xx_touch_dev = {
+    .name = "gt92xx-touch",
+    .vid = PDEV_VID_GOOGLE,
+    .pid = PDEV_PID_ASTRO,
+    .did = PDEV_DID_ASTRO_GOODIXTOUCH,
+    .i2c_channels = gt92xx_touch_i2c,
+    .i2c_channel_count = countof(gt92xx_touch_i2c),
+    .gpios = touch_gpios,
+    .gpio_count = countof(touch_gpios),
+};
+
+
 zx_status_t astro_touch_init(aml_bus_t* bus) {
 
     //Check the display ID pin to determine which driver device to add
-    gpio_set_alt_function(&bus->gpio, S905D2_GPIOH(5), 0);
-    gpio_config_in(&bus->gpio, S905D2_GPIOH(5), GPIO_NO_PULL);
+    gpio_impl_set_alt_function(&bus->gpio, S905D2_GPIOH(5), 0);
+    gpio_impl_config_in(&bus->gpio, S905D2_GPIOH(5), GPIO_NO_PULL);
     uint8_t gpio_state;
     /* Two variants of display are supported, one with BOE display panel and
           ft3x27 touch controller, the other with INX panel and Goodix touch
@@ -54,10 +73,13 @@ zx_status_t astro_touch_init(aml_bus_t* bus) {
           Logic 0 for BOE/ft3x27 combination
           Logic 1 for Innolux/Goodix combination
     */
-    gpio_read(&bus->gpio, S905D2_GPIOH(5), &gpio_state);
+    gpio_impl_read(&bus->gpio, S905D2_GPIOH(5), &gpio_state);
     if (gpio_state) {
-        zxlogf(INFO, "Innolux/Goodix screen not supported at this time\n");
-        return ZX_OK;
+        zx_status_t status = pbus_device_add(&bus->pbus, &gt92xx_touch_dev);
+        if (status != ZX_OK) {
+            zxlogf(INFO, "astro_touch_init(gt92xx): pbus_device_add failed: %d\n", status);
+            return status;
+        }
     } else {
         zx_status_t status = pbus_device_add(&bus->pbus, &ft3x27_touch_dev);
         if (status != ZX_OK) {

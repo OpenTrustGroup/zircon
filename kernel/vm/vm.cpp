@@ -48,8 +48,8 @@ void MarkPagesInUsePhys(paddr_t pa, size_t len) {
 
     list_node list = LIST_INITIAL_VALUE(list);
 
-    auto allocated = pmm_alloc_range(pa, len / PAGE_SIZE, &list);
-    ASSERT_MSG(allocated == len / PAGE_SIZE,
+    zx_status_t status = pmm_alloc_range(pa, len / PAGE_SIZE, &list);
+    ASSERT_MSG(status == ZX_OK,
                "failed to reserve memory range [%#" PRIxPTR ", %#" PRIxPTR "]\n",
                pa, pa + len - 1);
 
@@ -88,6 +88,8 @@ void vm_init_preheap() {
         MarkPagesInUsePhys(boot_alloc_start, boot_alloc_end - boot_alloc_start);
     }
 
+    zx_status_t status;
+
 #if !DISABLE_KASLR // Disable random memory padding for KASLR
     // Reserve up to 15 pages as a random padding in the kernel physical mapping
     uchar entropy;
@@ -95,14 +97,14 @@ void vm_init_preheap() {
     struct list_node list;
     list_initialize(&list);
     size_t page_count = entropy % 16;
-    size_t allocated = pmm_alloc_pages(page_count, 0, &list);
-    DEBUG_ASSERT(page_count == allocated);
+    status = pmm_alloc_pages(page_count, 0, &list);
+    DEBUG_ASSERT(status == ZX_OK);
     LTRACEF("physical mapping padding page count %#" PRIxPTR "\n", page_count);
 #endif
 
     // grab a page and mark it as the zero page
-    zero_page = pmm_alloc_page(0, &zero_page_paddr);
-    DEBUG_ASSERT(zero_page);
+    status = pmm_alloc_page(0, &zero_page, &zero_page_paddr);
+    DEBUG_ASSERT(status == ZX_OK);
 
     void* ptr = paddr_to_physmap(zero_page_paddr);
     DEBUG_ASSERT(ptr);

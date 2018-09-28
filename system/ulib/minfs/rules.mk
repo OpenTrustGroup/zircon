@@ -8,6 +8,8 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 COMMON_SRCS := \
     $(LOCAL_DIR)/allocator.cpp \
     $(LOCAL_DIR)/bcache.cpp \
@@ -30,6 +32,7 @@ MODULE_STATIC_LIBS := \
     system/ulib/async \
     system/ulib/async-loop.cpp \
     system/ulib/async-loop \
+    system/ulib/bitmap \
     system/ulib/block-client \
     system/ulib/trace \
     system/ulib/zx \
@@ -40,7 +43,6 @@ MODULE_STATIC_LIBS := \
 
 MODULE_LIBS := \
     system/ulib/async.default \
-    system/ulib/bitmap \
     system/ulib/c \
     system/ulib/fdio \
     system/ulib/trace-engine \
@@ -55,8 +57,6 @@ MODULE_HOST_SRCS := \
     $(COMMON_SRCS) \
     $(LOCAL_DIR)/host.cpp \
     system/ulib/bitmap/raw-bitmap.cpp \
-    system/ulib/fs/vfs.cpp \
-    system/ulib/fs/vnode.cpp \
 
 MODULE_HOST_COMPILEFLAGS := \
     -Werror-implicit-function-declaration \
@@ -81,8 +81,7 @@ MODULE_COMPILEFLAGS := $(MODULE_HOST_COMPILEFLAGS)
 MODULE_HEADER_DEPS += system/ulib/zircon-internal
 
 MODULE_HOST_LIBS := \
-    system/ulib/fbl.hostlib
-
-MODULE_DEFINES += DISABLE_THREAD_ANNOTATIONS
+    system/ulib/fbl.hostlib \
+    system/ulib/fs.hostlib \
 
 include make/module.mk

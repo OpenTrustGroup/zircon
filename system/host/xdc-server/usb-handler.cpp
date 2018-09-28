@@ -13,10 +13,23 @@ std::unique_ptr<UsbHandler::Transfer> UsbHandler::Transfer::Create() {
     return transfer;
 }
 
+zx_status_t UsbHandler::Transfer::FillHeader(uint32_t stream_id, size_t data_len) {
+    // TODO(jocelyndang): implement this.
+    return ZX_ERR_NOT_SUPPORTED;
+}
+
 zx_status_t UsbHandler::Transfer::FillData(uint32_t stream_id, unsigned char* data,
                                            size_t data_len) {
     // TODO(jocelyndang): implement this.
     return ZX_ERR_NOT_SUPPORTED;
+}
+
+bool UsbHandler::Transfer::SetOffset(int offset) {
+    if (offset < 0 || offset > actual_length_) {
+        return false;
+    }
+    offset_ = offset;
+    return true;
 }
 
 // static
@@ -47,8 +60,14 @@ std::unique_ptr<UsbHandler::Transfer> UsbHandler::GetWriteTransfer() {
     return nullptr;
 }
 
-void UsbHandler::QueueWriteTransfer(std::unique_ptr<Transfer>) {
+void UsbHandler::ReturnWriteTransfer(std::unique_ptr<Transfer>) {
     // TODO(jocelyndang): implement this.
+}
+
+std::unique_ptr<UsbHandler::Transfer> UsbHandler::QueueWriteTransfer(
+    std::unique_ptr<Transfer> transfer) {
+    // TODO(jocelyndang): implement this.
+    return transfer;
 }
 
 }  // namespace xdc

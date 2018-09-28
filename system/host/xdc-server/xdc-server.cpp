@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <fbl/auto_call.h>
+#include <lib/fit/defer.h>
 #include <xdc-host-utils/conn.h>
 #include <xdc-server-utils/msg.h>
 #include <xdc-server-utils/packet.h>
@@ -11,12 +11,13 @@
 #include <cassert>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
-#include <poll.h>
 #include <unistd.h>
 
 #include "usb-handler.h"
@@ -25,7 +26,7 @@
 namespace xdc {
 
 static constexpr uint32_t MAX_PENDING_CONN_BACKLOG = 128;
-static const char* XDC_LOCK_PATH   = "/tmp/xdc.lock";
+static const char* XDC_LOCK_PATH = "/tmp/xdc.lock";
 
 void Client::SetStreamId(uint32_t stream_id) {
     registered_ = true;
@@ -39,8 +40,115 @@ void Client::SetConnected(bool connected) {
         return;
     }
     printf("client with stream id %u is now %s to the xdc device stream.\n",
-           stream_id(), connected ?  "connected" : "disconnected");
+           stream_id(), connected ? "connected" : "disconnected");
     connected_ = connected;
+}
+
+bool Client::UpdatePollState(bool usb_writable) {
+    short updated_events = events_;
+    // We want to poll for the client readable signal if:
+    //  - The client has not yet registered a stream id, or,
+    //  - The xdc stream of the client's id is ready to be written to.
+    if (!stream_id() || (usb_writable && connected())) {
+        updated_events |= POLLIN;
+    } else {
+        updated_events &= ~(POLLIN);
+    }
+    // We need to poll for the client writable signal if we have data to send to the client.
+    if (completed_reads_.size() > 0) {
+        updated_events |= POLLOUT;
+    } else {
+        updated_events &= ~POLLOUT;
+    }
+    if (updated_events != events_) {
+        events_ = updated_events;
+        return true;
+    }
+    return false;
+}
+
+void Client::AddCompletedRead(std::unique_ptr<UsbHandler::Transfer> transfer) {
+    completed_reads_.push_back(std::move(transfer));
+}
+
+void Client::ProcessCompletedReads(const std::unique_ptr<UsbHandler>& usb_handler) {
+    for (auto iter = completed_reads_.begin(); iter != completed_reads_.end();) {
+        std::unique_ptr<UsbHandler::Transfer>& transfer = *iter;
+
+        unsigned char* data = transfer->data() + transfer->offset();
+        size_t len_to_write = transfer->actual_length() - transfer->offset();
+
+        ssize_t total_written = 0;
+        while (total_written < len_to_write) {
+            ssize_t res = send(fd(), data + total_written, len_to_write - total_written, 0);
+            if (res < 0) {
+                if (errno == EAGAIN) {
+                    fprintf(stderr, "can't send completed read to client currently\n");
+                    // Need to wait for client to be writable again.
+                    return;
+                } else {
+                    fprintf(stderr, "can't write to client, err: %s\n", strerror(errno));
+                    return;
+                }
+            }
+            total_written += res;
+            int offset = transfer->offset() + res;
+            assert(transfer->SetOffset(offset));
+        }
+        usb_handler->RequeueRead(std::move(transfer));
+        iter = completed_reads_.erase(iter);
+    }
+}
+
+zx_status_t Client::ProcessWrites(const std::unique_ptr<UsbHandler>& usb_handler) {
+    if (!connected()) {
+        return ZX_ERR_SHOULD_WAIT;
+    }
+    while (true) {
+        if (!pending_write_) {
+            pending_write_ = usb_handler->GetWriteTransfer();
+            if (!pending_write_) {
+                return ZX_ERR_SHOULD_WAIT;  // No transfers currently available.
+            }
+        }
+        // If there is no pending data to transfer, read more from the client.
+        if (!has_write_data()) {
+            // Read from the client into the usb transfer buffer. Leave space for the header.
+            unsigned char* buf = pending_write_->write_data_buffer();
+
+            int n = recv(fd(), buf, UsbHandler::Transfer::MAX_WRITE_DATA_SIZE, 0);
+            if (n == 0) {
+                return ZX_ERR_PEER_CLOSED;
+             } else if (n == EAGAIN) {
+                return ZX_ERR_SHOULD_WAIT;
+            } else if (n < 0) {
+                fprintf(stderr, "recv got unhandled err: %s\n", strerror(errno));
+                return ZX_ERR_IO;
+            }
+            pending_write_->FillHeader(stream_id(), n);
+        }
+        if (usb_handler->writable()) {
+            pending_write_ = usb_handler->QueueWriteTransfer(std::move(pending_write_));
+            if (pending_write_) {
+                // Usb handler was busy and returned the write.
+                return ZX_ERR_SHOULD_WAIT;
+            }
+        } else {
+            break;  // Usb handler is busy, need to wait for some writes to complete.
+        }
+    }
+    return ZX_ERR_SHOULD_WAIT;
+}
+
+void Client::ReturnTransfers(const std::unique_ptr<UsbHandler>& usb_handler) {
+    for (auto& transfer : completed_reads_) {
+        usb_handler->RequeueRead(std::move(transfer));
+    }
+    completed_reads_.clear();
+
+    if (pending_write_) {
+        usb_handler->ReturnWriteTransfer(std::move(pending_write_));
+    }
 }
 
 // static
@@ -79,7 +187,7 @@ bool XdcServer::Init() {
     }
     // Remove the socket file if it exists.
     unlink(XDC_SOCKET_PATH);
-    if (bind(socket_fd_.get(), (sockaddr *)&addr, sizeof(addr)) != 0) {
+    if (bind(socket_fd_.get(), (sockaddr*)&addr, sizeof(addr)) != 0) {
         fprintf(stderr, "Could not bind socket with pathname: %s, err: %s\n",
                 XDC_SOCKET_PATH, strerror(errno));
         return false;
@@ -92,6 +200,25 @@ bool XdcServer::Init() {
     return true;
 }
 
+void XdcServer::UpdateClientPollEvents() {
+    for (auto iter : clients_) {
+        std::shared_ptr<Client> client = iter.second;
+        bool changed = client->UpdatePollState(usb_handler_->writable());
+        if (changed) {
+            // We need to update the corresponding file descriptor in the poll_fds_ array
+            // passed to poll.
+            int fd = client->fd();
+            auto is_fd = [fd](auto& elem) { return elem.fd == fd; };
+            auto fd_iter = std::find_if(poll_fds_.begin(), poll_fds_.end(), is_fd);
+            if (fd_iter == poll_fds_.end()) {
+                fprintf(stderr, "could not find pollfd for client with fd %d\n", fd);
+                continue;
+            }
+            fd_iter->events = client->events();
+        }
+    }
+}
+
 void XdcServer::UpdateUsbHandlerFds() {
     std::map<int, short> added_fds;
     std::set<int> removed_fds;
@@ -102,17 +229,17 @@ void XdcServer::UpdateUsbHandlerFds() {
         short events = iter.second;
 
         auto match = std::find_if(poll_fds_.begin(), poll_fds_.end(),
-                                  [&fd](auto& pollfd) { return pollfd.fd == fd; } );
+                                  [&fd](auto& pollfd) { return pollfd.fd == fd; });
         if (match != poll_fds_.end()) {
             fprintf(stderr, "already have usb handler fd: %d\n", fd);
             continue;
         }
-        poll_fds_.push_back(pollfd { fd, events, 0 });
+        poll_fds_.push_back(pollfd{fd, events, 0});
         printf("usb handler added fd: %d\n", fd);
     }
     for (auto fd : removed_fds) {
         auto match = std::remove_if(poll_fds_.begin(), poll_fds_.end(),
-                     [&fd](auto& pollfd) { return pollfd.fd == fd; } );
+                                    [&fd](auto& pollfd) { return pollfd.fd == fd; });
         if (match == poll_fds_.end()) {
             fprintf(stderr, "could not find usb handler fd: %d to delete\n", fd);
             continue;
@@ -123,16 +250,18 @@ void XdcServer::UpdateUsbHandlerFds() {
 }
 
 void XdcServer::Run() {
+    signal(SIGPIPE, SIG_IGN);  // Prevent clients from causing SIGPIPE.
+
     printf("Waiting for connections on: %s\n", XDC_SOCKET_PATH);
 
     // Listen for new client connections.
-    poll_fds_.push_back(pollfd{ socket_fd_.get(), POLLIN, 0 });
+    poll_fds_.push_back(pollfd{socket_fd_.get(), POLLIN, 0});
 
     // Initialize to true as we want to get the initial usb handler fds.
     bool update_usb_handler_fds = true;
 
     for (;;) {
-         if (update_usb_handler_fds) {
+        if (update_usb_handler_fds) {
             UpdateUsbHandlerFds();
             update_usb_handler_fds = false;
         }
@@ -174,16 +303,33 @@ void XdcServer::Run() {
                 }
 
                 std::shared_ptr<Client> client = iter->second;
+
                 // Received client disconnect signal.
-                bool delete_client = poll_fds_[i].revents & POLLHUP;
-                // The client sent us some data.
-                if (!delete_client && (poll_fds_[i].revents & POLLIN)) {
+                // Only remove the client if the corresponding xdc device stream is offline.
+                // Otherwise the client may still have data buffered to send to the usb handler,
+                // and we will wait until reading from the client returns zero (disconnect).
+                bool delete_client =
+                    (poll_fds_[i].revents & POLLHUP) && !client->connected();
+
+                // Check if the client had pending data to write, or signalled new data available.
+                bool do_write = client->has_write_data() && usb_handler_->writable() &&
+                                client->connected();
+                bool new_data_available = poll_fds_[i].revents & POLLIN;
+                if (!delete_client && (do_write || new_data_available)) {
                     if (!client->registered()) {
                         // Delete the client if registering the stream failed.
                         delete_client = !RegisterStream(client);
                     }
+                    if (!delete_client) {
+                        zx_status_t status = client->ProcessWrites(usb_handler_);
+                        if (status == ZX_ERR_PEER_CLOSED) {
+                            delete_client = true;
+                        }
+                    }
                 }
+
                 if (delete_client) {
+                    client->ReturnTransfers(usb_handler_);
                     // Notify the host server that the stream is now offline.
                     if (client->stream_id()) {
                         NotifyStreamState(client->stream_id(), false /* online */);
@@ -194,10 +340,11 @@ void XdcServer::Run() {
                     clients_.erase(iter);
                     continue;
                 }
-                // TODO(jocelyndang): handle client reads / writes.
+                client->ProcessCompletedReads(usb_handler_);
             }
             ++i;
         }
+        UpdateClientPollEvents();
     }
 }
 
@@ -205,7 +352,7 @@ void XdcServer::ClientConnect() {
     struct sockaddr_un addr;
     socklen_t len = sizeof(addr);
     // Most of the time we want non-blocking transfers, so we can handle other clients / libusb.
-    int client_fd = accept(socket_fd_.get(), (struct sockaddr *)&addr, &len);
+    int client_fd = accept(socket_fd_.get(), (struct sockaddr*)&addr, &len);
     if (client_fd < 0) {
         fprintf(stderr, "Socket accept failed, err: %s\n", strerror(errno));
         return;
@@ -228,16 +375,16 @@ void XdcServer::ClientConnect() {
     }
     printf("Client connected, socket fd: %d\n", client_fd);
     clients_[client_fd] = std::make_shared<Client>(client_fd);
-    poll_fds_.push_back(pollfd{ client_fd, POLLIN, 0 });
+    poll_fds_.push_back(pollfd{client_fd, POLLIN, 0});
 }
 
 bool XdcServer::RegisterStream(std::shared_ptr<Client> client) {
     RegisterStreamRequest stream_id;
     ssize_t n = recv(client->fd(), &stream_id, sizeof(stream_id), MSG_WAITALL);
     if (n != sizeof(stream_id)) {
-       fprintf(stderr, "failed to read stream id from client fd: %d, got len: %ld, got err: %s\n",
-               client->fd(), n, strerror(errno));
-       return false;
+        fprintf(stderr, "failed to read stream id from client fd: %d, got len: %ld, got err: %s\n",
+                client->fd(), n, strerror(errno));
+        return false;
     }
     // Client has disconnected. This will be handled in the main poll thread.
     if (n == 0) {
@@ -275,7 +422,7 @@ std::shared_ptr<Client> XdcServer::GetClient(uint32_t stream_id) {
 }
 
 void XdcServer::UsbReadComplete(std::unique_ptr<UsbHandler::Transfer> transfer) {
-    auto requeue = fbl::MakeAutoCall([&]() { usb_handler_->RequeueRead(std::move(transfer)); });
+    auto requeue = fit::defer([&]() { usb_handler_->RequeueRead(std::move(transfer)); });
 
     bool is_new_packet;
     uint32_t stream_id;
@@ -289,8 +436,20 @@ void XdcServer::UsbReadComplete(std::unique_ptr<UsbHandler::Transfer> transfer) 
     stream_id = read_packet_state_.header.stream_id;
     if (is_new_packet && stream_id == XDC_MSG_STREAM) {
         HandleCtrlMsg(transfer->data(), transfer->actual_length());
+        return;
     }
-    // TODO(jocelyndang): check if the completed transfer should be send to a registered client.
+    // Pass the completed transfer to the registered client, if any.
+    auto client = GetClient(stream_id);
+    if (!client) {
+        fprintf(stderr, "No client registered for stream %u, dropping read of size %d\n",
+                stream_id, transfer->actual_length());
+        return;
+    }
+    // If it is the start of a new packet, the client should begin reading after the header.
+    int offset = is_new_packet ? sizeof(xdc_packet_header_t) : 0;
+    assert(transfer->SetOffset(offset));
+    client->AddCompletedRead(std::move(transfer));
+    requeue.cancel();
 }
 
 void XdcServer::HandleCtrlMsg(unsigned char* transfer_buf, int transfer_len) {
@@ -336,8 +495,7 @@ void XdcServer::NotifyStreamState(uint32_t stream_id, bool online) {
     xdc_msg_t msg = {
         .opcode = XDC_NOTIFY_STREAM_STATE,
         .notify_stream_state.stream_id = stream_id,
-        .notify_stream_state.online = online
-    };
+        .notify_stream_state.online = online};
     queued_ctrl_msgs_.push_back(msg);
     SendQueuedCtrlMsgs();
 }
@@ -350,8 +508,12 @@ bool XdcServer::SendCtrlMsg(xdc_msg_t& msg) {
     zx_status_t res = transfer->FillData(DEBUG_STREAM_ID_RESERVED,
                                          reinterpret_cast<unsigned char*>(&msg), sizeof(msg));
     assert(res == ZX_OK);  // Should not fail.
-    usb_handler_->QueueWriteTransfer(std::move(transfer));
-    return true;
+    transfer = usb_handler_->QueueWriteTransfer(std::move(transfer));
+    bool queued = !transfer;
+    if (!queued) {
+        usb_handler_->ReturnWriteTransfer(std::move(transfer));
+    }
+    return queued;
 }
 
 void XdcServer::SendQueuedCtrlMsgs() {
@@ -367,7 +529,7 @@ void XdcServer::SendQueuedCtrlMsgs() {
     }
 }
 
-}  // namespace xdc
+} // namespace xdc
 
 int main(int argc, char** argv) {
     printf("Starting XHCI Debug Capability server...\n");

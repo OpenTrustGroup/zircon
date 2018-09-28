@@ -35,6 +35,7 @@
 //     PlatformDevDevice(zx_device_t* parent)
 //       : PlatformDevDeviceType("my-platform-device", parent) {}
 //
+//        zx_status_t GetMmio(void* ctx, uint32_t index, pdev_mmio_t* out_mmio);
 //        zx_status_t MapMmio(uint32_t index, uint32_t cache_policy, void** out_vaddr,
 //                            size_t* out_size, zx_paddr_t* out_paddr, zx_handle_t* out_handle);
 //        zx_status_t MapInterrupt(uint32_t index, uint32_t flags, zx_handle_t* out_handle);
@@ -42,6 +43,7 @@
 //        zx_status_t GetDeviceInfo(pdev_device_info_t* out_info);
 //        zx_status_t GetBoardInfo(pdev_board_info_t* out_info);
 //        zx_status_t DeviceAdd(uint32_t index, device_add_args_t* args, zx_device_t** out);
+//        zx_status_t GetProtocol(uint32_t proto_id, uint32_t index, void* out_protocol);
 //     ...
 // };
 
@@ -52,12 +54,14 @@ class PlatformDevProtocol : public internal::base_protocol {
 public:
     PlatformDevProtocol() {
         internal::CheckPlatformDevProtocolSubclass<D>();
+        pdev_proto_ops_.get_mmio = GetMmio;
         pdev_proto_ops_.map_mmio = MapMmio;
         pdev_proto_ops_.map_interrupt = MapInterrupt;
         pdev_proto_ops_.get_bti = GetBti;
         pdev_proto_ops_.get_device_info = GetDeviceInfo;
         pdev_proto_ops_.get_board_info = GetBoardInfo;
         pdev_proto_ops_.device_add = DeviceAdd;
+        pdev_proto_ops_.get_protocol = GetProtocol;
 
         // Can only inherit from one base_protocol implementation.
         ZX_ASSERT(ddk_proto_id_ == 0);
@@ -69,6 +73,10 @@ protected:
     platform_device_protocol_ops_t pdev_proto_ops_ = {};
 
 private:
+    static zx_status_t GetMmio(void* ctx, uint32_t index, pdev_mmio_t* out_mmio) {
+        return static_cast<D*>(ctx)->GetMmio(index, out_mmio);
+    }
+
     static zx_status_t MapMmio(void* ctx, uint32_t index, uint32_t cache_policy, void** out_vaddr,
                                size_t* out_size, zx_paddr_t* out_paddr, zx_handle_t* out_handle) {
         return static_cast<D*>(ctx)->MapMmio(index, cache_policy, out_vaddr, out_size, out_paddr,
@@ -96,12 +104,21 @@ private:
                                  zx_device_t** out) {
         return static_cast<D*>(ctx)->DeviceAdd(index, args, out);
     }
+
+    static zx_status_t GetProtocol(void* ctx, uint32_t proto_id, uint32_t index,
+                                   void* out_protocol) {
+        return static_cast<D*>(ctx)->GetProtocol(proto_id, index, out_protocol);
+    }
 };
 
 class PlatformDevProtocolProxy {
 public:
     PlatformDevProtocolProxy(platform_device_protocol_t* proto)
         : ops_(proto->ops), ctx_(proto->ctx) {}
+
+    zx_status_t GetMmio(void* ctx, uint32_t index, pdev_mmio_t* out_mmio) {
+        return ops_->get_mmio(ctx_, index, out_mmio);
+    }
 
     zx_status_t MapMmio(uint32_t index, uint32_t cache_policy, void** out_vaddr,
                         size_t* out_size, zx_paddr_t* out_paddr, zx_handle_t* out_handle) {
@@ -127,6 +144,10 @@ public:
 
     zx_status_t DeviceAdd(uint32_t index, device_add_args_t* args, zx_device_t** out) {
         return ops_->device_add(ctx_, index, args, out);
+    }
+
+    zx_status_t GetProtocol(uint32_t proto_id, uint32_t index, void* out_protocol) {
+        return ops_->get_protocol(ctx_, proto_id, index, out_protocol);
     }
 
 private:

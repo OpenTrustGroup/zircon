@@ -206,7 +206,7 @@ void Client::HandleImportVmoImage(const fuchsia_display_ControllerImportVmoImage
     dc_image.width = req->image_config.width;
     dc_image.pixel_format = req->image_config.pixel_format;
     dc_image.type = req->image_config.type;
-    for (uint32_t i = 0; i < countof(dc_image.planes); i++) {
+    for (uint32_t i = 0; i < fbl::count_of(dc_image.planes); i++) {
         dc_image.planes[i].byte_offset = req->image_config.planes[i].byte_offset;
         dc_image.planes[i].bytes_per_row = req->image_config.planes[i].bytes_per_row;
     }
@@ -928,7 +928,7 @@ bool Client::CheckConfig(fidl::Builder* resp_builder) {
         return false;
     }
 
-    uint32_t display_cfg_result;
+    uint32_t display_cfg_result = CONFIG_DISPLAY_OK;
     DC_IMPL_CALL(check_configuration, configs, &display_cfg_result,
                  display_layer_cfg_results, config_idx);
 
@@ -1111,7 +1111,7 @@ void Client::SetOwnership(bool is_owner) {
 
     is_owner_ = is_owner;
 
-    fuchsia_display_ControllerClientOwnershipChangeEvent msg;
+    fuchsia_display_ControllerClientOwnershipChangeEvent msg = {};
     msg.hdr.ordinal = fuchsia_display_ControllerClientOwnershipChangeOrdinal;
     msg.has_ownership = is_owner;
 
@@ -1132,17 +1132,18 @@ void Client::OnDisplaysChanged(const uint64_t* displays_added, uint32_t added_co
     fidl::Builder builder(bytes, ZX_CHANNEL_MAX_MSG_BYTES);
     auto req = builder.New<fuchsia_display_ControllerDisplaysChangedEvent>();
     zx_status_t status;
+    req->hdr = {};
     req->hdr.ordinal = fuchsia_display_ControllerDisplaysChangedOrdinal;
     req->added.count = 0;
     req->added.data = reinterpret_cast<void*>(FIDL_ALLOC_PRESENT);
-    req->removed.count = removed_count;
+    req->removed.count = 0;
     req->removed.data = reinterpret_cast<void*>(FIDL_ALLOC_PRESENT);
 
     for (unsigned i = 0; i < removed_count; i++) {
-        auto display = configs_.erase(displays_removed[i]);
-        if (display) {
-            display->pending_layers_.clear();
-            display->current_layers_.clear();
+        // TODO(stevensd): Delayed removal can cause conflicts if the driver reuses
+        // display ids. Move display id generation into the core driver.
+        if (configs_.find(displays_removed[i]).IsValid()) {
+            req->removed.count++;
         }
     }
 
@@ -1257,19 +1258,29 @@ void Client::OnDisplaysChanged(const uint64_t* displays_added, uint32_t added_co
         }
     }
 
-    if (removed_count > 0) {
-        auto removed_ids = builder.NewArray<int32_t>(removed_count);
-        memcpy(removed_ids, displays_removed, sizeof(int32_t) * removed_count);
+    if (req->removed.count > 0) {
+        auto removed_ids = builder.NewArray<uint64_t>(static_cast<uint32_t>(req->removed.count));
+        uint32_t idx = 0;
+        for (unsigned i = 0; i < removed_count; i++) {
+            auto display = configs_.erase(displays_removed[i]);
+            if (display) {
+                display->pending_layers_.clear();
+                display->current_layers_.clear();
+                removed_ids[idx++] = display->id;
+            }
+        }
     }
 
-    fidl::Message msg(builder.Finalize(), fidl::HandlePart());
-    const char* err;
-    ZX_DEBUG_ASSERT_MSG(
-            msg.Validate(&fuchsia_display_ControllerDisplaysChangedEventTable, &err) == ZX_OK,
-            "Failed to validate \"%s\"", err);
+    if (req->added.count > 0 || req->removed.count > 0) {
+        fidl::Message msg(builder.Finalize(), fidl::HandlePart());
+        const char* err;
+        ZX_DEBUG_ASSERT_MSG(
+                msg.Validate(&fuchsia_display_ControllerDisplaysChangedEventTable, &err) == ZX_OK,
+                "Failed to validate \"%s\"", err);
 
-    if ((status = msg.Write(server_handle_, 0)) != ZX_OK) {
-        zxlogf(ERROR, "Error writing remove message %d\n", status);
+        if ((status = msg.Write(server_handle_, 0)) != ZX_OK) {
+            zxlogf(ERROR, "Error writing remove message %d\n", status);
+        }
     }
 }
 
@@ -1303,6 +1314,12 @@ void Client::TearDown() {
     ZX_DEBUG_ASSERT(controller_->loop().GetState() == ASYNC_LOOP_SHUTDOWN
             || controller_->current_thread_is_loop());
     pending_config_valid_ = false;
+
+    // Teardown stops events from the channel, but not from the ddk, so we
+    // need to make sure we don't try to teardown multiple times.
+    if (!IsValid()) {
+        return;
+    }
 
     if (api_wait_.object() != ZX_HANDLE_INVALID) {
         api_wait_.Cancel();
@@ -1471,6 +1488,7 @@ void ClientProxy::OnDisplayVsync(uint64_t display_id, zx_time_t timestamp,
 
     fuchsia_display_ControllerVsyncEvent* msg =
             reinterpret_cast<fuchsia_display_ControllerVsyncEvent*>(data);
+    msg->hdr = {};
     msg->hdr.ordinal = fuchsia_display_ControllerVsyncOrdinal;
     msg->display_id = display_id;
     msg->timestamp = timestamp;

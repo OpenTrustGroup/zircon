@@ -307,6 +307,17 @@ Minfs::~Minfs() {
     vnode_hash_.clear();
 }
 
+zx_status_t Minfs::FVMQuery(fvm_info_t* info) const {
+#ifdef __Fuchsia__
+    if (!(Info().flags & kMinfsFlagFVM)) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return bc_->FVMQuery(info);
+#else
+    return ZX_ERR_NOT_SUPPORTED;
+#endif
+}
+
 zx_status_t Minfs::InoFree(VnodeMinfs* vn, WritebackWork* wb) {
     TRACE_DURATION("minfs", "Minfs::InoFree", "ino", vn->ino_);
 
@@ -594,7 +605,7 @@ zx_status_t Minfs::Create(fbl::unique_ptr<Bcache> bc, const minfs_info_t* info,
     const blk_t ino_start_block = offsets.InoStartBlock();
 #endif
 
-    ReadTxn txn(bc.get());
+    fs::ReadTxn txn(bc.get());
 
     // Block Bitmap allocator initialization.
     AllocatorFvmMetadata block_allocator_fvm = AllocatorFvmMetadata(
@@ -626,7 +637,7 @@ zx_status_t Minfs::Create(fbl::unique_ptr<Bcache> bc, const minfs_info_t* info,
         return status;
     }
 
-    if ((status = txn.Flush()) != ZX_OK) {
+    if ((status = txn.Transact()) != ZX_OK) {
         FS_TRACE_ERROR("Minfs::Create failed to read initial blocks: %d\n", status);
         return status;
     }
@@ -946,14 +957,14 @@ zx_status_t Mkfs(const Options& options, fbl::unique_ptr<Bcache> bc) {
 
     // write allocation bitmap
     for (uint32_t n = 0; n < abmblks; n++) {
-        void* bmdata = fs::GetBlock<kMinfsBlockSize>(abm.StorageUnsafe()->GetData(), n);
+        void* bmdata = fs::GetBlock(kMinfsBlockSize, abm.StorageUnsafe()->GetData(), n);
         memcpy(blk, bmdata, kMinfsBlockSize);
         bc->Writeblk(info.abm_block + n, blk);
     }
 
     // write inode bitmap
     for (uint32_t n = 0; n < ibmblks; n++) {
-        void* bmdata = fs::GetBlock<kMinfsBlockSize>(ibm.StorageUnsafe()->GetData(), n);
+        void* bmdata = fs::GetBlock(kMinfsBlockSize, ibm.StorageUnsafe()->GetData(), n);
         memcpy(blk, bmdata, kMinfsBlockSize);
         bc->Writeblk(info.ibm_block + n, blk);
     }

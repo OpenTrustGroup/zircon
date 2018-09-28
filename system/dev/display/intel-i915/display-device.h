@@ -44,6 +44,8 @@ public:
     virtual bool Query() = 0;
     // Does display mode agnostic ddi initialization - subclasses implement InitDdi.
     bool Init();
+    // Initializes the display backlight for an already initialized display.
+    void InitBacklight();
     // Resumes the ddi after suspend.
     bool Resume();
     // Loads ddi state from the hardware at driver startup.
@@ -72,11 +74,14 @@ public:
 protected:
     // Attempts to initialize the ddi.
     virtual bool InitDdi() = 0;
+    virtual bool InitBacklightHw() { return false; }
 
     // Configures the hardware to display content at the given resolution.
     virtual bool DdiModeset(const display_mode_t& mode,
                             registers::Pipe pipe, registers::Trans trans) = 0;
     virtual bool ComputeDpllState(uint32_t pixel_clock_10khz, struct dpll_state* config) = 0;
+    // Load the clock rate from hardware if it's necessary when changing the transcoder.
+    virtual uint32_t LoadClockRateForTranscoder(registers::Trans transcoder) = 0;
 
     // Attaching a pipe to a display or configuring a pipe after display mode change has
     // 3 steps. The second step is generic pipe configuration, whereas PipeConfigPreamble

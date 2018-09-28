@@ -96,7 +96,6 @@ static void mp_sync_task(void* raw_context) {
     // use seq-cst atomic to ensure this update is not seen before the
     // side-effects of context->task
     atomic_and((int*)&context->outstanding_cpus, ~cpu_num_to_mask(arch_curr_cpu_num()));
-    arch_spinloop_signal();
 }
 
 /* @brief Execute a task on the specified CPUs, and block on the calling
@@ -198,7 +197,7 @@ void mp_sync_exec(mp_ipi_target_t target, cpu_mask_t mask, mp_sync_task_t task, 
             if (!list_is_empty(&mp.ipi_task_list[local_cpu])) {
                 bool previous_blocking_disallowed = arch_blocking_disallowed();
                 arch_set_blocking_disallowed(true);
-                mp_mbx_generic_irq();
+                mp_mbx_generic_irq(nullptr);
                 arch_set_blocking_disallowed(previous_blocking_disallowed);
                 continue;
             }
@@ -336,7 +335,7 @@ static zx_status_t mp_unplug_cpu_mask_single_locked(cpu_num_t cpu_id) {
     // Wait for the unplug thread to get scheduled on the target
     do {
         status = event_wait(&unplug_done);
-    } while (status < 0);
+    } while (status != ZX_OK);
 
     // Now that the CPU is no longer processing tasks, move all of its timers
     timer_transition_off_cpu(cpu_id);
@@ -391,23 +390,7 @@ cleanup_mutex:
     return status;
 }
 
-void mp_set_curr_cpu_online(bool online) {
-    if (online) {
-        atomic_or((volatile int*)&mp.online_cpus, cpu_num_to_mask(arch_curr_cpu_num()));
-    } else {
-        atomic_and((volatile int*)&mp.online_cpus, ~cpu_num_to_mask(arch_curr_cpu_num()));
-    }
-}
-
-void mp_set_curr_cpu_active(bool active) {
-    if (active) {
-        atomic_or((volatile int*)&mp.active_cpus, cpu_num_to_mask(arch_curr_cpu_num()));
-    } else {
-        atomic_and((volatile int*)&mp.active_cpus, ~cpu_num_to_mask(arch_curr_cpu_num()));
-    }
-}
-
-void mp_mbx_generic_irq() {
+void mp_mbx_generic_irq(void*) {
     DEBUG_ASSERT(arch_ints_disabled());
     const cpu_num_t local_cpu = arch_curr_cpu_num();
 
@@ -426,7 +409,7 @@ void mp_mbx_generic_irq() {
     }
 }
 
-void mp_mbx_reschedule_irq() {
+void mp_mbx_reschedule_irq(void*) {
     const cpu_num_t cpu = arch_curr_cpu_num();
 
     LTRACEF("cpu %u\n", cpu);
@@ -437,7 +420,7 @@ void mp_mbx_reschedule_irq() {
         thread_preempt_set_pending();
 }
 
-void mp_mbx_interrupt_irq() {
+void mp_mbx_interrupt_irq(void*) {
     const cpu_num_t cpu = arch_curr_cpu_num();
 
     LTRACEF("cpu %u\n", cpu);

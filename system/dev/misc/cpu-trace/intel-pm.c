@@ -10,8 +10,8 @@
 #include <ddk/driver.h>
 #include <ddk/io-buffer.h>
 
-#include <zircon/device/cpu-trace/intel-pm.h>
-#include <zircon/mtrace.h>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm.h>
+#include <lib/zircon-internal/mtrace.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/resource.h>
 #include <zircon/types.h>
@@ -38,20 +38,20 @@
 typedef enum {
 #define DEF_FIXED_EVENT(symbol, id, regnum, flags, name, description) \
     symbol ## _ID = CPUPERF_MAKE_EVENT_ID(CPUPERF_UNIT_FIXED, id),
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
 } fixed_event_id_t;
 
 // Verify each fixed counter regnum < IPM_MAX_FIXED_COUNTERS.
 #define DEF_FIXED_EVENT(symbol, id, regnum, flags, name, description) \
     && (regnum) < IPM_MAX_FIXED_COUNTERS
 static_assert(1
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
     , "");
 
 typedef enum {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
     symbol ## _ID = CPUPERF_MAKE_EVENT_ID(CPUPERF_UNIT_MISC, id),
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
 } misc_event_id_t;
 
 // Misc event ids needn't be consecutive.
@@ -59,7 +59,7 @@ typedef enum {
 typedef enum {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
     symbol ## _NUMBER,
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
     NUM_MISC_EVENTS
 } misc_event_number_t;
 
@@ -67,7 +67,7 @@ typedef enum {
 static cpuperf_event_id_t misc_event_table_contents[NUM_MISC_EVENTS] = {
 #define DEF_MISC_SKL_EVENT(symbol, id, offset, size, flags, name, description) \
     CPUPERF_MAKE_EVENT_ID(CPUPERF_UNIT_MISC, id),
-#include <zircon/device/cpu-trace/skylake-misc-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-misc-events.inc>
 };
 
 // Const accessor to give the illusion of the table being const.
@@ -78,13 +78,13 @@ static void ipm_init_misc_event_table(void);
 typedef enum {
 #define DEF_ARCH_EVENT(symbol, id, ebx_bit, event, umask, flags, name, description) \
     symbol,
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
 } arch_event_t;
 
 typedef enum {
 #define DEF_SKL_EVENT(symbol, id, event, umask, flags, name, description) \
     symbol,
-#include <zircon/device/cpu-trace/skylake-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-pm-events.inc>
 } model_event_t;
 
 typedef struct {
@@ -96,26 +96,26 @@ typedef struct {
 static const event_details_t kArchEvents[] = {
 #define DEF_ARCH_EVENT(symbol, id, ebx_bit, event, umask, flags, name, description) \
     { event, umask, flags },
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
 };
 
 static const event_details_t kModelEvents[] = {
 #define DEF_SKL_EVENT(symbol, id, event, umask, flags, name, description) \
     { event, umask, flags },
-#include <zircon/device/cpu-trace/skylake-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-pm-events.inc>
 };
 
 static const uint16_t kArchEventMap[] = {
 #define DEF_ARCH_EVENT(symbol, id, ebx_bit, event, umask, flags, name, description) \
     [id] = symbol,
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
 };
 static_assert(countof(kArchEventMap) <= CPUPERF_MAX_EVENT + 1, "");
 
 static const uint16_t kModelEventMap[] = {
 #define DEF_SKL_EVENT(symbol, id, event, umask, flags, name, description) \
     [id] = symbol,
-#include <zircon/device/cpu-trace/skylake-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/skylake-pm-events.inc>
 };
 static_assert(countof(kModelEventMap) <= CPUPERF_MAX_EVENT + 1, "");
 
@@ -171,7 +171,7 @@ void cpuperf_init_once(void)
     zx_x86_ipm_properties_t props;
     zx_handle_t resource = get_root_resource();
     zx_status_t status =
-        zx_mtrace_control(resource, MTRACE_KIND_IPM, MTRACE_IPM_GET_PROPERTIES,
+        zx_mtrace_control(resource, MTRACE_KIND_CPUPERF, MTRACE_CPUPERF_GET_PROPERTIES,
                           0, &props, sizeof(props));
     if (status != ZX_OK) {
         if (status == ZX_ERR_NOT_SUPPORTED)
@@ -227,7 +227,7 @@ static unsigned ipm_fixed_counter_number(cpuperf_event_id_t id) {
     enum {
 #define DEF_FIXED_EVENT(symbol, id, regnum, flags, name, description) \
         symbol ## _NUMBER = regnum,
-#include <zircon/device/cpu-trace/intel-pm-events.inc>
+#include <lib/zircon-internal/device/cpu-trace/intel-pm-events.inc>
     };
     switch (id) {
     case FIXED_INSTRUCTIONS_RETIRED_ID:
@@ -803,8 +803,8 @@ static zx_status_t ipm_start(cpu_trace_device_t* dev) {
     zx_handle_t resource = get_root_resource();
 
     zx_status_t status =
-        zx_mtrace_control(resource, MTRACE_KIND_IPM,
-                          MTRACE_IPM_INIT, 0, NULL, 0);
+        zx_mtrace_control(resource, MTRACE_KIND_CPUPERF,
+                          MTRACE_CPUPERF_INIT, 0, NULL, 0);
     if (status != ZX_OK)
         return status;
 
@@ -813,22 +813,22 @@ static zx_status_t ipm_start(cpu_trace_device_t* dev) {
         zx_x86_ipm_buffer_t buffer;
         io_buffer_t* io_buffer = &per_trace->buffers[cpu];
         buffer.vmo = io_buffer->vmo_handle;
-        status = zx_mtrace_control(resource, MTRACE_KIND_IPM,
-                                   MTRACE_IPM_ASSIGN_BUFFER, cpu,
+        status = zx_mtrace_control(resource, MTRACE_KIND_CPUPERF,
+                                   MTRACE_CPUPERF_ASSIGN_BUFFER, cpu,
                                    &buffer, sizeof(buffer));
         if (status != ZX_OK)
             goto fail;
     }
 
-    status = zx_mtrace_control(resource, MTRACE_KIND_IPM,
-                               MTRACE_IPM_STAGE_CONFIG, 0,
+    status = zx_mtrace_control(resource, MTRACE_KIND_CPUPERF,
+                               MTRACE_CPUPERF_STAGE_CONFIG, 0,
                                &per_trace->config, sizeof(per_trace->config));
     if (status != ZX_OK)
         goto fail;
 
     // Step 2: Start data collection.
 
-    status = zx_mtrace_control(resource, MTRACE_KIND_IPM, MTRACE_IPM_START,
+    status = zx_mtrace_control(resource, MTRACE_KIND_CPUPERF, MTRACE_CPUPERF_START,
                                0, NULL, 0);
     if (status != ZX_OK)
         goto fail;
@@ -839,10 +839,10 @@ static zx_status_t ipm_start(cpu_trace_device_t* dev) {
   fail:
     {
         zx_status_t status2 =
-            zx_mtrace_control(resource, MTRACE_KIND_IPM,
-                              MTRACE_IPM_FINI, 0, NULL, 0);
+            zx_mtrace_control(resource, MTRACE_KIND_CPUPERF,
+                              MTRACE_CPUPERF_FINI, 0, NULL, 0);
         if (status2 != ZX_OK)
-            zxlogf(TRACE, "%s: MTRACE_IPM_FINI failed: %d\n", __func__, status2);
+            zxlogf(TRACE, "%s: MTRACE_CPUPERF_FINI failed: %d\n", __func__, status2);
         assert(status2 == ZX_OK);
         return status;
     }
@@ -857,12 +857,12 @@ static zx_status_t ipm_stop(cpu_trace_device_t* dev) {
 
     zx_handle_t resource = get_root_resource();
     zx_status_t status =
-        zx_mtrace_control(resource, MTRACE_KIND_IPM,
-                          MTRACE_IPM_STOP, 0, NULL, 0);
+        zx_mtrace_control(resource, MTRACE_KIND_CPUPERF,
+                          MTRACE_CPUPERF_STOP, 0, NULL, 0);
     if (status == ZX_OK) {
         ipm->active = false;
-        status = zx_mtrace_control(resource, MTRACE_KIND_IPM,
-                                   MTRACE_IPM_FINI, 0, NULL, 0);
+        status = zx_mtrace_control(resource, MTRACE_KIND_CPUPERF,
+                                   MTRACE_CPUPERF_FINI, 0, NULL, 0);
     }
     return status;
 }

@@ -27,10 +27,12 @@ public:
 
         ASSERT_NE(0u, remaining_);
         auto entry = reinterpret_cast<const vdirent_t*>(current_);
-        ASSERT_GE(remaining_, entry->size);
-        current_ += entry->size;
-        remaining_ -= entry->size;
-        EXPECT_STR_EQ(name, entry->name, "name");
+        size_t entry_size = entry->size + sizeof(vdirent_t);
+        ASSERT_GE(remaining_, entry_size);
+        current_ += entry_size;
+        remaining_ -= entry_size;
+        EXPECT_BYTES_EQ(reinterpret_cast<const uint8_t*>(name),
+                        reinterpret_cast<const uint8_t*>(entry->name), strlen(name), "name");
         EXPECT_EQ(VTYPE_TO_DTYPE(vtype), entry->type);
 
         END_HELPER;
@@ -97,6 +99,25 @@ bool test_pseudo_dir() {
         EXPECT_TRUE(dc.ExpectEntry("file1", V_TYPE_FILE));
         EXPECT_TRUE(dc.ExpectEntry("file2b", V_TYPE_FILE));
         EXPECT_TRUE(dc.ExpectEnd());
+    }
+
+    // readdir with small buffer
+    {
+        fs::vdircookie_t cookie = {};
+        uint8_t buffer[2*sizeof(vdirent) + 13];
+        size_t length;
+        EXPECT_EQ(dir->Readdir(&cookie, buffer, sizeof(buffer), &length), ZX_OK);
+        DirentChecker dc(buffer, length);
+        EXPECT_TRUE(dc.ExpectEntry(".", V_TYPE_DIR));
+        EXPECT_TRUE(dc.ExpectEntry("subdir", V_TYPE_DIR));
+        EXPECT_TRUE(dc.ExpectEnd());
+
+        // readdir again
+        EXPECT_EQ(dir->Readdir(&cookie, buffer, sizeof(buffer), &length), ZX_OK);
+        DirentChecker dc1(buffer, length);
+        EXPECT_TRUE(dc1.ExpectEntry("file1", V_TYPE_FILE));
+        EXPECT_TRUE(dc1.ExpectEntry("file2b", V_TYPE_FILE));
+        EXPECT_TRUE(dc1.ExpectEnd());
     }
 
     // test removed entries do not appear in readdir or lookup

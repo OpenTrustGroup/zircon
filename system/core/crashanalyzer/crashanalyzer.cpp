@@ -16,9 +16,9 @@
 #include <lib/crashanalyzer/crashanalyzer.h>
 #include <lib/fdio/util.h>
 #include <lib/fidl/cpp/message_buffer.h>
+#include <lib/zircon-internal/crashlogger.h>
 #include <pretty/hexdump.h>
 #include <zircon/assert.h>
-#include <zircon/crashlogger.h>
 #include <zircon/process.h>
 #include <zircon/processargs.h>
 #include <zircon/status.h>
@@ -318,8 +318,11 @@ static void process_report(zx_handle_t process, zx_handle_t thread, bool use_lib
     {
         inspector_dsoinfo_t* dso_list = inspector_dso_fetch_list(process);
         inspector_dso_print_list(stdout, dso_list);
+        // TODO (jakehehrlich): Remove the old backtrace format.
         inspector_print_backtrace(stdout, process, thread, dso_list,
                                   pc, sp, fp, use_libunwind);
+        inspector_print_backtrace_markup(stdout, process, thread, dso_list,
+                                         pc, sp, fp, use_libunwind);
     }
 
 // TODO(ZX-588): Print a backtrace of all other threads in the process.

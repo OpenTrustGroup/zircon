@@ -14,16 +14,11 @@
 #include <ddk/debug.h>
 #include <ddk/device.h>
 #include <ddk/driver.h>
+#include <ddk/protocol/gpio.h>
 #include <ddk/protocol/platform-defs.h>
 #include <ddk/protocol/platform-device.h>
-#include <ddktl/protocol/gpio.h>
+#include <fbl/algorithm.h>
 #include <fbl/unique_ptr.h>
-
-enum {
-    HUB_VDD33_EN,
-    VBUS_TYPEC,
-    USBSW_SW_SEL,
-};
 
 namespace hikey_usb {
 
@@ -51,15 +46,13 @@ zx_status_t HikeyUsb::Init() {
     if (status != ZX_OK) {
         return status;
     }
-    status = device_get_protocol(parent(), ZX_PROTOCOL_GPIO, &gpio_);
-    if (status != ZX_OK) {
-        return status;
+    for (uint32_t i = 0; i < countof(gpios_); i++) {
+        status = pdev_get_protocol(&pdev, ZX_PROTOCOL_GPIO, i, &gpios_[i]);
+        if (status != ZX_OK) {
+            return status;
+        }
+        gpio_config_out(&gpios_[i], 0);
     }
-
-    ddk::GpioProtocolProxy gpio(&gpio_);
-    gpio.ConfigOut(HUB_VDD33_EN, 0);
-    gpio.ConfigOut(VBUS_TYPEC, 0);
-    gpio.ConfigOut(USBSW_SW_SEL, 0);
 
     zx_device_prop_t props[] = {
         {BIND_PLATFORM_DEV_VID, 0, PDEV_VID_GENERIC},
@@ -73,7 +66,7 @@ zx_status_t HikeyUsb::Init() {
     args.ctx = this;
     args.ops = &ddk_device_proto_;
     args.props = props;
-    args.prop_count = countof(props);
+    args.prop_count = static_cast<uint32_t>(fbl::count_of(props));
     args.proto_id = ddk_proto_id_;
     args.proto_ops = ddk_proto_ops_;
 
@@ -88,10 +81,9 @@ zx_status_t HikeyUsb::UmsSetMode(usb_mode_t mode) {
         return ZX_ERR_NOT_SUPPORTED;
     }
 
-    ddk::GpioProtocolProxy gpio(&gpio_);
-    gpio.Write(HUB_VDD33_EN, mode == USB_MODE_HOST);
-    gpio.Write(VBUS_TYPEC, mode == USB_MODE_HOST);
-    gpio.Write(USBSW_SW_SEL, mode == USB_MODE_HOST);
+    gpio_write(&gpios_[HUB_VDD33_EN], mode == USB_MODE_HOST);
+    gpio_write(&gpios_[VBUS_TYPEC], mode == USB_MODE_HOST);
+    gpio_write(&gpios_[USBSW_SW_SEL], mode == USB_MODE_HOST);
 
     usb_mode_ = mode;
     return ZX_OK;

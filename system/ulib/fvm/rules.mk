@@ -8,6 +8,8 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_SRCS += \
     $(LOCAL_DIR)/fvm.cpp \
     $(LOCAL_DIR)/fvm-lz4.cpp \
@@ -57,7 +59,5 @@ MODULE_HOST_LIBS := \
     third_party/ulib/lz4.hostlib \
     system/ulib/digest.hostlib \
     system/ulib/fbl.hostlib \
-
-MODULE_DEFINES += DISABLE_THREAD_ANNOTATIONS
 
 include make/module.mk

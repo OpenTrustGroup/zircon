@@ -6,6 +6,7 @@
 
 #include "display-device.h"
 #include "dpcd.h"
+#include <ddk/protocol/i2c-impl.h>
 
 namespace i915 {
 
@@ -15,8 +16,7 @@ class DpAux {
 public:
     DpAux(registers::Ddi ddi);
 
-    zx_status_t I2cTransact(uint32_t index, const uint8_t* write_buf, uint8_t write_length,
-                            uint8_t* read_buf, uint8_t read_length);
+    zx_status_t I2cTransact(i2c_impl_op_t* ops, size_t count);
 
     bool DpcdRead(uint32_t addr, uint8_t* buf, size_t size);
     bool DpcdWrite(uint32_t addr, const uint8_t* buf, size_t size);
@@ -56,6 +56,7 @@ private:
     bool PipeConfigEpilogue(const display_mode_t& mode,
                             registers::Pipe pipe, registers::Trans trans) final;
     bool ComputeDpllState(uint32_t pixel_clock_10khz, struct dpll_state* config) final;
+    uint32_t LoadClockRateForTranscoder(registers::Trans transcoder) final;
 
     bool CheckPixelRate(uint64_t pixel_rate) final;
 
@@ -77,6 +78,7 @@ private:
     bool LinkTrainingStage2(dpcd::TrainingPatternSet* tp_set, dpcd::TrainingLaneSet* lanes);
 
     bool SetBacklightOn(bool on);
+    bool InitBacklightHw() override;
 
     bool IsBacklightOn();
     // Sets the backlight brightness with |val| as a coefficient on the maximum

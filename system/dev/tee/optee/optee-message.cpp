@@ -18,10 +18,11 @@ OpenSessionMessage OpenSessionMessage::Create(SharedMemoryManager::DriverMemoryP
     const size_t num_params = params.size() + kNumFixedOpenSessionParams;
     ZX_DEBUG_ASSERT(num_params <= fbl::numeric_limits<uint32_t>::max());
 
-    OpenSessionMessage message;
-
     // Allocate from pool
-    pool->Allocate(CalculateSize(num_params), &message.memory_);
+    OpenSessionMessage::SharedMemoryPtr memory;
+    pool->Allocate(CalculateSize(num_params), &memory);
+
+    OpenSessionMessage message(fbl::move(memory));
 
     message.header()->command = Command::kOpenSession;
     message.header()->cancel_id = cancel_id;
@@ -32,14 +33,16 @@ OpenSessionMessage OpenSessionMessage::Create(SharedMemoryManager::DriverMemoryP
     // Param 0 is the trusted app UUID
     current_param->attribute = MessageParam::kAttributeTypeMeta |
                                MessageParam::kAttributeTypeValueInput;
-    trusted_app.ToUint64Pair(&current_param->payload.value.a, &current_param->payload.value.b);
+    trusted_app.ToUint64Pair(&current_param->payload.value.generic.a,
+                             &current_param->payload.value.generic.b);
     current_param++;
 
     // Param 1 is the client app UUID and login
     current_param->attribute = MessageParam::kAttributeTypeMeta |
                                MessageParam::kAttributeTypeValueInput;
-    client_app.ToUint64Pair(&current_param->payload.value.a, &current_param->payload.value.b);
-    current_param->payload.value.c = client_login;
+    client_app.ToUint64Pair(&current_param->payload.value.generic.a,
+                            &current_param->payload.value.generic.b);
+    current_param->payload.value.generic.c = client_login;
     current_param++;
 
     // Copy input params in

@@ -65,7 +65,7 @@ static int rx_fifo_empty(intel_serialio_i2c_device_t *controller) {
 // Thread safety analysis cannot see the control flow through the
 // gotos, and cannot prove that the lock is unheld at return through
 // all paths.
-static zx_status_t intel_serialio_i2c_slave_transfer(
+zx_status_t intel_serialio_i2c_slave_transfer(
     intel_serialio_i2c_slave_device_t* slave, i2c_slave_segment_t *segments, int segment_count)
     TA_NO_THREAD_SAFETY_ANALYSIS {
     zx_status_t status = ZX_OK;
@@ -384,17 +384,8 @@ slave_transfer_ioctl_finish_2:
     return status;
 }
 
-static zx_status_t intel_serialio_i2c_slave_irq_ioctl(
-    intel_serialio_i2c_slave_device_t* slave, uint32_t op, const void* in_buf, size_t in_len,
-    void* out_buf, size_t out_len, size_t* out_actual) {
-
-    if (out_len < sizeof(zx_handle_t)) {
-        return ZX_ERR_BUFFER_TOO_SMALL;
-    }
-
-    // This IOCTL is a hack to get interrupts to the right devices.
-    // TODO(teisenbe): Remove this when we discover interrupts via ACPI and
-    // route more appropriately.
+zx_status_t intel_serialio_i2c_slave_get_irq(intel_serialio_i2c_slave_device_t* slave,
+                                             zx_handle_t* out) {
     if (slave->chip_address == 0xa) {
         zx_handle_t irq;
         zx_status_t status = zx_interrupt_create(get_root_resource(), 0x1f,
@@ -402,8 +393,7 @@ static zx_status_t intel_serialio_i2c_slave_irq_ioctl(
         if (status != ZX_OK) {
             return status;
         }
-        memcpy(out_buf, &irq, sizeof(irq));
-        *out_actual = sizeof(irq);
+        *out = irq;
         return ZX_OK;
     } else if (slave->chip_address == 0x49) {
         zx_handle_t irq;
@@ -412,8 +402,7 @@ static zx_status_t intel_serialio_i2c_slave_irq_ioctl(
         if (status != ZX_OK) {
             return status;
         }
-       memcpy(out_buf, &irq, sizeof(irq));
-        *out_actual = sizeof(irq);
+        *out = irq;
         return ZX_OK;
     } else if (slave->chip_address == 0x10) {
         // Acer12
@@ -423,8 +412,7 @@ static zx_status_t intel_serialio_i2c_slave_irq_ioctl(
         if (status != ZX_OK) {
             return status;
         }
-        memcpy(out_buf, &irq, sizeof(irq));
-        *out_actual = sizeof(irq);
+        *out = irq;
         return ZX_OK;
     } else if (slave->chip_address == 0x50) {
         zx_handle_t irq;
@@ -433,8 +421,7 @@ static zx_status_t intel_serialio_i2c_slave_irq_ioctl(
         if (status != ZX_OK) {
             return status;
         }
-        memcpy(out_buf, &irq, sizeof(irq));
-        *out_actual = sizeof(irq);
+        *out = irq;
         return ZX_OK;
     }
 
@@ -450,9 +437,6 @@ static zx_status_t intel_serialio_i2c_slave_ioctl(
         return intel_serialio_i2c_slave_transfer_ioctl(
             slave, op, in_buf, in_len, out_buf, out_len, out_actual);
         break;
-    case IOCTL_I2C_SLAVE_IRQ:
-        return intel_serialio_i2c_slave_irq_ioctl(
-            slave, op, in_buf, in_len, out_buf, out_len, out_actual);
     default:
         return ZX_ERR_INVALID_ARGS;
     }

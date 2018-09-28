@@ -7,8 +7,3 @@
 #include <dev/interrupt/arm_gic_common.h>
 
 #include <assert.h>
-
-zx_status_t gic_register_sgi_handler(unsigned int vector, int_handler handler, void* arg) {
-    DEBUG_ASSERT(vector < GIC_BASE_PPI);
-    return register_int_handler(vector, handler, arg);
-}

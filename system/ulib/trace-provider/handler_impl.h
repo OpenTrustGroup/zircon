@@ -21,11 +21,11 @@ namespace internal {
 
 class TraceHandlerImpl final : public trace::TraceHandler {
 public:
-    static zx_status_t StartEngine(async_dispatcher_t* dispatcher,
-                                   trace_buffering_mode_t buffering_mode,
-                                   zx::vmo buffer, zx::fifo fifo,
-                                   fbl::Vector<fbl::String> enabled_categories);
-    static zx_status_t StopEngine();
+    static void StartEngine(async_dispatcher_t* dispatcher,
+                            trace_buffering_mode_t buffering_mode,
+                            zx::vmo buffer, zx::fifo fifo,
+                            fbl::Vector<fbl::String> enabled_categories);
+    static void StopEngine();
 
 private:
     TraceHandlerImpl(void* buffer, size_t buffer_num_bytes, zx::fifo fifo,
@@ -37,16 +37,15 @@ private:
     void TraceStarted() override;
     void TraceStopped(async_dispatcher_t* dispatcher,
                       zx_status_t disposition, size_t buffer_bytes_written) override;
+    // This is called in streaming mode to notify the trace manager that
+    // buffer |buffer_number| is full and needs to be saved.
+    void NotifyBufferFull(uint32_t wrapped_count, uint64_t durable_data_end)
+        override;
 
     void HandleFifo(async_dispatcher_t* dispatcher, async::WaitBase* wait,
                     zx_status_t status,
                     const zx_packet_signal_t* signal);
     bool ReadFifoMessage();
-
-    // This is called in streaming mode to notify the trace manager that
-    // buffer |buffer_number| is full and needs to be saved.
-    void NotifyBufferFull(uint32_t wrapped_count, uint64_t durable_data_end)
-        override;
 
     // This is called in streaming mode when TraceManager reports back that
     // it has saved the buffer.

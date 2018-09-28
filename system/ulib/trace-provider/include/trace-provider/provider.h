@@ -73,6 +73,9 @@ typedef struct trace_provider trace_provider_t;
 // Creates a trace provider associated with the specified async dispatcher
 // and registers it with the tracing system.
 //
+// |name| is the name of the trace provider and is used for diagnostic
+// purposes. The maximum supported length is 100 characters.
+//
 // The trace provider will start and stop the trace engine in response to requests
 // from the tracing system.
 //
@@ -85,6 +88,13 @@ typedef struct trace_provider trace_provider_t;
 // Switch to passively exporting the trace provider via the "hub" through
 // the process's exported directory once that stuff is implemented.  We'll
 // probably need to pass some extra parameters to the trace provider then.
+trace_provider_t* trace_provider_create_with_name(async_dispatcher_t* dispatcher,
+                                                  const char* name);
+
+// Wrapper around trace_provider_create_with_name for backward compatibility.
+// TODO(DX-422): Update all providers to use create_with_name, then change this
+// to also take a name, then update all providers to call this one, and then
+// delete trace_provider_create_with_name.
 trace_provider_t* trace_provider_create(async_dispatcher_t* dispatcher);
 
 // Same as trace_provider_create except does not return until the provider is
@@ -98,12 +108,6 @@ trace_provider_t* trace_provider_create_synchronously(async_dispatcher_t* dispat
                                                       const char* name,
                                                       bool* out_already_started);
 
-// Wait for tracing to start.
-// Returns ZX_OK on success, ZX_ERR_CANCELED if it times out.
-// This must be called on a thread other than the provider's dispatcher thread.
-zx_status_t trace_provider_wait_tracing_started(trace_provider_t* provider,
-                                                zx_duration_t timeout);
-
 // Destroys the trace provider.
 void trace_provider_destroy(trace_provider_t* provider);
 
@@ -112,7 +116,6 @@ __END_CDECLS
 #ifdef __cplusplus
 
 #include <fbl/unique_ptr.h>
-#include <lib/zx/time.h>
 
 namespace trace {
 
@@ -120,7 +123,8 @@ namespace trace {
 class TraceProvider {
 public:
     // Create a trace provider synchronously, and return an indicator of
-    // whether tracing has started already.
+    // whether tracing has started already in |*out_already_started|.
+    // Returns a boolean indicating success.
     // This is done with a factory function because it's more complex than
     // the basic constructor.
     static bool CreateSynchronously(
@@ -140,19 +144,14 @@ public:
     TraceProvider(async_dispatcher_t* dispatcher)
         : provider_(trace_provider_create(dispatcher)) {}
 
+    // Creates a trace provider.
+    TraceProvider(async_dispatcher_t* dispatcher, const char* name)
+        : provider_(trace_provider_create_with_name(dispatcher, name)) {}
+
     // Destroys a trace provider.
     ~TraceProvider() {
         if (provider_)
             trace_provider_destroy(provider_);
-    }
-
-    zx_status_t WaitTracingStarted(zx::duration timeout) {
-        if (provider_) {
-            return trace_provider_wait_tracing_started(provider_,
-                                                       timeout.get());
-        } else {
-            return ZX_ERR_BAD_STATE;
-        }
     }
 
     // Returns true if the trace provider was created successfully.

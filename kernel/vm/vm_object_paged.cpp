@@ -141,17 +141,15 @@ zx_status_t VmObjectPaged::CreateContiguous(uint32_t pmm_alloc_flags, uint64_t s
     list_initialize(&page_list);
 
     size_t num_pages = size / PAGE_SIZE;
-    size_t allocated = pmm_alloc_contiguous(num_pages, pmm_alloc_flags, alignment_log2, nullptr, &page_list);
-    if (allocated != num_pages) {
-        LTRACEF("failed to allocate enough pages (asked for %zu, got %zu)\n", num_pages, allocated);
-        pmm_free(&page_list);
+    paddr_t pa;
+    status = pmm_alloc_contiguous(num_pages, pmm_alloc_flags, alignment_log2, &pa, &page_list);
+    if (status != ZX_OK) {
+        LTRACEF("failed to allocate enough pages (asked for %zu)\n", num_pages);
         return ZX_ERR_NO_MEMORY;
     }
     auto cleanup_phys_pages = fbl::MakeAutoCall([&page_list]() {
         pmm_free(&page_list);
     });
-
-    DEBUG_ASSERT(list_length(&page_list) == allocated);
 
     // add them to the appropriate range of the object
     VmObjectPaged* vmop = static_cast<VmObjectPaged*>(vmo.get());
@@ -214,7 +212,8 @@ zx_status_t VmObjectPaged::CreateFromROData(const void* data, size_t size, fbl::
             if (page->state == VM_PAGE_STATE_WIRED) {
                 // it's wired to the kernel, so we can just use it directly
             } else if (page->state == VM_PAGE_STATE_FREE) {
-                ASSERT(pmm_alloc_range(pa, 1, nullptr) == 1);
+                list_node list = LIST_INITIAL_VALUE(list);
+                ASSERT(pmm_alloc_range(pa, 1, &list) == ZX_OK);
                 page->state = VM_PAGE_STATE_WIRED;
             } else {
                 panic("page used to back static vmo in unusable state: paddr %#" PRIxPTR " state %u\n", pa,
@@ -423,7 +422,7 @@ zx_status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, list_no
                 }
             }
             if (!p_clone) {
-                p_clone = pmm_alloc_page(pmm_alloc_flags_, &pa_clone);
+                status = pmm_alloc_page(pmm_alloc_flags_, &p_clone, &pa_clone);
             }
             if (!p_clone) {
                 return ZX_ERR_NO_MEMORY;
@@ -478,7 +477,7 @@ zx_status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, list_no
         }
     }
     if (!p) {
-        p = pmm_alloc_page(pmm_alloc_flags_, &pa);
+        pmm_alloc_page(pmm_alloc_flags_, &p, &pa);
     }
     if (!p) {
         return ZX_ERR_NO_MEMORY;
@@ -558,11 +557,9 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
     list_node page_list;
     list_initialize(&page_list);
 
-    size_t allocated = pmm_alloc_pages(count, pmm_alloc_flags_, &page_list);
-    if (allocated < count) {
-        LTRACEF("failed to allocate enough pages (asked for %zu, got %zu)\n", count, allocated);
-        pmm_free(&page_list);
-        return ZX_ERR_NO_MEMORY;
+    zx_status_t status = pmm_alloc_pages(count, pmm_alloc_flags_, &page_list);
+    if (status != ZX_OK) {
+        return status;
     }
 
     // unmap all of the pages in this range on all the mapping regions
@@ -874,7 +871,7 @@ zx_status_t VmObjectPaged::ReadWriteInternal(uint64_t offset, size_t len, bool w
         auto status = GetPageLocked(src_offset,
                                     VMM_PF_FLAG_SW_FAULT | (write ? VMM_PF_FLAG_WRITE : 0),
                                     nullptr, nullptr, &pa);
-        if (status < 0)
+        if (status != ZX_OK)
             return status;
 
         // compute the kernel mapping of this page

@@ -55,42 +55,48 @@ zx_status_t pmm_add_arena(const pmm_arena_info_t* info) {
     return pmm_node.AddArena(info);
 }
 
-vm_page_t* pmm_alloc_page(uint alloc_flags, paddr_t* pa) {
-    return pmm_node.AllocPage(alloc_flags, pa);
+zx_status_t pmm_alloc_page(uint alloc_flags, paddr_t* pa) {
+    return pmm_node.AllocPage(alloc_flags, nullptr, pa);
 }
 
-size_t pmm_alloc_pages(size_t count, uint alloc_flags, list_node* list) {
+zx_status_t pmm_alloc_page(uint alloc_flags, vm_page_t** page) {
+    return pmm_node.AllocPage(alloc_flags, page, nullptr);
+}
+
+zx_status_t pmm_alloc_page(uint alloc_flags, vm_page_t** page, paddr_t* pa) {
+    return pmm_node.AllocPage(alloc_flags, page, pa);
+}
+
+zx_status_t pmm_alloc_pages(size_t count, uint alloc_flags, list_node* list) {
     return pmm_node.AllocPages(count, alloc_flags, list);
 }
 
-size_t pmm_alloc_range(paddr_t address, size_t count, list_node* list) {
+zx_status_t pmm_alloc_range(paddr_t address, size_t count, list_node* list) {
     return pmm_node.AllocRange(address, count, list);
 }
 
-size_t pmm_alloc_contiguous(size_t count, uint alloc_flags, uint8_t alignment_log2, paddr_t* pa,
+zx_status_t pmm_alloc_contiguous(size_t count, uint alloc_flags, uint8_t alignment_log2, paddr_t* pa,
                             list_node* list) {
     // if we're called with a single page, just fall through to the regular allocation routine
-    if (unlikely(count == 1 && alignment_log2 == PAGE_SIZE_SHIFT)) {
-        vm_page_t* page = pmm_node.AllocPage(alloc_flags, pa);
-        if (page == nullptr) {
-            return 0;
+    if (unlikely(count == 1 && alignment_log2 <= PAGE_SIZE_SHIFT)) {
+        vm_page_t* page;
+        zx_status_t status = pmm_node.AllocPage(alloc_flags, &page, pa);
+        if (status != ZX_OK) {
+            return status;
         }
-        if (list != nullptr) {
-            list_add_tail(list, &page->queue_node);
-        }
-        return 1;
+        list_add_tail(list, &page->queue_node);
+        return ZX_OK;
     }
 
     return pmm_node.AllocContiguous(count, alloc_flags, alignment_log2, pa, list);
 }
 
-size_t pmm_free(list_node* list) {
-    return pmm_node.Free(list);
+void pmm_free(list_node* list) {
+    pmm_node.FreeList(list);
 }
 
-size_t pmm_free_page(vm_page* page) {
-    pmm_node.Free(page);
-    return 1;
+void pmm_free_page(vm_page* page) {
+    pmm_node.FreePage(page);
 }
 
 uint64_t pmm_count_free_pages() {

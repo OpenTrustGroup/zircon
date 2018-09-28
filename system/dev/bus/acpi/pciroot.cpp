@@ -4,6 +4,7 @@
 
 #include <acpica/acpi.h>
 #include <zircon/types.h>
+#include <zircon/device/i2c.h>
 #include <ddk/debug.h>
 #include <ddk/protocol/pciroot.h>
 
@@ -81,9 +82,6 @@ static ACPI_STATUS pci_child_data_callback(ACPI_HANDLE object,
         // Publish HID
         if ((info->Valid & ACPI_VALID_HID) && info->HardwareId.Length <= HID_LENGTH + 1) {
             const char* hid = info->HardwareId.String;
-            if (!strncmp(hid, GOOGLE_TPM_HID_STRING, HID_LENGTH)) {
-                data->protocol_id = ZX_PROTOCOL_TPM;
-            }
             data->props[data->propcount].id = BIND_ACPI_HID_0_3;
             data->props[data->propcount++].value = htobe32(*((uint32_t*)(hid)));
             data->props[data->propcount].id = BIND_ACPI_HID_4_7;
@@ -94,7 +92,8 @@ static ACPI_STATUS pci_child_data_callback(ACPI_HANDLE object,
             ACPI_PNP_DEVICE_ID* cid = &info->CompatibleIdList.Ids[0];
             if (cid->Length <= CID_LENGTH + 1) {
                 if (!strncmp(cid->String, I2C_HID_CID_STRING, CID_LENGTH)) {
-                    data->protocol_id = ZX_PROTOCOL_I2C_HID;
+                    data->props[data->propcount].id = BIND_I2C_CLASS;
+                    data->props[data->propcount++].value = I2C_CLASS_HID;
                 }
                 data->props[data->propcount].id = BIND_ACPI_CID_0_3;
                 data->props[data->propcount++].value = htobe32(*((uint32_t*)(cid->String)));
@@ -104,6 +103,7 @@ static ACPI_STATUS pci_child_data_callback(ACPI_HANDLE object,
         }
         ACPI_FREE(info);
     }
+    ZX_ASSERT(data->propcount <= AUXDATA_MAX_DEVPROPS);
 
     // call _CRS to get i2c info
     acpi_status = AcpiWalkResources(object, (char*)"_CRS",

@@ -6,7 +6,7 @@
 
 #include <ddk/device.h>
 #include <ddk/io-buffer.h>
-#include <ddk/protocol/gpio.h>
+#include <ddk/protocol/gpio-impl.h>
 #include <ddk/protocol/iommu.h>
 #include <ddk/protocol/platform-bus.h>
 
@@ -22,16 +22,16 @@ enum {
 };
 
 typedef struct {
-    platform_bus_protocol_t     pbus;
-    zx_device_t*                parent;
-    iommu_protocol_t            iommu;
-    gpio_protocol_t             gpio;
-    zx_handle_t                 bti_handle;
-    uint32_t                    soc_pid;
+    platform_bus_protocol_t pbus;
+    zx_device_t* parent;
+    iommu_protocol_t iommu;
+    gpio_impl_protocol_t gpio;
+    zx_handle_t bti_handle;
+    uint32_t soc_pid;
 } imx8mevk_bus_t;
-
 
 zx_status_t imx8m_gpio_init(imx8mevk_bus_t* bus);
 zx_status_t imx_usb_init(imx8mevk_bus_t* bus);
+zx_status_t imx_i2c_init(imx8mevk_bus_t* bus);
 zx_status_t imx_gpu_init(imx8mevk_bus_t* bus);
 zx_status_t imx8m_sdhci_init(imx8mevk_bus_t* bus);

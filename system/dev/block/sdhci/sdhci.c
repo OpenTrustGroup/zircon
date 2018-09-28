@@ -850,7 +850,7 @@ unlock_out:
     return st;
 }
 
-static zx_status_t sdhci_perform_tuning(void* ctx) {
+static zx_status_t sdhci_perform_tuning(void* ctx, uint32_t tuning_cmd_idx) {
     zxlogf(TRACE, "sdhci: perform tuning\n");
 
     sdhci_device_t* dev = ctx;
@@ -859,7 +859,7 @@ static zx_status_t sdhci_perform_tuning(void* ctx) {
     // TODO no other commands should run during tuning
 
     sdmmc_req_t req = {
-        .cmd_idx = MMC_SEND_TUNING_BLOCK,
+        .cmd_idx = tuning_cmd_idx,
         .cmd_flags = MMC_SEND_TUNING_BLOCK_FLAGS,
         .arg = 0,
         .blockcount = 0,
@@ -896,11 +896,6 @@ static zx_status_t sdhci_perform_tuning(void* ctx) {
     }
 }
 
-static zx_status_t sdhci_get_sdio_oob_irq(void* ctx, zx_handle_t *oob_irq_handle) {
-    //Currently we do not support SDIO
-    return ZX_ERR_NOT_SUPPORTED;
-}
-
 static sdmmc_protocol_ops_t sdmmc_proto = {
     .host_info = sdhci_host_info,
     .set_signal_voltage = sdhci_set_signal_voltage,
@@ -910,7 +905,6 @@ static sdmmc_protocol_ops_t sdmmc_proto = {
     .hw_reset = sdhci_hw_reset,
     .perform_tuning = sdhci_perform_tuning,
     .request = sdhci_request,
-    .get_sdio_oob_irq = sdhci_get_sdio_oob_irq,
 };
 
 static void sdhci_unbind(void* ctx) {
@@ -978,6 +972,7 @@ static zx_status_t sdhci_controller_init(sdhci_device_t* dev) {
         // no maximum if only PIO supported
         dev->info.max_transfer_size = BLOCK_MAX_TRANSFER_UNBOUNDED;
     }
+    dev->info.max_transfer_size_non_dma = BLOCK_MAX_TRANSFER_UNBOUNDED;
 
     // Configure the clock.
     ctrl1 = dev->regs->ctrl1;

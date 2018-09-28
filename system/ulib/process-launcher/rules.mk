@@ -8,11 +8,15 @@ MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := userlib
 
+MODULE_COMPILEFLAGS += -fvisibility=hidden
+
 MODULE_SRCS := \
     $(LOCAL_DIR)/launcher.cpp \
     $(LOCAL_DIR)/provider.cpp
 
 MODULE_FIDL_LIBS := \
+    system/fidl/fuchsia-io \
+    system/fidl/fuchsia-ldsvc \
     system/fidl/fuchsia-process
 
 MODULE_HEADER_DEPS := \

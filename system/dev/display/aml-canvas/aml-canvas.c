@@ -112,6 +112,7 @@ static zx_status_t aml_canvas_config(void* ctx, zx_handle_t vmo,
 
     *canvas_idx = index;
 fail:
+    zx_handle_close(vmo);
     mtx_unlock(&canvas->lock);
     return status;
 }
@@ -154,23 +155,31 @@ static canvas_protocol_ops_t canvas_ops = {
     .free = aml_canvas_free,
 };
 
-static zx_status_t aml_canvas_proxy_cb(platform_proxy_args_t* args, void* cookie) {
+static void aml_canvas_proxy_cb(platform_proxy_args_t* args, void* cookie) {
     if (args->req->proto_id != ZX_PROTOCOL_AMLOGIC_CANVAS) {
-        return ZX_ERR_NOT_SUPPORTED;
+        args->resp->status = ZX_ERR_NOT_SUPPORTED;
+        return;
     }
     if (args->req_size < sizeof(rpc_canvas_rsp_t)) {
-        return ZX_ERR_BUFFER_TOO_SMALL;
+        args->resp->status = ZX_ERR_BUFFER_TOO_SMALL;
+        return;
     }
 
     rpc_canvas_req_t* req = (rpc_canvas_req_t*)args->req;
     rpc_canvas_rsp_t* resp = (rpc_canvas_rsp_t*)args->resp;
     args->resp_actual_size = sizeof(*resp);
     args->resp_actual_handles = 0;
+    uint32_t handles_consumed = 0;
 
     switch (req->header.op) {
     case CANVAS_CONFIG: {
+        if (args->req_handle_count < 1) {
+            args->resp->status = ZX_ERR_BUFFER_TOO_SMALL;
+            return;
+        }
         resp->header.status = aml_canvas_config(cookie, args->req_handles[0], req->offset,
                                                 &req->info, &resp->idx);
+        handles_consumed = 1;
         break;
     }
     case CANVAS_FREE: {
@@ -178,9 +187,16 @@ static zx_status_t aml_canvas_proxy_cb(platform_proxy_args_t* args, void* cookie
         break;
     }
     default:
-        return ZX_ERR_NOT_SUPPORTED;
+        for (uint32_t i = 0; i < args->req_handle_count; i++) {
+            zx_handle_close(args->req_handles[i]);
+        }
+        args->resp->status = ZX_ERR_NOT_SUPPORTED;
+        return;
     }
-    return ZX_OK;
+    for (uint32_t i = handles_consumed; i < args->req_handle_count; i++) {
+        zx_handle_close(args->req_handles[i]);
+    }
+    args->resp->status = ZX_OK;
 }
 
 static zx_status_t aml_canvas_bind(void* ctx, zx_device_t* parent) {
