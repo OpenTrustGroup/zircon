@@ -13,6 +13,10 @@
 #include <object/process_dispatcher.h>
 #include <object/resource_dispatcher.h>
 
+#if WITH_LIB_SM
+#include <lib/sm.h>
+#endif
+
 #include "priv.h"
 
 // Create a new resource, child of the provided resource.
@@ -64,6 +68,20 @@ zx_status_t sys_resource_create(zx_handle_t parent_rsrc,
             return ZX_ERR_INVALID_ARGS;
         }
     }
+
+#if WITH_LIB_SM
+    if (kind == ZX_RSRC_KIND_NSMEM) {
+        // TODO(SY): decouple shm_info and libsm
+        ns_shm_info_t info;
+        sm_get_shm_config(&info);
+        if (info.size == 0) {
+            return ZX_ERR_INTERNAL;
+        }
+
+        base = static_cast<uintptr_t>(info.pa);
+        size = ROUNDUP_PAGE_SIZE(static_cast<size_t>(info.size));
+    }
+#endif
 
     // Create a new Resource
     zx_rights_t rights;
