@@ -32,35 +32,17 @@
 #define LOCAL_TRACE 1
 
 zx_status_t sys_smc_create(uint32_t options,
-                           user_out_ptr<zx_info_smc_t> user_smc_info,
-                           user_out_handle* smc_out,
-                           user_out_handle* vmo_out) {
+                           user_out_handle* smc_out) {
     auto up = ProcessDispatcher::GetCurrent();
     zx_status_t res = up->QueryPolicy(ZX_POL_NEW_SMC);
     if (res != ZX_OK) return res;
 
     fbl::RefPtr<SmcDispatcher> smc_disp;
-    fbl::RefPtr<VmObject> shm_vmo;
     zx_rights_t smc_rights;
-    res = SmcDispatcher::Create(options, &smc_disp, &smc_rights, &shm_vmo);
+    res = SmcDispatcher::Create(options, &smc_disp, &smc_rights);
     if (res != ZX_OK) return res;
 
-    fbl::RefPtr<Dispatcher> vmo_disp;
-    zx_rights_t vmo_rights;
-    res = VmObjectDispatcher::Create(fbl::move(shm_vmo), &vmo_disp, &vmo_rights);
-    if (res != ZX_OK) return res;
-
-    zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
-    res = user_smc_info.copy_to_user(smc_info);
-    if (res != ZX_OK) return ZX_ERR_INVALID_ARGS;
-
-    res = smc_out->make(fbl::move(smc_disp), smc_rights);
-    if (res == ZX_OK) {
-        vmo_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
-        res = vmo_out->make(fbl::move(vmo_disp), vmo_rights);
-    }
-
-    return res;
+    return smc_out->make(fbl::move(smc_disp), smc_rights);
 }
 
 zx_status_t sys_smc_read(zx_handle_t smc_handle,

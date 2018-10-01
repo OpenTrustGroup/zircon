@@ -42,6 +42,7 @@ MODULES += \
     system/uapp/runtests \
     system/ulib/syslog \
     system/ulib/virtio \
+    system/ulib/gzos-shm \
     third_party/uapp/dash \
 
 MODULES += \
@@ -49,5 +50,5 @@ MODULES += \
 
 ifeq ($(call TOBOOL,$(DISABLE_UTEST)),false)
 MODULES += \
-    system/utest/core/smc
+    system/utest/gzos/smc
 endif
