@@ -13,6 +13,10 @@
 #include <object/process_dispatcher.h>
 #include <object/resource_dispatcher.h>
 
+#if WITH_LIB_SM
+#include <lib/sm.h>
+#endif
+
 #include "priv.h"
 
 // Create a new resource, child of the provided resource.
@@ -75,4 +79,42 @@ zx_status_t sys_resource_create(zx_handle_t parent_rsrc,
 
     // Create a handle for the child
     return resource_out->make(fbl::move(child), rights);
+}
+
+zx_status_t sys_resource_create_ns_mem(uint32_t options,
+                                user_out_ptr<zx_info_ns_shm_t> user_shm_info,
+                                user_out_handle* resource_out) {
+#if WITH_LIB_SM
+    auto up = ProcessDispatcher::GetCurrent();
+    zx_status_t res = up->QueryPolicy(ZX_POL_NEW_SMC);
+    if (res != ZX_OK) return res;
+
+    // TODO(SY): decouple shm_info and libsm
+    ns_shm_info_t info;
+    sm_get_shm_config(&info);
+    if (info.size == 0) return ZX_ERR_INTERNAL;
+
+    zx_info_ns_shm_t shm_info = {
+        .base_phys = info.pa,
+        .size = info.size,
+        .use_cache = info.use_cache,
+    };
+
+    res = user_shm_info.copy_to_user(shm_info);
+    if (res != ZX_OK) return ZX_ERR_INVALID_ARGS;
+
+    uintptr_t shm_pa = static_cast<uintptr_t>(info.pa);
+    size_t shm_size = ROUNDUP_PAGE_SIZE(static_cast<size_t>(info.size));
+
+    fbl::RefPtr<ResourceDispatcher> shm_rsc;
+    zx_rights_t rights;
+    res = ResourceDispatcher::Create(&shm_rsc, &rights, ZX_RSRC_KIND_NSMEM,
+                                     shm_pa, shm_size, 0, "gzos_shm");
+    if (res != ZX_OK) return res;
+
+    // Create a handle for the child
+    return resource_out->make(fbl::move(shm_rsc), rights);
+#else
+    return ZX_ERR_NOT_SUPPORTED;
+#endif
 }

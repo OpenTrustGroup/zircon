@@ -33,6 +33,10 @@ public:
                               const char* name,
                               size_t namelen,
                               resource* result);
+
+    static zx_status_t create_ns_mem(uint32_t options,
+                                     zx_info_ns_shm_t* shm_info,
+                                     resource* result);
 };
 
 using unowned_resource = unowned<resource>;

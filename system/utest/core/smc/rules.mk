@@ -10,9 +10,11 @@ MODULE_TYPE := usertest
 
 MODULE_USERTEST_GROUP := core
 
-MODULE_SRCS += $(LOCAL_DIR)/smc.c
+MODULE_SRCS += $(LOCAL_DIR)/smc.cpp
 
 MODULE_NAME := smc-test
+
+MODULE_STATIC_LIBS := system/ulib/fbl system/ulib/zx
 
 MODULE_LIBS := system/ulib/unittest system/ulib/fdio system/ulib/zircon system/ulib/c
 
