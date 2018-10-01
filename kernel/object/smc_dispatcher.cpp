@@ -109,7 +109,8 @@ static long invoke_smc_test(smc32_args_t* args) {
 #endif
 
 zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
-                                  zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo) {
+                                  zx_rights_t* rights, fbl::RefPtr<ResourceDispatcher>* shm_rsc,
+                                  zx_rights_t* shm_rights) {
 #if WITH_LIB_SM
     fbl::AutoLock al(&alloc_lock);
 
@@ -119,17 +120,13 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
         sm_get_shm_config(&info);
         if (info.size == 0) return ZX_ERR_INTERNAL;
 
-        fbl::RefPtr<VmObject> vmo;
         uintptr_t shm_pa = static_cast<uintptr_t>(info.pa);
         size_t shm_size = ROUNDUP_PAGE_SIZE(static_cast<size_t>(info.size));
 
-        zx_status_t status = VmObjectPhysical::Create(shm_pa, shm_size, &vmo);
+        fbl::RefPtr<ResourceDispatcher> rsc;
+        zx_status_t status = ResourceDispatcher::Create(&rsc, shm_rights, ZX_RSRC_KIND_NSMEM,
+		                                                shm_pa, shm_size, 0, "gzos_shm");
         if (status != ZX_OK) return status;
-
-        if (info.use_cache) {
-            status = vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_CACHED);
-            if (status != ZX_OK) return status;
-        }
 
         zx_info_smc_t smc_info = {
             .ns_shm = {
@@ -147,7 +144,7 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
 
         *rights = ZX_DEFAULT_SMC_RIGHTS;
         *dispatcher = fbl::AdoptRef<SmcDispatcher>(disp);
-        *shm_vmo = fbl::move(vmo);
+        *shm_rsc = fbl::move(rsc);
         smc_disp = dispatcher->get();
         LTRACEF("create smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
         return ZX_OK;

@@ -16,6 +16,7 @@
 #include <zircon/syscalls/smc_service.h>
 
 static zx_handle_t smc_handle;
+static zx_handle_t shm_rsc_handle;
 static zx_handle_t shm_vmo_handle;
 static zx_info_smc_t smc_info = {};
 
@@ -26,13 +27,28 @@ static bool setup(void) {
         zx_handle_close(smc_handle);
         smc_handle = ZX_HANDLE_INVALID;
     }
+    if (shm_rsc_handle != ZX_HANDLE_INVALID) {
+        zx_handle_close(shm_rsc_handle);
+        shm_rsc_handle = ZX_HANDLE_INVALID;
+    }
     if (shm_vmo_handle != ZX_HANDLE_INVALID) {
         zx_handle_close(shm_vmo_handle);
         shm_vmo_handle = ZX_HANDLE_INVALID;
     }
 
-    ASSERT_EQ(zx_smc_create(0, &smc_info, &smc_handle, &shm_vmo_handle),
+    ASSERT_EQ(zx_smc_create(0, &smc_info, &smc_handle, &shm_rsc_handle),
               ZX_OK, "failed to create smc object");
+
+    zx_info_ns_shm_t shm_info = smc_info.ns_shm;
+    ASSERT_EQ(zx_vmo_create_physical(shm_rsc_handle, shm_info.base_phys,
+                                     shm_info.size, &shm_vmo_handle),
+              ZX_OK, "failed to create vmo object");
+
+    if (shm_info.use_cache) {
+      ASSERT_EQ(zx_vmo_set_cache_policy(shm_vmo_handle, ZX_CACHE_POLICY_CACHED),
+                ZX_OK, "failed to set vmo cache policy");
+    }
+
     END_HELPER;
 }
 
@@ -175,17 +191,14 @@ static bool smc_shm_vmo_basic_test(void) {
     zx_status_t status = zx_object_get_info(shm_vmo_handle, ZX_INFO_HANDLE_BASIC, &basic_info, sizeof(basic_info), NULL, NULL);
     ASSERT_EQ(status, ZX_OK, "handle should be valid");
 
-    const zx_rights_t expected_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
+    const zx_rights_t expected_rights = ZX_RIGHT_DUPLICATE | ZX_RIGHT_TRANSFER | ZX_RIGHTS_IO |
+                                        ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
 
     EXPECT_GT(basic_info.koid, 0ULL, "object id should be positive");
     EXPECT_EQ(basic_info.type, (uint32_t)ZX_OBJ_TYPE_VMO, "handle should be an vmo");
     EXPECT_EQ(basic_info.rights, expected_rights, "wrong set of rights");
     EXPECT_EQ(basic_info.props, (uint32_t)ZX_OBJ_PROP_WAITABLE, "should have waitable property");
     EXPECT_EQ(basic_info.related_koid, 0ULL, "vmo don't have associated koid");
-
-    zx_handle_t dup_handle;
-    ASSERT_EQ(zx_handle_duplicate(shm_vmo_handle, ZX_RIGHT_SAME_RIGHTS, &dup_handle),
-            ZX_ERR_ACCESS_DENIED, "shm vmo can't be duplicated");
 
     ASSERT_TRUE(tear_down(), "tear down");
     END_TEST;
