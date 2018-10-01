@@ -41,8 +41,4 @@ typedef struct zx_info_ns_shm {
     bool use_cache;
 } zx_info_ns_shm_t;
 
-typedef struct zx_info_smc {
-    zx_info_ns_shm_t ns_shm;
-} zx_info_smc_t;
-
 __END_CDECLS

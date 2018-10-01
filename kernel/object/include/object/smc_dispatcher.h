@@ -7,6 +7,7 @@
 #pragma once
 
 #include <object/dispatcher.h>
+#include <object/resource_dispatcher.h>
 
 #include <kernel/event.h>
 
@@ -17,7 +18,7 @@
 class SmcDispatcher final : public SoloDispatcher<SmcDispatcher> {
 public:
     static zx_status_t Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
-                              zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo);
+                              zx_rights_t* rights);
     static SmcDispatcher* GetDispatcherByEntity(uint32_t entity_nr);
 
     ~SmcDispatcher() final;
@@ -32,12 +33,12 @@ public:
     /* called by smc service via syscalls */
     zx_status_t ReadArgs(smc32_args_t* args);
     zx_status_t SetResult(long result);
-    zx_info_smc_t GetSmcInfo();
+    zx_info_ns_shm_t GetShmInfo();
     zx_status_t ReadNopRequest(uint32_t cpu_num, smc32_args_t* args);
     zx_status_t CancelReadNopRequest();
 
 private:
-    explicit SmcDispatcher(uint32_t options, zx_info_smc_t info);
+    explicit SmcDispatcher(uint32_t options, zx_info_ns_shm_t info);
 
     fbl::Canary<fbl::magic("SMCD")> canary_;
 
@@ -46,7 +47,7 @@ private:
     long smc_result TA_GUARDED(get_lock());
     bool can_serve_next_smc TA_GUARDED(get_lock());
     event_t result_event_;
-    zx_info_smc_t smc_info;
+    zx_info_ns_shm_t shm_info_;
     smc32_args_t req_nop_args[SMP_MAX_CPUS]{} TA_GUARDED(get_lock());
     event_t req_nop_event_[SMP_MAX_CPUS];
 };
