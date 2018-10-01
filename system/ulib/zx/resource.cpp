@@ -22,4 +22,13 @@ zx_status_t resource::create(const resource& parent,
     return status;
 }
 
+zx_status_t resource::create_ns_mem(uint32_t options,
+                                    zx_info_ns_shm_t* shm_info,
+                                    resource* result) {
+    resource h;
+    zx_status_t status = zx_resource_create_ns_mem(options, shm_info, h.reset_and_get_address());
+    result->reset(h.release());
+    return status;
+}
+
 } // namespace zx
