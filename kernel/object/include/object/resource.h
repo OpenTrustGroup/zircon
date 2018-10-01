@@ -33,6 +33,11 @@ static inline zx_status_t validate_resource_mmio(zx_handle_t handle, uint64_t ba
     return validate_ranged_resource(handle, ZX_RSRC_KIND_MMIO, base, len);
 }
 
+// Validates mapping an None-Secure memory range based on a resource handle
+static inline zx_status_t validate_resource_nsmem(zx_handle_t handle, uint64_t base, size_t len) {
+    return validate_ranged_resource(handle, ZX_RSRC_KIND_NSMEM, base, len);
+}
+
 // Validates creation of an interrupt object based on a resource handle
 static inline zx_status_t validate_resource_irq(zx_handle_t handle, uint32_t irq) {
     return validate_ranged_resource(handle, ZX_RSRC_KIND_IRQ, irq, 1);

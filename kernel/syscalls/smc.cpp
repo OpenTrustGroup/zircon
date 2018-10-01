@@ -34,20 +34,16 @@
 zx_status_t sys_smc_create(uint32_t options,
                            user_out_ptr<zx_info_smc_t> user_smc_info,
                            user_out_handle* smc_out,
-                           user_out_handle* vmo_out) {
+                           user_out_handle* shm_rsc_out) {
     auto up = ProcessDispatcher::GetCurrent();
     zx_status_t res = up->QueryPolicy(ZX_POL_NEW_SMC);
     if (res != ZX_OK) return res;
 
     fbl::RefPtr<SmcDispatcher> smc_disp;
-    fbl::RefPtr<VmObject> shm_vmo;
+    fbl::RefPtr<ResourceDispatcher> shm_rsc;
     zx_rights_t smc_rights;
-    res = SmcDispatcher::Create(options, &smc_disp, &smc_rights, &shm_vmo);
-    if (res != ZX_OK) return res;
-
-    fbl::RefPtr<Dispatcher> vmo_disp;
-    zx_rights_t vmo_rights;
-    res = VmObjectDispatcher::Create(fbl::move(shm_vmo), &vmo_disp, &vmo_rights);
+    zx_rights_t shm_rights;
+    res = SmcDispatcher::Create(options, &smc_disp, &smc_rights, &shm_rsc, &shm_rights);
     if (res != ZX_OK) return res;
 
     zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
@@ -56,8 +52,7 @@ zx_status_t sys_smc_create(uint32_t options,
 
     res = smc_out->make(fbl::move(smc_disp), smc_rights);
     if (res == ZX_OK) {
-        vmo_rights = ZX_RIGHTS_IO | ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
-        res = vmo_out->make(fbl::move(vmo_disp), vmo_rights);
+        res = shm_rsc_out->make(fbl::move(shm_rsc), shm_rights);
     }
 
     return res;
