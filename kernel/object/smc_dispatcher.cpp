@@ -32,12 +32,12 @@ static fbl::Mutex alloc_lock;
 static SmcDispatcher* smc_disp TA_GUARDED(alloc_lock);
 
 #if ENABLE_SMC_TEST
-static void* map_shm(zx_info_smc_t* smc_info) {
+static void* map_shm(ns_shm_info_t* shm_info) {
     void* shm_vaddr = nullptr;
 
     zx_status_t status = VmAspace::kernel_aspace()->AllocPhysical(
-            "smc_ns_shm", smc_info->ns_shm.size, &shm_vaddr, PAGE_SIZE_SHIFT,
-            static_cast<paddr_t>(smc_info->ns_shm.base_phys), VmAspace::VMM_FLAG_COMMIT,
+            "smc_ns_shm", shm_info->size, &shm_vaddr, PAGE_SIZE_SHIFT,
+            static_cast<paddr_t>(shm_info->pa), VmAspace::VMM_FLAG_COMMIT,
             ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE | ARCH_MMU_FLAG_NS);
     if (status != ZX_OK) {
         TRACEF("failed to map shm into kernel address space, status %d\n", status);
@@ -54,15 +54,16 @@ static void unmap_shm(void* va) {
 
 static long write_shm() {
     bool is_fail = false;
-    zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
+    ns_shm_info_t shm_info;
+    sm_get_shm_config(&shm_info);
 
-    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&smc_info));
+    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
     if (shm_va == nullptr) {
         is_fail = true;
         goto exit;
     }
 
-    for (size_t i = 0; i < smc_info.ns_shm.size; i++) {
+    for (size_t i = 0; i < shm_info.size; i++) {
         shm_va[i] = static_cast<uint8_t>((i & 0xff) ^ 0xaa);
     }
 
@@ -73,15 +74,16 @@ exit:
 
 static long verify_shm() {
     bool is_fail = false;
-    zx_info_smc_t smc_info = smc_disp->GetSmcInfo();
+    ns_shm_info_t shm_info;
+    sm_get_shm_config(&shm_info);
 
-    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&smc_info));
+    uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
     if (shm_va == nullptr) {
         is_fail = true;
         goto exit;
     }
 
-    for (uint32_t i = 0; i < smc_info.ns_shm.size; i++) {
+    for (uint32_t i = 0; i < shm_info.size; i++) {
         if (shm_va[i] != (i & 0xff)) {
             TRACEF("error: shm_va[%u] 0x%02x, expected 0x%02x\n",
                         i, shm_va[i], (i & 0xff));
@@ -109,45 +111,19 @@ static long invoke_smc_test(smc32_args_t* args) {
 #endif
 
 zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
-                                  zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo) {
+                                  zx_rights_t* rights) {
 #if WITH_LIB_SM
     fbl::AutoLock al(&alloc_lock);
 
     if (smc_disp == nullptr) {
-        ns_shm_info_t info = {};
-
-        sm_get_shm_config(&info);
-        if (info.size == 0) return ZX_ERR_INTERNAL;
-
-        fbl::RefPtr<VmObject> vmo;
-        uintptr_t shm_pa = static_cast<uintptr_t>(info.pa);
-        size_t shm_size = ROUNDUP_PAGE_SIZE(static_cast<size_t>(info.size));
-
-        zx_status_t status = VmObjectPhysical::Create(shm_pa, shm_size, &vmo);
-        if (status != ZX_OK) return status;
-
-        if (info.use_cache) {
-            status = vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_CACHED);
-            if (status != ZX_OK) return status;
-        }
-
-        zx_info_smc_t smc_info = {
-            .ns_shm = {
-                .base_phys = info.pa,
-                .size = info.size,
-                .use_cache = info.use_cache,
-            },
-        };
-
         fbl::AllocChecker ac;
-        auto disp = new (&ac) SmcDispatcher(options, smc_info);
+        auto disp = new (&ac) SmcDispatcher(options);
         if (!ac.check()) {
             return ZX_ERR_NO_MEMORY;
         }
 
         *rights = ZX_DEFAULT_SMC_RIGHTS;
         *dispatcher = fbl::AdoptRef<SmcDispatcher>(disp);
-        *shm_vmo = fbl::move(vmo);
         smc_disp = dispatcher->get();
         LTRACEF("create smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
         return ZX_OK;
@@ -162,11 +138,10 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
 
 }
 
-SmcDispatcher::SmcDispatcher(uint32_t options, zx_info_smc_t info)
+SmcDispatcher::SmcDispatcher(uint32_t options)
     : options(options), smc_args(nullptr),
       smc_result(SM_ERR_INTERNAL_FAILURE),
-      can_serve_next_smc(true),
-      smc_info(info) {
+      can_serve_next_smc(true) {
     event_init(&result_event_, false, EVENT_FLAG_AUTOUNSIGNAL);
 
     for (int i = 0; i < SMP_MAX_CPUS; i++) {
@@ -178,10 +153,6 @@ SmcDispatcher::~SmcDispatcher() {
     fbl::AutoLock al(&alloc_lock);
     LTRACEF("free smc object, koid=%" PRIu64 "\n", smc_disp->get_koid());
     smc_disp = nullptr;
-}
-
-zx_info_smc_t SmcDispatcher::GetSmcInfo() {
-    return smc_info;
 }
 
 zx_status_t SmcDispatcher::NotifyUser(smc32_args_t* args) {

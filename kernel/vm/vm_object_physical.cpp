@@ -13,6 +13,7 @@
 #include <fbl/alloc_checker.h>
 #include <inttypes.h>
 #include <lib/console.h>
+#include <object/event_pair_dispatcher.h>
 #include <stdlib.h>
 #include <string.h>
 #include <trace.h>
@@ -52,6 +53,34 @@ zx_status_t VmObjectPhysical::Create(paddr_t base, uint64_t size, fbl::RefPtr<Vm
     vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_UNCACHED);
 
     *obj = fbl::move(vmo);
+
+    return ZX_OK;
+}
+
+zx_status_t VmObjectPhysical::Create(paddr_t base, uint64_t size, fbl::RefPtr<VmObject>* obj,
+                                     fbl::RefPtr<Dispatcher>* event, zx_rights_t* event_rights) {
+    fbl::RefPtr<Dispatcher> ev0, ev1;
+    zx_rights_t rights;
+    zx_status_t status = EventPairDispatcher::Create(&ev0, &ev1, &rights);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    status = Create(base, size, obj);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    auto handle = Handle::Make(fbl::move(ev0), rights);
+    if (!handle) {
+      return ZX_ERR_NO_MEMORY;
+    }
+
+    auto vmo = static_cast<VmObjectPhysical*>(obj->get());
+    vmo->SetEventPairHandle(fbl::move(handle));
+
+    *event_rights = rights;
+    *event = fbl::move(ev1);
 
     return ZX_OK;
 }

@@ -49,5 +49,5 @@ MODULES += \
 
 ifeq ($(call TOBOOL,$(DISABLE_UTEST)),false)
 MODULES += \
-    system/utest/core/smc
+    system/utest/gzos/smc
 endif

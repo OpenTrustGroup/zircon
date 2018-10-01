@@ -39,6 +39,10 @@
 #include <platform/pc/bootloader.h>
 #endif
 
+#if WITH_LIB_SM
+#include <lib/sm.h>
+#endif
+
 #include "ddk_priv.h"
 #include "priv.h"
 
@@ -119,6 +123,74 @@ zx_status_t sys_vmo_create_physical(zx_handle_t hrsrc, uintptr_t paddr, size_t s
 
     // create a handle and attach the dispatcher to it
     return out->make(fbl::move(dispatcher), rights);
+}
+
+static void SetShmId(fbl::RefPtr<VmObject>& vmo) {
+    static fbl::Mutex vmo_id_lock;
+    static uint64_t vmo_id;
+
+    fbl::AutoLock lock(&vmo_id_lock);
+    char name[ZX_MAX_NAME_LEN];
+    snprintf(name, sizeof(name), "ns_shm:%lx", vmo_id++);
+    vmo->set_name(name, strlen(name));
+}
+
+zx_status_t sys_vmo_create_ns_mem(zx_handle_t hrsrc, uintptr_t paddr, size_t size,
+                                  user_out_handle* vmo_out, user_out_handle* event_out) {
+#if WITH_LIB_SM
+    LTRACEF("size 0x%zu\n", size);
+
+    // Memory should be subtracted from the PhysicalAspace allocators, so it's
+    // safe to assume that if the caller has access to a resource for this specified
+    // region of MMIO space then it is safe to allow the vmo to be created.
+    zx_status_t status;
+    if ((status = validate_resource_nsmem(hrsrc, paddr, size)) != ZX_OK) {
+        return status;
+    }
+
+    size = ROUNDUP_PAGE_SIZE(size);
+
+    // create a vm object
+    fbl::RefPtr<VmObject> vmo;
+    fbl::RefPtr<Dispatcher> event;
+    zx_rights_t event_rights;
+    zx_status_t result = VmObjectPhysical::Create(paddr, size, &vmo, &event, &event_rights);
+    if (result != ZX_OK) {
+        return result;
+    }
+
+    SetShmId(vmo);
+
+    ns_shm_info_t info;
+    sm_get_shm_config(&info);
+
+    if (info.use_cache) {
+        result = vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_CACHED);
+        if (result != ZX_OK) {
+            return result;
+        }
+    }
+
+    // create a Vm Object dispatcher
+    fbl::RefPtr<Dispatcher> dispatcher;
+    zx_rights_t vmo_rights;
+    result = VmObjectDispatcher::Create(fbl::move(vmo), &dispatcher, &vmo_rights);
+    if (result != ZX_OK) {
+        return result;
+    }
+
+    vmo_rights = ZX_RIGHT_DUPLICATE | ZX_RIGHT_TRANSFER | ZX_RIGHTS_IO |
+                 ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
+
+    // create a handle and attach the dispatcher to it
+    result = vmo_out->make(fbl::move(dispatcher), vmo_rights);
+    if (result == ZX_OK) {
+        result = event_out->make(fbl::move(event), event_rights);
+    }
+    return result;
+#else
+    return ZX_ERR_NOT_SUPPORTED;
+#endif
 }
 
 zx_status_t sys_framebuffer_get_info(zx_handle_t handle, user_out_ptr<uint32_t> format,

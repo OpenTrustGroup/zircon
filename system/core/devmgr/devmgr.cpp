@@ -24,6 +24,7 @@
 #include <zircon/syscalls/exception.h>
 #include <zircon/syscalls/object.h>
 #include <zircon/syscalls/policy.h>
+#include <zircon/syscalls/resource.h>
 
 #include <lib/fdio/namespace.h>
 #include <lib/fdio/util.h>
@@ -999,6 +1000,8 @@ static void gzos_svc_start() {
 
     zx_handle_t appmgr_svc_req = ZX_HANDLE_INVALID;
     zx_handle_t appmgr_svc = ZX_HANDLE_INVALID;
+    zx_handle_t shm_rsc = ZX_HANDLE_INVALID;
+    const char rsc_name[] = "ns_shm";
 
     zx_status_t status = zx_channel_create(0, &appmgr_svc_req, &appmgr_svc);
     if (status != ZX_OK) {
@@ -1012,72 +1015,25 @@ static void gzos_svc_start() {
         goto error;
     }
 
-#ifdef DISABLE_RPC_AGENT
-    zx_handle_t ree_agent_cli;
-    zx_handle_t ree_agent_srv;
-
-    ree_agent_cli = ZX_HANDLE_INVALID;
-    ree_agent_srv = ZX_HANDLE_INVALID;
-
-    status = zx_channel_create(0, &ree_agent_cli, &ree_agent_srv);
+    status = zx_resource_create(get_root_resource(),
+                                ZX_RSRC_KIND_NSMEM,
+                                0, 0, rsc_name, sizeof(rsc_name), &shm_rsc);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_start: failed to create ree_agent_svc channel: %d\n", status);
+        printf("devmgr: gzos_svc_init: failed to create shared memory resource: %d\n", status);
         goto error;
     }
 
     unsigned int handle_count;
     zx_handle_t handles[2];
     uint32_t handle_types[2];
-    int argc_smc_service;
-    const char* argv_smc_service[1];
-
-    handle_count = 1;
-    handles[0] = ree_agent_cli;
-    handles[1] = ZX_HANDLE_INVALID;
-    handle_types[0] = PA_HND(PA_USER0, 0);
-    handle_types[1] = PA_HND(PA_USER0, 1);
-    argc_smc_service = 1;
-    argv_smc_service[0] = "/system/bin/smc_service";
-
-    status = devmgr_launch(gzos_svcs_job_handle, "smc_service",
-                           &devmgr_launch_load, nullptr,
-                           argc_smc_service, argv_smc_service, nullptr, -1,
-                           handles, handle_types, handle_count,
-                           nullptr, 0);
-    if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_start: failed to launch smc_service: %d\n", status);
-        goto error;
-    }
-
-    int argc_ree_agent;
-    const char* argv_ree_agent[1];
-
-    handles[0] = ree_agent_srv;
-    handles[1] = appmgr_svc;
-    handle_count = 2;
-    argc_ree_agent = 1;
-    argv_ree_agent[0] = "/system/bin/ree_agent";
-
-    status = devmgr_launch(gzos_svcs_job_handle, "ree_agent",
-                           &devmgr_launch_load, nullptr,
-                           argc_ree_agent, argv_ree_agent, nullptr, -1,
-                           handles, handle_types, handle_count,
-                           nullptr, 0);
-    if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_start: failed to launch ree_agent: %d\n", status);
-        goto error;
-    }
-
-#else
-    unsigned int handle_count;
-    zx_handle_t handles[1];
-    uint32_t handle_types[1];
     int argc_rpc_agent;
     const char* argv_rpc_agent[1];
 
-    handle_count = 1;
+    handle_count = 2;
     handles[0] = appmgr_svc;
+    handles[1] = shm_rsc;
     handle_types[0] = PA_HND(PA_USER0, 0);
+    handle_types[1] = PA_HND(PA_USER1, 0);
     argc_rpc_agent = 1;
     argv_rpc_agent[0] = "/system/bin/rpc_agent";
 
@@ -1090,7 +1046,6 @@ static void gzos_svc_start() {
         printf("devmgr: gzos_svc_start: failed to launch rpc_agent: %d\n", status);
         goto error;
     }
-#endif
 
     return;
 
@@ -1099,10 +1054,6 @@ error:
     // fdio_service_connect_at.
     if (appmgr_svc != ZX_HANDLE_INVALID)
         zx_handle_close(appmgr_svc);
-#ifdef DISABLE_RPC_AGENT
-    if (ree_agent_cli != ZX_HANDLE_INVALID)
-        zx_handle_close(ree_agent_cli);
-    if (ree_agent_srv != ZX_HANDLE_INVALID)
-        zx_handle_close(ree_agent_srv);
-#endif
+    if (shm_rsc != ZX_HANDLE_INVALID)
+        zx_handle_close(shm_rsc);
 }
