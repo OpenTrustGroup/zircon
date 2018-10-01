@@ -75,8 +75,4 @@ extern uint64_t arm_gicv2_gicv_offset;
 #define GICV_ADDRESS (GICV_OFFSET + arm_gicv2_gic_base)
 
 #define MAX_INT 1024
-#define DIV_ROUND_UP(n, d) (((n) + (d)-1) / (d))
-#define GIC_REG_COUNT(bit_per_reg) DIV_ROUND_UP(MAX_INT, (bit_per_reg))
-#define DEFINE_GIC_SHADOW_REG(name, bit_per_reg, init_val, init_from) \
-    uint32_t(name)[GIC_REG_COUNT(bit_per_reg)] = {                    \
-        [(init_from / bit_per_reg)...(GIC_REG_COUNT(bit_per_reg) - 1)] = (init_val)}
+

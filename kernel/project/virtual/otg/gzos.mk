@@ -10,6 +10,9 @@ KERNEL_DEFINES += WITH_DEBUG_LINEBUFFER=1
 ## Directly output kernel message to the console rather than buffering it
 #KERNEL_DEFINES += ENABLE_KERNEL_LL_DEBUG=1
 
+KERNEL_DEFINES += WITH_LIB_SM=1
+KERNEL_DEFINES += WITH_LIB_VERSION=1
+
 MODULES += \
     kernel/lib/userboot \
     kernel/lib/debuglog \

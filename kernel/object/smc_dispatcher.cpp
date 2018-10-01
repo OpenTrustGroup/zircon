@@ -326,4 +326,12 @@ long notify_nop_thread(smc32_args_t* args) {
 
     return SM_OK;
 }
+#else
+long notify_smc_service(smc32_args_t* args) {
+    return SM_ERR_NOT_SUPPORTED;
+}
+
+long notify_nop_thread(smc32_args_t* args) {
+    return SM_ERR_NOT_SUPPORTED;
+}
 #endif

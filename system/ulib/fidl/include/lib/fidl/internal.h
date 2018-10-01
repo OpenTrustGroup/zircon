@@ -121,6 +121,7 @@ enum FidlHandleSubtype : zx_obj_type_t {
     kFidlHandleSubtypePort = ZX_OBJ_TYPE_PORT,
     kFidlHandleSubtypeInterrupt = ZX_OBJ_TYPE_INTERRUPT,
     kFidlHandleSubtypeLog = ZX_OBJ_TYPE_LOG,
+    kFidlHandleSubtypeSmc = ZX_OBJ_TYPE_SMC,
     kFidlHandleSubtypeSocket = ZX_OBJ_TYPE_SOCKET,
     kFidlHandleSubtypeResource = ZX_OBJ_TYPE_RESOURCE,
     kFidlHandleSubtypeEventpair = ZX_OBJ_TYPE_EVENTPAIR,

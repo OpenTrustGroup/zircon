@@ -155,6 +155,9 @@ void FormatTypeName(StringBuilder* str, const fidl_type_t* type) {
             case fidl::kFidlHandleSubtypeLog:
                 str->Append("log");
                 break;
+            case fidl::kFidlHandleSubtypeSmc:
+                str->Append("smc");
+                break;
             case fidl::kFidlHandleSubtypeSocket:
                 str->Append("socket");
                 break;

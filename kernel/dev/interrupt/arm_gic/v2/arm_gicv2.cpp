@@ -82,11 +82,6 @@ static uint32_t gic_get_max_vector() {
     return max_irqs;
 }
 
-#if WITH_LIB_SM
-static DEFINE_GIC_SHADOW_REG(gicd_igroupr, 32, ~0U, 0);
-#endif
-static DEFINE_GIC_SHADOW_REG(gicd_itargetsr, 4, 0x01010101, 32);
-
 static void gic_set_enable(uint vector, bool enable) {
     int reg = vector / 32;
     uint32_t mask = (uint32_t)(1ULL << (vector % 32));
@@ -194,7 +189,7 @@ static zx_status_t arm_gic_init() {
      */
     for (i = 32; i < max_irqs; i += 32) {
         u_int reg = i / 32;
-        GICREG(0, GICD_IGROUPR(reg)) = gicd_igroupr[reg];
+        GICREG(0, GICD_IGROUPR(reg)) = ~0U;
     }
 #endif
 
@@ -322,7 +317,7 @@ long smc_intc_get_next_irq(smc32_args_t *args)
     return ret;
 }
 
-static zx_status_t arm_gic_get_priority(u_int irq) {
+static uint8_t arm_gic_get_priority(u_int irq) {
     u_int reg = irq / 4;
     u_int shift = 8 * (irq % 4);
     return (GICREG(0, GICD_IPRIORITYR(reg)) >> shift) & 0xff;

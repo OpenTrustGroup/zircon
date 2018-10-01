@@ -28,6 +28,7 @@ enum struct HandleSubtype : zx_obj_type_t {
     kPort = ZX_OBJ_TYPE_PORT,
     kInterrupt = ZX_OBJ_TYPE_INTERRUPT,
     kLog = ZX_OBJ_TYPE_LOG,
+    kSmc = ZX_OBJ_TYPE_SMC,
     kSocket = ZX_OBJ_TYPE_SOCKET,
     kResource = ZX_OBJ_TYPE_RESOURCE,
     kEventpair = ZX_OBJ_TYPE_EVENTPAIR,
