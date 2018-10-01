@@ -611,6 +611,12 @@ static void arm_resource_dispatcher_init_hook(unsigned int rl) {
     if (status != ZX_OK) {
         printf("Resources: Failed to initialize MMIO allocator: %d\n", status);
     }
+    // 64 bit address space for MSMEM on ARM64
+    status = ResourceDispatcher::InitializeAllocator(ZX_RSRC_KIND_NSMEM, 0,
+                                                     UINT64_MAX);
+    if (status != ZX_OK) {
+        printf("Resources: Failed to initialize NSMEM allocator: %d\n", status);
+    }
     // Set up IRQs based on values from the GIC
     status = ResourceDispatcher::InitializeAllocator(ZX_RSRC_KIND_IRQ,
                                                      interrupt_get_base_vector(),

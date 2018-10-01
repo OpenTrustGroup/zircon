@@ -7,6 +7,7 @@
 #pragma once
 
 #include <object/dispatcher.h>
+#include <object/resource_dispatcher.h>
 
 #include <kernel/event.h>
 
@@ -17,7 +18,7 @@
 class SmcDispatcher final : public SoloDispatcher<SmcDispatcher> {
 public:
     static zx_status_t Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* dispatcher,
-                              zx_rights_t* rights, fbl::RefPtr<VmObject>* shm_vmo);
+                              zx_rights_t* rights, fbl::RefPtr<ResourceDispatcher>* shm_vmo, zx_rights_t* shm_rights);
     static SmcDispatcher* GetDispatcherByEntity(uint32_t entity_nr);
 
     ~SmcDispatcher() final;
