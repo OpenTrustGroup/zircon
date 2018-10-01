@@ -96,6 +96,22 @@ static zx_status_t sysinfo_ioctl(void* ctx, uint32_t op, const void* cmd, size_t
         *out_actual = sizeof(zx_handle_t);
         return ZX_OK;
     }
+    case IOCTL_SYSINFO_GET_NS_SHM_RESOURCE: {
+        if ((cmdlen != 0) || (max < sizeof(zx_handle_t))) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+        zx_handle_t h;
+        const char name[] = "ns_shm";
+        zx_status_t status = zx_resource_create(get_root_resource(),
+                                                ZX_RSRC_KIND_NSMEM,
+                                                0, 0, name, sizeof(name), &h);
+        if (status < 0) {
+            return status;
+        }
+        memcpy(reply, &h, sizeof(zx_handle_t));
+        *out_actual = sizeof(zx_handle_t);
+        return ZX_OK;
+    }
     case IOCTL_SYSINFO_GET_BOARD_NAME: {
         if ((cmdlen != 0) || (max < sizeof(sysinfo->board_name))) {
             return ZX_ERR_INVALID_ARGS;

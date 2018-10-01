@@ -31,6 +31,10 @@ VmObjectPhysical::VmObjectPhysical(paddr_t base, uint64_t size)
 VmObjectPhysical::~VmObjectPhysical() {
     canary_.Assert();
     LTRACEF("%p\n", this);
+
+    if (event_) {
+      event_->user_signal(0, ZX_EVENTPAIR_SIGNALED, true);
+    }
 }
 
 zx_status_t VmObjectPhysical::Create(paddr_t base, uint64_t size, fbl::RefPtr<VmObject>* obj) {
@@ -52,6 +56,29 @@ zx_status_t VmObjectPhysical::Create(paddr_t base, uint64_t size, fbl::RefPtr<Vm
     vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_UNCACHED);
 
     *obj = fbl::move(vmo);
+
+    return ZX_OK;
+}
+
+zx_status_t VmObjectPhysical::Create(paddr_t base, uint64_t size, fbl::RefPtr<VmObject>* obj,
+                                     fbl::RefPtr<Dispatcher>* event, zx_rights_t* event_rights) {
+    fbl::RefPtr<Dispatcher> ev0, ev1;
+    zx_rights_t rights;
+    zx_status_t status = EventPairDispatcher::Create(&ev0, &ev1, &rights);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    status = Create(base, size, obj);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    auto vmo = static_cast<VmObjectPhysical*>(obj->get());
+    vmo->SetEventPairDispatcher(fbl::move(DownCastDispatcher<EventPairDispatcher>(&ev0)));
+
+    *event_rights = rights;
+    *event = fbl::move(ev1);
 
     return ZX_OK;
 }
