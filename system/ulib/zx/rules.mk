@@ -23,6 +23,7 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/port.cpp \
     $(LOCAL_DIR)/process.cpp \
     $(LOCAL_DIR)/resource.cpp \
+    $(LOCAL_DIR)/smc.cpp \
     $(LOCAL_DIR)/socket.cpp \
     $(LOCAL_DIR)/thread.cpp \
     $(LOCAL_DIR)/timer.cpp \

@@ -16,6 +16,7 @@
 #include <kernel/mutex.h>
 #include <lib/user_copy/user_ptr.h>
 #include <list.h>
+#include <object/handle.h>
 #include <stdint.h>
 #include <vm/vm.h>
 #include <vm/vm_object.h>
@@ -26,6 +27,9 @@
 class VmObjectPhysical final : public VmObject {
 public:
     static zx_status_t Create(paddr_t base, uint64_t size, fbl::RefPtr<VmObject>* vmo);
+
+    static zx_status_t Create(paddr_t base, uint64_t size, fbl::RefPtr<VmObject>* vmo,
+                              fbl::RefPtr<Dispatcher>* event, zx_rights_t* event_rights);
 
     bool is_contiguous() const override { return true; }
 
@@ -52,10 +56,14 @@ private:
     ~VmObjectPhysical() override;
     friend fbl::RefPtr<VmObjectPhysical>;
 
+    void SetEventPairHandle(HandleOwner handle) { event_handle_ = fbl::move(handle); }
+
     DISALLOW_COPY_ASSIGN_AND_MOVE(VmObjectPhysical);
 
     // members
     const uint64_t size_ = 0;
     const paddr_t base_ = 0;
     uint32_t mapping_cache_flags_ TA_GUARDED(lock_) = 0;
+
+    HandleOwner event_handle_;
 };

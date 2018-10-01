@@ -40,6 +40,12 @@
 #define IOCTL_SYSINFO_GET_INTERRUPT_CONTROLLER_INFO \
     IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_SYSINFO, 5)
 
+// Return non-secure shared memory resource
+//   in: none
+//   out: zx_handle_t
+#define IOCTL_SYSINFO_GET_NS_SHM_RESOURCE \
+    IOCTL(IOCTL_KIND_GET_HANDLE, IOCTL_FAMILY_SYSINFO, 6)
+
 enum {
     INTERRUPT_CONTROLLER_TYPE_UNKNOWN = 0,
     INTERRUPT_CONTROLLER_TYPE_APIC = 1,
@@ -59,6 +65,9 @@ IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_root_resource, IOCTL_SYSINFO_GET_ROOT_RESOUR
 
 // ssize_t ioctl_sysinfo_get_hypervisor_resource(int fd, zx_handle_t* out);
 IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_hypervisor_resource, IOCTL_SYSINFO_GET_HYPERVISOR_RESOURCE, zx_handle_t);
+
+// ssize_t ioctl_sysinfo_get_hypervisor_resource(int fd, zx_handle_t* out);
+IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_ns_shm_resource, IOCTL_SYSINFO_GET_NS_SHM_RESOURCE, zx_handle_t);
 
 // ssize_t ioctl_sysinfo_get_board_name(int fd, char* out, size_t out_len);
 IOCTL_WRAPPER_VAROUT(ioctl_sysinfo_get_board_name, IOCTL_SYSINFO_GET_BOARD_NAME, char);

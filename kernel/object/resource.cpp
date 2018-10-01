@@ -71,7 +71,7 @@ zx_status_t validate_ranged_resource(zx_handle_t handle,
     // specific validation methods.
     uint64_t rbase = resource->get_base();
     size_t rsize = resource->get_size();
-    if (resource->get_kind() == ZX_RSRC_KIND_MMIO) {
+    if (resource->get_kind() == ZX_RSRC_KIND_MMIO || resource->get_kind() == ZX_RSRC_KIND_NSMEM) {
         const uint64_t aligned_rbase = ROUNDDOWN(rbase, PAGE_SIZE);
         rsize = PAGE_ALIGN((rbase - aligned_rbase) + rsize);
         rbase = aligned_rbase;
