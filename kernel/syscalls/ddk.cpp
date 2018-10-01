@@ -91,13 +91,17 @@ zx_status_t sys_vmo_create_contiguous(zx_handle_t bti, size_t size, uint32_t ali
 zx_status_t sys_vmo_create_physical(zx_handle_t hrsrc, uintptr_t paddr, size_t size,
                                     user_out_handle* out) {
     LTRACEF("size 0x%zu\n", size);
+    bool is_ns_mem = false;
 
     // Memory should be subtracted from the PhysicalAspace allocators, so it's
     // safe to assume that if the caller has access to a resource for this specified
     // region of MMIO space then it is safe to allow the vmo to be created.
     zx_status_t status;
     if ((status = validate_resource_mmio(hrsrc, paddr, size)) != ZX_OK) {
-        return status;
+        if ((status = validate_resource_nsmem(hrsrc, paddr, size)) != ZX_OK) {
+            return status;
+        }
+        is_ns_mem = true;
     }
 
     size = ROUNDUP_PAGE_SIZE(size);
@@ -115,6 +119,11 @@ zx_status_t sys_vmo_create_physical(zx_handle_t hrsrc, uintptr_t paddr, size_t s
     result = VmObjectDispatcher::Create(fbl::move(vmo), &dispatcher, &rights);
     if (result != ZX_OK) {
         return result;
+    }
+
+    if (is_ns_mem) {
+        rights = ZX_RIGHT_DUPLICATE | ZX_RIGHT_TRANSFER | ZX_RIGHTS_IO |
+                 ZX_RIGHT_MAP | ZX_RIGHT_MAP_NS;
     }
 
     // create a handle and attach the dispatcher to it

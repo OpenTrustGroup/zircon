@@ -759,7 +759,7 @@ syscall system_powerctl
 syscall smc_create
     (options: uint32_t, smc_info: zx_info_smc_t[1] OUT)
     returns (zx_status_t, smc_out: zx_handle_t handle_acquire,
-        vmo_out: zx_handle_t handle_acquire);
+        shm_rsc_out: zx_handle_t handle_acquire);
 
 syscall smc_read
     (handle: zx_handle_t, args: smc32_args_t[1] OUT)
