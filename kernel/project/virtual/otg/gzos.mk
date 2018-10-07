@@ -48,5 +48,3 @@ ifeq ($(call TOBOOL,$(DISABLE_UTEST)),false)
 MODULES += \
     system/utest/core/smc
 endif
-
-EXTRA_BUILDDEPS += $(USER_BOOTDATA)

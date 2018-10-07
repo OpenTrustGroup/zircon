@@ -636,8 +636,10 @@ int main(int argc, char** argv) {
 
     devmgr_svc_init();
     devmgr_vfs_init();
-    devmgr_gzos_svc_init();
 
+    if (getenv_bool("gzsvcs.enable", false)) {
+        devmgr_gzos_svc_init();
+    }
 
     // if we're not a full fuchsia build, no point to set up appmgr services
     // which will just cause things attempting to access it to block until
