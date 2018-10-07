@@ -1,3 +1,4 @@
+# Copyright 2018 Open Trust Group
 # Copyright 2016 The Fuchsia Authors
 # Copyright (c) 2008-2015 Travis Geiselbrecht
 #
@@ -11,4 +12,9 @@ ARCH := arm64
 TARGET := arm64
 
 include kernel/project/virtual/test.mk
+
+ifeq ($(SUB_PROJECT),gzos)
+include kernel/project/virtual/otg/gzos.mk
+else
 include kernel/project/virtual/user.mk
+endif
