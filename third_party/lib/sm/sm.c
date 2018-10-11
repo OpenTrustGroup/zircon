@@ -24,6 +24,7 @@
 
 #include <err.h>
 #include <trace.h>
+#include <kernel/cmdline.h>
 #include <kernel/event.h>
 #include <kernel/thread.h>
 #include <lib/console.h>
@@ -396,7 +397,7 @@ static int __NO_RETURN sm_stdcall_loop(void *arg)
 
 static void sm_init(uint level)
 {
-    sm.disable = false;
+    sm.disable = cmdline_get_bool("kernel.sm.disable", false);
 
     sm.stdcallthread = thread_create("sm-stdcall", sm_stdcall_loop, NULL,
                       LOWEST_PRIORITY + 2);

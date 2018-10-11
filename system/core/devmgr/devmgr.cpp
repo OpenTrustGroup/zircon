@@ -94,6 +94,7 @@ void do_autorun(const char* name, const char* env) {
 }
 
 static zx_handle_t fshost_event;
+static void gzos_svc_start();
 
 static int fuchsia_starter(void* arg) {
     bool appmgr_started = false;
@@ -126,6 +127,10 @@ static int fuchsia_starter(void* arg) {
             // drivers are now loadable
             load_system_drivers();
             drivers_loaded = true;
+        }
+
+        if (getenv_bool("gzsvcs.enable", false)) {
+            gzos_svc_start();
         }
 
         struct stat s;
@@ -637,10 +642,6 @@ int main(int argc, char** argv) {
     devmgr_svc_init();
     devmgr_vfs_init();
 
-    if (getenv_bool("gzsvcs.enable", false)) {
-        devmgr_gzos_svc_init();
-    }
-
     // if we're not a full fuchsia build, no point to set up appmgr services
     // which will just cause things attempting to access it to block until
     // we give up on the appmgr 10s later
@@ -993,21 +994,21 @@ void devmgr_svc_init() {
     svchost_start();
 }
 
-void devmgr_gzos_svc_init() {
-    printf("devmgr: gzos svc init\n");
+static void gzos_svc_start() {
+    printf("devmgr: start gzos services\n");
 
     zx_handle_t appmgr_svc_req = ZX_HANDLE_INVALID;
     zx_handle_t appmgr_svc = ZX_HANDLE_INVALID;
 
     zx_status_t status = zx_channel_create(0, &appmgr_svc_req, &appmgr_svc);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to create appmgr_svc channel: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to create appmgr_svc channel: %d\n", status);
         goto error;
     }
 
     status = fdio_service_connect_at(appmgr_req_cli, "svc", appmgr_svc_req);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to connect to appmgr service: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to connect to appmgr service: %d\n", status);
         goto error;
     }
 
@@ -1020,7 +1021,7 @@ void devmgr_gzos_svc_init() {
 
     status = zx_channel_create(0, &ree_agent_cli, &ree_agent_srv);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to create ree_agent_svc channel: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to create ree_agent_svc channel: %d\n", status);
         goto error;
     }
 
@@ -1044,7 +1045,7 @@ void devmgr_gzos_svc_init() {
                            handles, handle_types, handle_count,
                            nullptr, 0);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to launch smc_service: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to launch smc_service: %d\n", status);
         goto error;
     }
 
@@ -1063,7 +1064,7 @@ void devmgr_gzos_svc_init() {
                            handles, handle_types, handle_count,
                            nullptr, 0);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to launch ree_agent: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to launch ree_agent: %d\n", status);
         goto error;
     }
 
@@ -1086,7 +1087,7 @@ void devmgr_gzos_svc_init() {
                            handles, handle_types, handle_count,
                            nullptr, 0);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to launch rpc_agent: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to launch rpc_agent: %d\n", status);
         goto error;
     }
 #endif

@@ -31,6 +31,9 @@ MODULES += \
 MODULES += \
     system/dev/misc/console \
     system/dev/misc/sysinfo \
+    system/dev/block/block \
+    system/dev/block/ramdisk \
+    system/dev/block/fvm \
 
 MODULES += \
     system/uapp/driverctl \
