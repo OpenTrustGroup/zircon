@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "a8e6f61d_409b0230",
+        "filename": "kernel/syscalls/ddk.cpp",
+        "patchSetId": 8
+      },
+      "lineNbr": 160,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-13T08:31:53Z",
+      "side": 1,
+      "message": "do we need to protect the function by a lock?",
+      "range": {
+        "startLine": 160,
+        "startChar": 4,
+        "endLine": 160,
+        "endChar": 18
+      },
+      "revId": "9c94a9837d49717d6a3c366081bf1578c8da0d7a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "76d64a80_f9e06146",
+        "filename": "kernel/vm/vm_object_physical.cpp",
+        "patchSetId": 8
+      },
+      "lineNbr": 78,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-13T08:31:53Z",
+      "side": 1,
+      "message": "You can hold a HandleOwner object containing the event pair dispatcher so that you do not need to signal peer manually when VmObject is destroyed.\n\nexample code:\n\nHandleOwner h \u003d Handle::Make(fbl::move(ev0), rights);\nvmo-\u003eSetEventPairHandle(h);",
+      "range": {
+        "startLine": 78,
+        "startChar": 4,
+        "endLine": 78,
+        "endChar": 90
+      },
+      "revId": "9c94a9837d49717d6a3c366081bf1578c8da0d7a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
