@@ -49,6 +49,30 @@
     },
     {
       "key": {
+        "uuid": "d1ac202c_ba542322",
+        "filename": "kernel/syscalls/ddk.cpp",
+        "patchSetId": 8
+      },
+      "lineNbr": 160,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-14T13:55:11Z",
+      "side": 1,
+      "message": "Sorry, vmo_id did need a lock. Will fix it in next patch",
+      "parentUuid": "83d3f607_8bb1bc44",
+      "range": {
+        "startLine": 160,
+        "startChar": 4,
+        "endLine": 160,
+        "endChar": 18
+      },
+      "revId": "9c94a9837d49717d6a3c366081bf1578c8da0d7a",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "76d64a80_f9e06146",
         "filename": "kernel/vm/vm_object_physical.cpp",
         "patchSetId": 8
