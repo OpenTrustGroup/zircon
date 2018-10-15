@@ -28,10 +28,16 @@
 #define ENABLE_SMC_TEST 1
 #endif
 
+#if WITH_DEV_GZOS_SHM
+#include <dev/gzos_shm.h>
+#endif
+
 static fbl::Mutex alloc_lock;
 static SmcDispatcher* smc_disp TA_GUARDED(alloc_lock);
 
 #if ENABLE_SMC_TEST
+
+#if WITH_DEV_GZOS_SHM
 static void* map_shm(ns_shm_info_t* shm_info) {
     void* shm_vaddr = nullptr;
 
@@ -55,7 +61,7 @@ static void unmap_shm(void* va) {
 static long write_shm() {
     bool is_fail = false;
     ns_shm_info_t shm_info;
-    sm_get_shm_config(&shm_info);
+    gzos_shm_get_config(&shm_info);
 
     uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
     if (shm_va == nullptr) {
@@ -75,7 +81,7 @@ exit:
 static long verify_shm() {
     bool is_fail = false;
     ns_shm_info_t shm_info;
-    sm_get_shm_config(&shm_info);
+    gzos_shm_get_config(&shm_info);
 
     uint8_t* shm_va = static_cast<uint8_t*>(map_shm(&shm_info));
     if (shm_va == nullptr) {
@@ -96,13 +102,16 @@ exit:
     unmap_shm(shm_va);
     return is_fail ? SM_ERR_INTERNAL_FAILURE : 0;
 }
+#endif
 
 static long invoke_smc_test(smc32_args_t* args) {
     switch (args->smc_nr) {
+#if WITH_DEV_GZOS_SHM
     case SMC_SC_WRITE_SHM:
         return write_shm();
     case SMC_SC_VERIFY_SHM:
         return verify_shm();
+#endif
     default:
         return SM_ERR_UNDEFINED_SMC;
     }
@@ -116,13 +125,6 @@ zx_status_t SmcDispatcher::Create(uint32_t options, fbl::RefPtr<SmcDispatcher>* 
     fbl::AutoLock al(&alloc_lock);
 
     if (smc_disp == nullptr) {
-        ns_shm_info_t shm_info;
-        sm_get_shm_config(&shm_info);
-        if (shm_info.size == 0) {
-            TRACEF("error: failed to get shared memory\n");
-            return ZX_ERR_INTERNAL;
-        }
-
         fbl::AllocChecker ac;
         auto disp = new (&ac) SmcDispatcher(options);
         if (!ac.check()) {

@@ -45,12 +45,6 @@ typedef struct smc32_entity {
     smc32_handler_t stdcall_handler;
 } smc32_entity_t;
 
-typedef struct ns_shm_info {
-    uint32_t pa;
-    uint32_t size;
-    bool use_cache;
-} ns_shm_info_t;
-
 __BEGIN_CDECLS
 
 /* Schedule Secure OS */
@@ -61,9 +55,6 @@ void sm_sched_nonsecure(long retval, smc32_args_t* args);
 
 /* Handle an interrupt */
 void sm_handle_irq(void);
-
-/* Get Non-secure share memory configuration */
-void sm_get_shm_config(ns_shm_info_t* shm);
 
 /* Version */
 long smc_sm_api_version(smc32_args_t* args);
