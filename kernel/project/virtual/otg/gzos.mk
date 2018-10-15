@@ -11,6 +11,7 @@ KERNEL_DEFINES += WITH_DEBUG_LINEBUFFER=1
 #KERNEL_DEFINES += ENABLE_KERNEL_LL_DEBUG=1
 
 KERNEL_DEFINES += WITH_LIB_SM=1
+KERNEL_DEFINES += WITH_DEV_GZOS_SHM=1
 KERNEL_DEFINES += WITH_LIB_VERSION=1
 
 MODULES += \
@@ -20,6 +21,7 @@ MODULES += \
     kernel/lib/mtrace \
     kernel/object \
     kernel/syscalls \
+    kernel/dev/gzos/shm \
 
 MODULES += \
     system/core/devmgr \

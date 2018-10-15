@@ -13,8 +13,8 @@
 #include <object/process_dispatcher.h>
 #include <object/resource_dispatcher.h>
 
-#if WITH_LIB_SM
-#include <lib/sm.h>
+#if WITH_DEV_GZOS_SHM
+#include <dev/gzos_shm.h>
 #endif
 
 #include "priv.h"
@@ -69,14 +69,10 @@ zx_status_t sys_resource_create(zx_handle_t parent_rsrc,
         }
     }
 
-#if WITH_LIB_SM
+#if WITH_DEV_GZOS_SHM
     if (kind == ZX_RSRC_KIND_NSMEM) {
-        // TODO(SY): decouple shm_info and libsm
         ns_shm_info_t info;
-        sm_get_shm_config(&info);
-        if (info.size == 0) {
-            return ZX_ERR_INTERNAL;
-        }
+        gzos_shm_get_config(&info);
 
         base = static_cast<uintptr_t>(info.pa);
         size = ROUNDUP_PAGE_SIZE(static_cast<size_t>(info.size));
