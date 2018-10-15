@@ -41,6 +41,10 @@
 #include <config-buildid.h>
 #endif
 
+#if WITH_DEV_GZOS_SHM
+#include <dev/gzos_shm.h>
+#endif
+
 #define LOCAL_TRACE 0
 
 static mutex_t smc_table_lock = MUTEX_INITIAL_VALUE(smc_table_lock);
@@ -149,24 +153,23 @@ static long smc_get_version_str(smc32_args_t *args)
 
 static long smc_get_shm_config(smc32_args_t *args)
 {
+#if WITH_DEV_GZOS_SHM
     ns_shm_info_t info = {};
+    gzos_shm_get_config(&info);
 
-    sm_get_shm_config(&info);
-
-    if (info.size > 0) {
-        switch (args->params[0]) {
-        case TRUSTY_SHM_PA:
-            return info.pa;
-        case TRUSTY_SHM_SIZE:
-            return info.size;
-        case TRUSTY_SHM_USE_CACHE:
-            return info.use_cache;
-        default:
-            return SM_ERR_INVALID_PARAMETERS;
-        }
+    switch (args->params[0]) {
+    case TRUSTY_SHM_PA:
+        return info.pa;
+    case TRUSTY_SHM_SIZE:
+        return info.size;
+    case TRUSTY_SHM_USE_CACHE:
+        return info.use_cache;
+    default:
+        return SM_ERR_INVALID_PARAMETERS;
     }
-
+#else
     return SM_ERR_NOT_SUPPORTED;
+#endif
 }
 
 smc32_handler_t sm_fastcall_function_table[] = {

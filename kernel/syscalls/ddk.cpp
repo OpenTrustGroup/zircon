@@ -39,8 +39,8 @@
 #include <platform/pc/bootloader.h>
 #endif
 
-#if WITH_LIB_SM
-#include <lib/sm.h>
+#if WITH_DEV_GZOS_SHM
+#include <dev/gzos_shm.h>
 #endif
 
 #include "ddk_priv.h"
@@ -125,6 +125,7 @@ zx_status_t sys_vmo_create_physical(zx_handle_t hrsrc, uintptr_t paddr, size_t s
     return out->make(fbl::move(dispatcher), rights);
 }
 
+#if WITH_DEV_GZOS_SHM
 static void SetShmId(fbl::RefPtr<VmObject>& vmo) {
     static fbl::Mutex vmo_id_lock;
     static uint64_t vmo_id;
@@ -134,10 +135,11 @@ static void SetShmId(fbl::RefPtr<VmObject>& vmo) {
     snprintf(name, sizeof(name), "ns_shm:%lx", vmo_id++);
     vmo->set_name(name, strlen(name));
 }
+#endif
 
 zx_status_t sys_vmo_create_ns_mem(zx_handle_t hrsrc, uintptr_t paddr, size_t size,
                                   user_out_handle* vmo_out, user_out_handle* event_out) {
-#if WITH_LIB_SM
+#if WITH_DEV_GZOS_SHM
     LTRACEF("size 0x%zu\n", size);
 
     // Memory should be subtracted from the PhysicalAspace allocators, so it's
@@ -162,7 +164,7 @@ zx_status_t sys_vmo_create_ns_mem(zx_handle_t hrsrc, uintptr_t paddr, size_t siz
     SetShmId(vmo);
 
     ns_shm_info_t info;
-    sm_get_shm_config(&info);
+    gzos_shm_get_config(&info);
 
     if (info.use_cache) {
         result = vmo->SetMappingCachePolicy(ARCH_MMU_FLAG_CACHED);

@@ -1019,7 +1019,7 @@ static void gzos_svc_start() {
                                 ZX_RSRC_KIND_NSMEM,
                                 0, 0, rsc_name, sizeof(rsc_name), &shm_rsc);
     if (status != ZX_OK) {
-        printf("devmgr: gzos_svc_init: failed to create shared memory resource: %d\n", status);
+        printf("devmgr: gzos_svc_start: failed to create shared memory resource: %d\n", status);
         goto error;
     }
 
