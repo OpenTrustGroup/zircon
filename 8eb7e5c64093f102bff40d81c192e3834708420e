@@ -49,6 +49,30 @@
     },
     {
       "key": {
+        "uuid": "cd1dcbaf_03310df8",
+        "filename": "system/core/devmgr/devmgr.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 1084,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T08:48:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "de7591f7_726d93f6",
+      "range": {
+        "startLine": 1026,
+        "startChar": 0,
+        "endLine": 1084,
+        "endChar": 5
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "f7f1378c_a420a1a9",
         "filename": "system/ulib/gzos-shm/include/gzos-shm/resource.h",
         "patchSetId": 14
@@ -93,6 +117,30 @@
       "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "f5037b8d_2528ea94",
+        "filename": "system/ulib/gzos-shm/include/gzos-shm/resource.h",
+        "patchSetId": 14
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T08:48:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "235539a8_aba6292b",
+      "range": {
+        "startLine": 1,
+        "startChar": 3,
+        "endLine": 1,
+        "endChar": 38
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     },
     {
       "key": {
@@ -143,6 +191,30 @@
     },
     {
       "key": {
+        "uuid": "502daa4b_872d6ffb",
+        "filename": "system/ulib/gzos-shm/resource.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T08:48:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "784e2b8e_26f10f08",
+      "range": {
+        "startLine": 1,
+        "startChar": 2,
+        "endLine": 1,
+        "endChar": 38
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "5841d58f_2216a532",
         "filename": "system/ulib/gzos-shm/rules.mk",
         "patchSetId": 14
@@ -175,6 +247,24 @@
       "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "cecbe426_fa513b44",
+        "filename": "system/ulib/gzos-shm/rules.mk",
+        "patchSetId": 14
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T08:48:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "545a0fd7_0fc260c0",
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     },
     {
       "key": {
@@ -225,6 +315,30 @@
     },
     {
       "key": {
+        "uuid": "f747cc0f_f56ae08b",
+        "filename": "system/ulib/zx/smc.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T08:48:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "5167923c_0e5ed5ff",
+      "range": {
+        "startLine": 15,
+        "startChar": 4,
+        "endLine": 15,
+        "endChar": 10
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "4f5daaaa_2808ddc1",
         "filename": "system/ulib/zx/vmo.cpp",
         "patchSetId": 14
@@ -269,6 +383,30 @@
       "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "658a636d_bbee2f15",
+        "filename": "system/ulib/zx/vmo.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T08:48:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "34d008b3_a0705616",
+      "range": {
+        "startLine": 20,
+        "startChar": 0,
+        "endLine": 28,
+        "endChar": 15
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     }
   ]
 }
