@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "de7591f7_726d93f6",
+        "filename": "system/core/devmgr/devmgr.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 1084,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T07:26:09Z",
+      "side": 1,
+      "message": "OK, will fix in next patch",
+      "parentUuid": "91a6bf37_7d26e9d7",
+      "range": {
+        "startLine": 1026,
+        "startChar": 0,
+        "endLine": 1084,
+        "endChar": 5
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "f7f1378c_a420a1a9",
         "filename": "system/ulib/gzos-shm/include/gzos-shm/resource.h",
         "patchSetId": 14
@@ -36,6 +60,30 @@
       "writtenOn": "2018-10-15T06:48:15Z",
       "side": 1,
       "message": "change copyright to OTG",
+      "range": {
+        "startLine": 1,
+        "startChar": 3,
+        "endLine": 1,
+        "endChar": 38
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "235539a8_aba6292b",
+        "filename": "system/ulib/gzos-shm/include/gzos-shm/resource.h",
+        "patchSetId": 14
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T07:26:09Z",
+      "side": 1,
+      "message": "OK, will fix it in next patch",
+      "parentUuid": "f7f1378c_a420a1a9",
       "range": {
         "startLine": 1,
         "startChar": 3,
@@ -71,6 +119,30 @@
     },
     {
       "key": {
+        "uuid": "784e2b8e_26f10f08",
+        "filename": "system/ulib/gzos-shm/resource.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T07:26:09Z",
+      "side": 1,
+      "message": "OK, will fix it in next patch",
+      "parentUuid": "ebc2a83c_c31f4c47",
+      "range": {
+        "startLine": 1,
+        "startChar": 2,
+        "endLine": 1,
+        "endChar": 38
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "5841d58f_2216a532",
         "filename": "system/ulib/gzos-shm/rules.mk",
         "patchSetId": 14
@@ -82,6 +154,24 @@
       "writtenOn": "2018-10-15T06:48:15Z",
       "side": 1,
       "message": "suggestion: change dir. name to \"system/ulib/gzos-utils\"",
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "545a0fd7_0fc260c0",
+        "filename": "system/ulib/gzos-shm/rules.mk",
+        "patchSetId": 14
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T07:26:09Z",
+      "side": 1,
+      "message": "OK",
+      "parentUuid": "5841d58f_2216a532",
       "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
@@ -111,6 +201,30 @@
     },
     {
       "key": {
+        "uuid": "5167923c_0e5ed5ff",
+        "filename": "system/ulib/zx/smc.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T07:26:09Z",
+      "side": 1,
+      "message": "Other functions in //garnet/system/ulib/zx ddin\u0027t check nullptr. They might think no one will pass nullptr to a create function.",
+      "parentUuid": "099d78c8_17918632",
+      "range": {
+        "startLine": 15,
+        "startChar": 4,
+        "endLine": 15,
+        "endChar": 10
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "4f5daaaa_2808ddc1",
         "filename": "system/ulib/zx/vmo.cpp",
         "patchSetId": 14
@@ -122,6 +236,30 @@
       "writtenOn": "2018-10-15T06:48:15Z",
       "side": 1,
       "message": "if (result \u003d\u003d nullptr) return ZX_ERR_INVALID_ARGS;\n\nzx_status_t res \u003d zx_vmo_create_ns_mem(...);\nif (res !\u003d ZX_OK) return res;\n\nresult-\u003ereset(vmo.release()));\n...\n...\n\nreturn ZX_OK;",
+      "range": {
+        "startLine": 20,
+        "startChar": 0,
+        "endLine": 28,
+        "endChar": 15
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "34d008b3_a0705616",
+        "filename": "system/ulib/zx/vmo.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-10-15T07:26:09Z",
+      "side": 1,
+      "message": "This follows the style of libzx which didn\u0027t check nullptr",
+      "parentUuid": "4f5daaaa_2808ddc1",
       "range": {
         "startLine": 20,
         "startChar": 0,
