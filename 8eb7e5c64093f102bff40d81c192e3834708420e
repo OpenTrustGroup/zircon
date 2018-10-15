@@ -1,0 +1,136 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "91a6bf37_7d26e9d7",
+        "filename": "system/core/devmgr/devmgr.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 1084,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "Please remove DISABLE_RPC_AGENT related source code, we will no longer support this feature.\nThe main.cc of smc_service and ree_agent can be deleted also.",
+      "range": {
+        "startLine": 1026,
+        "startChar": 0,
+        "endLine": 1084,
+        "endChar": 5
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "f7f1378c_a420a1a9",
+        "filename": "system/ulib/gzos-shm/include/gzos-shm/resource.h",
+        "patchSetId": 14
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "change copyright to OTG",
+      "range": {
+        "startLine": 1,
+        "startChar": 3,
+        "endLine": 1,
+        "endChar": 38
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "ebc2a83c_c31f4c47",
+        "filename": "system/ulib/gzos-shm/resource.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "change copyright to OTG",
+      "range": {
+        "startLine": 1,
+        "startChar": 2,
+        "endLine": 1,
+        "endChar": 38
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "5841d58f_2216a532",
+        "filename": "system/ulib/gzos-shm/rules.mk",
+        "patchSetId": 14
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "suggestion: change dir. name to \"system/ulib/gzos-utils\"",
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "099d78c8_17918632",
+        "filename": "system/ulib/zx/smc.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "should check the pointer is not null.",
+      "range": {
+        "startLine": 15,
+        "startChar": 4,
+        "endLine": 15,
+        "endChar": 10
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "4f5daaaa_2808ddc1",
+        "filename": "system/ulib/zx/vmo.cpp",
+        "patchSetId": 14
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "if (result \u003d\u003d nullptr) return ZX_ERR_INVALID_ARGS;\n\nzx_status_t res \u003d zx_vmo_create_ns_mem(...);\nif (res !\u003d ZX_OK) return res;\n\nresult-\u003ereset(vmo.release()));\n...\n...\n\nreturn ZX_OK;",
+      "range": {
+        "startLine": 20,
+        "startChar": 0,
+        "endLine": 28,
+        "endChar": 15
+      },
+      "revId": "8eb7e5c64093f102bff40d81c192e3834708420e",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}

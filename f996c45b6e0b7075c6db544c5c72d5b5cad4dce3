@@ -1,0 +1,73 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "545d548b_c41b73e2",
+        "filename": "kernel/object/smc_dispatcher.cpp",
+        "patchSetId": 13
+      },
+      "lineNbr": 124,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "unused code, can be removed",
+      "range": {
+        "startLine": 119,
+        "startChar": 0,
+        "endLine": 124,
+        "endChar": 9
+      },
+      "revId": "f996c45b6e0b7075c6db544c5c72d5b5cad4dce3",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "8a6555b8_7fb3085f",
+        "filename": "kernel/vm/vm_object_physical.cpp",
+        "patchSetId": 13
+      },
+      "lineNbr": 80,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "you already do fbl::move() in the SetEventPairHandle() function",
+      "range": {
+        "startLine": 80,
+        "startChar": 28,
+        "endLine": 80,
+        "endChar": 45
+      },
+      "revId": "f996c45b6e0b7075c6db544c5c72d5b5cad4dce3",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "0584c029_b7e162a7",
+        "filename": "system/core/devmgr/devmgr.cpp",
+        "patchSetId": 13
+      },
+      "lineNbr": 1022,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-10-15T06:48:15Z",
+      "side": 1,
+      "message": "gzos_svc_start",
+      "range": {
+        "startLine": 1022,
+        "startChar": 24,
+        "endLine": 1022,
+        "endChar": 37
+      },
+      "revId": "f996c45b6e0b7075c6db544c5c72d5b5cad4dce3",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
