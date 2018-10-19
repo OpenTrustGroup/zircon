@@ -13,8 +13,8 @@ TARGET := arm64
 
 include kernel/project/virtual/test.mk
 
-ifeq ($(SUB_PROJECT),gzos)
-include kernel/project/virtual/otg/gzos.mk
+ifneq ($(strip $(SUB_PROJECT)),)
+include kernel/project/virtual/otg/$(SUB_PROJECT).mk
 else
 include kernel/project/virtual/user.mk
 endif
