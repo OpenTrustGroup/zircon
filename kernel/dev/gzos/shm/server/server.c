@@ -5,7 +5,6 @@
 // https://opensource.org/licenses/MIT
 
 #include <assert.h>
-#include <string.h>
 
 #include <dev/gzos_shm.h>
 #include <pdev/driver.h>
