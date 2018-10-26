@@ -4,10 +4,14 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 
-include kernel/project/virtual/otg/gzos_common.mk
+LOCAL_DIR := $(GET_LOCAL_DIR)
 
-KERNEL_DEFINES += WITH_DEV_GZOS_SHM=1
+MODULE := $(LOCAL_DIR)
 
-MODULES += \
-    kernel/dev/gzos/shm/client \
-    kernel/dev/gzos/trusty \
+MODULE_SRCS += \
+    $(LOCAL_DIR)/client.cpp
+
+MODULE_DEPS += \
+    kernel/dev/gzos/shm/common \
+
+include make/module.mk

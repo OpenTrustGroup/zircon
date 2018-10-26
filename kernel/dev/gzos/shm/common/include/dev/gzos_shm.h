@@ -9,8 +9,8 @@
 #include <zircon/types.h>
 
 typedef struct ns_shm_info {
-    uint32_t pa;
-    uint32_t size;
+    uint64_t pa;
+    uint64_t size;
     bool use_cache;
 } ns_shm_info_t;
 
