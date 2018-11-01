@@ -46,6 +46,6 @@ private:
     long smc_result TA_GUARDED(get_lock());
     bool can_serve_next_smc TA_GUARDED(get_lock());
     event_t result_event_;
-    smc32_args_t req_nop_args[SMP_MAX_CPUS]{} TA_GUARDED(get_lock());
+    smc32_args_t req_nop_args[SMP_MAX_CPUS] TA_GUARDED(get_lock());
     event_t req_nop_event_[SMP_MAX_CPUS];
 };
