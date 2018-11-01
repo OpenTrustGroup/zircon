@@ -276,11 +276,8 @@ static int __NO_RETURN sm_wait_for_smcall(void *arg __UNUSED)
     uint cpu_num;
     long ret = 0;
 
-    /* We should guarantee all TEE interrupts are handled before return to
-     * normal world during boot process, or UEFI bootloader will get panic
-     * due to IRQ exception occurred.
-     */
-    thread_sleep_relative(ZX_SEC(2));
+    /* Wait a while for unittest script to issue 'k sm disable' command */
+    thread_sleep_relative(ZX_SEC(0.5));
 
     LTRACEF("wait for stdcalls, on cpu %u\n", arch_curr_cpu_num());
 
