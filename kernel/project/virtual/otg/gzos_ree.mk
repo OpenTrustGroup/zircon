@@ -11,3 +11,6 @@ KERNEL_DEFINES += WITH_DEV_GZOS_SHM=1
 MODULES += \
     kernel/dev/gzos/shm/client \
     kernel/dev/gzos/trusty \
+
+MODULES += \
+    system/dev/tee/trusty_virtio \

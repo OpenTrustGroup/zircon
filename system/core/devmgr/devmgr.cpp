@@ -1035,9 +1035,9 @@ static void gzos_svc_start() {
     handle_types[0] = PA_HND(PA_USER0, 0);
     handle_types[1] = PA_HND(PA_USER1, 0);
     argc_rpc_agent = 1;
-    argv_rpc_agent[0] = "/system/bin/rpc_agent";
+    argv_rpc_agent[0] = "/system/bin/rpc_server";
 
-    status = devmgr_launch(gzos_svcs_job_handle, "rpc_agent",
+    status = devmgr_launch(gzos_svcs_job_handle, "rpc_server",
                            &devmgr_launch_load, nullptr,
                            argc_rpc_agent, argv_rpc_agent, nullptr, -1,
                            handles, handle_types, handle_count,

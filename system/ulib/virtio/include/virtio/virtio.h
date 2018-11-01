@@ -131,6 +131,7 @@ typedef struct virtio_pci_common_cfg {
 #define VIRTIO_DEV_TYPE_T_SCSI_HOST     0x1004
 #define VIRTIO_DEV_TYPE_T_ENTROPY       0x1005
 #define VIRTIO_DEV_TYPE_T_9P            0x1009
+#define VIRTIO_DEV_TYPE_T_TIPC          0x100c
 
 // Legacy Device Types
 #define VIRTIO_LEGACY_DEV_TYPE(dev_id) (0x1040 + dev_id)
