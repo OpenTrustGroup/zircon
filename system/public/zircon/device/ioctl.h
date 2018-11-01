@@ -83,6 +83,8 @@
 #define IOCTL_FAMILY_CLK            0x3F
 #define IOCTL_FAMILY_NAND_BROKER    0x40
 
+#define IOCTL_FAMILY_TRUSTY_VDEV    0xF0
+
 // IOCTL constructor
 // --K-FFNN
 #define IOCTL(kind, family, number) \
