@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "16cfbe43_e3085360",
+        "filename": "system/dev/tee/trusty_virtio/virtio_c.c",
+        "patchSetId": 9
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-12-23T10:36:13Z",
+      "side": 1,
+      "message": "no author?",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 17
+      },
+      "revId": "e7af0680e13da25ba92201fc7ec2d9308c12e95f",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
