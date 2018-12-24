@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "ab282ec9_c91cd3ce",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-12-24T05:53:19Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "2bbc82e4_48dc86d2",
+      "range": {
+        "startLine": 7,
+        "startChar": 7,
+        "endLine": 7,
+        "endChar": 15
+      },
+      "revId": "bd37932c7dd62796286a58ccccea67ce934ef342",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "cf5d2070_3a62c1a0",
         "filename": "kernel/dev/gzos/shm/client/client.cpp",
         "patchSetId": 2
@@ -45,6 +69,30 @@
       "revId": "bd37932c7dd62796286a58ccccea67ce934ef342",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "5f342a29_865962ba",
+        "filename": "kernel/dev/gzos/shm/client/client.cpp",
+        "patchSetId": 2
+      },
+      "lineNbr": 44,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-12-24T05:53:19Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "cf5d2070_3a62c1a0",
+      "range": {
+        "startLine": 35,
+        "startChar": 0,
+        "endLine": 44,
+        "endChar": 5
+      },
+      "revId": "bd37932c7dd62796286a58ccccea67ce934ef342",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     },
     {
       "key": {
@@ -71,6 +119,30 @@
     },
     {
       "key": {
+        "uuid": "ece52064_418a2912",
+        "filename": "kernel/dev/gzos/shm/client/rules.mk",
+        "patchSetId": 2
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-12-24T05:53:19Z",
+      "side": 1,
+      "message": "should be space, fixed",
+      "parentUuid": "f897e64e_567ca303",
+      "range": {
+        "startLine": 12,
+        "startChar": 0,
+        "endLine": 12,
+        "endChar": 4
+      },
+      "revId": "bd37932c7dd62796286a58ccccea67ce934ef342",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "425e0ef5_5c4b6f57",
         "filename": "kernel/dev/gzos/shm/server/rules.mk",
         "patchSetId": 2
@@ -82,6 +154,30 @@
       "writtenOn": "2018-11-07T10:22:27Z",
       "side": 1,
       "message": "should be tab or space?",
+      "range": {
+        "startLine": 12,
+        "startChar": 0,
+        "endLine": 12,
+        "endChar": 4
+      },
+      "revId": "bd37932c7dd62796286a58ccccea67ce934ef342",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "af6a2966_38c97f9b",
+        "filename": "kernel/dev/gzos/shm/server/rules.mk",
+        "patchSetId": 2
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-12-24T05:53:19Z",
+      "side": 1,
+      "message": "should be space, fixed",
+      "parentUuid": "425e0ef5_5c4b6f57",
       "range": {
         "startLine": 12,
         "startChar": 0,
