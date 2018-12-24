@@ -22,6 +22,30 @@
       "revId": "e7af0680e13da25ba92201fc7ec2d9308c12e95f",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "f8716341_8f4278f6",
+        "filename": "system/dev/tee/trusty_virtio/virtio_c.c",
+        "patchSetId": 9
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1013117
+      },
+      "writtenOn": "2018-12-24T05:55:36Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "16cfbe43_e3085360",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 17
+      },
+      "revId": "e7af0680e13da25ba92201fc7ec2d9308c12e95f",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": false
     }
   ]
 }
