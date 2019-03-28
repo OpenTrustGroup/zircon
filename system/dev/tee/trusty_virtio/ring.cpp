@@ -65,8 +65,6 @@ zx_status_t Ring::Init(uint16_t index, uint16_t count) {
 
     /* initialize the ring */
     vring_init(&ring_, count, ring_buf_->as<uint8_t>(0), PAGE_SIZE);
-    ring_.free_list = 0xffff;
-    ring_.free_count = 0;
 
     /* add all the descriptors to the free list */
     for (uint16_t i = 0; i < count; i++) {

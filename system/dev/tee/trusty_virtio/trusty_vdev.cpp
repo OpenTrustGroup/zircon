@@ -273,8 +273,13 @@ void TrustyVirtioDevice::IrqRingUpdate() {
         ZX_ASSERT(status == ZX_OK);
 
         rx_ring_.FreeDesc(id);
+
         desc = rx_ring_.AllocDescChain(1, &id);
+        desc->addr = shm->paddr();
         desc->len = kQueueElementSize;
+        desc->flags |= VRING_DESC_F_WRITE;
+        rx_ring_.SubmitChain(id);
+
         need_kick = true;
     };
 
