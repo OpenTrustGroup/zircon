@@ -21,7 +21,7 @@ readonly URL_PREFIX="https://storage.googleapis.com/fuchsia"
 # write $DOWNLOAD_DIR/$PACKAGE.stamp files with the versions from
 # VERSIONS_FILE on faith that that's what we just unpacked.
 
-cipd_ok=true
+cipd_ok=false
 case "$#:$1" in
 0:)
   mode=update
