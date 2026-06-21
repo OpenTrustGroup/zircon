@@ -24,7 +24,7 @@ function HELP {
     echo "-I <interface name>  : network interface name, default is qemu."
     echo "-k                   : use KVM"
     echo "-m <memory in MB>    : memory size, default is ${MEMSIZE_DEFAULT}MB"
-    echo "-n                   : run with emulated nic"
+    echo "-n                   : run with emulated nic and forward localhost:8022 to target SSH"
     echo "-N                   : run with emulated nic via tun/tap"
     echo "-o <dir>             : build directory"
     echo "-q <directory>       : location of qemu, defaults to looking in prebuilt/downloads/qemu/bin, then \$PATH"
@@ -244,7 +244,7 @@ if (( !$NET )); then
 fi
 
 if [[ $NET == 1 ]]; then
-    ARGS+=" -netdev type=user,hostname=$IFNAME,id=net0"
+    ARGS+=" -netdev type=user,hostname=$IFNAME,hostfwd=tcp:127.0.0.1:8022-:22,id=net0"
 fi
 
 if [[ $NET == 2 ]]; then
