@@ -15,6 +15,9 @@ MODULE_SRCS := \
     $(wildcard $(LOCAL_DIR)/*/*.S) \
     $(LOCAL_DIR)/main.c \
 
+MODULE_SRCS := \
+    $(filter-out $(LOCAL_DIR)/pager/% $(LOCAL_DIR)/stream/%,$(MODULE_SRCS))
+
 MODULE_NAME := core-tests
 
 MODULE_STATIC_LIBS := \

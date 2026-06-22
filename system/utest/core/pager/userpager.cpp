@@ -53,8 +53,8 @@ bool Vmo::CheckVmo(uint64_t offset, uint64_t len, const void* expected) {
     return false;
   }
 
-  if ((status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, 0,
-                            tmp_vmo.get(), 0, len, &buf)) != ZX_OK) {
+  if ((status = zx_vmar_map(zx_vmar_root_self(), 0, tmp_vmo.get(), 0, len,
+                            ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &buf)) != ZX_OK) {
     fprintf(stderr, "vmar map failed with %s\n", zx_status_get_string(status));
     return false;
   }
@@ -93,9 +93,9 @@ bool Vmo::Resize(uint64_t new_page_count) {
     }
 
     zx_vaddr_t addr = 0;
-    if (new_size > 0 && (status = zx_vmar_map(zx_vmar_root_self(),
-                                             ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, 0,
-                                             vmo_.get(), 0, new_size, &addr)) != ZX_OK) {
+    if (new_size > 0 && (status = zx_vmar_map(zx_vmar_root_self(), 0,
+                                             vmo_.get(), 0, new_size,
+                                             ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &addr)) != ZX_OK) {
       fprintf(stderr, "vmar map failed with %s\n", zx_status_get_string(status));
       return false;
     }
@@ -141,8 +141,8 @@ Vmo* Vmo::Clone(uint64_t offset, uint64_t size) {
   }
 
   zx_vaddr_t addr;
-  if ((status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, 0,
-                            clone.get(), 0, size, &addr)) != ZX_OK) {
+  if ((status = zx_vmar_map(zx_vmar_root_self(), 0, clone.get(), 0, size,
+                            ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &addr)) != ZX_OK) {
     fprintf(stderr, "vmar map failed with %s\n", zx_status_get_string(status));
     return nullptr;
   }
@@ -207,8 +207,8 @@ bool UserPager::CreateVmoWithOptions(uint64_t size, uint32_t options, Vmo** vmo_
   }
 
   zx_vaddr_t addr;
-  if ((status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, 0,
-                            vmo.get(), 0, size, &addr)) != ZX_OK) {
+  if ((status = zx_vmar_map(zx_vmar_root_self(), 0, vmo.get(), 0, size,
+                            ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &addr)) != ZX_OK) {
     fprintf(stderr, "vmar map failed with %s\n", zx_status_get_string(status));
     return false;
   }
@@ -254,9 +254,10 @@ bool UserPager::ReplaceVmo(Vmo* vmo, zx::vmo* old_vmo) {
   }
 
   zx_vaddr_t addr;
-  if ((status = zx_vmar_map(zx_vmar_root_self(),
+  if ((status = zx_vmar_map(zx_vmar_root_self(), vmo->base_addr_ - info.base,
+           new_vmo.get(), 0, vmo->size_,
            ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE | ZX_VM_FLAG_SPECIFIC_OVERWRITE,
-           vmo->base_addr_ - info.base, new_vmo.get(), 0, vmo->size_, &addr)) != ZX_OK) {
+           &addr)) != ZX_OK) {
     fprintf(stderr, "vmar map failed with %s\n", zx_status_get_string(status));
     return false;
   }
@@ -528,8 +529,8 @@ bool UserPager::VerifyDirtyRanges(Vmo* paged_vmo, zx_vmo_dirty_range_t* dirty_ra
     return false;
   }
 
-  if ((status = zx_vmar_map(zx_vmar_root_self(), ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, 0,
-                            tmp_vmo.get(), 0, kVmoSize, &buf)) != ZX_OK) {
+  if ((status = zx_vmar_map(zx_vmar_root_self(), 0, tmp_vmo.get(), 0, kVmoSize,
+                            ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &buf)) != ZX_OK) {
     fprintf(stderr, "vmar map failed with %s\n", zx_status_get_string(status));
     return false;
   }

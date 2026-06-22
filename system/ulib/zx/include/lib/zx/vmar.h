@@ -37,7 +37,7 @@ public:
     // Modern argument order used by ported pager tests.
     zx_status_t map(uint32_t flags, size_t vmar_offset, const vmo& vmo_handle, uint64_t vmo_offset,
                     size_t len, uintptr_t* ptr) const {
-        return zx_vmar_map(get(), flags, vmar_offset, vmo_handle.get(), vmo_offset, len, ptr);
+        return zx_vmar_map(get(), vmar_offset, vmo_handle.get(), vmo_offset, len, flags, ptr);
     }
 
     // Test-oriented compatibility for zx_vmar_op_range.

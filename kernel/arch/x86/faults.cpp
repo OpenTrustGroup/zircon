@@ -286,8 +286,11 @@ static zx_status_t x86_pfe_handler(x86_iframe_t* frame) {
 
     /* call the high level page fault handler */
     zx_status_t pf_err = vmm_page_fault_handler(va, flags);
-    if (likely(pf_err == ZX_OK))
+    // Return to the pending-signal path for interrupted user pager faults.
+    if (likely(pf_err == ZX_OK ||
+               (is_from_user(frame) && pf_err == ZX_ERR_INTERNAL_INTR_RETRY))) {
         return ZX_OK;
+    }
 
     /* if the high level page fault handler can't deal with it,
      * resort to trying to recover first, before bailing */
