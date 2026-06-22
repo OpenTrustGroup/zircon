@@ -15,6 +15,9 @@
 
 // output via debuglog syscalls
 
+#define CORE_TEST_SUCCESS_STRING \
+    "***Core-test-successful!-MDd7/O65SuVZ23yGAaQG4CedYQGH9E1/58r73pSAVK0=***"
+
 static zx_handle_t log_handle;
 
 #define LOGBUF_MAX (ZX_LOG_RECORD_MAX - sizeof(zx_log_record_t))
@@ -102,5 +105,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "core-tests must be invoked by userboot (e.g. userboot=bin/core-tests).\n");
         return -1;
     }
-    return unittest_run_all_tests(argc, argv) ? 0 : -1;
+    bool success = unittest_run_all_tests(argc, argv);
+    if (success) {
+        printf("%s\n", CORE_TEST_SUCCESS_STRING);
+    }
+    return success ? 0 : -1;
 }
