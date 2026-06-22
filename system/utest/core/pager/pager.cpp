@@ -9,6 +9,7 @@
 #include <fbl/vector.h>
 #include <fbl/atomic.h>
 #include <fbl/memory_probe.h>
+#include <lib/zx/stream.h>
 #include <zircon/rights.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/iommu.h>
@@ -88,6 +89,31 @@ VMO_VMAR_TEST(Pager, PresupplyTest) {
 
   ASSERT_TRUE(t.Wait());
 
+  ASSERT_FALSE(pager.WaitForPageRead(vmo, 0, 1, 0));
+}
+
+TEST(Pager, StreamReadPresuppliedPageTest) {
+  UserPager pager;
+
+  ASSERT_TRUE(pager.Init());
+
+  Vmo* vmo;
+  ASSERT_TRUE(pager.CreateVmo(1, &vmo));
+  ASSERT_TRUE(pager.SupplyPages(vmo, 0, 1));
+
+  zx::stream stream;
+  ASSERT_EQ(zx::stream::create(ZX_STREAM_MODE_READ | ZX_STREAM_MODE_WRITE, vmo->vmo(), 0, &stream),
+            ZX_OK, "");
+
+  fbl::Array<uint8_t> data(new uint8_t[zx_system_get_page_size()](), zx_system_get_page_size());
+  zx_iovec_t vector = {
+      .buffer = data.get(),
+      .capacity = data.size(),
+  };
+  size_t actual = 0;
+  ASSERT_EQ(stream.readv_at(0, 0, &vector, 1, &actual), ZX_OK, "");
+  ASSERT_EQ(actual, data.size(), "");
+  ASSERT_TRUE(vmo->CheckVmo(0, 1, data.get()));
   ASSERT_FALSE(pager.WaitForPageRead(vmo, 0, 1, 0));
 }
 
