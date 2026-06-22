@@ -424,6 +424,36 @@ syscall vmo_set_cache_policy
     (handle: zx_handle_t, cache_policy: uint32_t)
     returns (zx_status_t);
 
+# Streams
+
+syscall stream_create
+    (options: uint32_t, vmo: zx_handle_t, seek: zx_off_t)
+    returns (zx_status_t, out: zx_handle_t handle_acquire);
+
+syscall stream_writev
+    (handle: zx_handle_t, options: uint32_t, vector: zx_iovec_t[vector_count] IN,
+        vector_count: size_t)
+    returns (zx_status_t, actual: size_t optional);
+
+syscall stream_writev_at
+    (handle: zx_handle_t, options: uint32_t, offset: zx_off_t,
+        vector: zx_iovec_t[vector_count] IN, vector_count: size_t)
+    returns (zx_status_t, actual: size_t optional);
+
+syscall stream_readv
+    (handle: zx_handle_t, options: uint32_t, vector: zx_iovec_t[vector_count] IN,
+        vector_count: size_t)
+    returns (zx_status_t, actual: size_t optional);
+
+syscall stream_readv_at
+    (handle: zx_handle_t, options: uint32_t, offset: zx_off_t,
+        vector: zx_iovec_t[vector_count] IN, vector_count: size_t)
+    returns (zx_status_t, actual: size_t optional);
+
+syscall stream_seek
+    (handle: zx_handle_t, whence: zx_stream_seek_origin_t, offset: int64_t)
+    returns (zx_status_t, out_seek: zx_off_t optional);
+
 # Pagers
 
 syscall pager_create

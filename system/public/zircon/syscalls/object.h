@@ -35,6 +35,7 @@ typedef enum {
     ZX_INFO_PROCESS_HANDLE_STATS       = 21, // zx_info_process_handle_stats_t[1]
     // Support querying a single VMO handle.
     ZX_INFO_VMO                        = 22, // zx_info_vmo_t[1]
+    ZX_INFO_STREAM                     = 26, // zx_info_stream_t[1]
     ZX_INFO_LAST
 } zx_object_info_topic_t;
 
@@ -157,6 +158,26 @@ typedef struct zx_info_bti {
     // The number of bytes in the device's address space (UINT64_MAX if 2^64).
     uint64_t aspace_size;
 } zx_info_bti_t;
+
+typedef struct zx_info_stream {
+    // The options passed to zx_stream_create().
+    uint32_t options;
+
+    uint8_t padding1[4];
+
+    // The current seek offset.
+    //
+    // Used by zx_stream_readv and zx_stream_writev to determine where to read
+    // and write the stream.
+    zx_off_t seek;
+
+    // The current size of the stream.
+    //
+    // The number of bytes in the stream that store data. The stream itself
+    // might have a larger capacity to avoid reallocating the underlying storage
+    // as the stream grows or shrinks.
+    uint64_t content_size;
+} zx_info_stream_t;
 
 
 // Types and values used by ZX_INFO_PROCESS_MAPS.

@@ -21,6 +21,7 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/process.cpp \
     $(LOCAL_DIR)/resource.cpp \
     $(LOCAL_DIR)/socket.cpp \
+    $(LOCAL_DIR)/stream.cpp \
     $(LOCAL_DIR)/thread.cpp \
     $(LOCAL_DIR)/timer.cpp \
     $(LOCAL_DIR)/vmar.cpp \

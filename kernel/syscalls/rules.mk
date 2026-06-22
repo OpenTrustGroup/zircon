@@ -36,6 +36,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/profile.cpp \
     $(LOCAL_DIR)/resource.cpp \
     $(LOCAL_DIR)/socket.cpp \
+    $(LOCAL_DIR)/stream.cpp \
     $(LOCAL_DIR)/system.cpp \
     $(LOCAL_DIR)/bootdata_unittest.cpp \
     $(LOCAL_DIR)/task.cpp \

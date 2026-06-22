@@ -280,6 +280,12 @@ typedef uint32_t  zx_paddr32_t;
 // offset
 typedef uint64_t zx_off_t;
 
+// vectorized I/O
+typedef struct zx_iovec {
+    void* buffer;
+    size_t capacity;
+} zx_iovec_t;
+
 // Maximum string length for kernel names (process name, thread name, etc)
 #define ZX_MAX_NAME_LEN           (32)
 
@@ -327,6 +333,19 @@ typedef uint64_t zx_off_t;
 
 // These can be passed to zx_socket_read() and zx_socket_write().
 #define ZX_SOCKET_CONTROL                   (1u << 2)
+
+// These can be passed to zx_stream_create().
+#define ZX_STREAM_MODE_READ                 ((uint32_t)1u << 0)
+#define ZX_STREAM_MODE_WRITE                ((uint32_t)1u << 1)
+#define ZX_STREAM_CREATE_MASK               (ZX_STREAM_MODE_READ | ZX_STREAM_MODE_WRITE)
+
+// These can be passed to zx_stream_writev().
+#define ZX_STREAM_APPEND                    ((uint32_t)1u << 0)
+
+typedef uint32_t zx_stream_seek_origin_t;
+#define ZX_STREAM_SEEK_ORIGIN_START         ((zx_stream_seek_origin_t)0u)
+#define ZX_STREAM_SEEK_ORIGIN_CURRENT       ((zx_stream_seek_origin_t)1u)
+#define ZX_STREAM_SEEK_ORIGIN_END           ((zx_stream_seek_origin_t)2u)
 
 // Flags which can be used to to control cache policy for APIs which map memory.
 #define ZX_CACHE_POLICY_CACHED              0u
@@ -378,7 +397,8 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_PMT             ((zx_obj_type_t)26u)
 #define ZX_OBJ_TYPE_SUSPEND_TOKEN   ((zx_obj_type_t)27u)
 #define ZX_OBJ_TYPE_PAGER           ((zx_obj_type_t)28u)
-#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)29u)
+#define ZX_OBJ_TYPE_STREAM          ((zx_obj_type_t)29u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)30u)
 
 // Range type used by the zx_pager_query_dirty_ranges() syscall.
 typedef struct zx_vmo_dirty_range {
