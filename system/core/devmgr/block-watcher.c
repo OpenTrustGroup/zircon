@@ -117,6 +117,12 @@ static zx_status_t launch_minfs(int argc, const char** argv, zx_handle_t* hnd,
                          hnd, ids, len, NULL, FS_FOR_FSPROC);
 }
 
+static zx_status_t launch_fxfs(int argc, const char** argv, zx_handle_t* hnd,
+                               uint32_t* ids, size_t len) {
+    return devmgr_launch(job, "fxfs:/data", argc, argv, NULL, -1,
+                         hnd, ids, len, NULL, FS_FOR_FSPROC);
+}
+
 static zx_status_t launch_fat(int argc, const char** argv, zx_handle_t* hnd,
                               uint32_t* ids, size_t len) {
     return devmgr_launch(job, "fatfs:/volume", argc, argv, NULL, -1,
@@ -322,6 +328,25 @@ static zx_status_t block_device_added(int dirfd, int event, const char* name, vo
         mount_options_t options = default_mount_options;
         options.wait_until_ready = false;
         mount_minfs(fd, &options);
+        return ZX_OK;
+    }
+    case DISK_FORMAT_FXFS: {
+        // An Fxfs-formatted raw block device is mounted at /data. Unlike minfs,
+        // it is not gated on a GPT data GUID, so a dedicated data disk works.
+        if (data_mounted) {
+            close(fd);
+            return ZX_OK;
+        }
+        printf("devmgr: mounting fxfs at %s\n", PATH_DATA);
+        mount_options_t options = default_mount_options;
+        options.wait_until_ready = true;
+        zx_status_t status = mount(fd, "/fs" PATH_DATA, DISK_FORMAT_FXFS, &options, launch_fxfs);
+        if (status != ZX_OK) {
+            printf("devmgr: failed to mount fxfs at %s: %s.\n", PATH_DATA,
+                   zx_status_get_string(status));
+        } else {
+            data_mounted = true;
+        }
         return ZX_OK;
     }
     case DISK_FORMAT_FAT: {
