@@ -29,6 +29,7 @@ typedef enum disk_format_type {
     DISK_FORMAT_BLOBFS,
     DISK_FORMAT_FVM,
     DISK_FORMAT_ZXCRYPT,
+    DISK_FORMAT_FXFS,
 } disk_format_t;
 
 #define HEADER_SIZE 4096
@@ -50,6 +51,12 @@ static const uint8_t gpt_magic[16] = {
 
 static const uint8_t fvm_magic[8] = {
     0x46, 0x56, 0x4d, 0x20, 0x50, 0x41, 0x52, 0x54,
+};
+
+// Fxfs writes super-block A at offset 0; its first field is the 64-bit
+// SUPER_BLOCK_MAGIC (0x514741c7522d20f5) stored little-endian.
+static const uint8_t fxfs_magic[8] = {
+    0xf5, 0x20, 0x2d, 0x52, 0xc7, 0x41, 0x47, 0x51,
 };
 
 static const uint8_t zxcrypt_magic[16] = {

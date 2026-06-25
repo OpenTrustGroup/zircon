@@ -234,6 +234,9 @@ zx_status_t Mounter::Mount(unique_fd device, disk_format_t format,
         return MountNativeFs("/boot/bin/minfs", fbl::move(device), options, cb);
     case DISK_FORMAT_BLOBFS:
         return MountNativeFs("/boot/bin/blobfs", fbl::move(device), options, cb);
+    case DISK_FORMAT_FXFS:
+        // The Fxfs server is a system (Garnet) binary, so it lives under /system.
+        return MountNativeFs("/system/bin/fxfs", fbl::move(device), options, cb);
     case DISK_FORMAT_FAT:
         return MountFat(fbl::move(device), options, cb);
     default:
@@ -283,6 +286,10 @@ disk_format_t detect_disk_format(int fd) {
 
     if (!memcmp(data, minfs_magic, sizeof(minfs_magic))) {
         return DISK_FORMAT_MINFS;
+    }
+
+    if (!memcmp(data, fxfs_magic, sizeof(fxfs_magic))) {
+        return DISK_FORMAT_FXFS;
     }
 
     if (!memcmp(data, blobfs_magic, sizeof(blobfs_magic))) {
