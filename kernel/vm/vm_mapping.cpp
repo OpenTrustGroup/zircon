@@ -670,8 +670,15 @@ zx_status_t VmMapping::PageFault(vaddr_t va, const uint pf_flags, LazyPageReques
     vm_page_t* page;
     zx_status_t status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, page_request, &page, &new_pa);
     if (status < 0) {
-        TRACEF("ERROR: failed to fault in or grab existing page\n");
-        TRACEF("%p vmo_offset %#" PRIx64 ", pf_flags %#x\n", this, vmo_offset, pf_flags);
+        // ZX_ERR_SHOULD_WAIT is the normal pager path: GetPageLocked has
+        // requested the page from the page source, and VmAspace::PageFault will
+        // wait on the page request and retry. Only log genuine failures, since
+        // logging here is synchronous on the serial console and would otherwise
+        // throttle every pager fault.
+        if (status != ZX_ERR_SHOULD_WAIT) {
+            TRACEF("ERROR: failed to fault in or grab existing page\n");
+            TRACEF("%p vmo_offset %#" PRIx64 ", pf_flags %#x\n", this, vmo_offset, pf_flags);
+        }
         return status;
     }
 
