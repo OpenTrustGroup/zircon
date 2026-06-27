@@ -321,12 +321,14 @@ bool UserPager::WaitForPageComplete(uint64_t key, zx_time_t deadline) {
 
 bool UserPager::WaitForRequest(uint64_t key, const zx_packet_page_request& req,
                                zx_time_t deadline) {
-  zx_port_packet_t expected = {
-      .key = key,
-      .type = ZX_PKT_TYPE_PAGE_REQUEST,
-      .status = ZX_OK,
-      .page_request = req,
-  };
+  // Use field assignment rather than a designated initializer: the legacy 2018
+  // GCC rejects designated initialization of the union member (.page_request)
+  // as a non-trivial designated initializer.
+  zx_port_packet_t expected = {};
+  expected.key = key;
+  expected.type = ZX_PKT_TYPE_PAGE_REQUEST;
+  expected.status = ZX_OK;
+  expected.page_request = req;
 
   return WaitForRequest(
       [expected](const zx_port_packet& actual) -> bool {
