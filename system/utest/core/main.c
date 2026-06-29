@@ -107,7 +107,14 @@ int main(int argc, char** argv) {
     }
     bool success = unittest_run_all_tests(argc, argv);
     if (success) {
-        printf("%s\n", CORE_TEST_SUCCESS_STRING);
+        // Write the success marker straight to the debug serial console with
+        // zx_debug_write instead of the debuglog.  The debuglog is drained to
+        // serial asynchronously by a kernel thread, so when userboot powers the
+        // machine off immediately after this process exits the marker could be
+        // truncated before reaching the console.  A synchronous debug write
+        // completes in this thread before main returns.
+        static const char marker[] = CORE_TEST_SUCCESS_STRING "\n";
+        zx_debug_write(marker, sizeof(marker) - 1);
     }
     return success ? 0 : -1;
 }
