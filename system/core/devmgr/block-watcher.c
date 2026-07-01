@@ -123,6 +123,30 @@ static zx_status_t launch_fxfs(int argc, const char** argv, zx_handle_t* hnd,
                          hnd, ids, len, NULL, FS_FOR_FSPROC);
 }
 
+// Launch callback for `fxfs mkfs`. Unlike the mount callbacks, mkfs is a
+// transient process, so we wait for it to terminate (and check its exit code)
+// before returning; otherwise the caller would mount a device that is still
+// being formatted.
+static zx_status_t launch_fxfs_mkfs(int argc, const char** argv, zx_handle_t* hnd,
+                                    uint32_t* ids, size_t len) {
+    zx_handle_t proc = ZX_HANDLE_INVALID;
+    zx_status_t status = devmgr_launch(job, "fxfs:mkfs", argc, argv, NULL, -1,
+                                       hnd, ids, len, &proc, FS_FOR_FSPROC);
+    if (status != ZX_OK) {
+        return status;
+    }
+    status = zx_object_wait_one(proc, ZX_PROCESS_TERMINATED, ZX_TIME_INFINITE, NULL);
+    if (status == ZX_OK) {
+        zx_info_process_t info;
+        status = zx_object_get_info(proc, ZX_INFO_PROCESS, &info, sizeof(info), NULL, NULL);
+        if (status == ZX_OK && info.return_code != 0) {
+            status = ZX_ERR_BAD_STATE;
+        }
+    }
+    zx_handle_close(proc);
+    return status;
+}
+
 static zx_status_t launch_fat(int argc, const char** argv, zx_handle_t* hnd,
                               uint32_t* ids, size_t len) {
     return devmgr_launch(job, "fatfs:/volume", argc, argv, NULL, -1,
@@ -216,6 +240,45 @@ static zx_status_t mount_minfs(int fd, mount_options_t* options) {
     }
 
     return ZX_ERR_INVALID_ARGS;
+}
+
+// Formats a freshly-provisioned data partition as Fxfs and mounts it at /data.
+// The data partition ships seeded with minfs purely to reserve FVM slices (the
+// 2018 fvm tool cannot pack an empty or Fxfs partition), so on first boot it is
+// reformatted to Fxfs here before being mounted. On later boots the partition
+// is already Fxfs and is handled by the DISK_FORMAT_FXFS case directly.
+static zx_status_t mount_fxfs_data(int fd, const char* device_path) {
+    if (data_mounted) {
+        close(fd);
+        return ZX_OK;
+    }
+    // mkfs reopens the device by path, so release our fd first.
+    close(fd);
+    printf("devmgr: formatting %s as fxfs\n", PATH_DATA);
+    zx_status_t status = mkfs(device_path, DISK_FORMAT_FXFS, launch_fxfs_mkfs,
+                              &default_mkfs_options);
+    if (status != ZX_OK) {
+        printf("devmgr: failed to mkfs fxfs on %s: %s.\n", device_path,
+               zx_status_get_string(status));
+        return status;
+    }
+
+    fd = open(device_path, O_RDWR);
+    if (fd < 0) {
+        printf("devmgr: failed to reopen %s after mkfs\n", device_path);
+        return ZX_ERR_BAD_STATE;
+    }
+    printf("devmgr: mounting fxfs at %s\n", PATH_DATA);
+    mount_options_t options = default_mount_options;
+    options.wait_until_ready = true;
+    status = mount(fd, "/fs" PATH_DATA, DISK_FORMAT_FXFS, &options, launch_fxfs);
+    if (status != ZX_OK) {
+        printf("devmgr: failed to mount fxfs at %s: %s.\n", PATH_DATA,
+               zx_status_get_string(status));
+    } else {
+        data_mounted = true;
+    }
+    return status;
 }
 
 #define FVM_DRIVER_LIB "/boot/driver/fvm.so"
@@ -367,6 +430,19 @@ static zx_status_t block_device_added(int dirfd, int event, const char* name, vo
         options.wait_until_ready = false;
         printf("devmgr: mounting fatfs\n");
         mount(fd, mountpath, df, &options, launch_fat);
+        return ZX_OK;
+    }
+    case DISK_FORMAT_UNKNOWN: {
+        // The data partition ships blank: an FVM placeholder that reserves slices
+        // under the data type GUID but holds no filesystem. On first boot it is
+        // unformatted, so format it as Fxfs and mount it at /data. Other
+        // unformatted devices are left alone.
+        uint8_t guid[GPT_GUID_LEN];
+        ssize_t guid_len = ioctl_block_get_type_guid(fd, guid, sizeof(guid));
+        if (gpt_is_data_guid(guid, guid_len)) {
+            return mount_fxfs_data(fd, device_path);
+        }
+        close(fd);
         return ZX_OK;
     }
     default:

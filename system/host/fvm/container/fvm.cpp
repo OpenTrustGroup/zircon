@@ -4,7 +4,10 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 
 #include <fvm/fvm.h>
 
@@ -569,6 +572,62 @@ zx_status_t FvmContainer::AddPartition(const char* path, const char* type_name) 
     return ZX_OK;
 }
 
+zx_status_t FvmContainer::AddReservedDataPartition() {
+    CheckValid();
+
+    uint32_t num_slices = static_cast<uint32_t>((kReservedDataBytes + slice_size_ - 1)
+                                                / slice_size_);
+    if (num_slices == 0) {
+        num_slices = 1;
+    }
+
+    // A blank data partition: the data type GUID and name, a random instance GUID, and
+    // reserved (zeroed) slices with no backing filesystem. The runtime formats it on
+    // first boot. Mirrors AddPartition's allocation loop, minus the Format/data write.
+    uint8_t type[FVM_GUID_LEN];
+    memcpy(type, kDataType, FVM_GUID_LEN);
+    uint8_t guid[FVM_GUID_LEN];
+    srand(static_cast<unsigned>(time(0)));
+    for (unsigned i = 0; i < FVM_GUID_LEN; i++) {
+        guid[i] = static_cast<uint8_t>(rand());
+    }
+    char name[FVM_NAME_LEN];
+    memset(name, 0, sizeof(name));
+    strncpy(name, kDataTypeName, sizeof(name) - 1);
+
+    uint32_t vpart_index;
+    zx_status_t status;
+    if ((status = AllocatePartition(type, guid, name, num_slices, 0, &vpart_index)) != ZX_OK) {
+        return status;
+    }
+
+    size_t required_size = fvm::kAllocTableOffset + (pslice_hint_ + num_slices)
+                           * sizeof(fvm::slice_entry_t);
+    if ((status = GrowMetadata(required_size)) != ZX_OK) {
+        return status;
+    }
+
+    uint32_t pslice_start = 0;
+    for (uint32_t i = 0; i < num_slices; i++) {
+        uint32_t pslice;
+        if ((status = AllocateSlice(vpart_index, i, &pslice)) != ZX_OK) {
+            return status;
+        }
+        if (i == 0) {
+            pslice_start = pslice;
+        }
+    }
+
+    // No Format is attached; WritePartition leaves the reserved slices zeroed on disk.
+    partition_info_t partition;
+    partition.format = nullptr;
+    partition.vpart_index = vpart_index;
+    partition.pslice_start = pslice_start;
+    partition.slice_count = num_slices;
+    partitions_.push_back(fbl::move(partition));
+    return ZX_OK;
+}
+
 void FvmContainer::CheckValid() const {
     if (!valid_) {
         fprintf(stderr, "Error: FVM is invalid\n");
@@ -691,6 +750,12 @@ zx_status_t FvmContainer::WritePartition(unsigned part_index) {
     partition_info_t* partition = &partitions_[part_index];
     Format* format = partition->format.get();
     uint32_t pslice_start = partition->pslice_start;
+
+    // A reserved (blank) partition has no backing filesystem; its slices are left
+    // zeroed on disk, so there is nothing to write.
+    if (format == nullptr) {
+        return ZX_OK;
+    }
 
     while (true) {
         zx_status_t status;

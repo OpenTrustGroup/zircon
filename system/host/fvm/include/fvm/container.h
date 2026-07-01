@@ -13,6 +13,11 @@
 
 #include "format.h"
 
+// Number of bytes reserved for a blank data partition (see AddReservedDataPartition).
+// Matches the historical minfs data partition size, which the runtime already formats
+// with mkfs on first boot, so it is known to be large enough for that on-boot format.
+static constexpr uint64_t kReservedDataBytes = 10ull * 1024 * 1024;
+
 // A Container represents a method of storing multiple file system partitions in an
 // FVM-recognizable format
 class Container {
@@ -44,6 +49,12 @@ public:
 
     // Given a path to a valid file system partition, adds that partition to the container
     virtual zx_status_t AddPartition(const char* path, const char* type_name) = 0;
+
+    // Reserves a blank, unformatted "data"-typed partition (no backing filesystem image),
+    // sized to hold the data filesystem written on first boot. Lets /data ship empty so
+    // the runtime formats it (e.g. as Fxfs) on first boot instead of shipping a real
+    // filesystem purely to reserve slices.
+    virtual zx_status_t AddReservedDataPartition() = 0;
 
 protected:
     char path_[PATH_MAX];
@@ -79,6 +90,7 @@ public:
     zx_status_t Extend(size_t length);
     size_t SliceSize() const final;
     zx_status_t AddPartition(const char* path, const char* type_name) final;
+    zx_status_t AddReservedDataPartition() final;
 
 private:
     bool valid_;
@@ -132,6 +144,7 @@ public:
     zx_status_t Commit() final;
     size_t SliceSize() const final;
     zx_status_t AddPartition(const char* path, const char* type_name) final;
+    zx_status_t AddReservedDataPartition() final;
 
 private:
     bool valid_;

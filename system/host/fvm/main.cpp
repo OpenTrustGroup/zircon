@@ -35,6 +35,7 @@ int usage(void) {
     fprintf(stderr, "Input options:\n");
     fprintf(stderr, " --blob [path] - Add path as blob type (must be blobfs)\n");
     fprintf(stderr, " --data [path] - Add path as data type (must be minfs)\n");
+    fprintf(stderr, " --with-empty-data - Add a blank 'data' partition, formatted on boot\n");
     fprintf(stderr, " --system [path] - Add path as system type (must be minfs)\n");
     fprintf(stderr, " --default [path] - Add generic path\n");
     fprintf(stderr, " --sparse [path] - Path to compressed sparse file\n");
@@ -42,17 +43,32 @@ int usage(void) {
 }
 
 int add_partitions(Container* container, int argc, char** argv) {
-    for (unsigned i = 0; i < argc; i += 2) {
-        if (argc - i < 2 || argv[i][0] != '-' || argv[i][1] != '-') {
+    for (unsigned i = 0; i < argc;) {
+        if (argv[i][0] != '-' || argv[i][1] != '-') {
             usage();
         }
 
         char* partition_type = argv[i] + 2;
+
+        // --with-empty-data reserves a blank data partition and takes no path argument.
+        if (!strcmp(partition_type, "with-empty-data")) {
+            if (container->AddReservedDataPartition() != ZX_OK) {
+                fprintf(stderr, "Failed to add empty data partition\n");
+                return -1;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (argc - i < 2) {
+            usage();
+        }
         char* partition_path = argv[i + 1];
         if ((container->AddPartition(partition_path, partition_type)) != ZX_OK) {
             fprintf(stderr, "Failed to add partition\n");
             return -1;
         }
+        i += 2;
     }
 
     return 0;

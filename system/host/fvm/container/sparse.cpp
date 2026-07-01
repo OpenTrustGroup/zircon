@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <inttypes.h>
+#include <string.h>
 
 #include "fvm/container.h"
 
@@ -221,6 +222,12 @@ zx_status_t SparseContainer::Commit() {
         fvm::partition_descriptor_t partition = partitions_[i].descriptor;
         Format* format = partitions_[i].format.get();
 
+        // A reserved (blank) partition has no backing filesystem; its extents carry
+        // extent_length 0, so there is no data to write to the sparse image.
+        if (format == nullptr) {
+            continue;
+        }
+
         vslice_info_t vslice_info;
         // Write out each extent in the partition
         for (unsigned j = 0; j < partition.extent_count; j++) {
@@ -278,6 +285,39 @@ zx_status_t SparseContainer::AddPartition(const char* path, const char* type_nam
     }
 
     return ZX_OK;
+}
+
+zx_status_t SparseContainer::AddReservedDataPartition() {
+    uint32_t num_slices = static_cast<uint32_t>((kReservedDataBytes + SliceSize() - 1)
+                                                / SliceSize());
+    if (num_slices == 0) {
+        num_slices = 1;
+    }
+
+    // A blank data partition: the descriptor carries the data type GUID and name; a
+    // single extent reserves num_slices with extent_length 0, so the sparse image holds
+    // no data bytes for it. No Format is attached, so Commit writes no data. The runtime
+    // formats it on first boot.
+    partition_info_t partition;
+    partition.descriptor.magic = fvm::kPartitionDescriptorMagic;
+    memcpy(partition.descriptor.type, kDataType, FVM_GUID_LEN);
+    memset(partition.descriptor.name, 0, sizeof(partition.descriptor.name));
+    strncpy(reinterpret_cast<char*>(partition.descriptor.name), kDataTypeName,
+            sizeof(partition.descriptor.name) - 1);
+    partition.descriptor.extent_count = 0;
+    partition.descriptor.flags = 0;
+    partition.format = nullptr;
+    image_.header_length += sizeof(fvm::partition_descriptor_t);
+    uint32_t part_index = image_.partition_count;
+
+    partitions_.push_back(fbl::move(partition));
+
+    if (++image_.partition_count != partitions_.size()) {
+        fprintf(stderr, "Unexpected number of partitions\n");
+        return ZX_ERR_INTERNAL;
+    }
+
+    return AllocateExtent(part_index, 0, num_slices, 0);
 }
 
 zx_status_t SparseContainer::AllocatePartition(fbl::unique_ptr<Format> format) {
