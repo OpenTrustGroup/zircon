@@ -67,7 +67,7 @@ zx_status_t mkfs(const char* device_path, disk_format_t df, LaunchCallback cb,
     case DISK_FORMAT_BLOBFS:
         return MkfsNativeFs("/boot/bin/blobfs", device_path, cb, options);
     case DISK_FORMAT_FXFS:
-        return MkfsNativeFs("/system/bin/fxfs", device_path, cb, options);
+        return MkfsNativeFs("/boot/bin/fxfs", device_path, cb, options);
     default:
         return ZX_ERR_NOT_SUPPORTED;
     }

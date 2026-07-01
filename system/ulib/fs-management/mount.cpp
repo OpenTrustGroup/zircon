@@ -235,8 +235,9 @@ zx_status_t Mounter::Mount(unique_fd device, disk_format_t format,
     case DISK_FORMAT_BLOBFS:
         return MountNativeFs("/boot/bin/blobfs", fbl::move(device), options, cb);
     case DISK_FORMAT_FXFS:
-        // The Fxfs server is a system (Garnet) binary, so it lives under /system.
-        return MountNativeFs("/system/bin/fxfs", fbl::move(device), options, cb);
+        // The Fxfs server binary is packaged into bootfs so block-watcher can
+        // launch it during early boot, before /system (pkgfs) is serving.
+        return MountNativeFs("/boot/bin/fxfs", fbl::move(device), options, cb);
     case DISK_FORMAT_FAT:
         return MountFat(fbl::move(device), options, cb);
     default:
