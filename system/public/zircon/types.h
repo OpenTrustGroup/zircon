@@ -244,6 +244,7 @@ enum { ZX_VMO_OP_ALWAYS_NEED = 10u, ZX_VMO_OP_DONT_NEED = 11u };
 #define ZX_PAGER_OP_WRITEBACK_END       4u
 
 #define ZX_VMO_TRAP_DIRTY               (1u << 0)
+#define ZX_VMO_RESIZABLE                (1u << 1)
 
 // VM Object clone flags
 #define ZX_VMO_CLONE_COPY_ON_WRITE       1u

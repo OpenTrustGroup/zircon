@@ -30,6 +30,14 @@ zx_status_t VmObjectDispatcher::parse_create_syscall_flags(uint32_t flags, uint3
         flags &= ~ZX_VMO_NON_RESIZABLE;
     }
     */
+    // 2018 uses the modern opt-in ZX_VMO_RESIZABLE flag instead of the
+    // NON_RESIZABLE form snapshotted above. Mirroring upstream, translate it into
+    // the parsed options. 2018 has no VmObjectPaged::kResizable constant, so the
+    // ABI bit is carried through directly and read by VmObjectPaged::CreateExternal.
+    if (flags & ZX_VMO_RESIZABLE) {
+        res |= ZX_VMO_RESIZABLE;
+        flags &= ~ZX_VMO_RESIZABLE;
+    }
     if (flags) {
         return ZX_ERR_INVALID_ARGS;
     }

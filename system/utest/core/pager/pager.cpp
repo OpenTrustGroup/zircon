@@ -514,8 +514,6 @@ TEST(Pager, VmarMapRangeTest) {
   zx::vmar::root_self().unmap(ptr, 2 * zx_system_get_page_size());
 }
 
-// [PORT-BLOCKED] ReadResizeTest blocked because ZX_VMO_RESIZABLE is not supported in 2018 kernel pager.
-/*
 // Tests that reads don't block forever if a vmo is resized out from under a read.
 VMO_VMAR_TEST(Pager, ReadResizeTest) {
   UserPager pager;
@@ -539,7 +537,6 @@ VMO_VMAR_TEST(Pager, ReadResizeTest) {
     ASSERT_TRUE(t.WaitForFailure());
   }
 }
-*/
 
 // Test that suspending and resuming a thread in the middle of a read works.
 VMO_VMAR_TEST(Pager, SuspendReadTest) {
@@ -1545,8 +1542,6 @@ TEST(Pager, CommitRedundantSupplyTest) {
   ASSERT_TRUE(t.Wait());
 }
 
-// [PORT-BLOCKED] ResizeCommitTest blocked because ZX_VMO_RESIZABLE is not supported in 2018 kernel pager.
-/*
 // Test that resizing out from under a commit is handled.
 TEST(Pager, ResizeCommitTest) {
   UserPager pager;
@@ -1580,7 +1575,6 @@ TEST(Pager, ResizeCommitTest) {
   uint64_t offset, length;
   ASSERT_FALSE(pager.GetPageReadRequest(vmo, 0, &offset, &length));
 }
-*/
 
 // Test that suspending and resuming a thread in the middle of commit works.
 TEST(Pager, SuspendCommitTest) {
