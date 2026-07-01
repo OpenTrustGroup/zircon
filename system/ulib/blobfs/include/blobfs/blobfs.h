@@ -132,6 +132,14 @@ public:
     virtual ~VnodeBlob();
     void CompleteSync();
 
+    // Cancels the VMO clone watcher and hands back the self-reference that
+    // keeps this blob alive while a client holds a cloned VMO. Used during
+    // filesystem teardown, where the ZX_VMO_ZERO_CHILDREN notification is no
+    // longer needed; the caller must drop the returned reference outside of
+    // the hash lock so the blob can be recycled. Returns nullptr if no clone
+    // is outstanding.
+    fbl::RefPtr<VnodeBlob> CloneWatcherTeardown();
+
     // Constructs a blob, reads in data, verifies the contents, then destroys the in-memory copy.
     static zx_status_t VerifyBlob(Blobfs* bs, size_t node_index);
 private:

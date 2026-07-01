@@ -16,6 +16,7 @@
 #include <fbl/auto_call.h>
 #include <fbl/limits.h>
 #include <fbl/ref_ptr.h>
+#include <fbl/vector.h>
 #include <fdio/debug.h>
 #include <fs/block-txn.h>
 #include <fs/ticker.h>
@@ -463,6 +464,14 @@ void VnodeBlob::HandleNoClones(async_t* async, async::WaitBase* wait,
     clone_ref_ = nullptr;
 }
 
+fbl::RefPtr<VnodeBlob> VnodeBlob::CloneWatcherTeardown() {
+    if (clone_watcher_.is_pending()) {
+        clone_watcher_.Cancel();
+    }
+    clone_watcher_.set_object(ZX_HANDLE_INVALID);
+    return fbl::move(clone_ref_);
+}
+
 zx_status_t VnodeBlob::ReadInternal(void* data, size_t len, size_t off, size_t* actual) {
     TRACE_DURATION("blobfs", "Blobfs::ReadInternal", "len", len, "off", off);
 
@@ -719,6 +728,30 @@ void Blobfs::Shutdown(fs::Vfs::ShutdownCallback cb) {
 
     // 1) Shutdown all external connections to blobfs.
     ManagedVfs::Shutdown([this, cb = fbl::move(cb)] (zx_status_t status) mutable {
+        // External connections are closed, so the only references still
+        // pinning blobs in |open_hash_| are the self-references each blob holds
+        // while a client keeps a cloned VMO alive (e.g. an executable mapped
+        // out of /blob). Cancel those clone watchers and gather the
+        // self-references now, while we are on the dispatch thread, then drop
+        // them below outside the hash lock so the blobs can recycle. Otherwise
+        // ~Blobfs would assert that |open_hash_| is empty.
+        fbl::Vector<fbl::RefPtr<VnodeBlob>> clone_refs;
+        {
+            fbl::AutoLock lock(&hash_lock_);
+            for (auto& vn : open_hash_) {
+                fbl::RefPtr<VnodeBlob> clone_ref = vn.CloneWatcherTeardown();
+                if (clone_ref != nullptr) {
+                    fbl::AllocChecker ac;
+                    clone_refs.push_back(fbl::move(clone_ref), &ac);
+                    ZX_ASSERT(ac.check());
+                }
+            }
+        }
+        // Dropping each reference recycles the blob, which re-acquires
+        // |hash_lock_| to move it into |closed_hash_|; do it with the lock
+        // released.
+        clone_refs.reset();
+
         // 2) Flush all pending work to blobfs to the underlying storage.
         Sync([this, cb = fbl::move(cb)](zx_status_t status) mutable {
             async::PostTask(async(), [this, cb = fbl::move(cb)]() mutable {
