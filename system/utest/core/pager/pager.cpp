@@ -9,6 +9,8 @@
 #include <fbl/vector.h>
 #include <fbl/atomic.h>
 #include <fbl/memory_probe.h>
+#include <lib/zx/bti.h>
+#include <lib/zx/pmt.h>
 #include <lib/zx/stream.h>
 #include <zircon/rights.h>
 #include <zircon/syscalls.h>
@@ -1669,8 +1671,6 @@ TEST(Pager, InvalidPagerDetachVmo) {
   ASSERT_EQ(zx_pager_detach_vmo(pager2.get(), vmo.get()), ZX_ERR_INVALID_ARGS);
 }
 
-// [PORT-BLOCKED] InvalidPagerSupplyPages blocked because iommu/bti dependencies are not properly supported in 2018 userland tests.
-/*
 // Tests API violations for supply_pages.
 TEST(Pager, InvalidPagerSupplyPages) {
   zx::pager pager;
@@ -1763,7 +1763,8 @@ TEST(Pager, InvalidPagerSupplyPages) {
 
     if (i == kIsClone) {
       ASSERT_EQ(zx::vmo::create(zx_system_get_page_size(), 0, &alt_vmo), ZX_OK);
-      ASSERT_EQ(alt_vmo.create_child(ZX_VMO_CHILD_SNAPSHOT, 0, zx_system_get_page_size(), &aux_vmo),
+      // clone used instead of create_child.
+      ASSERT_EQ(alt_vmo.clone(ZX_VMO_CLONE_COPY_ON_WRITE, 0, zx_system_get_page_size(), &aux_vmo),
                 ZX_OK);
     } else if (i == kFromPager) {
       ASSERT_EQ(zx_pager_create_vmo(pager.get(), 0, port.get(), 0, zx_system_get_page_size(),
@@ -1774,7 +1775,8 @@ TEST(Pager, InvalidPagerSupplyPages) {
     }
 
     if (i == kHasClone) {
-      ASSERT_EQ(aux_vmo.create_child(ZX_VMO_CHILD_SNAPSHOT, 0, zx_system_get_page_size(), &alt_vmo),
+      // clone used instead of create_child.
+      ASSERT_EQ(aux_vmo.clone(ZX_VMO_CLONE_COPY_ON_WRITE, 0, zx_system_get_page_size(), &alt_vmo),
                 ZX_OK);
     }
 
@@ -1790,18 +1792,18 @@ TEST(Pager, InvalidPagerSupplyPages) {
                 ZX_OK);
     }
 
-    zx::iommu iommu;
+    // The 2018 zx C++ library has no zx::iommu wrapper and no zx::bti::create,
+    // so use the C syscalls to build the dummy iommu and bti.
+    zx::handle iommu;
     zx::bti bti;
     zx::pmt pmt;
     if (i == kHasPinned) {
-      // Please do not use get_root_resource() in new code. See fxbug.dev/31358.
-      zx::unowned_resource root_res(get_root_resource());
       zx_iommu_desc_dummy_t desc;
       // Please do not use get_root_resource() in new code. See fxbug.dev/31358.
       ASSERT_EQ(zx_iommu_create(get_root_resource(), ZX_IOMMU_TYPE_DUMMY, &desc, sizeof(desc),
                                 iommu.reset_and_get_address()),
                 ZX_OK);
-      ASSERT_EQ(zx::bti::create(iommu, 0, 0xdeadbeef, &bti), ZX_OK);
+      ASSERT_EQ(zx_bti_create(iommu.get(), 0, 0xdeadbeef, bti.reset_and_get_address()), ZX_OK);
       zx_paddr_t addr;
       ASSERT_EQ(bti.pin(ZX_BTI_PERM_READ, aux_vmo, 0, zx_system_get_page_size(), &addr, 1, &pmt),
                 ZX_OK);
@@ -1829,7 +1831,6 @@ TEST(Pager, InvalidPagerSupplyPages) {
                                   aux_vmo.get(), zx_system_get_page_size()),
             ZX_ERR_OUT_OF_RANGE);
 }
-*/
 
 // Tests that supply_pages works when the source is mapped.
 TEST(Pager, MappedSupplyPages) {
@@ -2494,9 +2495,6 @@ TEST(Pager, EvictPages) {
   ASSERT_GT(free_after - free_before, kNumPages * zx_system_get_page_size() / 2);
 }
 
-// [PORT-BLOCKED] ResizeBlockedPin blocked because 2018 lacks the zx::iommu/zx::bti C++ wrappers and the zx_bti_pin support this test needs.
-/*
-
 // Test that if we resize a vmo while it is waiting on a page to fullfill the commit for a pin
 // request that neither the resize nor the pin cause a crash and fail gracefully.
 TEST(Pager, ResizeBlockedPin) {
@@ -2513,15 +2511,16 @@ TEST(Pager, ResizeBlockedPin) {
   Vmo* vmo;
   ASSERT_TRUE(pager.CreateVmoWithOptions(kNumPages, ZX_VMO_RESIZABLE, &vmo));
 
-  zx::iommu iommu;
+  // The 2018 zx C++ library has no zx::iommu wrapper and no zx::bti::create,
+  // so use the C syscalls to build the dummy iommu and bti.
+  zx::handle iommu;
   zx::bti bti;
   zx::pmt pmt;
-  zx::unowned_resource root_res(get_root_resource());
   zx_iommu_desc_dummy_t desc;
   ASSERT_EQ(zx_iommu_create(get_root_resource(), ZX_IOMMU_TYPE_DUMMY, &desc, sizeof(desc),
                             iommu.reset_and_get_address()),
             ZX_OK);
-  ASSERT_EQ(zx::bti::create(iommu, 0, 0xdeadbeef, &bti), ZX_OK);
+  ASSERT_EQ(zx_bti_create(iommu.get(), 0, 0xdeadbeef, bti.reset_and_get_address()), ZX_OK);
 
   // Spin up a thread to do the pin, this will block as it has to wait for pages from the user pager
   TestThread pin_thread([&bti, &pmt, &vmo]() -> bool {
@@ -2544,7 +2543,6 @@ TEST(Pager, ResizeBlockedPin) {
   // ultimately failed. pin_thread returns true if it got the correct failure result from pin.
   ASSERT_TRUE(pin_thread.Wait());
 }
-*/
 
 TEST(Pager, DeepHierarchy) {
   zx::pager pager;
