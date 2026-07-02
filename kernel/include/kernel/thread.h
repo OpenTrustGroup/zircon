@@ -74,7 +74,8 @@ typedef void (*thread_tls_callback_t)(void* tls_value);
 #define THREAD_LINEBUFFER_LENGTH 128
 
 // Number of kernel tls slots.
-#define THREAD_MAX_TLS_ENTRY 2
+// Add one TLS slot for VMO safe deletion.
+#define THREAD_MAX_TLS_ENTRY 3
 
 struct vmm_aspace;
 

@@ -39,7 +39,9 @@ public:
     void Dump(uint depth, bool verbose) override;
 
     zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, list_node* free_list,
-                              vm_page_t**, paddr_t* pa) override TA_REQ(lock_);
+                              LazyPageRequest* page_request,
+                              vm_page_t** _page, paddr_t* _pa) override TA_REQ(lock_);
+
 
     zx_status_t GetMappingCachePolicy(uint32_t* cache_policy) override;
     zx_status_t SetMappingCachePolicy(const uint32_t cache_policy) override;

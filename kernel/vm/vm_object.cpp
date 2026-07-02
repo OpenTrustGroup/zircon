@@ -11,10 +11,13 @@
 #include <assert.h>
 #include <err.h>
 #include <fbl/auto_lock.h>
+#include <fbl/alloc_checker.h>
+#include <fbl/intrusive_single_list.h>
 #include <fbl/mutex.h>
 #include <fbl/ref_ptr.h>
 #include <inttypes.h>
 #include <lib/console.h>
+#include <object/tls_slots.h>
 #include <stdlib.h>
 #include <string.h>
 #include <trace.h>
@@ -27,6 +30,50 @@
 using fbl::AutoLock;
 
 #define LOCAL_TRACE MAX(VM_GLOBAL_TRACE, 0)
+
+class SafeVmObjectDeleter {
+public:
+    static SafeVmObjectDeleter* Get() {
+        auto self = reinterpret_cast<SafeVmObjectDeleter*>(tls_get(TLS_ENTRY_VMO_DELETER));
+        if (self == nullptr) {
+            fbl::AllocChecker ac;
+            self = new (&ac) SafeVmObjectDeleter;
+            if (!ac.check())
+                return nullptr;
+
+            tls_set(TLS_ENTRY_VMO_DELETER, self);
+            tls_set_callback(TLS_ENTRY_VMO_DELETER, &CleanTLS);
+        }
+        return self;
+    }
+
+    void Delete(VmObject* vmo) {
+        if (level_ > 0) {
+            pending_.push_front(vmo);
+            return;
+        }
+
+        // Delete VMOs iteratively to avoid deep COW clone recursion.
+        level_++;
+        vmo->DeleteSelf();
+
+        while ((vmo = pending_.pop_front()) != nullptr) {
+            vmo->DeleteSelf();
+        }
+        level_--;
+    }
+
+private:
+    static void CleanTLS(void* tls) {
+        delete reinterpret_cast<SafeVmObjectDeleter*>(tls);
+    }
+
+    SafeVmObjectDeleter() : level_(0) {}
+    ~SafeVmObjectDeleter() { DEBUG_ASSERT(level_ == 0); }
+
+    int level_;
+    fbl::SinglyLinkedList<VmObject*, VmObject::DeleterListTraits> pending_;
+};
 
 fbl::Mutex VmObject::all_vmos_lock_ = {};
 VmObject::GlobalList VmObject::all_vmos_ = {};
@@ -71,6 +118,19 @@ VmObject::~VmObject() {
         DEBUG_ASSERT(global_list_state_.InContainer() == true);
         all_vmos_.erase(*this);
     }
+}
+
+void VmObject::fbl_recycle() {
+    auto deleter = SafeVmObjectDeleter::Get();
+    if (likely(deleter != nullptr)) {
+        deleter->Delete(this);
+    } else {
+        DeleteSelf();
+    }
+}
+
+void VmObject::DeleteSelf() {
+    delete this;
 }
 
 void VmObject::get_name(char* out_name, size_t len) const {

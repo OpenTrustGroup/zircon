@@ -10,8 +10,10 @@
 #include <fbl/array.h>
 #include <fbl/canary.h>
 #include <fbl/intrusive_double_list.h>
+#include <fbl/intrusive_single_list.h>
 #include <fbl/macros.h>
 #include <fbl/name.h>
+#include <fbl/recycler.h>
 #include <fbl/ref_counted.h>
 #include <fbl/ref_ptr.h>
 #include <kernel/mutex.h>
@@ -23,8 +25,12 @@
 #include <vm/vm_page_list.h>
 #include <zircon/thread_annotations.h>
 #include <zircon/types.h>
+#include <fbl/function.h>
 
 class VmMapping;
+class VmPageSpliceList;
+class LazyPageRequest;
+class SafeVmObjectDeleter;
 
 typedef zx_status_t (*vmo_lookup_fn_t)(void* context, size_t offset, size_t index, paddr_t pa);
 
@@ -39,6 +45,7 @@ public:
 // Can be created without mapping and used as a container of data, or mappable
 // into an address space via VmAddressRegion::CreateVmMapping
 class VmObject : public fbl::RefCounted<VmObject>,
+                 public fbl::Recyclable<VmObject>,
                  public fbl::DoublyLinkedListable<VmObject*> {
 public:
     // public API
@@ -52,6 +59,7 @@ public:
     // Returns true if the object is backed by a contiguous range of physical
     // memory.
     virtual bool is_contiguous() const { return false; }
+    virtual bool is_pager_backed() const { return false; }
 
     // Returns the number of physical pages currently allocated to the
     // object where (offset <= page_offset < offset+len).
@@ -115,6 +123,60 @@ public:
         return ZX_ERR_NOT_SUPPORTED;
     }
 
+    // Pager support.
+    // pinned pages in the source range. |offset| and |len| must be page aligned.
+    virtual zx_status_t TakePages(uint64_t offset, uint64_t len, VmPageSpliceList* pages) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
+    // Supplies this vmo with pages for the range [offset, offset + len). If this vmo
+    // already has pages in the target range, the corresponding pages in |pages| will be
+    // freed, instead of being moved into this vmo. |offset| and |len| must be page aligned.
+    virtual zx_status_t SupplyPages(uint64_t offset, uint64_t len, VmPageSpliceList* pages) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
+    // Indicates that page requests in the range [offset, offset + len) could not be fulfilled.
+    // |error_status| specifies the error encountered. |offset| and |len| must be page aligned.
+    virtual zx_status_t FailPageRequests(uint64_t offset, uint64_t len, zx_status_t error_status) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
+    // Dirties pages in the vmo in the range [offset, offset + len).
+    virtual zx_status_t DirtyPages(uint64_t offset, uint64_t len) { return ZX_ERR_NOT_SUPPORTED; }
+
+    using DirtyRangeEnumerateFunction = fbl::Function<zx_status_t(
+        uint64_t range_offset, uint64_t range_len, bool range_is_zero)>;
+    // Enumerates dirty ranges in the range [offset, offset + len) in ascending order, updating any
+    // relevant VMO internal state required to perform the enumeration, and calls |dirty_range_fn| on
+    // each dirty range (spanning [range_offset, range_offset + range_len) where |range_is_zero|
+    // indicates whether the range is all zeros). |dirty_range_fn| can return ZX_ERR_NEXT to continue
+    // with the enumeration, ZX_ERR_STOP to terminate the enumeration successfully, and any other
+    // error code to terminate the enumeration early with that error code.
+    virtual zx_status_t EnumerateDirtyRanges(uint64_t offset, uint64_t len,
+                                             DirtyRangeEnumerateFunction&& dirty_range_fn) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+
+    // Indicates start of writeback for the range [offset, offset + len). Any Dirty pages in the range
+    // are transitioned to AwaitingClean, in preparation for transition to Clean when the writeback is
+    // done (See VmCowPages::DirtyState for details of these states). |offset| and |len| must be page
+    // aligned.
+    // This port keeps the writeback state in VmObjectPaged.
+    virtual zx_status_t WritebackBegin(uint64_t offset, uint64_t len) { return ZX_ERR_NOT_SUPPORTED; }
+
+    // Indicates end of writeback for the range [offset, offset + len). Any AwaitingClean pages in the
+    // range are transitioned to Clean (See VmCowPages::DirtyState for details of these states).
+    // |offset| and |len| must be page aligned.
+    // This port keeps the writeback state in VmObjectPaged.
+    virtual zx_status_t WritebackEnd(uint64_t offset, uint64_t len) { return ZX_ERR_NOT_SUPPORTED; }
+
+    // Detaches the underlying page source, if present. Can be called multiple times.
+    virtual void DetachSource() {}
+
+    // Closes the underlying page source, if present.
+    virtual void CloseSource() {}
+
     // The assocaited VmObjectDispatcher will set an observer to notify user mode.
     void SetChildObserver(VmObjectChildObserver* child_observer);
 
@@ -176,6 +238,7 @@ public:
     // get a pointer to the page structure and/or physical address at the specified offset.
     // valid flags are VMM_PF_FLAG_*
     virtual zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, list_node* free_list,
+                                      LazyPageRequest* page_request,
                                       vm_page_t** page, paddr_t* pa) TA_REQ(lock_) {
         return ZX_ERR_NOT_SUPPORTED;
     }
@@ -198,6 +261,12 @@ public:
     void AddChildLocked(VmObject* r) TA_REQ(lock_);
     void RemoveChildLocked(VmObject* r) TA_REQ(lock_);
     uint32_t num_children() const;
+
+    struct DeleterListTraits {
+        static fbl::SinglyLinkedListNodeState<VmObject*>& node_state(VmObject& obj) {
+            return obj.deleter_ll_;
+        }
+    };
 
     // Calls the provided |func(const VmObject&)| on every VMO in the system,
     // from oldest to newest. Stops if |func| returns an error, returning the
@@ -223,6 +292,10 @@ protected:
     // private destructor, only called from refptr
     virtual ~VmObject();
     friend fbl::RefPtr<VmObject>;
+    friend class fbl::Recyclable<VmObject>;
+    friend class SafeVmObjectDeleter;
+    void fbl_recycle();
+    void DeleteSelf();
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(VmObject);
 
@@ -273,6 +346,9 @@ private:
     // Per-node state for the global VMO list.
     using NodeState = fbl::DoublyLinkedListNodeState<VmObject*>;
     NodeState global_list_state_;
+
+    // Used to store this VMO on the VMO deleter list.
+    fbl::SinglyLinkedListNodeState<VmObject*> deleter_ll_;
 
     // The global VMO list.
     struct GlobalListTraits {

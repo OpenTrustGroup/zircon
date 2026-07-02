@@ -8,6 +8,7 @@
 
 #include <assert.h>
 #include <fbl/array.h>
+#include <fbl/auto_lock.h>
 #include <fbl/canary.h>
 #include <fbl/intrusive_double_list.h>
 #include <fbl/macros.h>
@@ -22,6 +23,8 @@
 #include <vm/vm_aspace.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page_list.h>
+#include <vm/vm_page_or_marker.h>
+#include <vm/page_source.h>
 #include <zircon/thread_annotations.h>
 #include <zircon/types.h>
 
@@ -36,6 +39,9 @@ public:
     static zx_status_t CreateContiguous(uint32_t pmm_alloc_flags, uint64_t size,
                                         uint8_t alignment_log2, fbl::RefPtr<VmObject>* vmo);
 
+    static zx_status_t CreateExternal(fbl::RefPtr<PageSource> src, uint32_t options, uint64_t size,
+                                      fbl::RefPtr<VmObjectPaged>* vmo);
+
     static zx_status_t CreateFromROData(const void* data, size_t size, fbl::RefPtr<VmObject>* vmo);
 
     zx_status_t Resize(uint64_t size) override;
@@ -46,6 +52,11 @@ public:
         TA_NO_THREAD_SAFETY_ANALYSIS { return size_; }
     bool is_paged() const override { return true; }
     bool is_contiguous() const override { return is_contiguous_; }
+    bool is_pager_backed() const override
+        TA_NO_THREAD_SAFETY_ANALYSIS {
+        // Treat detached pager-backed VMOs as pager-backed for clone faults.
+        return page_source_ || page_source_detached_ || (parent_ && parent_->is_pager_backed());
+    }
 
     size_t AllocatedPagesInRange(uint64_t offset, uint64_t len) const override;
 
@@ -74,6 +85,7 @@ public:
     zx_status_t SyncCache(const uint64_t offset, const uint64_t len) override;
 
     zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, list_node* free_list,
+                              LazyPageRequest* page_request,
                               vm_page_t**, paddr_t*) override
         // Calls a Locked method of the parent, which confuses analysis.
         TA_NO_THREAD_SAFETY_ANALYSIS;
@@ -90,19 +102,37 @@ public:
     zx_status_t GetMappingCachePolicy(uint32_t* cache_policy) override;
     zx_status_t SetMappingCachePolicy(const uint32_t cache_policy) override;
 
+    // Pager support implementation.
+    zx_status_t SupplyPages(uint64_t offset, uint64_t len, VmPageSpliceList* pages) override;
+    zx_status_t FailPageRequests(uint64_t offset, uint64_t len, zx_status_t error_status) override;
+    zx_status_t DirtyPages(uint64_t offset, uint64_t len) override;
+    zx_status_t EnumerateDirtyRanges(uint64_t offset, uint64_t len,
+                                     DirtyRangeEnumerateFunction&& dirty_range_fn) override;
+    zx_status_t WritebackBegin(uint64_t offset, uint64_t len) override;
+    zx_status_t WritebackEnd(uint64_t offset, uint64_t len) override;
+    void DetachSource() override;
+    void CloseSource() override;
+
+    zx_status_t TakePages(uint64_t offset, uint64_t len, VmPageSpliceList* pages) override;
+
     // maximum size of a VMO is one page less than the full 64bit range
     static const uint64_t MAX_SIZE = ROUNDDOWN(UINT64_MAX, PAGE_SIZE);
 
 private:
     // private constructor (use Create())
     VmObjectPaged(uint32_t pmm_alloc_flags, uint64_t size, fbl::RefPtr<VmObject> parent,
-                  bool is_contiguous);
+                  bool is_contiguous, fbl::RefPtr<PageSource> page_source = nullptr,
+                  bool resizable = true);
 
     // private destructor, only called from refptr
     ~VmObjectPaged() override;
     friend fbl::RefPtr<VmObjectPaged>;
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(VmObjectPaged);
+
+    // Clip this clone's view of its parent when the parent is resized smaller.
+    void OnParentResizeLocked(uint64_t parent_new_size) override
+        TA_NO_THREAD_SAFETY_ANALYSIS;
 
     // perform a cache maintenance operation against the vmo.
     enum class CacheOpType { Invalidate,
@@ -114,6 +144,15 @@ private:
     // add a page to the object
     zx_status_t AddPage(vm_page_t* p, uint64_t offset);
     zx_status_t AddPageLocked(vm_page_t* p, uint64_t offset) TA_REQ(lock_);
+
+    // Overload accepting a VmPageOrMarker, so upstream paged-VMO code (e.g. the
+    // ported SupplyPages) can be used with as little change as possible. A marker
+    // has no representation in the 2018 page list, so it is materialized here as an
+    // allocated zero page (upstream instead stores a zero-page marker). The
+    // overwrite/do_range_update tags are accepted and ignored: the 2018 page list
+    // never overwrites and does its own range updates.
+    zx_status_t AddPageLocked(VmPageOrMarker* p, uint64_t offset, CanOverwriteContent overwrite,
+                              void* released_page, bool do_range_update) TA_REQ(lock_);
 
     // internal page list routine
     void AddPageToArray(size_t index, vm_page_t* p);
@@ -131,13 +170,33 @@ private:
     // set our offset within our parent
     zx_status_t SetParentOffsetLocked(uint64_t o) TA_REQ(lock_);
 
+    // Returns the page source of the root of this clone hierarchy (the only VMO
+    // that can own one), or null if none. Mirrors VmCowPages::GetRootPageSourceLocked
+    // in upstream. The clone hierarchy shares a single lock, so walking parents is
+    // safe under lock_.
+    fbl::RefPtr<PageSource> GetRootPageSourceLocked() const TA_REQ(lock_);
+
     // members
     uint64_t size_ TA_GUARDED(lock_) = 0;
     uint64_t parent_offset_ TA_GUARDED(lock_) = 0;
+    // For a COW clone, the offset (in this object's space) below which pages may
+    // still be sourced from the parent. Set to the clone size at creation and
+    // only ever reduced when the parent shrinks, so a subsequently re-grown
+    // parent does not resurrect the clone's window into it. Unused (0) for
+    // objects without a parent.
+    uint64_t parent_limit_ TA_GUARDED(lock_) = 0;
     uint32_t pmm_alloc_flags_ TA_GUARDED(lock_) = PMM_ALLOC_FLAG_ANY;
     uint32_t cache_policy_ TA_GUARDED(lock_) = ARCH_MMU_FLAG_CACHED;
     const bool is_contiguous_;
+    // Whether zx_vmo_set_size() is permitted. User VMOs created without
+    // ZX_VMO_RESIZABLE are fixed-size; kernel-internal VMOs default to resizable.
+    const bool resizable_;
 
     // a tree of pages
     VmPageList page_list_ TA_GUARDED(lock_);
+
+    // Pager members.
+    fbl::RefPtr<PageSource> page_source_;
+    bool page_source_detached_ TA_GUARDED(lock_) = false;
+    uint64_t supply_zero_offset_ TA_GUARDED(lock_) = UINT64_MAX;
 };
