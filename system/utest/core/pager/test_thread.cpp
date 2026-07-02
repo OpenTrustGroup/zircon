@@ -110,11 +110,7 @@ bool TestThread::Wait(bool expect_failure, bool expect_crash, uintptr_t crash_ad
       res &= crash_addr == actual_crash_addr;
     }
     if (res) {
-      // [PORT-BLOCKED] 2018 zx_exception_report_t lacks context.synth_code.
-      /*
       res &= error_status == static_cast<zx_status_t>(report.context.synth_code);
-      */
-      (void)error_status;
     }
 
     if (!res) {

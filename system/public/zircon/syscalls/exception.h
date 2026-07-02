@@ -83,6 +83,12 @@ typedef struct zx_exception_context {
             zx_arm64_exc_data_t  arm_64;
         } u;
     } arch;
+
+    // The values of |synth_code| and |synth_data| depend on the exception type.
+    // For ZX_EXCP_FATAL_PAGE_FAULT, |synth_code| is the zx_status_t error that
+    // caused the fault (cast to a uint32_t) and |synth_data| is 0.
+    uint32_t synth_code;
+    uint32_t synth_data;
 } zx_exception_context_t;
 
 // The common header of all exception reports.

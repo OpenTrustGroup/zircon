@@ -43,6 +43,11 @@ struct arch_exception_context {
     bool is_page_fault;
     x86_iframe_t *frame;
     uint64_t cr2;
+    // Synthetic status reported to userspace via zx_exception_context_t. For a
+    // fatal page fault this carries the zx_status_t returned by the page fault
+    // handler; it is zero for other exceptions.
+    uint32_t user_synth_code;
+    uint32_t user_synth_data;
 };
 
 // Register state layout used by x86_64_context_switch().

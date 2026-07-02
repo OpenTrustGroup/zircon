@@ -2960,7 +2960,11 @@ TEST(Pager, EvictionHintDontNeed) {
   uint64_t offset, length;
   ASSERT_FALSE(pager.GetPageReadRequest(vmo, 0, &offset, &length));
 
-  // [PORT-BLOCKED] The 2018 scanner does not implement the DONT_NEED age hint.
+  // [PORT-BLOCKED] The 2018 scanner does not implement the DONT_NEED age hint:
+  // there is no PageQueues aging infrastructure or scanner thread to move
+  // hinted pages to an evict-first queue, so eviction ordering cannot be
+  // verified here. Honoring the hint requires porting the whole page-queue and
+  // scanner subsystem, which is out of scope for this test.
   /*
   // Please do not use get_root_resource() in new code. See fxbug.dev/31358.
   if (!&get_root_resource) {

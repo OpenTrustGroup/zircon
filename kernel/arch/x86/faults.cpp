@@ -109,7 +109,7 @@ static zx_status_t call_dispatch_user_exception(uint kind,
 
 static bool try_dispatch_user_exception(x86_iframe_t* frame, uint kind) {
     if (is_from_user(frame)) {
-        struct arch_exception_context context = {false, frame, 0};
+        struct arch_exception_context context = {false, frame, 0, 0, 0};
         thread_preempt_reenable_no_resched();
         arch_set_in_int_handler(false);
         arch_enable_ints();
@@ -305,7 +305,10 @@ static zx_status_t x86_pfe_handler(x86_iframe_t* frame) {
     /* let high level code deal with this */
     if (is_from_user(frame)) {
         kcounter_add(exceptions_user, 1);
-        struct arch_exception_context context = {true, frame, va};
+        // Carry the page fault handler status to userspace as the synthetic
+        // exception code so handlers can distinguish the underlying failure.
+        struct arch_exception_context context = {true, frame, va,
+                                                 static_cast<uint32_t>(pf_err), 0};
         return call_dispatch_user_exception(ZX_EXCP_FATAL_PAGE_FAULT,
                                             &context, frame);
     }
@@ -502,6 +505,9 @@ void arch_fill_in_exception_context(const arch_exception_context_t* arch_context
     zx_context->arch.u.x86_64.vector = arch_context->frame->vector;
     zx_context->arch.u.x86_64.err_code = arch_context->frame->err_code;
     zx_context->arch.u.x86_64.cr2 = arch_context->cr2;
+
+    zx_context->synth_code = arch_context->user_synth_code;
+    zx_context->synth_data = arch_context->user_synth_data;
 }
 
 zx_status_t arch_dispatch_user_policy_exception(void) {

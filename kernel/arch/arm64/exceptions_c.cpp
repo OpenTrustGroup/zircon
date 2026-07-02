@@ -57,13 +57,14 @@ KCOUNTER(exceptions_unknown, "kernel.exceptions.unknown");
 
 static zx_status_t try_dispatch_user_data_fault_exception(
     zx_excp_type_t type, struct arm64_iframe_long* iframe,
-    uint32_t esr, uint64_t far) {
+    uint32_t esr, uint64_t far, uint32_t user_synth_code) {
     thread_t* thread = get_current_thread();
     arch_exception_context_t context = {};
     DEBUG_ASSERT(iframe != nullptr);
     context.frame = iframe;
     context.esr = esr;
     context.far = far;
+    context.user_synth_code = user_synth_code;
 
     arch_enable_ints();
     DEBUG_ASSERT(thread->arch.suspended_general_regs == nullptr);
@@ -76,7 +77,7 @@ static zx_status_t try_dispatch_user_data_fault_exception(
 
 static zx_status_t try_dispatch_user_exception(
     zx_excp_type_t type, struct arm64_iframe_long* iframe, uint32_t esr) {
-    return try_dispatch_user_data_fault_exception(type, iframe, esr, 0);
+    return try_dispatch_user_data_fault_exception(type, iframe, esr, 0, 0);
 }
 
 __NO_RETURN static void exception_die(struct arm64_iframe_long* iframe, uint32_t esr) {
@@ -166,7 +167,8 @@ static void arm64_instruction_abort_handler(struct arm64_iframe_long* iframe, ui
     // get a shot at it.
     if (is_user) {
         kcounter_add(exceptions_user, 1);
-        if (try_dispatch_user_data_fault_exception(ZX_EXCP_FATAL_PAGE_FAULT, iframe, esr, far) == ZX_OK)
+        if (try_dispatch_user_data_fault_exception(ZX_EXCP_FATAL_PAGE_FAULT, iframe, esr, far,
+                                                   static_cast<uint32_t>(err)) == ZX_OK)
             return;
     }
 
@@ -198,11 +200,14 @@ static void arm64_data_abort_handler(struct arm64_iframe_long* iframe, uint exce
             ", is_user %d, FAR %#" PRIx64 ", esr 0x%x, iss 0x%x\n",
             iframe->elr, is_user, far, esr, iss);
 
+    // Retained beyond the page fault block below so it can be reported as the
+    // synthetic exception code; stays ZX_OK for the alignment-fault path.
+    zx_status_t err = ZX_OK;
     uint32_t dfsc = BITS(iss, 5, 0);
     if (likely(dfsc != DFSC_ALIGNMENT_FAULT)) {
         arch_enable_ints();
         kcounter_add(exceptions_page, 1);
-        zx_status_t err = vmm_page_fault_handler(far, pf_flags);
+        err = vmm_page_fault_handler(far, pf_flags);
         arch_disable_ints();
         // Return to the pending-signal path for interrupted user pager faults.
         if (err >= 0 || (is_user && err == ZX_ERR_INTERNAL_INTR_RETRY)) {
@@ -226,7 +231,8 @@ static void arm64_data_abort_handler(struct arm64_iframe_long* iframe, uint exce
         if (unlikely(dfsc == DFSC_ALIGNMENT_FAULT)) {
             excp_type = ZX_EXCP_UNALIGNED_ACCESS;
         }
-        if (try_dispatch_user_data_fault_exception(excp_type, iframe, esr, far) == ZX_OK)
+        if (try_dispatch_user_data_fault_exception(excp_type, iframe, esr, far,
+                                                   static_cast<uint32_t>(err)) == ZX_OK)
             return;
     }
 
@@ -444,6 +450,9 @@ void arch_fill_in_exception_context(const arch_exception_context_t* arch_context
     } else {
         zx_context->arch.u.arm_64.far = 0;
     }
+
+    zx_context->synth_code = arch_context->user_synth_code;
+    zx_context->synth_data = arch_context->user_synth_data;
 }
 
 zx_status_t arch_dispatch_user_policy_exception(void) {

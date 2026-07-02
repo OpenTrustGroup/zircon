@@ -102,6 +102,11 @@ struct arch_exception_context {
     struct arm64_iframe_long* frame;
     uint64_t far;
     uint32_t esr;
+    // Synthetic status reported to userspace via zx_exception_context_t. For a
+    // fatal page fault this carries the zx_status_t returned by the page fault
+    // handler; it is zero for other exceptions.
+    uint32_t user_synth_code;
+    uint32_t user_synth_data;
 };
 
 struct thread;
