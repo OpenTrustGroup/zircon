@@ -19,6 +19,14 @@
 #define ROUNDUP_PAGE_SIZE(x) ROUNDUP((x), PAGE_SIZE)
 #define IS_PAGE_ALIGNED(x) IS_ALIGNED((x), PAGE_SIZE)
 
+// The 2018 kernel has no VM_KTRACE tracing subsystem. Provide no-op stand-ins so
+// upstream VM and pager code that emits VM_KTRACE_* trace events compiles
+// unchanged; the events are simply not recorded, which is the same observable
+// behavior as the kernel before these events existed.
+#define VM_KTRACE_DURATION(level, string, ...) ((void)0)
+#define VM_KTRACE_FLOW_BEGIN(level, string, flow_id, ...) ((void)0)
+#define VM_KTRACE_FLOW_END(level, string, flow_id, ...) ((void)0)
+
 // kernel address space
 static_assert(KERNEL_ASPACE_BASE + (KERNEL_ASPACE_SIZE - 1) > KERNEL_ASPACE_BASE, "");
 

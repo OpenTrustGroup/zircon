@@ -8,6 +8,7 @@
 
 #include <err.h>
 #include <fbl/canary.h>
+#include <fbl/intrusive_double_list.h>
 #include <fbl/intrusive_wavl_tree.h>
 #include <fbl/macros.h>
 #include <fbl/unique_ptr.h>
@@ -15,6 +16,7 @@
 #include <zircon/types.h>
 
 struct vm_page;
+class VmPageList;
 
 class VmPageListNode final : public fbl::WAVLTreeContainable<fbl::unique_ptr<VmPageListNode>> {
 public:
@@ -98,6 +100,45 @@ private:
 
     uint64_t obj_offset_ = 0;
     vm_page* pages_[kPageFanOut] = {};
+};
+
+// The pre-marker upstream VmPageSpliceList (Fuchsia commit ef9c451ba83) ported to
+// the 2018 tree: it holds raw vm_page_t* in value-type head_/tail_ nodes plus a
+// middle tree, and Pop() returns a vm_page*. F7 later reworked it on top of
+// VmPageOrMarker page slots (Pop() returns a VmPageOrMarker); the 2018 page list
+// has no page markers. See the note on VmPageList::TakePages in vm_page_list.cpp.
+class VmPageSpliceList final {
+public:
+    VmPageSpliceList();
+    VmPageSpliceList(VmPageSpliceList&& other);
+    VmPageSpliceList& operator=(VmPageSpliceList&& other);
+    ~VmPageSpliceList();
+
+    // Pops the next page off of the splice.
+    vm_page* Pop();
+
+    // Returns true after the whole collection has been processed by Pop.
+    bool IsDone() const { return pos_ >= length_; }
+
+    DISALLOW_COPY_AND_ASSIGN_ALLOW_MOVE(VmPageSpliceList);
+
+private:
+    VmPageSpliceList(uint64_t offset, uint64_t length);
+    void FreeAllPages();
+
+    uint64_t offset_;
+    uint64_t length_;
+    uint64_t pos_ = 0;
+
+    // VmPageListNode is not movable, so head_/tail_ are value members (rather than
+    // upstream's C++17 `= VmPageListNode(0)`, which relied on guaranteed copy
+    // elision unavailable in the 2018 C++14 build); moves transfer node contents
+    // via move_vm_page_list_node.
+    VmPageListNode head_{0};
+    fbl::WAVLTree<uint64_t, fbl::unique_ptr<VmPageListNode>> middle_;
+    VmPageListNode tail_{0};
+
+    friend class VmPageList;
 };
 
 class VmPageList final {
@@ -189,9 +230,15 @@ public:
 
     zx_status_t AddPage(vm_page*, uint64_t offset);
     vm_page* GetPage(uint64_t offset);
+    // Removes the page at |offset| from the list, returning it via |page_out|.
+    // Returns true if a page was present. Used by TakePages.
+    bool RemovePage(uint64_t offset, vm_page** page_out);
     zx_status_t FreePage(uint64_t offset);
     size_t FreeAllPages();
     bool IsEmpty();
+
+    // Pager support.
+    VmPageSpliceList TakePages(uint64_t offset, uint64_t length);
 
 private:
     fbl::WAVLTree<uint64_t, fbl::unique_ptr<VmPageListNode>> list_;

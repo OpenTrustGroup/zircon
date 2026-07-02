@@ -28,6 +28,9 @@ enum vm_page_state {
 #define VM_PAGE_STATE_BITS 3
 static_assert((1u << VM_PAGE_STATE_BITS) >= VM_PAGE_STATE_COUNT_, "");
 
+#define VM_PAGE_PAGER_DIRTY (1 << 0)
+#define VM_PAGE_PAGER_CLEANING (1 << 1)
+
 // core per page structure allocated at pmm arena creation time
 typedef struct vm_page {
     struct list_node queue_node;

@@ -5,14 +5,15 @@
 // https://opensource.org/licenses/MIT
 
 #include <lib/console.h>
+#include <fbl/algorithm.h>
+#include <fbl/new.h>
+#include <string.h>
 #include <trace.h>
 
 #include <fbl/auto_lock.h>
 #include <kernel/lockdep.h>
 #include <ktl/move.h>
 #include <vm/page_source.h>
-
-#include <ktl/enforce.h>
 
 #define LOCAL_TRACE 0
 
@@ -50,7 +51,10 @@ void PageSource::Detach() {
 
       // Tell the clients the request is complete - they'll fail when they
       // reattempt the page request for the same pages after failing this time.
-      CompleteRequestLocked(req);
+      // Unlike upstream, the 2018 commit/fault retry path does not turn that
+      // ZX_OK completion into a failure (FailAfterDetach regresses), so detached
+      // waiters are failed directly with ZX_ERR_BAD_STATE.
+      CompleteRequestLocked(req, ZX_ERR_BAD_STATE);
     }
   }
 

@@ -9,14 +9,15 @@
 
 #include <zircon/types.h>
 
+#include <fbl/intrusive_double_list.h>
 #include <fbl/intrusive_wavl_tree.h>
 #include <fbl/ref_counted.h>
 #include <fbl/ref_ptr.h>
+#include <fbl/unique_ptr.h>
 #include <kernel/event.h>
 #include <kernel/lockdep.h>
 #include <kernel/mutex.h>
 #include <ktl/optional.h>
-#include <ktl/unique_ptr.h>
 #include <vm/page.h>
 #include <vm/vm.h>
 
@@ -361,7 +362,7 @@ class PageRequest : public fbl::WAVLTreeContainable<PageRequest*>,
   // The page source this request is currently associated with.
   fbl::RefPtr<PageSource> src_;
   // Event signaled when the request is fulfilled.
-  AutounsignalEvent event_;
+  Event event_{EVENT_FLAG_AUTOUNSIGNAL};
   // PageRequests are active if offset_ is not UINT64_MAX. In an inactive request, the
   // only other valid field is src_. Whilst a request is with a PageProvider (i.e. SendAsyncRequest
   // has been called), these fields must be kept constant so the PageProvider can read them. Once
@@ -437,7 +438,10 @@ class LazyPageRequest {
 
  private:
   const bool allow_batching_;
-  ktl::optional<PageRequest> request_ = ktl::nullopt;
+  // Default-constructed (empty), equivalent to the upstream "= ktl::nullopt".
+  // Written this way because under -std=c++14 the copy-initialization form would
+  // require optional's (elided) move constructor, which PageRequest lacks.
+  ktl::optional<PageRequest> request_;
 };
 
 #endif  // ZIRCON_KERNEL_VM_INCLUDE_VM_PAGE_SOURCE_H_

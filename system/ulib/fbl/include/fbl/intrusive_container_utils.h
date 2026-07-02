@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <fbl/intrusive_double_list.h>
 #include <fbl/intrusive_pointer_traits.h>
 #include <fbl/type_support.h>
 
@@ -132,4 +133,102 @@ struct KeyEraseUtils<
 };
 
 }  // namespace internal
+
+// ---------------------------------------------------------------------------
+// Tagged intrusive-container support.
+//
+// A C++14 reimplementation of the subset of the newer fbl tagged-container API
+// used by the pager. Objects that live in several intrusive containers
+// distinguish them with empty "tag" types instead of multiple node-state
+// members, letting upstream code such as
+//   class T : public fbl::ContainableBaseClasses<
+//                 fbl::TaggedDoublyLinkedListable<T*, TagA>,
+//                 fbl::TaggedDoublyLinkedListable<T*, TagB>> { ... };
+//   fbl::TaggedDoublyLinkedList<T*, TagA> list;
+//   fbl::InContainer<TagA>(obj);
+// compile unchanged. It is built additively on top of the existing
+// DoublyLinkedList (the core containers are untouched). The upstream version
+// relies on C++17 (if constexpr, fold expressions); this one uses ordinary
+// C++14 templates.
+// ---------------------------------------------------------------------------
+
+// Tag used when an object lives in a single, untagged container.
+struct DefaultObjectTag {};
+
+namespace internal {
+template <typename PtrType, typename TagType>
+struct TaggedDoublyLinkedListTraits;
+}  // namespace internal
+
+// Base class contributing one tag-specific doubly-linked-list node state.
+template <typename PtrType, typename TagType>
+class TaggedDoublyLinkedListable {
+public:
+    using TagTypeAlias = TagType;
+    bool InContainer() const { return tagged_dll_node_state_.InContainer(); }
+
+private:
+    friend struct internal::TaggedDoublyLinkedListTraits<PtrType, TagType>;
+    DoublyLinkedListNodeState<PtrType> tagged_dll_node_state_;
+};
+
+namespace internal {
+template <typename T>
+struct TaggedContainableIdentity { using type = T; };
+
+// Resolve, at compile time, which base in Bases... carries TagTypeAlias == Tag.
+// Only the selected branch's ::type is instantiated, so a shorter chain need
+// not name the terminator (which has no ::type and errors if a tag is absent).
+template <typename Tag, typename... Bases>
+struct TaggedContainableForTag;
+template <typename Tag, typename First, typename... Rest>
+struct TaggedContainableForTag<Tag, First, Rest...> {
+    using type = typename conditional<
+        is_same<Tag, typename First::TagTypeAlias>::value,
+        TaggedContainableIdentity<First>,
+        TaggedContainableForTag<Tag, Rest...>>::type::type;
+};
+template <typename Tag>
+struct TaggedContainableForTag<Tag> {};
+}  // namespace internal
+
+// Combine several Tagged*Listable base classes and look one up by its tag.
+template <typename... Bases>
+class ContainableBaseClasses : public Bases... {
+public:
+    template <typename Tag>
+    typename internal::TaggedContainableForTag<Tag, Bases...>::type& GetContainableByTag() {
+        return static_cast<
+            typename internal::TaggedContainableForTag<Tag, Bases...>::type&>(*this);
+    }
+    template <typename Tag>
+    const typename internal::TaggedContainableForTag<Tag, Bases...>::type&
+    GetContainableByTag() const {
+        return static_cast<
+            const typename internal::TaggedContainableForTag<Tag, Bases...>::type&>(*this);
+    }
+};
+
+namespace internal {
+// Node traits routing a tagged list to the object's tag-specific node state.
+template <typename PtrType, typename TagType>
+struct TaggedDoublyLinkedListTraits {
+    using PtrTraits = ContainerPtrTraits<PtrType>;
+    static DoublyLinkedListNodeState<PtrType>& node_state(typename PtrTraits::RefType obj) {
+        return obj.template GetContainableByTag<TagType>().tagged_dll_node_state_;
+    }
+};
+}  // namespace internal
+
+// A doubly-linked list whose membership is keyed by a tag.
+template <typename PtrType, typename TagType>
+using TaggedDoublyLinkedList =
+    DoublyLinkedList<PtrType, internal::TaggedDoublyLinkedListTraits<PtrType, TagType>>;
+
+// Membership test for a tagged container: fbl::InContainer<Tag>(obj).
+template <typename TagType, typename Containable>
+bool InContainer(const Containable& obj) {
+    return obj.template GetContainableByTag<TagType>().InContainer();
+}
+
 }  // namespace fbl
