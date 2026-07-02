@@ -565,8 +565,6 @@ VMO_VMAR_TEST(Pager, SuspendReadTest) {
   ASSERT_TRUE(t.Wait());
 }
 
-// [PORT-BLOCKED] VmoInfoPagerTest blocked because ZX_INFO_VMO is not supported in 2018 kernel.
-/*
 // Tests the ZX_INFO_VMO_PAGER_BACKED flag
 TEST(Pager, VmoInfoPagerTest) {
   UserPager pager;
@@ -587,7 +585,6 @@ TEST(Pager, VmoInfoPagerTest) {
   ASSERT_EQ(ZX_OK, plain_vmo.get_info(ZX_INFO_VMO, &info, sizeof(info), nullptr, nullptr), "");
   ASSERT_EQ(0, info.flags & ZX_INFO_VMO_PAGER_BACKED, "");
 }
-*/
 
 // Tests that detaching results in a complete request.
 TEST(Pager, DetachPageCompleteTest) {
@@ -603,8 +600,6 @@ TEST(Pager, DetachPageCompleteTest) {
   ASSERT_TRUE(pager.WaitForPageComplete(vmo->GetKey(), ZX_TIME_INFINITE));
 }
 
-// [PORT-BLOCKED] DecommitOnDetachTest blocked because ZX_INFO_VMO is not supported in 2018 kernel.
-/*
 // Tests that pages are decommitted on a detach, and accessing pages (via the parent VMO or the
 // clone) after the detach results in failures.
 VMO_VMAR_TEST(Pager, DecommitOnDetachTest) {
@@ -617,7 +612,7 @@ VMO_VMAR_TEST(Pager, DecommitOnDetachTest) {
   auto clone = vmo->Clone();
 
   // Reading the first page via the clone should create a read request packet.
-  TestThread t1([clone = clone.get(), check_vmar]() -> bool {
+  TestThread t1([clone, check_vmar]() -> bool {
     return check_buffer(clone, 0, 1, check_vmar);
   });
   ASSERT_TRUE(t1.Start());
@@ -652,7 +647,7 @@ VMO_VMAR_TEST(Pager, DecommitOnDetachTest) {
   }
 
   // Try to access the first page from the clone. This should also fail.
-  TestThread t3([clone = clone.get(), check_vmar]() -> bool {
+  TestThread t3([clone, check_vmar]() -> bool {
     return check_buffer(clone, 0, 1, check_vmar);
   });
   ASSERT_TRUE(t3.Start());
@@ -673,7 +668,7 @@ VMO_VMAR_TEST(Pager, DecommitOnDetachTest) {
   }
 
   // Try to access the second page from the clone. This should also fail.
-  TestThread t5([clone = clone.get(), check_vmar]() -> bool {
+  TestThread t5([clone, check_vmar]() -> bool {
     return check_buffer(clone, 0, 1, check_vmar);
   });
   ASSERT_TRUE(t5.Start());
@@ -683,7 +678,6 @@ VMO_VMAR_TEST(Pager, DecommitOnDetachTest) {
     ASSERT_TRUE(t5.WaitForFailure());
   }
 }
-*/
 
 // Tests that closing results in a complete request.
 TEST(Pager, ClosePageCompleteTest) {
@@ -1103,8 +1097,6 @@ TEST(Pager, CloneDetachTest) {
   ASSERT_TRUE(t5.Wait());
 }
 
-// [PORT-BLOCKED] CloneCommitTest blocked because ZX_INFO_VMO is not supported in 2018 kernel.
-/*
 // Tests that commit on the clone populates things properly.
 TEST(Pager, CloneCommitTest) {
   UserPager pager;
@@ -1118,7 +1110,7 @@ TEST(Pager, CloneCommitTest) {
   auto clone = vmo->Clone();
   ASSERT_NOT_NULL(clone);
 
-  TestThread t([clone = clone.get()]() -> bool { return clone->Commit(0, kNumPages); });
+  TestThread t([clone]() -> bool { return clone->Commit(0, kNumPages); });
 
   ASSERT_TRUE(t.Start());
 
@@ -1134,10 +1126,7 @@ TEST(Pager, CloneCommitTest) {
   ASSERT_EQ(ZX_OK, clone->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
 }
-*/
 
-// [PORT-BLOCKED] CloneChainCommitTest blocked because ZX_INFO_VMO is not supported in 2018 kernel.
-/*
 // Tests that commit on the clone of a clone populates things properly.
 TEST(Pager, CloneChainCommitTest) {
   UserPager pager;
@@ -1154,7 +1143,7 @@ TEST(Pager, CloneChainCommitTest) {
   auto clone = intermediate->Clone();
   ASSERT_NOT_NULL(clone);
 
-  TestThread t([clone = clone.get()]() -> bool { return clone->Commit(0, kNumPages); });
+  TestThread t([clone]() -> bool { return clone->Commit(0, kNumPages); });
 
   ASSERT_TRUE(t.Start());
 
@@ -1174,10 +1163,7 @@ TEST(Pager, CloneChainCommitTest) {
   ASSERT_EQ(ZX_OK, intermediate->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(0ul, info.committed_bytes);
 }
-*/
 
-// [PORT-BLOCKED] CloneSplitCommitTest blocked because ZX_INFO_VMO is not supported in 2018 kernel.
-/*
 // Tests that commit on the clone populates things properly if things have already been touched.
 TEST(Pager, CloneSplitCommitTest) {
   UserPager pager;
@@ -1191,7 +1177,7 @@ TEST(Pager, CloneSplitCommitTest) {
   auto clone = vmo->Clone();
   ASSERT_NOT_NULL(clone);
 
-  TestThread t([clone = clone.get()]() -> bool { return clone->Commit(0, kNumPages); });
+  TestThread t([clone]() -> bool { return clone->Commit(0, kNumPages); });
 
   // Populate pages 1 and 2 of the parent vmo, and page 1 of the clone.
   ASSERT_TRUE(pager.SupplyPages(vmo, 1, 2));
@@ -1213,7 +1199,6 @@ TEST(Pager, CloneSplitCommitTest) {
   ASSERT_EQ(ZX_OK, clone->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
 }
-*/
 
 // Resizing a cloned VMO causes a fault.
 TEST(Pager, CloneResizeCloneHazard) {
@@ -2464,10 +2449,9 @@ TEST(Pager, EvictPages) {
   ASSERT_OK(pager.supply_pages(vmo, 0, kNumPages * zx_system_get_page_size(), aux, 0));
 
   // Verify that the pager vmo has committed pages now.
-  // [PORT-BLOCKED] ZX_INFO_VMO not supported for pager-backed VMO. Block verification is disabled.
-  /* zx_info_vmo_t info;
+  zx_info_vmo_t info;
   ASSERT_EQ(ZX_OK, vmo.get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
-  ASSERT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes); */
+  ASSERT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
 
   // Rotate page queues a few times so the newly committed pages above are eligible for eviction.
   constexpr char k_command_rotate[] = "scanner rotate_queue";
@@ -2483,9 +2467,7 @@ TEST(Pager, EvictPages) {
 
   // Eviction is asynchronous. Poll in a loop until we see the committed page count drop. In case
   // we're left polling forever, the external test timeout will kick in.
-  // [PORT-BLOCKED] Eviction polling blocked because committed_bytes check via ZX_INFO_VMO is not supported.
-  /*
-while (true) {
+  while (true) {
     zx::nanosleep(zx::deadline_after(zx::msec(50)));
     printf("polling page count...\n");
 
@@ -2497,7 +2479,6 @@ while (true) {
   }
 
   ASSERT_EQ(0, info.committed_bytes);
-  */
 
   // Get free memory after evicting.
   ASSERT_OK(
@@ -2778,13 +2759,10 @@ TEST(Pager, CloneCommitSingleBatch) {
   ASSERT_TRUE(t.Wait());
 
   // Verify that the clone has all pages committed.
-  // [PORT-BLOCKED] ZX_INFO_VMO not supported for pager-backed VMO. Block verification if it fails.
-  /*
   zx_info_vmo_t info;
   uint64_t a1, a2;
   ASSERT_EQ(ZX_OK, clone->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
-  */
 }
 
 
@@ -2822,13 +2800,10 @@ TEST(Pager, CloneCommitTwoBatches) {
   ASSERT_TRUE(t.Wait());
 
   // Verify that the clone has all pages committed.
-  // [PORT-BLOCKED] ZX_INFO_VMO not supported for pager-backed VMO. Block verification if it fails.
-  /*
   zx_info_vmo_t info;
   uint64_t a1, a2;
   ASSERT_EQ(ZX_OK, clone->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
-  */
 }
 
 
@@ -2871,13 +2846,10 @@ TEST(Pager, CloneCommitMultipleBatches) {
   ASSERT_TRUE(t.Wait());
 
   // Verify that the clone has all pages committed.
-  // [PORT-BLOCKED] ZX_INFO_VMO not supported for pager-backed VMO. Block verification if it fails.
-  /*
   zx_info_vmo_t info;
   uint64_t a1, a2;
   ASSERT_EQ(ZX_OK, clone->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
-  */
 }
 
 
@@ -2927,13 +2899,10 @@ TEST(Pager, CloneCommitRandomBatches) {
   ASSERT_TRUE(t.Wait());
 
   // Verify that the clone has all pages committed.
-  // [PORT-BLOCKED] ZX_INFO_VMO not supported for pager-backed VMO. Block verification if it fails.
-  /*
   zx_info_vmo_t info;
   uint64_t a1, a2;
   ASSERT_EQ(ZX_OK, clone->vmo().get_info(ZX_INFO_VMO, &info, sizeof(info), &a1, &a2));
   EXPECT_EQ(kNumPages * zx_system_get_page_size(), info.committed_bytes);
-  */
 }
 
 // Tests that the ZX_VMO_OP_ALWAYS_NEED hint works as expected.

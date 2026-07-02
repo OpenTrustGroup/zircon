@@ -125,7 +125,9 @@ zx_info_vmo_t vmo_handle_info(const VmObjectDispatcher* vmod, zx_rights_t rights
     info.share_count = vmo->share_count();
     info.flags =
         (vmo->is_paged() ? ZX_INFO_VMO_TYPE_PAGED : ZX_INFO_VMO_TYPE_PHYSICAL) |
-        (vmo->is_cow_clone() ? ZX_INFO_VMO_IS_COW_CLONE : 0) | ZX_INFO_VMO_VIA_HANDLE;
+        (vmo->is_cow_clone() ? ZX_INFO_VMO_IS_COW_CLONE : 0) |
+        (vmo->is_pager_backed() ? ZX_INFO_VMO_PAGER_BACKED : 0) |
+        (vmo->is_contiguous() ? ZX_INFO_VMO_CONTIGUOUS : 0) | ZX_INFO_VMO_VIA_HANDLE;
     info.committed_bytes = vmo->AllocatedPages() * PAGE_SIZE;
     info.handle_rights = rights;
     return info;
