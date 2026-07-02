@@ -389,11 +389,15 @@ syscall vmo_create
     (size: uint64_t, options: uint32_t)
     returns (zx_status_t, out: zx_handle_t handle_acquire);
 
-syscall vmo_read
+# VMO reads can wait on a user pager and must retry after suspend.
+# syscall vmo_read
+syscall vmo_read blocking
     (handle: zx_handle_t, data: any[len] OUT, offset: uint64_t, len: size_t)
     returns (zx_status_t);
 
-syscall vmo_write
+# VMO writes can wait on a user pager and must retry after suspend.
+# syscall vmo_write
+syscall vmo_write blocking
     (handle: zx_handle_t, data: any[len] IN, offset: uint64_t, len: size_t)
     returns (zx_status_t);
 
@@ -405,7 +409,9 @@ syscall vmo_set_size
     (handle: zx_handle_t, size: uint64_t)
     returns (zx_status_t);
 
-syscall vmo_op_range
+# VMO range operations can wait on a user pager and must retry after suspend.
+# syscall vmo_op_range
+syscall vmo_op_range blocking
     (handle: zx_handle_t, op: uint32_t, offset: uint64_t, size: uint64_t,
         buffer: any[buffer_size] INOUT, buffer_size: size_t)
     returns (zx_status_t);
@@ -416,6 +422,32 @@ syscall vmo_clone
 
 syscall vmo_set_cache_policy
     (handle: zx_handle_t, cache_policy: uint32_t)
+    returns (zx_status_t);
+
+# Pagers
+
+syscall pager_create
+    (options: uint32_t)
+    returns (zx_status_t, out: zx_handle_t handle_acquire);
+
+syscall pager_create_vmo
+    (pager: zx_handle_t, options: uint32_t, port: zx_handle_t, key: uint64_t, size: uint64_t)
+    returns (zx_status_t, out: zx_handle_t handle_acquire);
+
+syscall pager_detach_vmo
+    (pager: zx_handle_t, vmo: zx_handle_t)
+    returns (zx_status_t);
+
+syscall pager_supply_pages
+    (pager: zx_handle_t, pager_vmo: zx_handle_t, offset: uint64_t, length: uint64_t, aux_vmo: zx_handle_t, aux_offset: uint64_t)
+    returns (zx_status_t);
+
+syscall pager_op_range
+    (pager: zx_handle_t, op: uint32_t, pager_vmo: zx_handle_t, offset: uint64_t, length: uint64_t, data: uint64_t)
+    returns (zx_status_t);
+
+syscall pager_query_dirty_ranges
+    (pager: zx_handle_t, pager_vmo: zx_handle_t, offset: uint64_t, length: uint64_t, buffer: void[buffer_size] OUT, buffer_size: size_t, actual: size_t[1] OUT, avail: size_t[1] OUT)
     returns (zx_status_t);
 
 # Address space management
@@ -442,6 +474,11 @@ syscall vmar_unmap
 syscall vmar_protect
     (vmar_handle: zx_handle_t, addr: uintptr_t, len: size_t,
         prot_flags: uint32_t)
+    returns (zx_status_t);
+
+syscall vmar_op_range
+    (vmar_handle: zx_handle_t, op: uint32_t, addr: uintptr_t, len: size_t,
+        buffer: any[buffer_size] INOUT, buffer_size: size_t)
     returns (zx_status_t);
 
 # Random Number generator

@@ -211,3 +211,19 @@ zx_status_t sys_vmar_protect(zx_handle_t vmar_handle, uintptr_t addr, size_t len
 
     return vmar->Protect(addr, len, prot);
 }
+
+zx_status_t sys_vmar_op_range(zx_handle_t vmar_handle, uint32_t op, uintptr_t addr, size_t len,
+                              user_inout_ptr<void> buffer, size_t buffer_size) {
+    if (buffer || buffer_size) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    auto up = ProcessDispatcher::GetCurrent();
+
+    fbl::RefPtr<VmAddressRegionDispatcher> vmar;
+    zx_status_t status = up->GetDispatcher(vmar_handle, &vmar);
+    if (status != ZX_OK)
+        return status;
+
+    return vmar->RangeOp(addr, len, op);
+}

@@ -33,6 +33,8 @@ typedef enum {
     ZX_INFO_HANDLE_COUNT               = 19, // zx_info_handle_count_t[1]
     ZX_INFO_BTI                        = 20, // zx_info_bti_t[1]
     ZX_INFO_PROCESS_HANDLE_STATS       = 21, // zx_info_process_handle_stats_t[1]
+    // Support querying a single VMO handle.
+    ZX_INFO_VMO                        = 22, // zx_info_vmo_t[1]
     ZX_INFO_LAST
 } zx_object_info_topic_t;
 
@@ -383,6 +385,14 @@ typedef struct zx_info_resource {
 // Argument is a size_t, describing the number of packets a channel
 // endpoint can have pending in its tx direction.
 #define ZX_PROP_CHANNEL_TX_MSG_MAX          12u
+
+// The size of the content in a VMO, in bytes.
+//
+// The content size of a VMO can be larger or smaller than the actual size of
+// the VMO.
+//
+// Argument is a uint64_t.
+#define ZX_PROP_VMO_CONTENT_SIZE            17u
 
 // Describes how important a job is.
 typedef int32_t zx_job_importance_t;

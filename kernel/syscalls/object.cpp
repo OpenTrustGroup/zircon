@@ -26,6 +26,7 @@
 #include <object/socket_dispatcher.h>
 #include <object/thread_dispatcher.h>
 #include <object/vm_address_region_dispatcher.h>
+#include <object/vm_object_dispatcher.h>
 
 #include <fbl/ref_ptr.h>
 
@@ -107,6 +108,26 @@ zx_status_t single_record_result(user_out_ptr<void> _buffer, size_t buffer_size,
     if (actual == 0)
         return ZX_ERR_BUFFER_TOO_SMALL;
     return ZX_OK;
+}
+
+// Build zx_info_vmo_t for a VMO handle.
+zx_info_vmo_t vmo_handle_info(const VmObjectDispatcher* vmod, zx_rights_t rights) {
+    auto vmo = vmod->vmo();
+    zx_info_vmo_t info = {};
+
+    vmo->get_name(info.name, sizeof(info.name));
+    info.koid = vmod->get_koid();
+    info.size_bytes = vmo->size();
+    info.parent_koid = vmo->parent_user_id();
+    info.num_children = vmo->num_children();
+    info.num_mappings = vmo->num_mappings();
+    info.share_count = vmo->share_count();
+    info.flags =
+        (vmo->is_paged() ? ZX_INFO_VMO_TYPE_PAGED : ZX_INFO_VMO_TYPE_PHYSICAL) |
+        (vmo->is_cow_clone() ? ZX_INFO_VMO_IS_COW_CLONE : 0) | ZX_INFO_VMO_VIA_HANDLE;
+    info.committed_bytes = vmo->AllocatedPages() * PAGE_SIZE;
+    info.handle_rights = rights;
+    return info;
 }
 
 } // namespace
@@ -382,6 +403,18 @@ zx_status_t sys_object_get_info(zx_handle_t handle, uint32_t topic,
                     return status;
             }
             return status;
+        }
+        case ZX_INFO_VMO: {
+            fbl::RefPtr<VmObjectDispatcher> vmo;
+            zx_rights_t rights;
+            zx_status_t status = up->GetDispatcherWithRights(
+                handle, ZX_RIGHT_INSPECT, &vmo, &rights);
+            if (status < 0)
+                return status;
+
+            zx_info_vmo_t info = vmo_handle_info(vmo.get(), rights);
+            return single_record_result(
+                _buffer, buffer_size, _actual, _avail, &info, sizeof(info));
         }
         case ZX_INFO_VMAR: {
             fbl::RefPtr<VmAddressRegionDispatcher> vmar;
@@ -706,6 +739,18 @@ zx_status_t sys_object_get_property(zx_handle_t handle_value, uint32_t property,
             }
             return ZX_OK;
         }
+        case ZX_PROP_VMO_CONTENT_SIZE: {
+            if (size < sizeof(uint64_t))
+                return ZX_ERR_BUFFER_TOO_SMALL;
+            auto vmo = DownCastDispatcher<VmObjectDispatcher>(&dispatcher);
+            if (!vmo)
+                return ZX_ERR_WRONG_TYPE;
+            uint64_t value = vmo->GetContentSize();
+            zx_status_t status = _value.reinterpret<uint64_t>().copy_to_user(value);
+            if (status != ZX_OK)
+                return status;
+            return ZX_OK;
+        }
         default:
             return ZX_ERR_INVALID_ARGS;
     }
@@ -804,6 +849,18 @@ zx_status_t sys_object_set_property(zx_handle_t handle_value, uint32_t property,
                 return status;
             return job->set_importance(
                 static_cast<zx_job_importance_t>(value));
+        }
+        case ZX_PROP_VMO_CONTENT_SIZE: {
+            if (size < sizeof(uint64_t))
+                return ZX_ERR_BUFFER_TOO_SMALL;
+            auto vmo = DownCastDispatcher<VmObjectDispatcher>(&dispatcher);
+            if (!vmo)
+                return ZX_ERR_WRONG_TYPE;
+            uint64_t value = 0;
+            zx_status_t status = _value.reinterpret<const uint64_t>().copy_from_user(&value);
+            if (status != ZX_OK)
+                return status;
+            return vmo->SetContentSize(value);
         }
     }
 

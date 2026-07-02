@@ -4,18 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
-#include <align.h>
-#include <zircon/syscalls-next.h>
+#include <kernel/align.h>
 
 #include <fbl/ref_ptr.h>
-#include <ktl/move.h>
 #include <object/pager_dispatcher.h>
 #include <object/vm_object_dispatcher.h>
+#include <vm/page_source.h>
 #include <vm/vm_object_paged.h>
 
 #include "priv.h"
-
-#include <ktl/enforce.h>
 
 namespace {
 
@@ -40,7 +37,7 @@ void split_syscall_flags(uint32_t flags, uint32_t* source_flags, uint32_t* vmo_f
 zx_status_t sys_pager_create(uint32_t options, user_out_handle* out) {
   auto up = ProcessDispatcher::GetCurrent();
 
-  zx_status_t status = up->EnforceBasicPolicy(ZX_POL_NEW_PAGER);
+  zx_status_t status = up->QueryPolicy(ZX_POL_NEW_PAGER);
   if (status != ZX_OK) {
     return status;
   }
@@ -49,14 +46,14 @@ zx_status_t sys_pager_create(uint32_t options, user_out_handle* out) {
     return ZX_ERR_INVALID_ARGS;
   }
 
-  KernelHandle<PagerDispatcher> handle;
+  fbl::RefPtr<Dispatcher> handle;
   zx_rights_t rights;
   status = PagerDispatcher::Create(&handle, &rights);
   if (status != ZX_OK) {
     return status;
   }
 
-  return out->make(ktl::move(handle), rights);
+  return out->make(fbl::move(handle), rights);
 }
 
 // zx_status_t zx_pager_create_vmo
@@ -64,19 +61,19 @@ zx_status_t sys_pager_create_vmo(zx_handle_t pager, uint32_t options, zx_handle_
                                  uint64_t key, uint64_t size, user_out_handle* out) {
   auto up = ProcessDispatcher::GetCurrent();
 
-  zx_status_t status = up->EnforceBasicPolicy(ZX_POL_NEW_VMO);
+  zx_status_t status = up->QueryPolicy(ZX_POL_NEW_VMO);
   if (status != ZX_OK) {
     return status;
   }
 
   fbl::RefPtr<PagerDispatcher> pager_dispatcher;
-  status = up->handle_table().GetDispatcher(pager, &pager_dispatcher);
+  status = up->GetDispatcherWithRights(pager, ZX_RIGHT_NONE, &pager_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
 
   fbl::RefPtr<PortDispatcher> port_dispatcher;
-  status = up->handle_table().GetDispatcherWithRights(port, ZX_RIGHT_WRITE, &port_dispatcher);
+  status = up->GetDispatcherWithRights(port, ZX_RIGHT_WRITE, &port_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
@@ -86,7 +83,7 @@ zx_status_t sys_pager_create_vmo(zx_handle_t pager, uint32_t options, zx_handle_
   split_syscall_flags(options, &source_flags, &vmo_flags);
 
   fbl::RefPtr<PageSource> src;
-  status = pager_dispatcher->CreateSource(ktl::move(port_dispatcher), key, source_flags, &src);
+  status = pager_dispatcher->CreateSource(fbl::move(port_dispatcher), key, source_flags, &src);
   if (status != ZX_OK) {
     return status;
   }
@@ -98,21 +95,20 @@ zx_status_t sys_pager_create_vmo(zx_handle_t pager, uint32_t options, zx_handle_
   }
 
   fbl::RefPtr<VmObjectPaged> vmo;
-  status = VmObjectPaged::CreateExternal(ktl::move(src), vmo_options, size, &vmo);
+  status = VmObjectPaged::CreateExternal(fbl::move(src), vmo_options, size, &vmo);
   if (status != ZX_OK) {
     return status;
   }
 
-  KernelHandle<VmObjectDispatcher> kernel_handle;
+  fbl::RefPtr<Dispatcher> kernel_handle;
   zx_rights_t rights;
-  status = VmObjectDispatcher::Create(vmo, size, pager_dispatcher->get_koid(),
-                                      VmObjectDispatcher::InitialMutability::kMutable,
+  status = VmObjectDispatcher::Create(fbl::move(vmo), pager_dispatcher->get_koid(),
                                       &kernel_handle, &rights);
   if (status != ZX_OK) {
     return status;
   }
 
-  return out->make(ktl::move(kernel_handle), rights);
+  return out->make(fbl::move(kernel_handle), rights);
 }
 
 // zx_status_t zx_pager_detach_vmo
@@ -120,13 +116,13 @@ zx_status_t sys_pager_detach_vmo(zx_handle_t pager, zx_handle_t vmo) {
   auto up = ProcessDispatcher::GetCurrent();
   fbl::RefPtr<PagerDispatcher> pager_dispatcher;
   // TODO: Consider rights on the pager dispatcher.
-  zx_status_t status = up->handle_table().GetDispatcher(pager, &pager_dispatcher);
+  zx_status_t status = up->GetDispatcherWithRights(pager, ZX_RIGHT_NONE, &pager_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
 
   fbl::RefPtr<VmObjectDispatcher> vmo_dispatcher;
-  status = up->handle_table().GetDispatcher(vmo, &vmo_dispatcher);
+  status = up->GetDispatcherWithRights(vmo, ZX_RIGHT_NONE, &vmo_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
@@ -148,13 +144,13 @@ zx_status_t sys_pager_supply_pages(zx_handle_t pager, zx_handle_t pager_vmo, uin
 
   auto up = ProcessDispatcher::GetCurrent();
   fbl::RefPtr<PagerDispatcher> pager_dispatcher;
-  zx_status_t status = up->handle_table().GetDispatcher(pager, &pager_dispatcher);
+  zx_status_t status = up->GetDispatcherWithRights(pager, ZX_RIGHT_NONE, &pager_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
 
   fbl::RefPtr<VmObjectDispatcher> pager_vmo_dispatcher;
-  status = up->handle_table().GetDispatcher(pager_vmo, &pager_vmo_dispatcher);
+  status = up->GetDispatcherWithRights(pager_vmo, ZX_RIGHT_NONE, &pager_vmo_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
@@ -164,7 +160,7 @@ zx_status_t sys_pager_supply_pages(zx_handle_t pager, zx_handle_t pager_vmo, uin
   }
 
   fbl::RefPtr<VmObjectDispatcher> aux_vmo_dispatcher;
-  status = up->handle_table().GetDispatcherWithRights(
+  status = up->GetDispatcherWithRights(
       aux_vmo_handle, ZX_RIGHT_READ | ZX_RIGHT_WRITE, &aux_vmo_dispatcher);
   if (status != ZX_OK) {
     return status;
@@ -188,13 +184,13 @@ zx_status_t sys_pager_op_range(zx_handle_t pager, uint32_t op, zx_handle_t pager
 
   auto up = ProcessDispatcher::GetCurrent();
   fbl::RefPtr<PagerDispatcher> pager_dispatcher;
-  zx_status_t status = up->handle_table().GetDispatcher(pager, &pager_dispatcher);
+  zx_status_t status = up->GetDispatcherWithRights(pager, ZX_RIGHT_NONE, &pager_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
 
   fbl::RefPtr<VmObjectDispatcher> pager_vmo_dispatcher;
-  status = up->handle_table().GetDispatcher(pager_vmo, &pager_vmo_dispatcher);
+  status = up->GetDispatcherWithRights(pager_vmo, ZX_RIGHT_NONE, &pager_vmo_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
@@ -213,13 +209,13 @@ zx_status_t sys_pager_query_dirty_ranges(zx_handle_t pager, zx_handle_t pager_vm
                                          user_out_ptr<size_t> avail) {
   auto up = ProcessDispatcher::GetCurrent();
   fbl::RefPtr<PagerDispatcher> pager_dispatcher;
-  zx_status_t status = up->handle_table().GetDispatcher(pager, &pager_dispatcher);
+  zx_status_t status = up->GetDispatcherWithRights(pager, ZX_RIGHT_NONE, &pager_dispatcher);
   if (status != ZX_OK) {
     return status;
   }
 
   fbl::RefPtr<VmObjectDispatcher> pager_vmo_dispatcher;
-  status = up->handle_table().GetDispatcher(pager_vmo, &pager_vmo_dispatcher);
+  status = up->GetDispatcherWithRights(pager_vmo, ZX_RIGHT_NONE, &pager_vmo_dispatcher);
   if (status != ZX_OK) {
     return status;
   }

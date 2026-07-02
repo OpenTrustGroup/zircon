@@ -23,6 +23,7 @@ __BEGIN_CDECLS
 #define ZX_PKT_TYPE_GUEST_IO        0x05u
 #define ZX_PKT_TYPE_GUEST_VCPU      0x06u
 #define ZX_PKT_TYPE_INTERRUPT       0x07u
+#define ZX_PKT_TYPE_PAGE_REQUEST    0x09u
 #define ZX_PKT_TYPE_EXCEPTION(n)    (0x08u | (((n) & 0xFFu) << 8))
 
 
@@ -36,6 +37,7 @@ __BEGIN_CDECLS
 #define ZX_PKT_IS_GUEST_IO(type)    ((type) == ZX_PKT_TYPE_GUEST_IO)
 #define ZX_PKT_IS_GUEST_VCPU(type)  ((type) == ZX_PKT_TYPE_GUEST_VCPU)
 #define ZX_PKT_IS_INTERRUPT(type)   ((type) == ZX_PKT_TYPE_INTERRUPT)
+#define ZX_PKT_IS_PAGE_REQUEST(type) ((type) == ZX_PKT_TYPE_PAGE_REQUEST)
 #define ZX_PKT_IS_EXCEPTION(type)   (((type) & ZX_PKT_TYPE_MASK) == ZX_PKT_TYPE_EXCEPTION(0))
 
 #define ZX_PKT_GUEST_VCPU_INTERRUPT  0
@@ -126,6 +128,20 @@ typedef struct zx_packet_interrupt {
     zx_time_t timestamp;
 } zx_packet_interrupt_t;
 
+typedef struct zx_packet_page_request {
+    uint16_t command;
+    uint16_t flags;
+    uint32_t reserved0;
+    uint64_t offset;
+    uint64_t length;
+    uint64_t reserved1;
+} zx_packet_page_request_t;
+
+// Pager commands
+#define ZX_PAGER_VMO_READ           (1u)
+#define ZX_PAGER_VMO_DIRTY          (2u)
+#define ZX_PAGER_VMO_COMPLETE       (3u)
+
 typedef struct zx_port_packet {
     uint64_t key;
     uint32_t type;
@@ -139,6 +155,7 @@ typedef struct zx_port_packet {
         zx_packet_guest_io_t guest_io;
         zx_packet_guest_vcpu_t guest_vcpu;
         zx_packet_interrupt_t interrupt;
+        zx_packet_page_request_t page_request;
     };
 } zx_port_packet_t;
 

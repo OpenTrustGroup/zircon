@@ -43,6 +43,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/timer.cpp \
     $(LOCAL_DIR)/vmar.cpp \
     $(LOCAL_DIR)/vmo.cpp \
+    $(LOCAL_DIR)/pager.cpp \
 
 ifeq ($(ARCH),x86)
 MODULE_SRCS += $(LOCAL_DIR)/system_x86.cpp

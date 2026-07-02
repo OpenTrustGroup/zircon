@@ -235,6 +235,15 @@ typedef uint32_t zx_rights_t;
 #define ZX_VMO_OP_CACHE_INVALIDATE       7u
 #define ZX_VMO_OP_CACHE_CLEAN            8u
 #define ZX_VMO_OP_CACHE_CLEAN_INVALIDATE 9u
+enum { ZX_VMO_OP_ALWAYS_NEED = 10u, ZX_VMO_OP_DONT_NEED = 11u };
+
+// Pager opcodes
+#define ZX_PAGER_OP_FAIL                1u
+#define ZX_PAGER_OP_DIRTY               2u
+#define ZX_PAGER_OP_WRITEBACK_BEGIN     3u
+#define ZX_PAGER_OP_WRITEBACK_END       4u
+
+#define ZX_VMO_TRAP_DIRTY               (1u << 0)
 
 // VM Object clone flags
 #define ZX_VMO_CLONE_COPY_ON_WRITE       1u
@@ -251,6 +260,9 @@ typedef uint32_t zx_rights_t;
 #define ZX_VM_FLAG_CAN_MAP_WRITE      (1u << 8)
 #define ZX_VM_FLAG_CAN_MAP_EXECUTE    (1u << 9)
 #define ZX_VM_FLAG_MAP_RANGE          (1u << 10)
+#define ZX_VM_FLAG_MAP_CONTIGUOUS     (1u << 11)
+enum { ZX_VM_PERM_READ = ZX_VM_FLAG_PERM_READ, ZX_VM_PERM_WRITE = ZX_VM_FLAG_PERM_WRITE, ZX_VM_SPECIFIC = ZX_VM_FLAG_SPECIFIC, ZX_VM_CAN_MAP_SPECIFIC = ZX_VM_FLAG_CAN_MAP_SPECIFIC, ZX_VM_CAN_MAP_READ = ZX_VM_FLAG_CAN_MAP_READ, ZX_VM_CAN_MAP_WRITE = ZX_VM_FLAG_CAN_MAP_WRITE };
+enum { ZX_VMAR_OP_COMMIT = 1u, ZX_VMAR_OP_DONT_NEED = 4u, ZX_VMAR_OP_ALWAYS_NEED = 5u };
 
 // clock ids
 #define ZX_CLOCK_MONOTONIC        (0u)
@@ -365,7 +377,21 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_PROFILE         ((zx_obj_type_t)25u)
 #define ZX_OBJ_TYPE_PMT             ((zx_obj_type_t)26u)
 #define ZX_OBJ_TYPE_SUSPEND_TOKEN   ((zx_obj_type_t)27u)
-#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)28u)
+#define ZX_OBJ_TYPE_PAGER           ((zx_obj_type_t)28u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)29u)
+
+// Range type used by the zx_pager_query_dirty_ranges() syscall.
+typedef struct zx_vmo_dirty_range {
+  // Represents the range [offset, offset + length).
+  uint64_t offset;
+  uint64_t length;
+  // Any options applicable to the range.
+  // ZX_VMO_DIRTY_RANGE_IS_ZERO indicates that the range contains all zeros.
+  uint64_t options;
+} zx_vmo_dirty_range_t;
+
+// options flags for zx_vmo_dirty_range_t
+#define ZX_VMO_DIRTY_RANGE_IS_ZERO ((uint64_t)1u)
 
 typedef struct {
     zx_handle_t handle;

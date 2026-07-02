@@ -34,6 +34,16 @@ public:
         return zx_vmar_map(get(), vmar_offset, vmo_handle.get(), vmo_offset, len, flags, ptr);
     }
 
+    // Modern argument order used by ported pager tests.
+    zx_status_t map(uint32_t flags, size_t vmar_offset, const vmo& vmo_handle, uint64_t vmo_offset,
+                    size_t len, uintptr_t* ptr) const {
+        return zx_vmar_map(get(), flags, vmar_offset, vmo_handle.get(), vmo_offset, len, ptr);
+    }
+
+    // Test-oriented compatibility for zx_vmar_op_range.
+    zx_status_t op_range(uint32_t op, uintptr_t address, size_t size, void* buffer,
+                         size_t buffer_size) const;
+
     zx_status_t unmap(uintptr_t address, size_t len) const {
         return zx_vmar_unmap(get(), address, len);
     }
