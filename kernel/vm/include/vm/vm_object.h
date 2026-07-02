@@ -283,6 +283,12 @@ public:
         return ZX_OK;
     }
 
+    // Called on each child when this parent is resized so a COW clone can clip
+    // its view of the parent. Runs under the shared parent/child lock. Default
+    // is a no-op for objects that are not COW clones.
+    virtual void OnParentResizeLocked(uint64_t parent_new_size)
+        TA_NO_THREAD_SAFETY_ANALYSIS {}
+
 protected:
     // private constructor (use Create())
     explicit VmObject(fbl::RefPtr<VmObject> parent);

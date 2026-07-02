@@ -1244,8 +1244,6 @@ TEST(Pager, CloneResizeCloneHazard) {
   EXPECT_EQ(ZX_OK, zx::vmar::root_self().unmap(ptr_rw, 2 * zx_system_get_page_size()), "unmap");
 }
 
-// [PORT-BLOCKED] CloneResizeParentOK blocked because ZX_VMO_RESIZABLE is not supported in 2018 kernel pager.
-/*
 // Resizing the parent VMO and accessing via a mapped VMO is ok.
 TEST(Pager, CloneResizeParentOK) {
   UserPager pager;
@@ -1258,12 +1256,15 @@ TEST(Pager, CloneResizeParentOK) {
   ASSERT_TRUE(pager.SupplyPages(vmo, 0, 2));
 
   zx::vmo clone_vmo;
-  ASSERT_EQ(ZX_OK,
-            vmo->vmo().create_child(ZX_VMO_CHILD_SNAPSHOT_AT_LEAST_ON_WRITE, 0, kSize, &clone_vmo));
+  // The 2018 kernel exposes copy-on-write clones rather than the upstream
+  // SNAPSHOT_AT_LEAST_ON_WRITE child; a COW clone keeps its faulted-in pages
+  // alive after the parent pager VMO is resized away, which is what this test
+  // exercises.
+  ASSERT_EQ(ZX_OK, vmo->vmo().clone(ZX_VMO_CLONE_COPY_ON_WRITE, 0, kSize, &clone_vmo));
 
   uintptr_t ptr_rw;
-  EXPECT_EQ(ZX_OK, zx::vmar::root_self()->map(ZX_VM_PERM_READ | ZX_VM_PERM_WRITE, 0, clone_vmo, 0,
-                                              kSize, &ptr_rw));
+  EXPECT_EQ(ZX_OK, zx::vmar::root_self().map(0, clone_vmo, 0, kSize,
+                                             ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE, &ptr_rw));
 
   auto int_arr = reinterpret_cast<int*>(ptr_rw);
   EXPECT_EQ(int_arr[1], 0);
@@ -1273,12 +1274,9 @@ TEST(Pager, CloneResizeParentOK) {
   EXPECT_EQ(true, probe_for_read(&int_arr[1]), "read probe");
   EXPECT_EQ(true, probe_for_write(&int_arr[1]), "write probe");
 
-  EXPECT_EQ(ZX_OK, zx::vmar::root_self()->unmap(ptr_rw, kSize), "unmap");
+  EXPECT_EQ(ZX_OK, zx::vmar::root_self().unmap(ptr_rw, kSize), "unmap");
 }
-*/
 
-// [PORT-BLOCKED] CloneShrinkGrowParent blocked because ZX_VMO_RESIZABLE is not supported in 2018.
-/*
 // Pages exposed by growing the parent after shrinking it aren't visible to the child.
 TEST(Pager, CloneShrinkGrowParent) {
   struct {
@@ -1310,15 +1308,17 @@ TEST(Pager, CloneShrinkGrowParent) {
     ASSERT_EQ(ZX_OK, zx::vmo::create(config.vmo_size, 0, &aux));
     ASSERT_EQ(ZX_OK, aux.op_range(ZX_VMO_OP_COMMIT, 0, config.vmo_size, nullptr, 0));
     ASSERT_TRUE(
-        pager.SupplyPages(vmo, 0, config.vmo_size / zx_system_get_page_size(), std::move(aux)));
+        pager.SupplyPages(vmo, 0, config.vmo_size / zx_system_get_page_size(), fbl::move(aux)));
 
     zx::vmo clone_vmo;
-    ASSERT_EQ(ZX_OK, vmo->vmo().create_child(ZX_VMO_CHILD_SNAPSHOT_AT_LEAST_ON_WRITE,
-                                             config.clone_offset, config.vmo_size, &clone_vmo));
+    // 2018 exposes copy-on-write clones instead of SNAPSHOT_AT_LEAST_ON_WRITE
+    // children; the resize hazards being verified here are identical.
+    ASSERT_EQ(ZX_OK, vmo->vmo().clone(ZX_VMO_CLONE_COPY_ON_WRITE, config.clone_offset,
+                                      config.vmo_size, &clone_vmo));
 
     uintptr_t ptr_ro;
-    EXPECT_EQ(ZX_OK, zx::vmar::root_self()->map(ZX_VM_PERM_READ, 0, clone_vmo, 0, config.clone_size,
-                                                &ptr_ro));
+    EXPECT_EQ(ZX_OK, zx::vmar::root_self().map(0, clone_vmo, 0, config.clone_size,
+                                               ZX_VM_FLAG_PERM_READ, &ptr_ro));
 
     auto ptr = reinterpret_cast<int*>(ptr_ro + config.clone_test_offset);
     EXPECT_EQ(0, *ptr);
@@ -1338,17 +1338,16 @@ TEST(Pager, CloneShrinkGrowParent) {
     ASSERT_EQ(ZX_OK, zx::vmo::create(config.vmo_size, 0, &aux));
     ASSERT_EQ(ZX_OK, aux.op_range(ZX_VMO_OP_COMMIT, 0, config.vmo_size, nullptr, 0));
     ASSERT_TRUE(
-        pager.SupplyPages(vmo, 0, config.vmo_size / zx_system_get_page_size(), std::move(aux)));
+        pager.SupplyPages(vmo, 0, config.vmo_size / zx_system_get_page_size(), fbl::move(aux)));
 
     data = 2;
     EXPECT_EQ(ZX_OK, vmo->vmo().write(&data, vmo_offset, sizeof(data)));
 
     EXPECT_EQ(0, *ptr);
 
-    EXPECT_EQ(ZX_OK, zx::vmar::root_self()->unmap(ptr_ro, config.clone_size));
+    EXPECT_EQ(ZX_OK, zx::vmar::root_self().unmap(ptr_ro, config.clone_size));
   }
 }
-*/
 
 // Tests that a commit properly populates the whole range.
 TEST(Pager, SimpleCommitTest) {
