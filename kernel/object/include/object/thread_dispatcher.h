@@ -41,6 +41,20 @@ public:
         }
     };
 
+    // Reason a thread is blocked. Upstream records this on the thread for
+    // diagnostics; the 2018 kernel has no such field, so AutoBlocked below is a
+    // no-op that only lets upstream code (e.g. PagerProxy::WaitOnEvent) compile.
+    enum class Blocked {
+        PAGER,
+    };
+
+    // Scoped RAII that marks the current thread as blocked for |reason| while in
+    // scope. No-op in 2018 (no per-thread blocked-reason tracking).
+    class AutoBlocked final {
+    public:
+        explicit AutoBlocked(Blocked reason) { (void)reason; }
+    };
+
     // state of the thread
     enum class State {
         INITIAL,     // newly created thread

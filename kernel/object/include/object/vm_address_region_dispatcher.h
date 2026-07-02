@@ -38,6 +38,8 @@ public:
 
     zx_status_t Protect(vaddr_t base, size_t len, uint32_t flags);
 
+    zx_status_t RangeOp(vaddr_t base, size_t len, uint32_t op);
+
     zx_status_t Unmap(vaddr_t base, size_t len);
 
     const fbl::RefPtr<VmAddressRegion>& vmar() const { return vmar_; }

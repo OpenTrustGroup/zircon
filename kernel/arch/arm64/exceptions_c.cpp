@@ -158,7 +158,8 @@ static void arm64_instruction_abort_handler(struct arm64_iframe_long* iframe, ui
     kcounter_add(exceptions_page, 1);
     zx_status_t err = vmm_page_fault_handler(far, pf_flags);
     arch_disable_ints();
-    if (err >= 0)
+    // Return to the pending-signal path for interrupted user pager faults.
+    if (err >= 0 || (is_user && err == ZX_ERR_INTERNAL_INTR_RETRY))
         return;
 
     // If this is from user space, let the user exception handler
@@ -203,7 +204,8 @@ static void arm64_data_abort_handler(struct arm64_iframe_long* iframe, uint exce
         kcounter_add(exceptions_page, 1);
         zx_status_t err = vmm_page_fault_handler(far, pf_flags);
         arch_disable_ints();
-        if (err >= 0) {
+        // Return to the pending-signal path for interrupted user pager faults.
+        if (err >= 0 || (is_user && err == ZX_ERR_INTERNAL_INTR_RETRY)) {
             return;
         }
     }

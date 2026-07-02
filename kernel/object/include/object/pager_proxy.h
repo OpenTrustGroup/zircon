@@ -14,6 +14,8 @@
 #include <object/port_dispatcher.h>
 #include <vm/page_source.h>
 
+class PagerDispatcher;
+
 // Page provider implementation that talks to a userspace pager service.
 //
 // The lifecycle of this class is a little complicated because the pager dispatcher's port
@@ -98,7 +100,7 @@ class PagerProxy : public PageProvider,
   // dispatcher serves as packet_'s allocator. This informs the dispatcher when
   // packet_ is freed by the port, which lets the single packet be continuously reused
   // for all of the source's page requests.
-  PortPacket packet_ = PortPacket(nullptr, this);
+  PortPacket packet_;
   // Bool indicating whether or not packet_ is currently queued in the port.
   bool packet_busy_ TA_GUARDED(mtx_) = false;
   // The page_request_t which corresponds to the current packet_. Can be set to nullptr if the

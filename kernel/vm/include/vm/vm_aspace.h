@@ -148,6 +148,11 @@ public:
     uintptr_t vdso_code_address() const;
 #endif
 
+    // [2018 shim] Upstream resolves a captured user-copy fault via SoftFault; the
+    // 2018 kernel resolves faults inline, so this simply forwards to the software
+    // page-fault path. Provided so upstream callers (e.g. QueryDirtyRanges) build.
+    zx_status_t SoftFault(vaddr_t va, uint flags) { return PageFault(va, flags); }
+
 protected:
     // Share the aspace lock with VmAddressRegion/VmMapping so they can serialize
     // changes to the aspace.

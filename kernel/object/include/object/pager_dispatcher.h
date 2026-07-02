@@ -14,16 +14,19 @@
 #include <object/pager_proxy.h>
 #include <object/port_dispatcher.h>
 
-class PagerDispatcher final : public SoloDispatcher<PagerDispatcher, ZX_DEFAULT_PAGER_RIGHTS> {
+class PageSource;
+class PagerProxy;
+
+class PagerDispatcher final : public SoloDispatcher {
  public:
-  static zx_status_t Create(KernelHandle<PagerDispatcher>* handle, zx_rights_t* rights);
+  static zx_status_t Create(fbl::RefPtr<Dispatcher>* handle, zx_rights_t* rights);
   ~PagerDispatcher() final;
 
   zx_status_t CreateSource(fbl::RefPtr<PortDispatcher> port, uint64_t key, uint32_t options,
                            fbl::RefPtr<PageSource>* src_out);
   // Drop and return this object's reference to |proxy|. Must be called under
   // |proxy|'s lock to prevent races with dispatcher teardown.
-  fbl::RefPtr<PagerProxy> ReleaseProxy(PagerProxy* proxy) TA_REQ(proxy->mtx_);
+  fbl::RefPtr<PagerProxy> ReleaseProxy(PagerProxy* proxy);
 
   zx_status_t RangeOp(uint32_t op, fbl::RefPtr<VmObject> vmo, uint64_t offset, uint64_t length,
                       uint64_t data);

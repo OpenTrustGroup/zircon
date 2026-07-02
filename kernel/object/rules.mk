@@ -50,6 +50,8 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/vm_address_region_dispatcher.cpp \
     $(LOCAL_DIR)/vm_object_dispatcher.cpp \
     $(LOCAL_DIR)/wait_state_observer.cpp \
+    $(LOCAL_DIR)/pager_dispatcher.cpp \
+    $(LOCAL_DIR)/pager_proxy.cpp \
 
 # Tests
 MODULE_SRCS += \

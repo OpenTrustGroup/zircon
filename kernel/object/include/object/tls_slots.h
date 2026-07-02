@@ -12,6 +12,7 @@
 // and tls_set_callback(). Add entries here up to THREAD_MAX_TLS_ENTRY - 1.
 
 #define TLS_ENTRY_KOBJ_DELETER      0
-#define TLS_ENTRY_LAST              1
+#define TLS_ENTRY_VMO_DELETER       1
+#define TLS_ENTRY_LAST              2
 
 static_assert(TLS_ENTRY_LAST <= (THREAD_MAX_TLS_ENTRY - 1), "");

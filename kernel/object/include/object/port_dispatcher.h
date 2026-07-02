@@ -141,6 +141,9 @@ private:
     fbl::RefPtr<PortDispatcher> const port_;
 };
 
+typedef bool (*match_fn_t)(const PortPacket &queue_packet,
+        const zx_port_packet_t &packet);
+
 class PortDispatcher final : public SoloDispatcher {
 public:
     static void Init();
@@ -170,6 +173,9 @@ public:
     // Called under the handle table lock. Returns true if at least one packet was
     // removed from the queue.
     bool CancelQueued(const void* handle, uint64_t key);
+    bool CancelQueued(PortPacket* port_packet);
+
+    bool IsQueued(match_fn_t fn, const zx_port_packet_t& packet);
 
     // Bits for options passed to port_create
     static constexpr uint32_t PORT_BIND_TO_INTERRUPT = (1u << 0);

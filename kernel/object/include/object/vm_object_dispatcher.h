@@ -18,7 +18,14 @@
 class VmObjectDispatcher final : public SoloDispatcher,
                                  public VmObjectChildObserver {
 public:
+    static zx_status_t parse_create_syscall_flags(uint32_t flags, uint32_t* out_flags);
+
     static zx_status_t Create(fbl::RefPtr<VmObject> vmo,
+                              fbl::RefPtr<Dispatcher>* dispatcher,
+                              zx_rights_t* rights);
+
+    static zx_status_t Create(fbl::RefPtr<VmObject> vmo,
+                              zx_koid_t pager_koid,
                               fbl::RefPtr<Dispatcher>* dispatcher,
                               zx_rights_t* rights);
     ~VmObjectDispatcher() final;
@@ -26,6 +33,7 @@ public:
     // VmObjectChildObserver implementation.
     void OnZeroChild() final;
     void OnOneChild() final;
+    void on_zero_handles() final;
 
     // SoloDispatcher implementation.
     zx_obj_type_t get_type() const final { return ZX_OBJ_TYPE_VMO; }
@@ -41,6 +49,10 @@ public:
                       uint64_t offset);
     zx_status_t SetSize(uint64_t);
     zx_status_t GetSize(uint64_t* size);
+    zx_status_t SetContentSize(uint64_t content_size);
+    uint64_t GetContentSize() const;
+    uint64_t ExpandContentIfNeeded(uint64_t requested_content_size,
+                                   uint64_t zero_until_offset);
     zx_status_t RangeOp(uint32_t op, uint64_t offset, uint64_t size, user_inout_ptr<void> buffer,
                         size_t buffer_size);
     zx_status_t Clone(
@@ -50,9 +62,10 @@ public:
     zx_status_t SetMappingCachePolicy(uint32_t cache_policy);
 
     const fbl::RefPtr<VmObject>& vmo() const { return vmo_; }
+    zx_koid_t pager_koid() const { return pager_koid_; }
 
 private:
-    explicit VmObjectDispatcher(fbl::RefPtr<VmObject> vmo);
+    explicit VmObjectDispatcher(fbl::RefPtr<VmObject> vmo, zx_koid_t pager_koid = 0);
 
     fbl::Canary<fbl::magic("VMOD")> canary_;
 
@@ -60,6 +73,10 @@ private:
     // ourselves to |vmo_| so we have to ensure we don't reset vmo_
     // except during destruction.
     fbl::RefPtr<VmObject> const vmo_;
+
+    const zx_koid_t pager_koid_;
+
+    uint64_t content_size_ TA_GUARDED(get_lock());
 
     // VMOs do not currently maintain any VMO-specific signal state,
     // but do allow user signals to be set. In addition, the CookieJar

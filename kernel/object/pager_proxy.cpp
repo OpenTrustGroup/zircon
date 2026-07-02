@@ -4,11 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
+#include <inttypes.h>
 #include <lib/boot-options/boot-options.h>
 #include <lib/counters.h>
 #include <trace.h>
-#include <zircon/syscalls-next.h>
+#include <ktl/move.h>
 
+#include <kernel/cmdline.h>
+#include <kernel/deadline.h>
+#include <kernel/thread.h>
 #include <lk/init.h>
 #include <object/pager_dispatcher.h>
 #include <object/pager_proxy.h>
@@ -16,11 +20,11 @@
 
 #define LOCAL_TRACE 0
 
-KCOUNTER(dispatcher_pager_overtime_wait_count, "dispatcher.pager.overtime_waits")
-KCOUNTER(dispatcher_pager_total_request_count, "dispatcher.pager.total_requests")
-KCOUNTER(dispatcher_pager_succeeded_request_count, "dispatcher.pager.succeeded_requests")
-KCOUNTER(dispatcher_pager_failed_request_count, "dispatcher.pager.failed_requests")
-KCOUNTER(dispatcher_pager_timed_out_request_count, "dispatcher.pager.timed_out_requests")
+KCOUNTER(dispatcher_pager_overtime_wait_count, "dispatcher.pager.overtime_waits");
+KCOUNTER(dispatcher_pager_total_request_count, "dispatcher.pager.total_requests");
+KCOUNTER(dispatcher_pager_succeeded_request_count, "dispatcher.pager.succeeded_requests");
+KCOUNTER(dispatcher_pager_failed_request_count, "dispatcher.pager.failed_requests");
+KCOUNTER(dispatcher_pager_timed_out_request_count, "dispatcher.pager.timed_out_requests");
 
 namespace {
 
@@ -31,11 +35,35 @@ const PageSourceProperties kProperties{
     .is_handling_free = false,
 };
 
+BootOptions g_pager_boot_options;
+
+// [2018 shim] Upstream's Thread::Current::Get() returns the running thread; map
+// it onto the 2018 C thread API so the dump_thread() call in WaitOnEvent below
+// compiles unchanged.
+namespace Thread {
+namespace Current {
+inline thread_t* Get() { return get_current_thread(); }
+}  // namespace Current
+}  // namespace Thread
+
 }  // namespace
+
+// [2018 shim] gBootOptions provides the user-pager overtime knobs upstream reads.
+// Populate them from the kernel command line once threading is up; defaults match
+// upstream (warn after 20s, abort after 300s).
+BootOptions* gBootOptions = &g_pager_boot_options;
+
+static void pager_boot_options_init(uint level) {
+    gBootOptions->userpager_overtime_wait_seconds =
+        cmdline_get_uint64("kernel.userpager.overtime_wait_seconds", 20);
+    gBootOptions->userpager_overtime_timeout_seconds =
+        cmdline_get_uint64("kernel.userpager.overtime_timeout_seconds", 300);
+}
+LK_INIT_HOOK(pager_boot_options, pager_boot_options_init, LK_INIT_LEVEL_THREADING);
 
 PagerProxy::PagerProxy(PagerDispatcher* dispatcher, fbl::RefPtr<PortDispatcher> port, uint64_t key,
                        uint32_t options)
-    : pager_(dispatcher), port_(ktl::move(port)), key_(key), options_(options) {
+    : pager_(dispatcher), port_(ktl::move(port)), key_(key), packet_(nullptr, this), options_(options) {
   LTRACEF("%p key %lx options %x\n", this, key_, options_);
 }
 
@@ -107,7 +135,7 @@ void PagerProxy::QueuePacketLocked(PageRequest* request) {
   // We can treat ZX_ERR_BAD_HANDLE as if the packet was queued
   // but the pager service never responds.
   // TODO: Bypass the port's max queued packet count to prevent ZX_ERR_SHOULD_WAIT
-  ASSERT(port_->Queue(&packet_, ZX_SIGNAL_NONE) != ZX_ERR_SHOULD_WAIT);
+  ASSERT(port_->Queue(&packet_, 0, 0) != ZX_ERR_SHOULD_WAIT);
 }
 
 void PagerProxy::ClearAsyncRequest(PageRequest* request) {
@@ -128,6 +156,7 @@ void PagerProxy::ClearAsyncRequest(PageRequest* request) {
     active_request_ = nullptr;
     // Condition on whether or not we actually cancel the packet, to make sure
     // we don't race with a call to PagerProxy::Free.
+    // Restore packet-identity cancellation for pager's handle-less packet.
     if (port_->CancelQueued(&packet_)) {
       OnPacketFreedLocked();
     }
@@ -306,7 +335,7 @@ zx_status_t PagerProxy::WaitOnEvent(Event* event) {
     // We might trigger this loop multiple times as we exceed multiples of the overtime counter, but
     // we only want to count each unique overtime event in the kcounter.
     if (waited == 1) {
-      dispatcher_pager_overtime_wait_count.Add(1);
+      kcounter_add(dispatcher_pager_overtime_wait_count, 1);
     }
 
     // Error out if we've been waiting for longer than the specified timeout, to allow the rest of

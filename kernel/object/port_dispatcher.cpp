@@ -291,16 +291,40 @@ zx_status_t PortDispatcher::Dequeue(zx_time_t deadline, zx_port_packet_t* out_pa
                 return ZX_OK;
             }
         }
+
+        PortPacket* packet_to_free = nullptr;
         {
             AutoLock al(get_lock());
             PortPacket* port_packet = packets_.pop_front();
-            if (port_packet != nullptr) {
+            if (port_packet == nullptr) {
+                goto wait;
+            }
+
+            if (out_packet != nullptr) {
                 *out_packet = port_packet->packet;
-                FreePacket(port_packet);
-                return ZX_OK;
+            }
+
+            PortObserver* observer = port_packet->observer;
+
+            if (observer) {
+                // Deleting the observer under the lock is fine because
+                // the reference that holds to this PortDispatcher is by
+                // construction not the last one. We need to do this under
+                // the lock because another thread can call CanReap().
+                delete observer;
+            } else if (port_packet->is_ephemeral()) {
+                // Defer packet allocator callbacks until after releasing port lock.
+                packet_to_free = port_packet;
             }
         }
 
+        if (packet_to_free) {
+            packet_to_free->Free();
+        }
+
+        return ZX_OK;
+
+wait:
         zx_status_t st = sema_.Wait(deadline, nullptr);
         if (st != ZX_OK)
             return st;
@@ -409,6 +433,32 @@ bool PortDispatcher::CancelQueued(const void* handle, uint64_t key) {
 
     return packet_removed;
 }
+
+bool PortDispatcher::CancelQueued(PortPacket* port_packet) {
+    canary_.Assert();
+
+    AutoLock al(get_lock());
+    if (!port_packet->InContainer())
+        return false;
+    DEBUG_ASSERT(port_packet->observer == nullptr);
+    packets_.erase(*port_packet);
+    return true;
+}
+
+bool PortDispatcher::IsQueued(match_fn_t fn, const zx_port_packet_t& packet) {
+    canary_.Assert();
+
+    AutoLock al(get_lock());
+
+    for (auto it = packets_.begin(); it != packets_.end(); ++it) {
+        if (fn(*it, packet)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 
 void PortDispatcher::LinkExceptionPort(ExceptionPort* eport) {
     canary_.Assert();
