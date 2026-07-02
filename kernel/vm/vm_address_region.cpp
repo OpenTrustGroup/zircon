@@ -392,7 +392,7 @@ size_t VmAddressRegion::AllocatedPagesLocked() const {
     return sum;
 }
 
-zx_status_t VmAddressRegion::PageFault(vaddr_t va, uint pf_flags) {
+zx_status_t VmAddressRegion::PageFault(vaddr_t va, uint pf_flags, LazyPageRequest* page_request) {
     canary_.Assert();
     DEBUG_ASSERT(is_mutex_held(aspace_->lock()));
 
@@ -400,7 +400,7 @@ zx_status_t VmAddressRegion::PageFault(vaddr_t va, uint pf_flags) {
          auto next = vmar->FindRegionLocked(va);
          vmar = next->as_vm_address_region()) {
         if (next->is_mapping())
-            return next->PageFault(va, pf_flags);
+            return next->PageFault(va, pf_flags, page_request);
     }
 
     return ZX_ERR_NOT_FOUND;
@@ -760,6 +760,70 @@ zx_status_t VmAddressRegion::Protect(vaddr_t base, size_t size, uint new_arch_mm
         }
 
         itr = fbl::move(next);
+    }
+
+    return ZX_OK;
+}
+
+zx_status_t VmAddressRegion::RangeOp(vaddr_t base, size_t size, uint32_t op) {
+    canary_.Assert();
+
+    size = ROUNDUP(size, PAGE_SIZE);
+    if (size == 0 || !IS_PAGE_ALIGNED(base)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    AutoLock guard(aspace_->lock());
+    if (state_ != LifeCycleState::ALIVE) {
+        return ZX_ERR_BAD_STATE;
+    }
+
+    if (!is_in_range(base, size)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    return RangeOpLocked(base, size, op);
+}
+
+zx_status_t VmAddressRegion::RangeOpLocked(vaddr_t base, size_t size, uint32_t op) {
+    DEBUG_ASSERT(is_mutex_held(aspace_->lock()));
+
+    if (subregions_.is_empty()) {
+        return ZX_ERR_BAD_STATE;
+    }
+
+    const vaddr_t end_addr = base + size;
+    const auto end = subregions_.lower_bound(end_addr);
+    auto begin = --subregions_.upper_bound(base);
+    if (!begin.IsValid() || begin->base() + begin->size() <= base) {
+        return ZX_ERR_BAD_STATE;
+    }
+
+    vaddr_t last_mapped = base;
+    for (auto itr = begin; itr != end; ++itr) {
+        if (itr->base() > last_mapped) {
+            return ZX_ERR_BAD_STATE;
+        }
+        if (itr->base() + itr->size() > last_mapped) {
+            last_mapped = itr->base() + itr->size();
+        }
+    }
+    if (last_mapped < end_addr) {
+        return ZX_ERR_BAD_STATE;
+    }
+
+    for (auto itr = begin; itr != end; ++itr) {
+        const vaddr_t curr_end = itr->base() + itr->size();
+        const vaddr_t op_base = fbl::max(itr->base(), base);
+        const vaddr_t op_end = fbl::min(curr_end, end_addr);
+        const size_t op_size = op_end - op_base;
+
+        zx_status_t status = itr->is_mapping()
+            ? itr->as_vm_mapping()->RangeOp(op_base, op_size, op)
+            : itr->as_vm_address_region()->RangeOpLocked(op_base, op_size, op);
+        if (status != ZX_OK) {
+            return status;
+        }
     }
 
     return ZX_OK;

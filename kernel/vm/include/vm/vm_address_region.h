@@ -115,7 +115,7 @@ public:
 
     // Page fault in an address within the region.  Recursively traverses
     // the regions to find the target mapping, if it exists.
-    virtual zx_status_t PageFault(vaddr_t va, uint pf_flags) = 0;
+    virtual zx_status_t PageFault(vaddr_t va, uint pf_flags, LazyPageRequest* page_request) = 0;
 
     // WAVL tree key function
     vaddr_t GetKey() const { return base(); }
@@ -231,11 +231,14 @@ public:
     // Protect() will fail.
     virtual zx_status_t Protect(vaddr_t base, size_t size, uint new_arch_mmu_flags);
 
+    // Run a range operation through mappings in this VMAR.
+    virtual zx_status_t RangeOp(vaddr_t base, size_t size, uint32_t op);
+
     const char* name() const { return name_; }
     bool is_mapping() const override { return false; }
 
     void Dump(uint depth, bool verbose) const override;
-    zx_status_t PageFault(vaddr_t va, uint pf_flags) override;
+    zx_status_t PageFault(vaddr_t va, uint pf_flags, LazyPageRequest* page_request) override;
 
 protected:
     // constructor for use in creating a VmAddressRegionDummy
@@ -271,6 +274,9 @@ private:
 
     // Version of FindRegion() that does not acquire the aspace lock
     fbl::RefPtr<VmAddressRegionOrMapping> FindRegionLocked(vaddr_t addr);
+
+    // Version of RangeOp() that does not acquire the aspace lock.
+    zx_status_t RangeOpLocked(vaddr_t base, size_t size, uint32_t op);
 
     // Version of Destroy() that does not acquire the aspace lock
     zx_status_t DestroyLocked() override;
@@ -360,6 +366,10 @@ public:
         return ZX_ERR_BAD_STATE;
     }
 
+    zx_status_t RangeOp(vaddr_t base, size_t size, uint32_t op) override {
+        return ZX_ERR_BAD_STATE;
+    }
+
     zx_status_t Unmap(vaddr_t base, size_t size) override {
         return ZX_ERR_BAD_STATE;
     }
@@ -368,7 +378,7 @@ public:
         return;
     }
 
-    zx_status_t PageFault(vaddr_t va, uint pf_flags) override {
+    zx_status_t PageFault(vaddr_t va, uint pf_flags, LazyPageRequest* page_request) override {
         // We should never be trying to page fault on this...
         ASSERT(false);
         return ZX_ERR_BAD_STATE;
@@ -417,6 +427,9 @@ public:
     // Map in pages from the underlying vm object, optionally committing pages as it goes
     zx_status_t MapRange(size_t offset, size_t len, bool commit);
 
+    // Run a VMO range operation through this mapping.
+    zx_status_t RangeOp(vaddr_t base, size_t size, uint32_t op);
+
     // Unmap a subset of the region of memory in the containing address space,
     // returning it to the parent region to allocate.  If all of the memory is unmapped,
     // Destroy()s this mapping.  If a subrange of the mapping is specified, the
@@ -432,7 +445,7 @@ public:
     bool is_mapping() const override { return true; }
 
     void Dump(uint depth, bool verbose) const override;
-    zx_status_t PageFault(vaddr_t va, uint pf_flags) override;
+    zx_status_t PageFault(vaddr_t va, uint pf_flags, LazyPageRequest* page_request) override;
 
 protected:
     ~VmMapping() override;

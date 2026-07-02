@@ -505,7 +505,7 @@ zx_status_t VmMapping::MapRange(size_t offset, size_t len, bool commit) {
 
         zx_status_t status;
         paddr_t pa;
-        status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, nullptr, &pa);
+        status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, nullptr, nullptr, &pa);
         if (status < 0) {
             // no page to map
             if (commit) {
@@ -526,6 +526,28 @@ zx_status_t VmMapping::MapRange(size_t offset, size_t len, bool commit) {
         }
     }
     return coalescer.Flush();
+}
+
+zx_status_t VmMapping::RangeOp(vaddr_t base, size_t size, uint32_t op) {
+    canary_.Assert();
+
+    if (!IS_PAGE_ALIGNED(base)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    size = ROUNDUP(size, PAGE_SIZE);
+    if (size == 0 || !is_in_range(base, size)) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    switch (op) {
+    case ZX_VMAR_OP_COMMIT:
+    case ZX_VMAR_OP_ALWAYS_NEED:
+    case ZX_VMAR_OP_DONT_NEED:
+        return ZX_OK;
+    default:
+        return ZX_ERR_INVALID_ARGS;
+    }
 }
 
 zx_status_t VmMapping::DecommitRange(size_t offset, size_t len,
@@ -596,7 +618,7 @@ zx_status_t VmMapping::DestroyLocked() {
     return ZX_OK;
 }
 
-zx_status_t VmMapping::PageFault(vaddr_t va, const uint pf_flags) {
+zx_status_t VmMapping::PageFault(vaddr_t va, const uint pf_flags, LazyPageRequest* page_request) {
     canary_.Assert();
     DEBUG_ASSERT(is_mutex_held(aspace_->lock()));
 
@@ -646,7 +668,7 @@ zx_status_t VmMapping::PageFault(vaddr_t va, const uint pf_flags) {
     // fault in or grab an existing page
     paddr_t new_pa;
     vm_page_t* page;
-    zx_status_t status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, &page, &new_pa);
+    zx_status_t status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, page_request, &page, &new_pa);
     if (status < 0) {
         TRACEF("ERROR: failed to fault in or grab existing page\n");
         TRACEF("%p vmo_offset %#" PRIx64 ", pf_flags %#x\n", this, vmo_offset, pf_flags);
@@ -659,6 +681,11 @@ zx_status_t VmMapping::PageFault(vaddr_t va, const uint pf_flags) {
     uint mmu_flags = arch_mmu_flags_;
     if (!(pf_flags & VMM_PF_FLAG_WRITE)) {
         // we read faulted, so only map with read permissions
+        mmu_flags &= ~ARCH_MMU_FLAG_PERM_WRITE;
+    }
+
+    // Map pager-provided clean pages read-only to trap writes.
+    if (page && (page->flags & VM_PAGE_PAGER_DIRTY) == 0 && object_->is_pager_backed()) {
         mmu_flags &= ~ARCH_MMU_FLAG_PERM_WRITE;
     }
 
