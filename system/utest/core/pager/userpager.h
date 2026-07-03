@@ -5,18 +5,14 @@
 #ifndef ZIRCON_SYSTEM_UTEST_CORE_PAGER_USERPAGER_H_
 #define ZIRCON_SYSTEM_UTEST_CORE_PAGER_USERPAGER_H_
 
-#include <lib/fit/function.h>
+#include "test_helper.h"
+#include "pager_wrapper.h"
 #include <lib/zx/event.h>
-#include <lib/zx/pager.h>
 #include <lib/zx/port.h>
 #include <lib/zx/vmar.h>
 #include <lib/zx/vmo.h>
-#include <zircon/syscalls-next.h>
 #include <zircon/syscalls/port.h>
-#include <zircon/time.h>
 #include <zircon/types.h>
-
-#include <memory>
 
 #include <fbl/intrusive_double_list.h>
 
@@ -26,7 +22,8 @@ namespace pager_tests {
 
 class UserPager;
 
-class Vmo : public fbl::DoublyLinkedListable<std::unique_ptr<Vmo>> {
+// UserPager owns Vmo nodes through a raw-pointer intrusive list.
+class Vmo : public fbl::DoublyLinkedListable<Vmo*> {
  public:
   ~Vmo() = default;
 
@@ -43,25 +40,23 @@ class Vmo : public fbl::DoublyLinkedListable<std::unique_ptr<Vmo>> {
   // to access it or perform operations on it concurrently.
   bool Resize(uint64_t new_page_count);
 
-  // Commits the specified pages in this vmo.
-  bool Commit(uint64_t page_offset, uint64_t page_count) {
-    return OpRange(ZX_VMO_OP_COMMIT, page_offset, page_count);
-  }
+  // Commits the specified pages in this vmo. Defined out of line for 2018.
+  bool Commit(uint64_t page_offset, uint64_t page_count);
 
   uint64_t GetKey() const { return base_val_; }
   uintptr_t GetBaseAddr() const { return base_addr_; }
   const zx::vmo& vmo() const { return vmo_; }
 
-  std::unique_ptr<Vmo> Clone();
-
-  std::unique_ptr<Vmo> Clone(uint64_t offset, uint64_t size);
+  // Clone returns a raw Vmo pointer owned by UserPager.
+  Vmo* Clone();
+  Vmo* Clone(uint64_t offset, uint64_t size);
 
  private:
   Vmo(zx::vmo vmo, uint64_t size, uint64_t* base, uint64_t base_addr, uint64_t base_val)
       : size_(size),
         base_(base),
         base_addr_(base_addr),
-        vmo_(std::move(vmo)),
+        vmo_(fbl::move(vmo)),
         base_val_(base_val) {}
 
   bool OpRange(uint32_t op, uint64_t page_offset, uint64_t page_count);
@@ -157,7 +152,7 @@ class UserPager {
   bool WaitForPageRequest(uint16_t command, Vmo* vmo, uint64_t page_offset, uint64_t page_count,
                           zx_time_t deadline);
   bool WaitForRequest(uint64_t key, const zx_packet_page_request_t& request, zx_time_t deadline);
-  bool WaitForRequest(fit::function<bool(const zx_port_packet_t& packet)> cmp_fn,
+  bool WaitForRequest(fbl::Function<bool(const zx_port_packet_t& packet)> cmp_fn,
                       zx_time_t deadline);
   void PageFaultHandler();
   bool VerifyDirtyRangesHelper(Vmo* paged_vmo, zx_vmo_dirty_range_t* dirty_ranges_to_verify,
@@ -169,13 +164,15 @@ class UserPager {
   static constexpr uint64_t kShutdownKey = 1;
   uint64_t next_base_ = kShutdownKey + 1;
 
-  fbl::DoublyLinkedList<std::unique_ptr<Vmo>> vmos_;
+  // UserPager owns the Vmo nodes through a raw-pointer intrusive list.
+  fbl::DoublyLinkedList<Vmo*> vmos_;
 
-  typedef struct request : fbl::DoublyLinkedListable<std::unique_ptr<struct request>> {
+  // Pending requests are stored as raw intrusive-list nodes.
+  typedef struct request : fbl::DoublyLinkedListable<struct request*> {
     zx_port_packet_t req;
   } request_t;
 
-  fbl::DoublyLinkedList<std::unique_ptr<request_t>> requests_;
+  fbl::DoublyLinkedList<request_t*> requests_;
 
   zx::event shutdown_event_;
   TestThread pager_thread_;
@@ -189,12 +186,6 @@ inline bool check_buffer_data(Vmo* vmo, uint64_t offset, uint64_t len, const voi
 inline bool check_buffer(Vmo* vmo, uint64_t offset, uint64_t len, bool check_vmar) {
   return check_vmar ? vmo->CheckVmar(offset, len) : vmo->CheckVmo(offset, len);
 }
-
-#define VMO_VMAR_TEST(test_name, fn_name)           \
-  void fn_name(bool);                               \
-  TEST(test_name, fn_name##Vmar) { fn_name(true); } \
-  TEST(test_name, fn_name##Vmo) { fn_name(false); } \
-  void fn_name(bool check_vmar)
 
 }  // namespace pager_tests
 

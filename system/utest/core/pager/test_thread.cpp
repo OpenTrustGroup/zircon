@@ -4,16 +4,14 @@
 
 #include "test_thread.h"
 
-#include <lib/fit/function.h>
-#include <lib/zx/exception.h>
-#include <string.h>
-#include <threads.h>
+#include <inspector/inspector.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/debug.h>
+#include <zircon/syscalls/port.h>
 #include <zircon/threads.h>
-
-#include <inspector/inspector.h>
+#include <stdio.h>
+#include <string.h>
 
 namespace pager_tests {
 
@@ -22,7 +20,7 @@ static int test_thread_fn(void* arg) {
   return 0;
 }
 
-TestThread::TestThread(fit::function<bool()> fn) : fn_(std::move(fn)) {
+TestThread::TestThread(fbl::Function<bool()> fn) : fn_(fbl::move(fn)) {
 #if !defined(__x86_64__) and !defined(__aarch64__)
   static_assert(false, "Unsupported architecture");
 #endif
@@ -32,6 +30,9 @@ TestThread::~TestThread() {
   // TODO: UserPagers need to be destroyed before TestThreads to ensure threads aren't blocked
   if (thrd_) {
     ZX_ASSERT(thrd_join(thrd_, nullptr) == thrd_success);
+  }
+  if (exception_port_ != ZX_HANDLE_INVALID) {
+      zx_handle_close(exception_port_);
   }
 }
 
@@ -46,11 +47,19 @@ bool TestThread::Start() {
     return false;
   }
 
-  if (zx_thread_.create_exception_channel(0, &exception_channel_) != ZX_OK) {
+  // Bind exception port instead of channel.
+  if (zx_port_create(0, &exception_port_) != ZX_OK) {
+    return false;
+  }
+  if (zx_task_bind_exception_port(zx_thread_.get(), exception_port_, 0, 0) != ZX_OK) {
+    return false;
+  }
+  if (zx_object_wait_async(zx_thread_.get(), exception_port_, 0, ZX_THREAD_TERMINATED,
+                           ZX_WAIT_ASYNC_ONCE) != ZX_OK) {
     return false;
   }
 
-  sync_completion_signal(&startup_sync_);
+  completion_signal(&startup_sync_);
 
   return true;
 }
@@ -67,17 +76,30 @@ bool TestThread::WaitForCrash(uintptr_t crash_addr, zx_status_t error_status) {
 
 bool TestThread::Wait(bool expect_failure, bool expect_crash, uintptr_t crash_addr,
                       zx_status_t error_status) {
-  zx_signals_t signals;
-  ZX_ASSERT(exception_channel_.wait_one(ZX_CHANNEL_READABLE | ZX_CHANNEL_PEER_CLOSED,
-                                        zx::time::infinite(), &signals) == ZX_OK);
+  while (true) {
+    // Wait on the exception port instead of reading an exception channel.
+    zx_port_packet_t packet;
+    zx_status_t status = zx_port_wait(exception_port_, ZX_TIME_INFINITE, &packet, 0);
+    if (status != ZX_OK) {
+      return false;
+    }
 
-  if (signals & ZX_CHANNEL_PEER_CLOSED) {
-    // Thread has terminated.
-    return !expect_crash && success_ != expect_failure;
-  } else if (signals & ZX_CHANNEL_READABLE) {
+    // Handle task termination through the signal packet.
+    if (ZX_PKT_IS_SIGNAL_ONE(packet.type)) {
+      if (packet.signal.observed & ZX_THREAD_TERMINATED) {
+        return !expect_crash && success_ != expect_failure;
+      }
+      continue;
+    }
+
+    if (!ZX_PKT_IS_EXCEPTION(packet.type)) {
+        continue;
+    }
+
     zx_exception_report_t report;
     ZX_ASSERT(zx_object_get_info(zx_thread_.get(), ZX_INFO_THREAD_EXCEPTION_REPORT, &report,
                                  sizeof(report), NULL, NULL) == ZX_OK);
+
     bool res = expect_crash && report.header.type == ZX_EXCP_FATAL_PAGE_FAULT;
     if (res) {
 #if defined(__x86_64__)
@@ -88,7 +110,11 @@ bool TestThread::Wait(bool expect_failure, bool expect_crash, uintptr_t crash_ad
       res &= crash_addr == actual_crash_addr;
     }
     if (res) {
+      // [PORT-BLOCKED] 2018 zx_exception_report_t lacks context.synth_code.
+      /*
       res &= error_status == static_cast<zx_status_t>(report.context.synth_code);
+      */
+      (void)error_status;
     }
 
     if (!res) {
@@ -106,16 +132,9 @@ bool TestThread::Wait(bool expect_failure, bool expect_crash, uintptr_t crash_ad
 #endif
     ZX_ASSERT(zx_thread_.write_state(ZX_THREAD_STATE_GENERAL_REGS, &regs, sizeof(regs)) == ZX_OK);
 
-    zx_exception_info_t info;
-    zx::exception exception;
-    ZX_ASSERT(exception_channel_.read(0, &info, exception.reset_and_get_address(), sizeof(info), 1,
-                                      nullptr, nullptr) == ZX_OK);
-
-    uint32_t state = ZX_EXCEPTION_STATE_HANDLED;
-    ZX_ASSERT(exception.set_property(ZX_PROP_EXCEPTION_STATE, &state, sizeof(state)) == ZX_OK);
+    // Resume the thread from the exception port.
+    ZX_ASSERT(zx_task_resume(zx_thread_.get(), ZX_RESUME_EXCEPTION) == ZX_OK);
     return res;
-  } else {
-    ZX_ASSERT_MSG(false, "Unexpected channel signals");
   }
 }
 
@@ -139,8 +158,21 @@ void TestThread::PrintDebugInfo(const zx_exception_report_t& report) {
   fp = regs.r[29];
 #endif
   inspector_dsoinfo_t* dso_list = inspector_dso_fetch_list(zx_process_self());
-  inspector_print_backtrace_markup(stdout, zx_process_self(), zx_thread_.get(), dso_list, pc, sp,
-                                   fp);
+  inspector_print_backtrace(stdout, zx_process_self(), zx_thread_.get(), dso_list, pc, sp, fp, false);
+}
+
+void TestThread::SuspendSync() {
+  // 2018 uses handle-based suspend instead of a suspend token.
+  zx_status_t status = zx_task_suspend(zx_thread_.get());
+  ZX_ASSERT(status == ZX_OK);
+
+  zx_signals_t observed = 0u;
+  status = zx_thread_.wait_one(ZX_THREAD_SUSPENDED, zx::time::infinite(), &observed);
+  ZX_ASSERT(status == ZX_OK);
+}
+
+void TestThread::Resume() {
+  zx_task_resume(zx_thread_.get(), 0);
 }
 
 bool TestThread::WaitForBlocked() {
@@ -151,7 +183,9 @@ bool TestThread::WaitForBlocked() {
       return false;
     } else if (info.state == ZX_THREAD_STATE_DEAD) {
       return false;
-    } else if (info.state == ZX_THREAD_STATE_BLOCKED_PAGER) {
+    }
+    // 2018 reports a generic blocked state rather than ZX_THREAD_STATE_BLOCKED_PAGER.
+    else if (info.state == ZX_THREAD_STATE_BLOCKED) {
       return true;
     }
     // There's no signal to wait on, so just poll
@@ -160,7 +194,7 @@ bool TestThread::WaitForBlocked() {
 }
 
 void TestThread::Run() {
-  if (sync_completion_wait(&startup_sync_, ZX_TIME_INFINITE) == ZX_OK) {
+  if (completion_wait(&startup_sync_, ZX_TIME_INFINITE) == ZX_OK) {
     success_ = fn_();
   }
 }
