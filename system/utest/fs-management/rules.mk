@@ -15,11 +15,28 @@ MODULE_SRCS += \
 
 MODULE_NAME := fs-management-test
 
+# Static libs needed to install a private in-process memfs (see main()).
+MODULE_STATIC_LIBS := \
+    system/ulib/async.cpp \
+    system/ulib/async \
+    system/ulib/async-loop.cpp \
+    system/ulib/async-loop \
+    system/ulib/fbl \
+    system/ulib/fs \
+    system/ulib/memfs \
+    system/ulib/sync \
+    system/ulib/trace \
+    system/ulib/zx \
+    system/ulib/zxcpp \
+
 MODULE_LIBS := \
+    system/ulib/async.default \
     system/ulib/fs-management \
     system/ulib/zircon \
     system/ulib/c \
     system/ulib/fdio \
+    system/ulib/launchpad \
+    system/ulib/trace-engine \
     system/ulib/unittest \
 
 include make/module.mk

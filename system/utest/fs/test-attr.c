@@ -90,8 +90,8 @@ bool test_blksize(void) {
 bool test_parent_directory_time(void) {
     BEGIN_TEST;
 
-    if (strcmp(test_info->name, "FAT") == 0) {
-        // FAT does not update parent directory times when children
+    if (strcmp(test_info->name, "thinfs") == 0) {
+        // FAT (thinfs) does not update parent directory times when children
         // are updated
         printf("FAT parent directory timestamps aren't updated; skipping test...\n");
         return true;

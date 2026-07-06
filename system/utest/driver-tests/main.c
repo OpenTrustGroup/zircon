@@ -17,9 +17,24 @@
 #include <zircon/device/test.h>
 #include <unittest/unittest.h>
 
-#define DRIVER_TEST_DIR "/boot/driver/test"
+// The DDK test drivers live in /boot/driver/test in a pure Zircon bootfs, but
+// the garnet image installs them under /system/driver/test. Probe both so the
+// test finds the drivers regardless of which layout it is running from.
+static const char* driver_test_dir(void) {
+    static const char* const candidates[] = {
+        "/boot/driver/test",
+        "/system/driver/test",
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        if (access(candidates[i], F_OK) == 0) {
+            return candidates[i];
+        }
+    }
+    // Fall back to the canonical location for a useful error message.
+    return candidates[0];
+}
 
-static void do_one_test(int tfd, const char* drv_libname, zx_handle_t output, test_ioctl_test_report_t* report) {
+static void do_one_test(int tfd, const char* driver_dir, const char* drv_libname, zx_handle_t output, test_ioctl_test_report_t* report) {
     char devpath[1024];
     ssize_t rc = ioctl_test_create_device(tfd, drv_libname, strlen(drv_libname) + 1, devpath, sizeof(devpath));
     if (rc < 0) {
@@ -50,7 +65,7 @@ static void do_one_test(int tfd, const char* drv_libname, zx_handle_t output, te
     }
 
     char libpath[PATH_MAX];
-    int n = snprintf(libpath, sizeof(libpath), "%s/%s", DRIVER_TEST_DIR, drv_libname);
+    int n = snprintf(libpath, sizeof(libpath), "%s/%s", driver_dir, drv_libname);
     rc = ioctl_device_bind(fd, libpath, n);
     if (rc < 0) {
         printf("driver-tests: error %zd binding to %s\n", rc, libpath);
@@ -135,14 +150,15 @@ int main(int argc, char** argv) {
     test_ioctl_test_report_t final_report;
     memset(&final_report, 0, sizeof(final_report));
 
-    DIR* dir = opendir(DRIVER_TEST_DIR);
+    const char* driver_dir = driver_test_dir();
+    DIR* dir = opendir(driver_dir);
     if (dir == NULL) {
-        printf("driver-tests: failed to open %s\n", DRIVER_TEST_DIR);
+        printf("driver-tests: failed to open %s\n", driver_dir);
         return -1;
     }
     int dfd = dirfd(dir);
     if (dfd < 0) {
-        printf("driver-tests: failed to get fd for %s\n", DRIVER_TEST_DIR);
+        printf("driver-tests: failed to get fd for %s\n", driver_dir);
         return -1;
     }
     struct dirent* de;
@@ -153,7 +169,7 @@ int main(int argc, char** argv) {
         }
         test_ioctl_test_report_t one_report;
         memset(&one_report, 0, sizeof(one_report));
-        do_one_test(fd, de->d_name, socket[1], &one_report);
+        do_one_test(fd, driver_dir, de->d_name, socket[1], &one_report);
         final_report.n_tests += one_report.n_tests;
         final_report.n_success += one_report.n_success;
         final_report.n_failed += one_report.n_failed;

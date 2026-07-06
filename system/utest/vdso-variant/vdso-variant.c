@@ -12,6 +12,23 @@
 
 #define VDSO_FILE "/boot/kernel/vdso/test1"
 
+// The helper lives in /boot/bin in a pure Zircon bootfs, but the garnet image
+// repackages Zircon's {test}-group binaries under /system/bin. Probe both so
+// the test works regardless of which layout it is running from.
+static const char* helper_file(void) {
+    static const char* const candidates[] = {
+        "/boot/bin/vdso-variant-helper",
+        "/system/bin/vdso-variant-helper",
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        if (access(candidates[i], F_OK) == 0) {
+            return candidates[i];
+        }
+    }
+    // Fall back to the canonical location for a useful error message below.
+    return candidates[0];
+}
+
 int main(void) {
     int fd = open(VDSO_FILE, O_RDONLY);
     if (fd < 0) {
@@ -33,7 +50,7 @@ int main(void) {
     launchpad_create(ZX_HANDLE_INVALID, "vdso-variant-helper", &lp);
     launchpad_clone(lp, LP_CLONE_ALL);
     launchpad_set_args(lp, 1, (const char*[]){"vdso-variant-helper"});
-    launchpad_load_from_file(lp, "/boot/bin/vdso-variant-helper");
+    launchpad_load_from_file(lp, helper_file());
     zx_handle_t proc;
     const char* errmsg;
     status = launchpad_go(lp, &proc, &errmsg);

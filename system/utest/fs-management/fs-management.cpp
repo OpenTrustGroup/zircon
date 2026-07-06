@@ -15,6 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <lib/async-loop/cpp/loop.h>
+#include <memfs/memfs.h>
 #include <unittest/unittest.h>
 #include <zircon/device/block.h>
 #include <zircon/device/ramdisk.h>
@@ -25,6 +27,12 @@
 #include <fs-management/ramdisk.h>
 
 namespace {
+
+// The tests mount filesystems, which requires the mount point to live on a
+// filesystem that grants O_ADMIN. The garnet image's /tmp is a memfs that does
+// not grant O_ADMIN to this process, so install a private in-process memfs (as
+// the fs test in system/utest/fs does) and mount underneath it instead.
+const char* kTestTmpfsPath = "/fs-management-tmp";
 
 typedef union {
     vfs_query_info_t info;
@@ -54,7 +62,7 @@ bool CheckMountedFs(const char* path, const char* fs_name, size_t len) {
 
 bool MountUnmount(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_unmount";
+    const char* mount_path = "/fs-management-tmp/mount_unmount";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -76,7 +84,7 @@ bool MountUnmount(void) {
 
 bool MountMkdirUnmount(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_mkdir_unmount";
+    const char* mount_path = "/fs-management-tmp/mount_mkdir_unmount";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -98,7 +106,7 @@ bool MountMkdirUnmount(void) {
 
 bool FmountFunmount(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_unmount";
+    const char* mount_path = "/fs-management-tmp/mount_unmount";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -221,7 +229,7 @@ bool DoMountEvil(const char* parentfs_name, const char* mount_path) {
 
 bool MountEvilMemfs(void) {
     BEGIN_TEST;
-    const char* mount_path = "/tmp/mount_evil";
+    const char* mount_path = "/fs-management-tmp/mount_evil";
     ASSERT_TRUE(DoMountEvil("memfs", mount_path));
     END_TEST;
 }
@@ -233,7 +241,7 @@ bool MountEvilMinfs(void) {
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
     ASSERT_EQ(mkfs(ramdisk_path, DISK_FORMAT_MINFS, launch_stdio_sync, &default_mkfs_options),
               ZX_OK);
-    const char* parent_path = "/tmp/parent";
+    const char* parent_path = "/fs-management-tmp/parent";
     ASSERT_EQ(mkdir(parent_path, 0666), 0);
     int mountfd = open(parent_path, O_RDONLY | O_DIRECTORY | O_ADMIN);
     ASSERT_GT(mountfd, 0, "Couldn't open mount point");
@@ -244,7 +252,7 @@ bool MountEvilMinfs(void) {
               ZX_OK);
     ASSERT_EQ(close(mountfd), 0);
 
-    const char* mount_path = "/tmp/parent/mount_evil";
+    const char* mount_path = "/fs-management-tmp/parent/mount_evil";
     ASSERT_TRUE(DoMountEvil("minfs", mount_path));
 
     ASSERT_EQ(umount(parent_path), 0);
@@ -255,7 +263,7 @@ bool MountEvilMinfs(void) {
 
 bool UmountTestEvil(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/umount_test_evil";
+    const char* mount_path = "/fs-management-tmp/umount_test_evil";
 
     BEGIN_TEST;
 
@@ -300,7 +308,7 @@ bool UmountTestEvil(void) {
 
 bool DoubleMountRoot(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/double_mount_root";
+    const char* mount_path = "/fs-management-tmp/double_mount_root";
 
     BEGIN_TEST;
 
@@ -353,7 +361,7 @@ bool DoubleMountRoot(void) {
 
 bool MountRemount(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_remount";
+    const char* mount_path = "/fs-management-tmp/mount_remount";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -377,7 +385,7 @@ bool MountRemount(void) {
 
 bool MountFsck(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_fsck";
+    const char* mount_path = "/fs-management-tmp/mount_fsck";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -399,7 +407,7 @@ bool MountFsck(void) {
 
 bool MountGetDevice(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_get_device";
+    const char* mount_path = "/fs-management-tmp/mount_get_device";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -486,7 +494,7 @@ bool CreateTestFile(const char* ramdisk_path, const char* mount_path, const char
 // Tests that setting read-only on the mount options works as expected.
 bool MountReadonly(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_readonly";
+    const char* mount_path = "/fs-management-tmp/mount_readonly";
     const char file_name[] = "some_file";
 
     BEGIN_TEST;
@@ -530,7 +538,7 @@ bool MountReadonly(void) {
 // Test that when a block device claims to be read-only, the filesystem is mounted as read-only.
 bool MountBlockReadonly(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_readonly";
+    const char* mount_path = "/fs-management-tmp/mount_readonly";
     const char file_name[] = "some_file";
 
     BEGIN_TEST;
@@ -568,7 +576,7 @@ bool MountBlockReadonly(void) {
 
 bool StatfsTest(void) {
     char ramdisk_path[PATH_MAX];
-    const char* mount_path = "/tmp/mount_unmount";
+    const char* mount_path = "/fs-management-tmp/mount_unmount";
 
     BEGIN_TEST;
     ASSERT_EQ(create_ramdisk(512, 1 << 16, ramdisk_path), 0);
@@ -622,5 +630,17 @@ RUN_TEST_MEDIUM(StatfsTest)
 END_TEST_CASE(fs_management_tests)
 
 int main(int argc, char** argv) {
+    // Install a private in-process memfs to host the mount points. It grants
+    // O_ADMIN to this process (which mount() requires on the mount point),
+    // unlike the system /tmp in the garnet image.
+    async::Loop loop;
+    if (loop.StartThread() != ZX_OK) {
+        fprintf(stderr, "Error: Cannot initialize local memfs loop\n");
+        return -1;
+    }
+    if (memfs_install_at(loop.async(), kTestTmpfsPath) != ZX_OK) {
+        fprintf(stderr, "Error: Cannot install local memfs\n");
+        return -1;
+    }
     return unittest_run_all_tests(argc, argv) ? 0 : -1;
 }

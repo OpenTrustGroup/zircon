@@ -2064,6 +2064,11 @@ static zx_status_t dc_control_event(port_handler_t* ph, zx_signals_t signals, ui
         if (!system_loaded) {
             system_loaded = true;
             find_loadable_drivers("/system/driver");
+            // The garnet image installs Zircon's {test}-group drivers under
+            // /system/driver/test (the pure-Zircon location is /boot/driver/test,
+            // scanned in coordinator()). Scan it so those drivers are registered
+            // and manually bindable, e.g. by the driver-tests utest.
+            find_loadable_drivers("/system/driver/test");
             find_loadable_drivers("/system/lib/driver");
             if (require_system && dc_running) {
                 driver_t* drv;
