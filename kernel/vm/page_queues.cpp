@@ -935,6 +935,18 @@ void PageQueues::Remove(vm_page_t* page) {
   RemoveLocked(page);
 }
 
+bool PageQueues::RemoveIfQueued(vm_page_t* page) {
+  Guard<CriticalMutex> guard{&lock_};
+  // A page that is not in any queue has PageQueueNone as its queue index and is not
+  // linked through its queue_node. Calling RemoveLocked on it would trip the
+  // old_queue != PageQueueNone assert, so short circuit here instead.
+  if (page->object.get_page_queue_ref().load(ktl::memory_order_relaxed) == PageQueueNone) {
+    return false;
+  }
+  RemoveLocked(page);
+  return true;
+}
+
 void PageQueues::RemoveArrayIntoList(vm_page_t** pages, size_t count, list_node_t* out_list) {
   DEBUG_ASSERT(pages);
   Guard<CriticalMutex> guard{&lock_};

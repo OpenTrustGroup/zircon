@@ -20,6 +20,7 @@
 #include <string.h>
 #include <trace.h>
 #include <vm/fault.h>
+#include <vm/page_queues.h>
 #include <vm/physmap.h>
 #include <vm/vm.h>
 #include <vm/vm_address_region.h>
@@ -174,6 +175,14 @@ zx_status_t VmObjectPaged::CreateContiguous(uint32_t pmm_alloc_flags, uint64_t s
         if (status != ZX_OK) {
             return status;
         }
+
+        // The page is now resident in this contiguous VMO's page_list_. This VMO is
+        // anonymous (no page_source_), so classify it into the unswappable queue. The
+        // pin below does not change queue membership; the page stays in the queue
+        // until it is freed in the destructor.
+        [&]() TA_NO_THREAD_SAFETY_ANALYSIS {
+            vmop->AddPageToPageQueuesLocked(p, off);
+        }();
 
         // Mark the pages as pinned, so they can't be physically rearranged
         // underneath us.
@@ -773,6 +782,24 @@ size_t VmObjectPaged::AllocatedPagesInRange(uint64_t offset, uint64_t len) const
     return count;
 }
 
+void VmObjectPaged::AddPageToPageQueuesLocked(vm_page_t* p, uint64_t offset) {
+    // Only real object pages participate in the page queues. CreateFromROData jams
+    // wired kernel pages directly into a VMO; those keep VM_PAGE_STATE_WIRED and must
+    // not be classified (SetQueueBacklinkLocked asserts the page is an object page).
+    if (p->state != VM_PAGE_STATE_OBJECT) {
+        return;
+    }
+    // A page directly owned by a pager-backed VMO (this object holds the page_source_)
+    // is evictable and gets a backlink so the evictor can find it. Pages in anonymous
+    // VMOs, and local copy-on-write copies made from a pager-backed parent, are not
+    // themselves pager-backed and go into the unswappable queue.
+    if (page_source_) {
+        pmm_page_queues().SetPagerBacked(p, this, offset);
+    } else {
+        pmm_page_queues().SetUnswappable(p);
+    }
+}
+
 zx_status_t VmObjectPaged::AddPage(vm_page_t* p, uint64_t offset) {
     AutoLock a(&lock_);
 
@@ -793,6 +820,9 @@ zx_status_t VmObjectPaged::AddPageLocked(vm_page_t* p, uint64_t offset) {
     zx_status_t err = page_list_.AddPage(p, offset);
     if (err != ZX_OK)
         return err;
+
+    // The page is now resident in the live page_list_; classify it into a page queue.
+    AddPageToPageQueuesLocked(p, offset);
 
     // other mappings may have covered this offset into the vmo, so unmap those ranges
     RangeChangeUpdateLocked(offset, PAGE_SIZE);
@@ -828,6 +858,9 @@ zx_status_t VmObjectPaged::AddPageLocked(VmPageOrMarker* p, uint64_t offset, Can
             list_initialize(&tmp);
             list_add_tail(&tmp, &zero_page->queue_node);
             pmm_free(&tmp);
+        } else {
+            // The materialized zero page is now resident; classify it.
+            AddPageToPageQueuesLocked(zero_page, offset);
         }
         return status;
     }
@@ -837,6 +870,8 @@ zx_status_t VmObjectPaged::AddPageLocked(VmPageOrMarker* p, uint64_t offset, Can
     zx_status_t status = page_list_.AddPage(page, offset);
     if (status == ZX_OK) {
         p->ReleasePage();
+        // The supplied page is now resident; classify it.
+        AddPageToPageQueuesLocked(page, offset);
     }
     return status;
 }

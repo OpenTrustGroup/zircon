@@ -11,6 +11,7 @@
 #include <inttypes.h>
 #include <ktl/move.h>
 #include <trace.h>
+#include <vm/page_queues.h>
 #include <vm/pmm.h>
 #include <vm/vm.h>
 #include <zircon/types.h>
@@ -162,6 +163,12 @@ zx_status_t VmPageList::FreePage(uint64_t offset) {
             list_.erase(*pln);
         }
 
+        // The page is leaving this VMO's live page list; take it out of its page
+        // queue before its queue_node is reused by the pmm free path. Use the
+        // tolerant variant because non-object pages (e.g. wired pages inserted by
+        // CreateFromROData) are never queued.
+        pmm_page_queues().RemoveIfQueued(page);
+
         pmm_free_page(page);
     }
 
@@ -178,6 +185,12 @@ size_t VmPageList::FreeAllPages() {
 
     // per page get a reference to the page pointer inside the page list node
     auto per_page_func = [&](vm_page*& p, uint64_t offset) {
+
+        // The page is leaving this VMO's live page list. It must be taken out of its
+        // page queue before its queue_node is reused below to build the pmm free
+        // list, otherwise the queue would be corrupted. Use the tolerant variant as
+        // non-object pages (e.g. wired pages from CreateFromROData) are never queued.
+        pmm_page_queues().RemoveIfQueued(p);
 
         // add the page to our list and null out the inner node
         list_add_tail(&list, &p->queue_node);
@@ -267,6 +280,13 @@ bool VmPageList::RemovePage(uint64_t offset, vm_page** page_out) {
             list_.erase(*pln);
         }
 
+        // The page is being removed from this VMO's live page list (directly, or on
+        // behalf of TakePages, which then owns it in a splice list). Take it out of
+        // its page queue here so the caller receives a page that is no longer queued
+        // and whose queue_node is free to reuse. Use the tolerant variant as
+        // non-object pages are never queued.
+        pmm_page_queues().RemoveIfQueued(page);
+
         *page_out = page;
         return true;
     } else {
@@ -293,6 +313,17 @@ VmPageSpliceList VmPageList::TakePages(uint64_t offset, uint64_t length) {
     while (offset_to_node_offset(offset) != offset_to_node_offset(end)) {
         fbl::unique_ptr<VmPageListNode> node = list_.erase(offset_to_node_offset(offset));
         if (node) {
+            // The whole node is leaving the live page list into the splice list, which is
+            // not part of any VMO's page queue. A bulk node move bypasses the per-offset
+            // RemovePage path, so dequeue each page here to keep the page queues consistent;
+            // otherwise a taken page stays linked in the source queue and a later SupplyPages
+            // that re-adds it corrupts the queue lists.
+            node->ForEveryPage(
+                [](vm_page*& p, uint64_t) {
+                    pmm_page_queues().RemoveIfQueued(p);
+                    return ZX_ERR_NEXT;
+                },
+                node->offset(), node->offset() + PAGE_SIZE * VmPageListNode::kPageFanOut);
             res.middle_.insert(ktl::move(node));
         }
         offset += (PAGE_SIZE * VmPageListNode::kPageFanOut);

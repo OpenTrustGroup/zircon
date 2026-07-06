@@ -166,6 +166,16 @@ class PageQueues {
   // Batched version of Remove that also places all the pages in the specified list
   void RemoveArrayIntoList(vm_page_t** page, size_t count, list_node_t* out_list);
 
+  // Variation on Remove that tolerates a page that was never placed in a queue.
+  // Unlike Remove (whose RemoveLocked asserts old_queue != PageQueueNone), this is
+  // a no-op if the page's queue index is PageQueueNone. This is used at the generic
+  // VmPageList leave-sites, which run for both live-VMO page_list_ pages (always
+  // queued) and for pages that were never queued (e.g. wired pages jammed into a VMO
+  // by CreateFromROData). It lets the leave-site stay centralized without having to
+  // prove queue membership at every caller. Returns true if the page was queued and
+  // has now been removed, false if it was not queued.
+  bool RemoveIfQueued(vm_page_t* page);
+
   // Variation on MoveToUnswappable that allows for already holding the lock.
   void MoveToUnswappableLocked(vm_page_t* page) TA_REQ(lock_);
 

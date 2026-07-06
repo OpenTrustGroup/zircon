@@ -154,6 +154,17 @@ private:
     zx_status_t AddPageLocked(VmPageOrMarker* p, uint64_t offset, CanOverwriteContent overwrite,
                               void* released_page, bool do_range_update) TA_REQ(lock_);
 
+    // Classifies a page that has just become resident in this VMO's page_list_ into
+    // the appropriate page queue. This is the single Set choke point: every path that
+    // inserts a real (VM_PAGE_STATE_OBJECT) page into page_list_ calls this exactly
+    // once after a successful add. Pages directly owned by a pager-backed VMO (this
+    // object has its own page_source_) are placed in the pager-backed queue with a
+    // backlink; all other resident pages (anonymous VMOs and local COW copies) are
+    // placed in the unswappable queue. Non-OBJECT pages (e.g. wired pages inserted by
+    // CreateFromROData) are skipped, matching the page-queue invariant that only
+    // object pages are classified.
+    void AddPageToPageQueuesLocked(vm_page_t* p, uint64_t offset) TA_REQ(lock_);
+
     // internal page list routine
     void AddPageToArray(size_t index, vm_page_t* p);
 
