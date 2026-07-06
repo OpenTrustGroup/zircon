@@ -31,6 +31,11 @@ static_assert((1u << VM_PAGE_STATE_BITS) >= VM_PAGE_STATE_COUNT_, "");
 #define VM_PAGE_PAGER_DIRTY (1 << 0)
 #define VM_PAGE_PAGER_CLEANING (1 << 1)
 
+// Forward declaration for the pager-backed page backlink. The 2018 VM has no
+// VmCowPages, so a page's owner backlink is the VmObjectPaged directly (upstream
+// stores a VmCowPages backlink here).
+class VmObjectPaged;
+
 // core per page structure allocated at pmm arena creation time
 typedef struct vm_page {
     struct list_node queue_node;
@@ -48,7 +53,36 @@ typedef struct vm_page {
 #define VM_PAGE_OBJECT_PIN_COUNT_BITS 5
 #define VM_PAGE_OBJECT_MAX_PIN_COUNT ((1ul << VM_PAGE_OBJECT_PIN_COUNT_BITS) - 1)
 
+            // Backlink to the owning VmObjectPaged and the page's offset within it.
+            // Set when the page is inserted into a pager-backed VMO's page list; the
+            // page queues / evictor use it to locate and reclaim the page. Upstream
+            // stores a VmCowPages backlink here; 2018 has no VmCowPages, so this is the
+            // VmObjectPaged directly. Null for pages not owned by a paged VMO.
+            VmObjectPaged* object_priv;
+            uint64_t page_offset_priv;
+
+            // Current PageQueues bucket (a PageQueue enum value). Updated as the page
+            // ages / is hinted; read to select eviction candidates. Kept as a plain
+            // byte (accessed under the page-queues lock, and via atomic loads on the
+            // lockless read path) rather than upstream's atomic_ref, which 2018 lacks.
+            uint8_t page_queue_priv;
+
             uint8_t pin_count : VM_PAGE_OBJECT_PIN_COUNT_BITS;
+            // Sticky ZX_VMO_OP_ALWAYS_NEED hint: prefer to keep this page resident;
+            // eviction skips it unless overridden under memory pressure.
+            uint8_t always_need : 1;
+
+            // Accessors mirroring upstream's vm_page.object surface.
+            VmObjectPaged* get_object() const { return object_priv; }
+            void set_object(VmObjectPaged* obj) { object_priv = obj; }
+            void clear_object() {
+                object_priv = nullptr;
+                page_offset_priv = 0;
+            }
+            uint64_t get_page_offset() const { return page_offset_priv; }
+            void set_page_offset(uint64_t offset) { page_offset_priv = offset; }
+            uint8_t& get_page_queue_ref() { return page_queue_priv; }
+            uint8_t get_page_queue_ref() const { return page_queue_priv; }
         } object; // attached to a vm object
     };
 
@@ -64,8 +98,9 @@ typedef struct vm_page {
     paddr_t paddr() const { return paddr_priv; }
 } vm_page_t;
 
-// assert that the page structure isn't growing uncontrollably
-static_assert(sizeof(vm_page) == 0x20, "");
+// assert that the page structure isn't growing uncontrollably. Grown from 0x20 to
+// hold the pager-backed backlink/offset/queue fields the page queues need.
+static_assert(sizeof(vm_page) == 0x38, "");
 
 // helpers
 const char* page_state_to_string(unsigned int state);
