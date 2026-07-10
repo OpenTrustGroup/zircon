@@ -800,6 +800,64 @@ void VmObjectPaged::AddPageToPageQueuesLocked(vm_page_t* p, uint64_t offset) {
     }
 }
 
+zx_status_t VmObjectPaged::HintRange(uint64_t offset, uint64_t len, EvictionHint hint) {
+    canary_.Assert();
+
+    uint64_t end_offset;
+    if (add_overflow(offset, len, &end_offset)) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+
+    AutoLock a(&lock_);
+
+    // Validate the range for all VMO types first, so an out-of-range hint returns
+    // ZX_ERR_OUT_OF_RANGE regardless of whether the VMO is pager-backed. This preserves the
+    // range-checking contract the dispatcher previously enforced for DONT_NEED.
+    if (end_offset > size_) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+
+    // Hints only apply to pager-backed VMOs. For other VMO types silently succeed,
+    // since hints are advisory and the kernel is free to ignore them.
+    if (!page_source_) {
+        return ZX_OK;
+    }
+
+    switch (hint) {
+        case EvictionHint::DontNeed:
+            PromoteRangeForReclamationLocked(offset, len);
+            break;
+        case EvictionHint::AlwaysNeed:
+            // The AlwaysNeed hint commits the range (done in the dispatcher) and would
+            // set the sticky always_need bit here; that marking lands with the evictor
+            // in a later stage. TODO(OT-155): set always_need once eviction honors it.
+            break;
+    }
+
+    return ZX_OK;
+}
+
+void VmObjectPaged::PromoteRangeForReclamationLocked(uint64_t offset, uint64_t len) {
+    // The sole caller (HintRange) has already verified this VMO is pager-backed, so no
+    // page_source_ check is repeated here.
+    const uint64_t start_offset = ROUNDDOWN(offset, PAGE_SIZE);
+    const uint64_t end_offset = ROUNDUP(offset + len, PAGE_SIZE);
+
+    // 2018 has a flat copy-on-write hierarchy (no VmCowPages tree), so a resident
+    // page's backlink points at this VMO directly and there is no root/fork ownership
+    // walk to perform. Move each resident page that is neither pinned nor dirty into
+    // the DontNeed queue. The always_need bit, if set, is sticky and left untouched.
+    page_list_.ForEveryPageInRange(
+        [this](vm_page_t* page, uint64_t off) {
+            if (page->object.get_object() == this && page->object.pin_count == 0 &&
+                (page->flags & VM_PAGE_PAGER_DIRTY) == 0) {
+                pmm_page_queues().MoveToPagerBackedDontNeed(page);
+            }
+            return ZX_ERR_NEXT;
+        },
+        start_offset, end_offset);
+}
+
 zx_status_t VmObjectPaged::AddPage(vm_page_t* p, uint64_t offset) {
     AutoLock a(&lock_);
 

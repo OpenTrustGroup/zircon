@@ -95,6 +95,24 @@ public:
         panic("Unpin should only be called on a pinned range");
     }
 
+    // Hint about how a range is intended to be used, so the hint can bias page
+    // reclamation under memory pressure. Exposed to userspace through the
+    // ZX_VMO_OP_{DONT,ALWAYS}_NEED range ops.
+    enum EvictionHint {
+        DontNeed,
+        AlwaysNeed,
+    };
+    // Applies an eviction hint to the given range. Hints are best effort and are a no-op for VMO
+    // types that do not participate in reclamation, but the range is still validated so an
+    // out-of-range hint is rejected for all VMO types (preserving the range check the dispatcher
+    // previously performed for every VMO type).
+    virtual zx_status_t HintRange(uint64_t offset, uint64_t len, EvictionHint hint) {
+        if (offset + len < offset || offset + len > size()) {
+            return ZX_ERR_OUT_OF_RANGE;
+        }
+        return ZX_OK;
+    }
+
     // read/write operators against kernel pointers only
     virtual zx_status_t Read(void* ptr, uint64_t offset, size_t len) {
         return ZX_ERR_NOT_SUPPORTED;

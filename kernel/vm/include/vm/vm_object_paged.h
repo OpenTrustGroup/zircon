@@ -62,6 +62,7 @@ public:
 
     zx_status_t CommitRange(uint64_t offset, uint64_t len, uint64_t* committed) override;
     zx_status_t DecommitRange(uint64_t offset, uint64_t len, uint64_t* decommitted) override;
+    zx_status_t HintRange(uint64_t offset, uint64_t len, EvictionHint hint) override;
 
     zx_status_t Pin(uint64_t offset, uint64_t len) override;
     void Unpin(uint64_t offset, uint64_t len) override;
@@ -164,6 +165,11 @@ private:
     // CreateFromROData) are skipped, matching the page-queue invariant that only
     // object pages are classified.
     void AddPageToPageQueuesLocked(vm_page_t* p, uint64_t offset) TA_REQ(lock_);
+
+    // Moves resident pages in the range into the DontNeed page queue so they are
+    // reclaimed ahead of other pager-backed pages. Best effort: only applies to
+    // pages owned by this pager-backed VMO that are neither pinned nor dirty.
+    void PromoteRangeForReclamationLocked(uint64_t offset, uint64_t len) TA_REQ(lock_);
 
     // internal page list routine
     void AddPageToArray(size_t index, vm_page_t* p);

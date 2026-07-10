@@ -236,8 +236,7 @@ zx_status_t VmObjectDispatcher::RangeOp(uint32_t op, uint64_t offset, uint64_t s
             return ZX_OK;
         }
         case ZX_VMO_OP_DONT_NEED: {
-            return (offset + size < offset || offset + size > vmo_->size()) ?
-                ZX_ERR_OUT_OF_RANGE : ZX_OK;
+            return vmo_->HintRange(offset, size, VmObject::EvictionHint::DontNeed);
         }
         case ZX_VMO_OP_DECOMMIT: {
             // TODO: handle partial decommits
