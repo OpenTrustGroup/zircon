@@ -858,6 +858,62 @@ void VmObjectPaged::PromoteRangeForReclamationLocked(uint64_t offset, uint64_t l
         start_offset, end_offset);
 }
 
+bool VmObjectPaged::RemovePageForEviction(vm_page_t* page, uint64_t offset,
+                                          EvictionHintAction hint_action) {
+    canary_.Assert();
+
+    AutoLock a(&lock_);
+
+    // Without a page source there is no way to bring the page back in, so it cannot be evicted.
+    if (!page_source_) {
+        return false;
+    }
+
+    // Check the page is still resident in this VMO at the expected offset.
+    if (page_list_.GetPage(offset) != page) {
+        return false;
+    }
+
+    // Pinned pages may be in use by DMA, so they cannot be safely evicted. Simulate an access to
+    // move the page off the tail of the eviction queue, so the eviction loop advances instead of
+    // repeatedly reconsidering the same non-evictable page. Upstream never encounters pinned pages
+    // here because they live in a separate wired queue; the 2018 port keeps them in the
+    // pager-backed queues, so they must be moved out explicitly to guarantee forward progress.
+    if (page->object.pin_count != 0) {
+        pmm_page_queues().MarkAccessed(page);
+        return false;
+    }
+
+    // A dirty page cannot be evicted; it must be written back first. As with pinned pages above,
+    // move it off the eviction-queue tail so the loop advances (the 2018 port has no separate dirty
+    // queue to hold such pages out of the eviction path).
+    if (page->flags & VM_PAGE_PAGER_DIRTY) {
+        pmm_page_queues().MarkAccessed(page);
+        return false;
+    }
+
+    // Honor a sticky always_need hint unless the caller tells us to ignore it.
+    if (page->object.always_need == 1 && hint_action == EvictionHintAction::Follow) {
+        // Simulate an access so the page moves off the tail of the LRU queue, letting the eviction
+        // loop make progress past it instead of repeatedly reconsidering the same page.
+        pmm_page_queues().MarkAccessed(page);
+        return false;
+    }
+
+    // Unmap the page from all address spaces before removing it.
+    RangeChangeUpdateLocked(offset, PAGE_SIZE);
+
+    // Remove the page from the live page list. In the 2018 VM this removal path also takes the page
+    // out of its page queue (VmPageList::RemovePage calls PageQueues::RemoveIfQueued), so there is
+    // no separate PageQueues::Remove call as there is upstream.
+    vm_page_t* removed = nullptr;
+    bool found = page_list_.RemovePage(offset, &removed);
+    DEBUG_ASSERT(found && removed == page);
+
+    // |page| is now owned by the caller.
+    return true;
+}
+
 zx_status_t VmObjectPaged::AddPage(vm_page_t* p, uint64_t offset) {
     AutoLock a(&lock_);
 

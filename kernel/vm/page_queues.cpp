@@ -611,11 +611,10 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessQueueHelper(
 
       // We may be racing with destruction of the VMO. As we currently hold our lock we know that
       // our back pointer is correct in so far as the object has not yet completed running its
-      // destructor. Upstream upgrades a raw VmCowPages to a RefPtr here.
-      // TODO(OT-155): 2018 has no upgradeable-from-raw refcount helper for VmObjectPaged
-      // yet; Stage 3 wires the real backlink upgrade. For this inert stage return a null
-      // vmo, which callers treat as "the VMO is being destroyed".
-      return VmoBacklink{nullptr, page, page_offset};
+      // destructor. Upgrade the raw backlink to a RefPtr; MakeRefPtrUpgradeFromRaw returns null if
+      // the VMO is already running its destructor, which callers treat as "the VMO is being
+      // destroyed".
+      return VmoBacklink{fbl::internal::MakeRefPtrUpgradeFromRaw(vmo, lock_), page, page_offset};
     } else {
       // Force it into our target queue, don't care about races. If we happened to access it at
       // the same time then too bad.

@@ -116,6 +116,19 @@ public:
 
     zx_status_t TakePages(uint64_t offset, uint64_t len, VmPageSpliceList* pages) override;
 
+    // Whether an eviction request should honor the sticky always_need hint on a page.
+    enum class EvictionHintAction : uint8_t {
+        Follow,
+        Ignore,
+    };
+
+    // Attempts to evict |page|, expected to be resident at |offset|. Returns true only if the page
+    // was from this VMO and was evicted, in which case the caller takes ownership of the page.
+    // Eviction fails (returns false) if the page is no longer here, is pinned or dirty, or carries
+    // the always_need hint while |hint_action| is Follow. The page is unmapped and removed from the
+    // page list and its page queue; the caller is responsible for freeing it.
+    bool RemovePageForEviction(vm_page_t* page, uint64_t offset, EvictionHintAction hint_action);
+
     // maximum size of a VMO is one page less than the full 64bit range
     static const uint64_t MAX_SIZE = ROUNDDOWN(UINT64_MAX, PAGE_SIZE);
 
