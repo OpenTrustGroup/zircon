@@ -38,5 +38,6 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/vmm.cpp \
     $(LOCAL_DIR)/page_source.cpp \
     $(LOCAL_DIR)/page_queues.cpp \
+    $(LOCAL_DIR)/evictor.cpp \
 
 include make/module.mk
