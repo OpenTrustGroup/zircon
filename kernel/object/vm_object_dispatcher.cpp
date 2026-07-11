@@ -233,6 +233,10 @@ zx_status_t VmObjectDispatcher::RangeOp(uint32_t op, uint64_t offset, uint64_t s
                     return status;
                 }
             }
+            // Mark the now-resident pages always-needed so the evictor skips them.
+            // Best-effort: the commit above already succeeded, so ignore HintRange's
+            // status (e.g. a concurrent resize), matching the advisory nature of hints.
+            vmo_->HintRange(offset, size, VmObject::EvictionHint::AlwaysNeed);
             return ZX_OK;
         }
         case ZX_VMO_OP_DONT_NEED: {

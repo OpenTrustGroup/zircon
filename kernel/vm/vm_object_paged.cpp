@@ -828,9 +828,7 @@ zx_status_t VmObjectPaged::HintRange(uint64_t offset, uint64_t len, EvictionHint
             PromoteRangeForReclamationLocked(offset, len);
             break;
         case EvictionHint::AlwaysNeed:
-            // The AlwaysNeed hint commits the range (done in the dispatcher) and would
-            // set the sticky always_need bit here; that marking lands with the evictor
-            // in a later stage. TODO(OT-155): set always_need once eviction honors it.
+            ProtectRangeFromReclamationLocked(offset, len);
             break;
     }
 
@@ -852,6 +850,32 @@ void VmObjectPaged::PromoteRangeForReclamationLocked(uint64_t offset, uint64_t l
             if (page->object.get_object() == this && page->object.pin_count == 0 &&
                 (page->flags & VM_PAGE_PAGER_DIRTY) == 0) {
                 pmm_page_queues().MoveToPagerBackedDontNeed(page);
+            }
+            return ZX_ERR_NEXT;
+        },
+        start_offset, end_offset);
+}
+
+void VmObjectPaged::ProtectRangeFromReclamationLocked(uint64_t offset, uint64_t len) {
+    // Hints only apply to pager-backed VMOs.
+    if (!page_source_) {
+        return;
+    }
+
+    const uint64_t start_offset = ROUNDDOWN(offset, PAGE_SIZE);
+    const uint64_t end_offset = ROUNDUP(offset + len, PAGE_SIZE);
+
+    // The dispatcher has already committed (faulted in) this range, so operate on the
+    // resident pages directly. 2018 has a flat copy-on-write hierarchy, so ownership
+    // collapses to get_object() == this. Set the sticky always_need bit, which
+    // RemovePageForEviction honors, and mark the page accessed so it moves to the MRU
+    // queue: upstream relies on the lookup fault having done this, and it ensures a
+    // page previously hinted DONT_NEED is no longer a prime eviction candidate.
+    page_list_.ForEveryPageInRange(
+        [this](vm_page_t* page, uint64_t off) {
+            if (page->object.get_object() == this) {
+                page->object.always_need = 1;
+                pmm_page_queues().MarkAccessed(page);
             }
             return ZX_ERR_NEXT;
         },

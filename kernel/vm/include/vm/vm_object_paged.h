@@ -184,6 +184,11 @@ private:
     // pages owned by this pager-backed VMO that are neither pinned nor dirty.
     void PromoteRangeForReclamationLocked(uint64_t offset, uint64_t len) TA_REQ(lock_);
 
+    // Sets the sticky always_need hint on resident pages in the range so the evictor
+    // skips them, and marks them accessed. Best effort: only applies to pages owned by
+    // this pager-backed VMO. The range is expected to already be committed.
+    void ProtectRangeFromReclamationLocked(uint64_t offset, uint64_t len) TA_REQ(lock_);
+
     // internal page list routine
     void AddPageToArray(size_t index, vm_page_t* p);
 
