@@ -2960,15 +2960,10 @@ TEST(Pager, EvictionHintDontNeed) {
   uint64_t offset, length;
   ASSERT_FALSE(pager.GetPageReadRequest(vmo, 0, &offset, &length));
 
-  // [PORT-BLOCKED] The 2018 scanner does not implement the DONT_NEED age hint:
-  // there is no PageQueues aging infrastructure or scanner thread to move
-  // hinted pages to an evict-first queue, so eviction ordering cannot be
-  // verified here. Honoring the hint requires porting the whole page-queue and
-  // scanner subsystem, which is out of scope for this test.
-  /*
   // Please do not use get_root_resource() in new code. See fxbug.dev/31358.
   if (!&get_root_resource) {
     printf("Root resource not available, skipping\n");
+    return;
   }
 
   // Trigger reclamation of only oldest evictable memory. This will include the pages we hinted
@@ -2992,7 +2987,6 @@ TEST(Pager, EvictionHintDontNeed) {
   }
 
   ASSERT_EQ(0, info.committed_bytes);
-  */
 }
 
 // Tests that the zx_vmo_op_range() API succeeds and fails as expected for hints.

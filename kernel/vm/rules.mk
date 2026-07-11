@@ -39,5 +39,6 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/page_source.cpp \
     $(LOCAL_DIR)/page_queues.cpp \
     $(LOCAL_DIR)/evictor.cpp \
+    $(LOCAL_DIR)/scanner.cpp \
 
 include make/module.mk
