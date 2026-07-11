@@ -647,6 +647,11 @@ void VmObjectPaged::CloseSource() {
         if (page_source_) {
             page_source = fbl::move(page_source_);
             page_source_detached_ = true;
+            // Do NOT free the resident pages here. Unlike the destructor / DetachSource, CloseSource
+            // runs on on_zero_handles while COW clones of this pager-backed VMO may still be alive
+            // and reading the shared pages through parent_; freeing them would lose the clone's data.
+            // The pages stay resident (readable by clones); the evictor no longer spins on them
+            // because RemovePageForEviction dequeues a page whose source has been closed.
         }
     }
 
@@ -890,11 +895,27 @@ bool VmObjectPaged::RemovePageForEviction(vm_page_t* page, uint64_t offset,
 
     // Without a page source there is no way to bring the page back in, so it cannot be evicted.
     if (!page_source_) {
+        // The page's page-queue backlink points at this VMO, but this VMO is no longer pager-backed
+        // (its source was detached/closed). Such a page can never be evicted, and leaving it in the
+        // pager-backed queue would make the evictor peek it forever without progress. Remove the
+        // stale backlink so the eviction loop can move on. This mirrors upstream, where detaching a
+        // page source frees the resident pages and thus removes them from the pager-backed queues.
+        // Only dequeue while the page still backlinks to this VMO, so a page racily reassigned to
+        // another VMO between the peek and here is never wrongly removed from its new owner's queue.
+        if (page->object.get_object() == this) {
+            pmm_page_queues().RemoveIfQueued(page);
+        }
         return false;
     }
 
-    // Check the page is still resident in this VMO at the expected offset.
+    // Check the page is still resident in this VMO at the expected offset. A mismatch means the
+    // page's pager-backed queue backlink is stale (the page has left this VMO's page list but was
+    // not dequeued). Drop the stale queue entry so the evictor makes progress instead of repeatedly
+    // reconsidering the same page. As above, only act while the backlink still names this VMO.
     if (page_list_.GetPage(offset) != page) {
+        if (page->object.get_object() == this) {
+            pmm_page_queues().RemoveIfQueued(page);
+        }
         return false;
     }
 
