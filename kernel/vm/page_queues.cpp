@@ -432,20 +432,36 @@ void PageQueues::RotatePagerBackedQueues(AgeReason reason) {
     // delays in scheduling we record in a counter as happening regularly could indicate a bug.
     kcounter_add(pq_aging_blocked_on_lru, 1);
 
-    MaybeTriggerLruProcessing();
+    // Upstream signals the LRU thread and blocks on |mru_semaphore_| until it posts. The 2018 port
+    // runs no background aging/lru threads (StartThreads is intentionally never called for this
+    // stage; eviction and aging are driven synchronously by the `scanner` console commands). With
+    // no thread to post the semaphore, waiting would deadlock, so drive the LRU processing inline
+    // here, mirroring LruThread(). ProcessDontNeedAndLruQueues advances |lru_gen_| and posts
+    // |mru_semaphore_| when it empties the LRU queue, satisfying the wait below.
+    if (NeedsLruProcessing()) {
+      uint64_t target_gen;
+      {
+        Guard<CriticalMutex> guard{&lock_};
+        target_gen = lru_gen_.load(ktl::memory_order_relaxed) + 1;
+      }
+      ProcessDontNeedAndLruQueues(target_gen, false);
+    }
 
-    // The LRU thread could take an arbitrary amount of time to get scheduled and run, so we cannot
-    // enforce a deadline. However, we can assume there might be a bug and start making noise to
-    // inform the user if we have waited multiples of the expected maximum aging interval, since
-    // that implies we are starting to lose the requested fidelity of age information.
-    int64_t timeouts = 0;
-    while (mru_semaphore_.Wait(Deadline::after(max_mru_rotate_time_)) == ZX_ERR_TIMED_OUT) {
-      timeouts++;
-      printf("[pq] WARNING: Waited %" PRIi64 " seconds for LRU thread, MRU semaphore %" PRIu64
-             ",aging is presently stalled\n",
-             static_cast<int64_t>((max_mru_rotate_time_ * timeouts) / ZX_SEC(1)),
-             mru_semaphore_.count());
-      Dump();
+    // The inline LRU processing above posts |mru_semaphore_| once the LRU queue empties, so this
+    // consumes that post. In the (unexpected) event more processing is still required, keep driving
+    // it inline rather than blocking on a thread that will never run.
+    while (mru_semaphore_.Wait(Deadline::after(0)) == ZX_ERR_TIMED_OUT) {
+      if (!NeedsLruProcessing()) {
+        // Nothing left to process but the semaphore was not posted; give up waiting rather than
+        // spin forever.
+        break;
+      }
+      uint64_t target_gen;
+      {
+        Guard<CriticalMutex> guard{&lock_};
+        target_gen = lru_gen_.load(ktl::memory_order_relaxed) + 1;
+      }
+      ProcessDontNeedAndLruQueues(target_gen, false);
     }
   }
 
