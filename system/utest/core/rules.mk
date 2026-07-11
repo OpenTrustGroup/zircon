@@ -16,7 +16,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/main.c \
 
 MODULE_SRCS := \
-    $(filter-out $(LOCAL_DIR)/pager/% $(LOCAL_DIR)/stream/%,$(MODULE_SRCS))
+    $(filter-out $(LOCAL_DIR)/pager/main.cpp $(LOCAL_DIR)/stream/%,$(MODULE_SRCS))
 
 MODULE_NAME := core-tests
 
@@ -30,11 +30,27 @@ MODULE_STATIC_LIBS := \
 # -fno-stack-protector
 MODULE_STATIC_LIBS += system/utest/core/threads/thread-functions
 
+# Extra static libs required by the pager tests, which are compiled into
+# core-tests so they run under userboot with the root resource.
+MODULE_STATIC_LIBS += \
+    system/ulib/zx \
+    system/ulib/inspector \
+    system/ulib/zxcpp
+
 MODULE_LIBS := \
     system/ulib/unittest \
     system/ulib/mini-process \
     system/ulib/zircon \
     system/ulib/c
+
+# Extra shared libs required by the pager tests (backtrace/unwind support).
+MODULE_LIBS += \
+    system/ulib/fdio \
+    third_party/ulib/backtrace \
+    third_party/ulib/ngunwind
+
+# Disable warnings that are common in imported pager test code.
+MODULE_COMPILEFLAGS += -Wno-unused-parameter
 
 MODULE_DEFINES := BUILD_COMBINED_TESTS=1
 
