@@ -37,5 +37,6 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/vm_unittest.cpp \
     $(LOCAL_DIR)/vmm.cpp \
     $(LOCAL_DIR)/page_source.cpp \
+    $(LOCAL_DIR)/page_queues.cpp \
 
 include make/module.mk

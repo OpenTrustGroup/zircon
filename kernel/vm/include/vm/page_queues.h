@@ -7,22 +7,26 @@
 #ifndef ZIRCON_KERNEL_VM_INCLUDE_VM_PAGE_QUEUES_H_
 #define ZIRCON_KERNEL_VM_INCLUDE_VM_PAGE_QUEUES_H_
 
-#include <lib/fitx/result.h>
 #include <sys/types.h>
 #include <zircon/listnode.h>
 
 #include <fbl/algorithm.h>
 #include <fbl/macros.h>
+#include <fbl/ref_ptr.h>
 #include <kernel/event.h>
 #include <kernel/lockdep.h>
 #include <kernel/mutex.h>
-#include <kernel/semaphore.h>
 #include <ktl/array.h>
+#include <ktl/atomic.h>
 #include <ktl/optional.h>
 #include <vm/page.h>
+#include <vm/page_queues_shims.h>
 
-class VmCowPages;
-class VmCowPagesContainer;
+// The 2018 VM has no VmCowPages; a page's owning object is the VmObjectPaged
+// directly, so backlinks reference VmObjectPaged where upstream references
+// VmCowPages (see vm/page.h). VmCowPagesContainer has no 2018 analogue and the
+// loaned-page machinery that uses it is cut for this stage.
+class VmObjectPaged;
 
 // Allocated pages that are part of the cow pages in a VmObjectPaged can be placed in a page queue.
 // The page queues provide a way to
@@ -72,6 +76,13 @@ class PageQueues {
 
   DISALLOW_COPY_ASSIGN_AND_MOVE(PageQueues);
 
+  // Note on atomic member initialization: upstream uses std::atomic, which is
+  // copy-initializable (`ktl::atomic<T> x = v;`). fbl::atomic (the 2018 backing
+  // for ktl::atomic) deletes its copy constructor, and C++14 does not guarantee
+  // the copy elision that would make `= v` work, so the atomic members below use
+  // direct brace initialization (`ktl::atomic<T> x{v};`) instead. This is a
+  // mechanical initialization-spelling change with identical semantics.
+
   // This is a specialized version of MarkAccessed designed to be called during accessed harvesting.
   // It does not update active/inactive counts, and this needs to be done separately once harvesting
   // is complete. It is only permitted to call this in between BeginAccessScan and EndAccessScan
@@ -80,7 +91,7 @@ class PageQueues {
     // Ensure that the page queues is returning the cached counts at the moment, otherwise we might
     // race.
     DEBUG_ASSERT(use_cached_queue_counts_.load(ktl::memory_order_relaxed));
-    auto queue_ref = page->object.get_page_queue_ref();
+    auto& queue_ref = page->object.get_page_queue_ref();
     uint8_t old_gen = queue_ref.load(ktl::memory_order_relaxed);
     // Between loading the mru_gen and finally storing it in the queue_ref it's possible for our
     // calculated target_queue to become invalid. This is extremely unlikely as it would require
@@ -94,7 +105,10 @@ class PageQueues {
       if (!queue_is_pager_backed(static_cast<PageQueue>(old_gen))) {
         return;
       }
-    } while (!queue_ref.compare_exchange_weak(old_gen, static_cast<uint8_t>(target_queue),
+      // fbl::atomic's compare_exchange_weak takes the expected value by pointer and requires both
+      // memory orders explicitly (std::atomic takes a reference and defaults failure order).
+    } while (!queue_ref.compare_exchange_weak(&old_gen, static_cast<uint8_t>(target_queue),
+                                              ktl::memory_order_relaxed,
                                               ktl::memory_order_relaxed));
     page_queue_counts_[old_gen].fetch_sub(1, ktl::memory_order_relaxed);
     page_queue_counts_[target_queue].fetch_add(1, ktl::memory_order_relaxed);
@@ -106,7 +120,7 @@ class PageQueues {
   void MoveToWired(vm_page_t* page);
   // Moves page from whichever queue it is currently in, to the wired queue, and also sets the
   // backlink information.
-  void MoveToWired(vm_page_t* page, VmCowPages* object, uint64_t page_offset);
+  void MoveToWired(vm_page_t* page, VmObjectPaged* object, uint64_t page_offset);
   // Place page in the unswappable queue. Must not already be in a page queue.
   void SetUnswappable(vm_page_t* page);
   // Moves page from whichever queue it is currently in, to the unswappable queue.
@@ -115,15 +129,21 @@ class PageQueues {
   // reference information. If the page is removed from the referenced object (especially if it's
   // due to the object being destroyed) then this back reference *must* be updated, either by
   // calling Remove or calling MoveToPagerBacked with the new object information.
-  void SetPagerBacked(vm_page_t* page, VmCowPages* object, uint64_t page_offset);
+  void SetPagerBacked(vm_page_t* page, VmObjectPaged* object, uint64_t page_offset);
   // Moves page from whichever queue it is currently in, to the pager backed queue. Same rules on
   // keeping the back reference up to date as given in SetPagerBacked apply.
-  void MoveToPagerBacked(vm_page_t* page, VmCowPages* object, uint64_t page_offset);
+  void MoveToPagerBacked(vm_page_t* page, VmObjectPaged* object, uint64_t page_offset);
   // Moves page from whichever queue it is currently in, to the DontNeed pager backed queue. The
   // object back reference information must have already been set by a previous call to
   // SetPagerBacked or MoveToPagerBacked. Same rules on keeping the back reference up to date as
   // given in SetPagerBacked apply.
   void MoveToPagerBackedDontNeed(vm_page_t* page);
+
+  // [PORT-BLOCKED] Dirty-tracking and zero-fork queue ops depend on VmCowPages
+  // dirty/zero-fork APIs that 2018 lacks; the queue slots remain (see PageQueue
+  // enum) but their public operations are cut for this inert stage. Stage 3+
+  // wires the real object APIs.
+  /*
   // Place page in the Dirty pager backed queue. Must not already be in a page queue. Sets the back
   // reference information. Same rules on keeping the back reference up to date as given in
   // SetPagerBacked apply.
@@ -139,6 +159,7 @@ class PageQueues {
   // Moves page from whichever queue it is currently in, to the unswappable zero forked queue. Same
   // rules for back pointers apply as for SetPagerBacked.
   void MoveToUnswappableZeroFork(vm_page_t* page, VmCowPages* object, uint64_t page_offset);
+  */
 
   // Removes the page from any page list and returns ownership of the queue_node.
   void Remove(vm_page_t* page);
@@ -189,16 +210,11 @@ class PageQueues {
   // use. This can be done by acquiring the returned vmo's lock and then validating that the page is
   // still contained at the offset.
   struct VmoBacklink {
-    fbl::RefPtr<VmCowPages> cow;
+    // Upstream stores a VmCowPages RefPtr; 2018 backlinks are to VmObjectPaged.
+    fbl::RefPtr<VmObjectPaged> vmo;
     vm_page_t* page = nullptr;
     uint64_t offset = 0;
   };
-
-  // Moves a page from from the unswappable zero fork queue into the unswappable queue and returns
-  // the backlink information. If the zero fork queue is empty then a nullopt is returned, otherwise
-  // if it has_value the vmo field may be null to indicate that the vmo is running its destructor
-  // (see VmoBacklink for more details).
-  ktl::optional<VmoBacklink> PopUnswappableZeroFork();
 
   // Looks at the pager_backed queues and returns backlink information of the first page found. The
   // queues themselves are walked from the current LRU queue up to the queue that is at most
@@ -209,6 +225,10 @@ class PageQueues {
   // not modified.
   ktl::optional<VmoBacklink> PeekPagerBacked(size_t lowest_queue);
 
+  // [PORT-BLOCKED] Loaned-page reclaim uses VmCowPagesContainer, which has no 2018
+  // analogue; cut for this stage. Zero-fork pop likewise depends on cut zero-fork
+  // queue ops. Both are preserved here for re-diffing.
+  /*
   // Not all methods are safe to call via a referenced VmoContainerBacklink since VmCowPages
   // refcount may already be 0, but RemovePageForEviction() is.  For loaned page reclaim we don't
   // have the option of just recognizing that the VmCowPages is deleting soon and moving on - we
@@ -228,6 +248,13 @@ class PageQueues {
   // is.
   ktl::optional<VmoContainerBacklink> GetCowWithReplaceablePage(vm_page_t* page,
                                                                 VmCowPages* owning_cow);
+
+  // Moves a page from from the unswappable zero fork queue into the unswappable queue and returns
+  // the backlink information. If the zero fork queue is empty then a nullopt is returned, otherwise
+  // if it has_value the vmo field may be null to indicate that the vmo is running its destructor
+  // (see VmoBacklink for more details).
+  ktl::optional<VmoBacklink> PopUnswappableZeroFork();
+  */
 
   // Helper struct to group pager-backed queue length counts returned by GetPagerQueueCounts.
   struct PagerCounts {
@@ -310,6 +337,9 @@ class PageQueues {
   // indefinitely as they might attempt to offload work to a nonexistent thread. This issue is only
   // relevant for unittests that may wish to avoid starting the threads for some tests.
   // It is the responsibility of the caller to only call this once, otherwise it will panic.
+  //
+  // Note: for this inert porting stage the aging/lru threads are defined but never
+  // started; StartThreads must compile but must not be called (see TODO(OT-155)).
   void StartThreads(zx_duration_t min_mru_rotate_time, zx_duration_t max_mru_rotate_time);
 
   // Sets the active ratio multiplier.
@@ -505,12 +535,14 @@ class PageQueues {
   // This Event is a binary semaphore and is used to control aging. Is acquired by the aging thread
   // when it performs aging, and can be acquired separately to block aging. For this purpose it
   // needs to start as being initially signalled.
-  AutounsignalEvent aging_token_ = AutounsignalEvent(true);
+  // Direct-initialized because the shim AutounsignalEvent is non-copyable (see the
+  // atomic-init note above); upstream copy-initializes here.
+  AutounsignalEvent aging_token_{true};
   // Flag used to catch programming errors related to double enabling or disabling aging.
-  ktl::atomic<bool> aging_disabled_ = false;
+  ktl::atomic<bool> aging_disabled_{false};
 
   // Time at which the mru_gen_ was last incremented.
-  ktl::atomic<zx_time_t> last_age_time_ = ZX_TIME_INFINITE_PAST;
+  ktl::atomic<zx_time_t> last_age_time_{ZX_TIME_INFINITE_PAST};
   // Reason the last aging event happened, this is purely for informational/debugging purposes.
   AgeReason last_age_reason_ TA_GUARDED(lock_) = AgeReason::None;
   // Used to signal the aging thread that it should wake up and see if it needs to do anything.
@@ -574,8 +606,8 @@ class PageQueues {
   // think they are in a queue that is invalid, only valid linked lists in the page_queues_ will
   // ever have pages in them. This invariant is easy to enforce as the page_queues_ are updated
   // under a lock.
-  ktl::atomic<uint64_t> lru_gen_ = 0;
-  ktl::atomic<uint64_t> mru_gen_ = kNumPagerBacked - 1;
+  ktl::atomic<uint64_t> lru_gen_{0};
+  ktl::atomic<uint64_t> mru_gen_{kNumPagerBacked - 1};
 
   // This semaphore counts the amount of space remaining for the mru to grow before it would overlap
   // with the lru. Having this as a semaphore (even though it can always be calculated from lru_gen_
@@ -585,7 +617,9 @@ class PageQueues {
   // Without this the aging thread would need to process the LRU queue directly if it needed to make
   // space. Initially, with the lru_gen_ and mru_gen_ definitions above, we start with no space for
   // the mru to grow, so initialize this to 0.
-  Semaphore mru_semaphore_ = Semaphore(0);
+  // Direct-initialized because the shim Semaphore is non-copyable; upstream
+  // copy-initializes here.
+  Semaphore mru_semaphore_{0};
 
   // Tracks the counts of pages in each queue in O(1) time complexity. As pages are moved between
   // queues, the corresponding source and destination counts are decremented and incremented,
@@ -613,12 +647,14 @@ class PageQueues {
   // whether the page queues expect accessed harvesting to be happening. This is only an atomic
   // so that MarkAccessedDeferredCount can reference it in a DEBUG_ASSERT without triggering
   // memory safety issues.
-  ktl::atomic<bool> use_cached_queue_counts_ = false;
+  ktl::atomic<bool> use_cached_queue_counts_{false};
 
   // Track the mru and lru threads and have a signalling mechanism to shut them down.
-  ktl::atomic<bool> shutdown_threads_ = false;
-  Thread* mru_thread_ TA_GUARDED(lock_) = nullptr;
-  Thread* lru_thread_ TA_GUARDED(lock_) = nullptr;
+  ktl::atomic<bool> shutdown_threads_{false};
+  // Upstream uses the C++ Thread type; the 2018 kernel exposes threads via the C
+  // thread_t API (thread_create/thread_resume/thread_join), so store thread_t*.
+  thread_t* mru_thread_ TA_GUARDED(lock_) = nullptr;
+  thread_t* lru_thread_ TA_GUARDED(lock_) = nullptr;
 
   // Queue rotation parameters. These are not locked as they are only read by the mru thread, and
   // are set before the mru thread is started.

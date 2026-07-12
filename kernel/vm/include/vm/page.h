@@ -8,6 +8,7 @@
 #pragma once
 
 #include <fbl/algorithm.h>
+#include <ktl/atomic.h>
 #include <list.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -62,10 +63,14 @@ typedef struct vm_page {
             uint64_t page_offset_priv;
 
             // Current PageQueues bucket (a PageQueue enum value). Updated as the page
-            // ages / is hinted; read to select eviction candidates. Kept as a plain
-            // byte (accessed under the page-queues lock, and via atomic loads on the
-            // lockless read path) rather than upstream's atomic_ref, which 2018 lacks.
-            uint8_t page_queue_priv;
+            // ages / is hinted; read to select eviction candidates. Stored as an
+            // atomic byte because the page queues update and read it both under the
+            // page-queues lock and on a lockless path (MarkAccessedDeferredCount),
+            // matching upstream which holds this in an atomic. 2018 lacks
+            // std::atomic_ref, so this is a full ktl::atomic (== fbl::atomic) member;
+            // it is 1 byte like the plain uint8_t it replaces, so the layout is
+            // unchanged.
+            ktl::atomic<uint8_t> page_queue_priv;
 
             uint8_t pin_count : VM_PAGE_OBJECT_PIN_COUNT_BITS;
             // Sticky ZX_VMO_OP_ALWAYS_NEED hint: prefer to keep this page resident;
@@ -81,8 +86,12 @@ typedef struct vm_page {
             }
             uint64_t get_page_offset() const { return page_offset_priv; }
             void set_page_offset(uint64_t offset) { page_offset_priv = offset; }
-            uint8_t& get_page_queue_ref() { return page_queue_priv; }
-            uint8_t get_page_queue_ref() const { return page_queue_priv; }
+            // Returns a reference to the atomic queue index so callers can use the
+            // full atomic surface (load/store/exchange/compare_exchange_weak). The
+            // const overload returns a const reference; loads on it must use the
+            // const load() overload.
+            ktl::atomic<uint8_t>& get_page_queue_ref() { return page_queue_priv; }
+            const ktl::atomic<uint8_t>& get_page_queue_ref() const { return page_queue_priv; }
         } object; // attached to a vm object
     };
 

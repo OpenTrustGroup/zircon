@@ -4,31 +4,62 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
+#include <assert.h>
+#include <inttypes.h>
 #include <lib/counters.h>
+#include <stdio.h>
+
+#include <fbl/auto_call.h>
+#include <fbl/ref_ptr.h>
+#include <kernel/thread.h>
+#include <ktl/algorithm.h>
+#include <platform.h>
+#include <vm/page.h>
+#include <vm/page_queues.h>
+#include <vm/pmm.h>
+#include <vm/vm.h>
+#include <vm/vm_object_paged.h>
+
+#include "vm_priv.h"
+
+// [PORT-BLOCKED] The following upstream includes have no 2018 analogue and are
+// only needed by machinery that is cut for this inert stage (loaned pages,
+// VmCowPages, the scanner thread, stack-owned loaned page intervals, and the
+// upgradeable refcount used to build a live backlink). They are preserved here
+// for re-diffing; the cut code paths below are marked individually.
+/*
 #include <lib/fit/defer.h>
-#include <lib/zircon-internal/macros.h>
 
 #include <fbl/ref_counted_upgradeable.h>
 #include <kernel/auto_preempt_disabler.h>
 #include <object/thread_dispatcher.h>
-#include <vm/page.h>
-#include <vm/page_queues.h>
-#include <vm/pmm.h>
 #include <vm/scanner.h>
 #include <vm/stack_owned_loaned_pages_interval.h>
 #include <vm/vm_cow_pages.h>
+*/
 
 namespace {
 
-KCOUNTER(pq_aging_reason_before_min_timeout, "pq.aging.reason_before_min_timeout")
-KCOUNTER(pq_aging_spurious_wakeup, "pq.aging.spurious_wakeup")
-KCOUNTER(pq_aging_timeout_with_reason, "pq.aging.timeout_with_reason")
-KCOUNTER(pq_aging_reason_none, "pq.aging.reason.none")
-KCOUNTER(pq_aging_reason_timeout, "pq.aging.reason.timeout")
-KCOUNTER(pq_aging_reason_active_ratio, "pq.aging.reason.active_ratio")
-KCOUNTER(pq_aging_reason_manual, "pq.aging.reason.manual")
-KCOUNTER(pq_aging_blocked_on_lru, "pq.aging.blocked_on_lru")
-KCOUNTER(pq_lru_spurious_wakeup, "pq.lru.spurious_wakeup")
+// Unlike upstream's Counter (whose KCOUNTER macro terminates itself), the 2018
+// KCOUNTER macro does not end in a semicolon, so each use is terminated here.
+KCOUNTER(pq_aging_reason_before_min_timeout, "pq.aging.reason_before_min_timeout");
+KCOUNTER(pq_aging_spurious_wakeup, "pq.aging.spurious_wakeup");
+KCOUNTER(pq_aging_timeout_with_reason, "pq.aging.timeout_with_reason");
+KCOUNTER(pq_aging_reason_none, "pq.aging.reason.none");
+KCOUNTER(pq_aging_reason_timeout, "pq.aging.reason.timeout");
+KCOUNTER(pq_aging_reason_active_ratio, "pq.aging.reason.active_ratio");
+KCOUNTER(pq_aging_reason_manual, "pq.aging.reason.manual");
+KCOUNTER(pq_aging_blocked_on_lru, "pq.aging.blocked_on_lru");
+KCOUNTER(pq_lru_spurious_wakeup, "pq.lru.spurious_wakeup");
+
+// The 2018 tree lacks the newer zx_time helpers used by upstream. Provide the
+// small subset needed here as local helpers with identical semantics; these are
+// pure arithmetic on nanosecond zx_time_t/zx_duration_t. ZX_TIME_INFINITE_PAST is
+// provided by page_queues_shims.h.
+inline zx_time_t pq_time_add_duration(zx_time_t time, zx_duration_t duration) {
+  return time + duration;
+}
+inline zx_duration_t pq_time_sub_time(zx_time_t a, zx_time_t b) { return a - b; }
 
 }  // namespace
 
@@ -48,7 +79,7 @@ PageQueues::~PageQueues() {
     DEBUG_ASSERT(list_is_empty(&page_queues_[i]));
   }
   for (size_t i = 0; i < page_queue_counts_.size(); i++) {
-    DEBUG_ASSERT_MSG(page_queue_counts_[i] == 0, "i=%zu count=%zu", i,
+    DEBUG_ASSERT_MSG(page_queue_counts_[i].load() == 0, "i=%zu count=%zu", i,
                      page_queue_counts_[i].load());
   }
 }
@@ -65,26 +96,28 @@ void PageQueues::StartThreads(zx_duration_t min_mru_rotate_time,
 
   // Cannot perform all of thread creation under the lock as thread creation requires
   // allocations so we create in temporaries first and then stash.
-  Thread* mru_thread = Thread::Create(
+  // Upstream uses the C++ Thread type; 2018 uses the C thread_t API. The entry
+  // functions are captureless lambdas that convert to thread_start_routine.
+  thread_t* mru_thread = thread_create(
       "page-queue-mru-thread",
       [](void* arg) -> int {
         static_cast<PageQueues*>(arg)->MruThread();
         return 0;
       },
-      this, LOW_PRIORITY);
+      this, LOW_PRIORITY, DEFAULT_STACK_SIZE);
   DEBUG_ASSERT(mru_thread);
 
-  mru_thread->Resume();
+  thread_resume(mru_thread);
 
-  Thread* lru_thread = Thread::Create(
+  thread_t* lru_thread = thread_create(
       "page-queue-lru-thread",
       [](void* arg) -> int {
         static_cast<PageQueues*>(arg)->LruThread();
         return 0;
       },
-      this, LOW_PRIORITY);
+      this, LOW_PRIORITY, DEFAULT_STACK_SIZE);
   DEBUG_ASSERT(lru_thread);
-  lru_thread->Resume();
+  thread_resume(lru_thread);
 
   Guard<CriticalMutex> guard{&lock_};
   ASSERT(!mru_thread_);
@@ -96,11 +129,11 @@ void PageQueues::StartThreads(zx_duration_t min_mru_rotate_time,
 void PageQueues::StopThreads() {
   // Cannot wait for threads to complete with the lock held, so update state and then perform any
   // joins outside the lock.
-  Thread* mru_thread = nullptr;
-  Thread* lru_thread = nullptr;
+  thread_t* mru_thread = nullptr;
+  thread_t* lru_thread = nullptr;
   {
     Guard<CriticalMutex> guard{&lock_};
-    shutdown_threads_ = true;
+    shutdown_threads_.store(true);
     if (aging_disabled_.exchange(false)) {
       aging_token_.Signal();
     }
@@ -111,11 +144,11 @@ void PageQueues::StopThreads() {
   }
   int retcode;
   if (mru_thread) {
-    zx_status_t status = mru_thread->Join(&retcode, ZX_TIME_INFINITE);
+    zx_status_t status = thread_join(mru_thread, &retcode, ZX_TIME_INFINITE);
     ASSERT(status == ZX_OK);
   }
   if (lru_thread) {
-    zx_status_t status = lru_thread->Join(&retcode, ZX_TIME_INFINITE);
+    zx_status_t status = thread_join(lru_thread, &retcode, ZX_TIME_INFINITE);
     ASSERT(status == ZX_OK);
   }
 }
@@ -233,7 +266,9 @@ void PageQueues::Dump() {
   // without causing stack allocation pressure.
   constexpr size_t kBufSize = 50;
   // Start with the buffer null terminated. snprintf will always keep it null terminated.
-  char buf[kBufSize] __UNINITIALIZED = "\0";
+  // Upstream tags this with __UNINITIALIZED to suppress auto-var-init; 2018 has no such
+  // attribute, so it is dropped (the buffer is explicitly initialized here regardless).
+  char buf[kBufSize] = "\0";
   size_t buf_len = 0;
   // This formats the counts of all buckets, not just those within the mru->lru range, even though
   // any buckets not in that range should always have a count of zero. The format this generates is
@@ -263,11 +298,14 @@ void PageQueues::Dump() {
     buf_len += write_len;
   }
   zx_time_t current = current_time();
-  timespec age_time = zx_timespec_from_duration(zx_time_sub_time(current, last_age_time));
-  printf("pq: MRU generation is %" PRIu64
-         " set %ld.%lds ago due to \"%s\", LRU generation is %" PRIu64 "\n",
-         mru_gen, age_time.tv_sec, age_time.tv_nsec, string_from_age_reason(last_age_reason),
-         lru_gen);
+  // Upstream converts to a timespec via zx_timespec_from_duration; 2018 lacks that
+  // helper, so compute seconds/nanoseconds directly from the nanosecond duration.
+  zx_duration_t age = pq_time_sub_time(current, last_age_time);
+  int64_t age_sec = static_cast<int64_t>(age / ZX_SEC(1));
+  int64_t age_nsec = static_cast<int64_t>(age % ZX_SEC(1));
+  printf("pq: MRU generation is %" PRIu64 " set %" PRId64 ".%" PRId64
+         "s ago due to \"%s\", LRU generation is %" PRIu64 "\n",
+         mru_gen, age_sec, age_nsec, string_from_age_reason(last_age_reason), lru_gen);
   printf("pq: Pager buckets %s evict first: %zu, %s active/inactive totals: %zu/%zu\n", buf,
          inactive_count, activeinactive.cached ? "cached" : "live", activeinactive.active,
          activeinactive.inactive);
@@ -281,11 +319,11 @@ void PageQueues::Dump() {
 // a full scan may happen inline in that method call, and get attributed directly to this thread.
 void PageQueues::MruThread() {
   // Pretend that aging happens during startup to simplify the rest of the loop logic.
-  last_age_time_ = current_time();
+  last_age_time_.store(current_time());
   while (!shutdown_threads_.load(ktl::memory_order_relaxed)) {
     // Wait for the min rotate time to pass.
-    Thread::Current::Sleep(
-        zx_time_add_duration(last_age_time_.load(ktl::memory_order_relaxed), min_mru_rotate_time_));
+    thread_sleep(pq_time_add_duration(last_age_time_.load(ktl::memory_order_relaxed),
+                                      min_mru_rotate_time_));
 
     // Wait on the aging_event_ in a loop to deal with spurious signals on the event. Will exit
     // the loop for either of
@@ -301,8 +339,7 @@ void PageQueues::MruThread() {
     while (!shutdown_threads_.load(ktl::memory_order_relaxed) &&
            (age_reason = GetAgeReason()) == AgeReason::None && result != ZX_ERR_TIMED_OUT) {
       result = aging_event_.WaitDeadline(
-          zx_time_add_duration(last_age_time_.load(ktl::memory_order_relaxed),
-                               max_mru_rotate_time_),
+          pq_time_add_duration(last_age_time_.load(ktl::memory_order_relaxed), max_mru_rotate_time_),
           Interruptible::No);
       iterations++;
     }
@@ -314,10 +351,10 @@ void PageQueues::MruThread() {
     if (iterations == 0) {
       // If We did zero iterations then this means there was an age_reason waiting for us, meaning
       // we wanted to age prior to the min timeout clearing.
-      pq_aging_reason_before_min_timeout.Add(1);
+      kcounter_add(pq_aging_reason_before_min_timeout, 1);
     } else if (iterations > 1) {
       // Every loop iteration above 1 indicates a spurious wake up.
-      pq_aging_spurious_wakeup.Add(iterations - 1);
+      kcounter_add(pq_aging_spurious_wakeup, iterations - 1);
     }
 
     // If we didn't have an age reason then since we already handled the disable_aging_ case the
@@ -330,15 +367,19 @@ void PageQueues::MruThread() {
       // to races or delays in scheduling this thread, but we log this case in a counter anyway
       // since it happening regularly could indicate a bug.
       if (result == ZX_ERR_TIMED_OUT) {
-        pq_aging_timeout_with_reason.Add(1);
+        kcounter_add(pq_aging_timeout_with_reason, 1);
       }
     }
 
     // Taken the aging token, potentially blocking if aging is disabled, make sure to return it when
     // we are done.
     aging_token_.Wait();
-    auto return_token = fit::defer([this] { aging_token_.Signal(); });
+    auto return_token = fbl::MakeAutoCall([this] { aging_token_.Signal(); });
 
+    // [PORT-BLOCKED] The scanner subsystem (scanner_wait_for_accessed_scan) does not
+    // exist in 2018; harvest synchronization is cut for this stage. This thread is
+    // never started here, so the skip is inert. Stage 6+ ports the scanner.
+    /*
     // Make sure the accessed information has been harvested since the last time we aged, otherwise
     // we are deliberately making the age information coarser, by effectively not using one of the
     // queues, at which point we might as well not have bothered rotating.
@@ -346,6 +387,7 @@ void PageQueues::MruThread() {
     // there are additional aging triggers and harvesting is more asynchronous, this will serve as
     // a synchronization point.
     scanner_wait_for_accessed_scan(last_age_time_, true);
+    */
 
     RotatePagerBackedQueues(age_reason);
 
@@ -368,7 +410,7 @@ void PageQueues::LruThread() {
     {
       Guard<CriticalMutex> guard{&lock_};
       if (!NeedsLruProcessing()) {
-        pq_lru_spurious_wakeup.Add(1);
+        kcounter_add(pq_lru_spurious_wakeup, 1);
         continue;
       }
       target_gen = lru_gen_.load(ktl::memory_order_relaxed) + 1;
@@ -382,11 +424,13 @@ void PageQueues::LruThread() {
 void PageQueues::RotatePagerBackedQueues(AgeReason reason) {
   VM_KTRACE_DURATION(2, "RotatePagerBackedQueues");
   // We expect LRU processing to have already happened, so first poll the mru semaphore.
-  if (mru_semaphore_.Wait(Deadline::no_slack(ZX_TIME_INFINITE_PAST)) == ZX_ERR_TIMED_OUT) {
+  // Upstream polls with Deadline::no_slack(ZX_TIME_INFINITE_PAST); 2018 Deadline has
+  // no TimerSlack, so a bare past deadline is used (a non-blocking poll).
+  if (mru_semaphore_.Wait(Deadline::after(0)) == ZX_ERR_TIMED_OUT) {
     // We should not have needed to wait for lru processing here, as it should have already been
     // made available due to earlier triggers. Although this could reasonably happen due to races or
     // delays in scheduling we record in a counter as happening regularly could indicate a bug.
-    pq_aging_blocked_on_lru.Add(1);
+    kcounter_add(pq_aging_blocked_on_lru, 1);
 
     MaybeTriggerLruProcessing();
 
@@ -395,12 +439,12 @@ void PageQueues::RotatePagerBackedQueues(AgeReason reason) {
     // inform the user if we have waited multiples of the expected maximum aging interval, since
     // that implies we are starting to lose the requested fidelity of age information.
     int64_t timeouts = 0;
-    while (mru_semaphore_.Wait(Deadline::after(max_mru_rotate_time_, TimerSlack::none())) ==
-           ZX_ERR_TIMED_OUT) {
+    while (mru_semaphore_.Wait(Deadline::after(max_mru_rotate_time_)) == ZX_ERR_TIMED_OUT) {
       timeouts++;
       printf("[pq] WARNING: Waited %" PRIi64 " seconds for LRU thread, MRU semaphore %" PRIu64
              ",aging is presently stalled\n",
-             (max_mru_rotate_time_ * timeouts) / ZX_SEC(1), mru_semaphore_.count());
+             static_cast<int64_t>((max_mru_rotate_time_ * timeouts) / ZX_SEC(1)),
+             mru_semaphore_.count());
       Dump();
     }
   }
@@ -413,7 +457,7 @@ void PageQueues::RotatePagerBackedQueues(AgeReason reason) {
     // mru_gen_ changing whilst they hold the lock.
     Guard<CriticalMutex> guard{&lock_};
     mru_gen_.fetch_add(1, ktl::memory_order_relaxed);
-    last_age_time_ = current_time();
+    last_age_time_.store(current_time());
     last_age_reason_ = reason;
     // Update the active/inactive counts. We could be a bit smarter here since we know exactly which
     // active bucket might have changed, but this will work.
@@ -422,16 +466,16 @@ void PageQueues::RotatePagerBackedQueues(AgeReason reason) {
   // Keep a count of the different reasons we have rotated.
   switch (reason) {
     case AgeReason::None:
-      pq_aging_reason_none.Add(1);
+      kcounter_add(pq_aging_reason_none, 1);
       break;
     case AgeReason::Timeout:
-      pq_aging_reason_timeout.Add(1);
+      kcounter_add(pq_aging_reason_timeout, 1);
       break;
     case AgeReason::ActiveRatio:
-      pq_aging_reason_active_ratio.Add(1);
+      kcounter_add(pq_aging_reason_active_ratio, 1);
       break;
     case AgeReason::Manual:
-      pq_aging_reason_manual.Add(1);
+      kcounter_add(pq_aging_reason_manual, 1);
       break;
     default:
       panic("Unknown age reason");
@@ -452,6 +496,11 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessQueueHelper(
   // Also, we need to limit the number to avoid sweep_to_loaned taking up excessive stack space.
   static constexpr uint32_t kMaxQueueWork = 16;
 
+  // [PORT-BLOCKED] Loaned-page sweeping (replacing active pages with loaned pages)
+  // depends on pmm loaned-page config and VmCowPages::ReplacePageWithLoaned, none of
+  // which exist in 2018. The sweep accumulation and its deferred replacement are cut;
+  // the surrounding queue-walk logic is preserved.
+  /*
   // Each page in this list can potentially be replaced with a loaned page, but we have to do this
   // replacement outside the PageQueues::lock_, so we accumulate pages and then try to replace the
   // pages after lock_ is released.
@@ -472,6 +521,8 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessQueueHelper(
                                                         sweep_to_loaned[i].offset);
         }
       });
+  */
+  const bool do_sweeping = false;
 
   Guard<CriticalMutex> guard{&lock_};
   const uint64_t mru = mru_gen_.load(ktl::memory_order_relaxed);
@@ -537,6 +588,9 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessQueueHelper(
       list_delete(&page->queue_node);
       list_add_head(&page_queues_[page_queue], &page->queue_node);
 
+      // [PORT-BLOCKED] Loaned-page sweeping (see cut sweep_to_loaned above). With
+      // do_sweeping always false this branch is never taken; preserved for re-diffing.
+      /*
       if (queue_is_active(page_queue, mru_queue) && do_sweeping && !pmm_is_loaned(page)) {
         DEBUG_ASSERT(sweep_to_loaned_count < kMaxQueueWork);
         VmCowPages* cow = reinterpret_cast<VmCowPages*>(page->object.get_object());
@@ -548,17 +602,20 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessQueueHelper(
           ++sweep_to_loaned_count;
         }
       }
+      */
+      (void)do_sweeping;
     } else if (peek) {
-      VmCowPages* cow = reinterpret_cast<VmCowPages*>(page->object.get_object());
+      VmObjectPaged* vmo = page->object.get_object();
       uint64_t page_offset = page->object.get_page_offset();
-      DEBUG_ASSERT(cow);
+      DEBUG_ASSERT(vmo);
 
-      // We may be racing with destruction of VMO. As we currently hold our lock we know that our
-      // back pointer is correct in so far as the VmCowPages has not yet had completed running its
-      // destructor, so we know it is safe to attempt to upgrade it to a RefPtr. If upgrading
-      // fails we assume the page is about to be removed from the page queue once the VMO
-      // destructor gets a chance to run.
-      return VmoBacklink{fbl::MakeRefPtrUpgradeFromRaw(cow, lock_), page, page_offset};
+      // We may be racing with destruction of the VMO. As we currently hold our lock we know that
+      // our back pointer is correct in so far as the object has not yet completed running its
+      // destructor. Upstream upgrades a raw VmCowPages to a RefPtr here.
+      // TODO(OT-155): 2018 has no upgradeable-from-raw refcount helper for VmObjectPaged
+      // yet; Stage 3 wires the real backlink upgrade. For this inert stage return a null
+      // vmo, which callers treat as "the VMO is being destroyed".
+      return VmoBacklink{nullptr, page, page_offset};
     } else {
       // Force it into our target queue, don't care about races. If we happened to access it at
       // the same time then too bad.
@@ -615,7 +672,8 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessDontNeedAndLruQueues(u
   // queue or the wrong DontNeed queue. Further we assume a single page per iteration to give some
   // additional buffer, even though multiple pages should be processed per iteration.
   ActiveInactiveCounts active_inactive = GetActiveInactiveCounts();
-  const uint64_t max_dont_need_iterations = page_queue_counts_[PageQueuePagerBackedDontNeed] + 1;
+  const uint64_t max_dont_need_iterations =
+      page_queue_counts_[PageQueuePagerBackedDontNeed].load(ktl::memory_order_relaxed) + 1;
   const uint64_t max_lru_iterations = active_inactive.active + active_inactive.inactive + 1;
   // Loop iteration counting is just for diagnostic purposes.
   uint64_t loop_iterations = 0;
@@ -698,7 +756,7 @@ void PageQueues::UpdateActiveInactiveLocked(PageQueue old_queue, PageQueue new_q
 void PageQueues::MarkAccessed(vm_page_t* page) {
   Guard<CriticalMutex> guard{&lock_};
 
-  auto queue_ref = page->object.get_page_queue_ref();
+  auto& queue_ref = page->object.get_page_queue_ref();
 
   // The page can be the zero page, but in that case we'll return early below.
   DEBUG_ASSERT(page != vm_get_zero_page() ||
@@ -729,17 +787,18 @@ void PageQueues::SetQueueLocked(vm_page_t* page, PageQueue queue) {
 
 void PageQueues::SetQueueBacklinkLocked(vm_page_t* page, void* object, uintptr_t page_offset,
                                         PageQueue queue) {
-  DEBUG_ASSERT(page->state() == vm_page_state::OBJECT);
+  DEBUG_ASSERT(page->state == VM_PAGE_STATE_OBJECT);
   DEBUG_ASSERT(!page->is_free());
   DEBUG_ASSERT(!list_in_list(&page->queue_node));
   if (object) {
-    DEBUG_ASSERT(!page->object.get_object() || page->object.get_object() == object);
+    DEBUG_ASSERT(!page->object.get_object() ||
+                 page->object.get_object() == reinterpret_cast<VmObjectPaged*>(object));
     DEBUG_ASSERT(!page->object.get_object() || page->object.get_page_offset() == page_offset);
-    page->object.set_object(object);
+    page->object.set_object(reinterpret_cast<VmObjectPaged*>(object));
     page->object.set_page_offset(page_offset);
   } else {
     // Currently SetQueueBacklinkLocked() can be used to clear the backlink in cases where the page
-    // isn't being removed from a VmCowPages.  This won't work for loaned pages, but we don't have
+    // isn't being removed from an object.  This won't work for loaned pages, but we don't have
     // any loaned pages yet.
     page->object.clear_object();
     page->object.set_page_offset(0);
@@ -757,19 +816,20 @@ void PageQueues::MoveToQueueLocked(vm_page_t* page, PageQueue queue) {
 
 void PageQueues::MoveToQueueBacklinkLocked(vm_page_t* page, void* object, uintptr_t page_offset,
                                            PageQueue queue) {
-  DEBUG_ASSERT(page->state() == vm_page_state::OBJECT);
+  DEBUG_ASSERT(page->state == VM_PAGE_STATE_OBJECT);
   DEBUG_ASSERT(!page->is_free());
   DEBUG_ASSERT(list_in_list(&page->queue_node));
   uint32_t old_queue = page->object.get_page_queue_ref().exchange(queue, ktl::memory_order_relaxed);
   DEBUG_ASSERT(old_queue != PageQueueNone);
   if (object) {
-    DEBUG_ASSERT(!page->object.get_object() || page->object.get_object() == object);
+    DEBUG_ASSERT(!page->object.get_object() ||
+                 page->object.get_object() == reinterpret_cast<VmObjectPaged*>(object));
     DEBUG_ASSERT(!page->object.get_object() || page->object.get_page_offset() == page_offset);
-    page->object.set_object(object);
+    page->object.set_object(reinterpret_cast<VmObjectPaged*>(object));
     page->object.set_page_offset(page_offset);
   } else {
     // Currently MoveToQueueBacklinkLocked() can be used to clear the backlink in cases where the
-    // page isn't being removed from a VmCowPages.  This won't work for loaned pages, but we don't
+    // page isn't being removed from an object.  This won't work for loaned pages, but we don't
     // have any loaned pages yet.
     page->object.clear_object();
     page->object.set_page_offset(0);
@@ -791,7 +851,7 @@ void PageQueues::MoveToWired(vm_page_t* page) {
   MoveToQueueLocked(page, PageQueueWired);
 }
 
-void PageQueues::MoveToWired(vm_page_t* page, VmCowPages* object, uint64_t page_offset) {
+void PageQueues::MoveToWired(vm_page_t* page, VmObjectPaged* object, uint64_t page_offset) {
   Guard<CriticalMutex> guard{&lock_};
   DEBUG_ASSERT(object);
   MoveToQueueBacklinkLocked(page, object, page_offset, PageQueueWired);
@@ -811,13 +871,13 @@ void PageQueues::MoveToUnswappable(vm_page_t* page) {
   MoveToUnswappableLocked(page);
 }
 
-void PageQueues::SetPagerBacked(vm_page_t* page, VmCowPages* object, uint64_t page_offset) {
+void PageQueues::SetPagerBacked(vm_page_t* page, VmObjectPaged* object, uint64_t page_offset) {
   Guard<CriticalMutex> guard{&lock_};
   DEBUG_ASSERT(object);
   SetQueueBacklinkLocked(page, object, page_offset, mru_gen_to_queue());
 }
 
-void PageQueues::MoveToPagerBacked(vm_page_t* page, VmCowPages* object, uint64_t page_offset) {
+void PageQueues::MoveToPagerBacked(vm_page_t* page, VmObjectPaged* object, uint64_t page_offset) {
   Guard<CriticalMutex> guard{&lock_};
   DEBUG_ASSERT(object);
   MoveToQueueBacklinkLocked(page, object, page_offset, mru_gen_to_queue());
@@ -829,6 +889,10 @@ void PageQueues::MoveToPagerBackedDontNeed(vm_page_t* page) {
                             PageQueuePagerBackedDontNeed);
 }
 
+// [PORT-BLOCKED] Dirty-tracking and zero-fork queue operations depend on VmCowPages
+// dirty/zero-fork APIs absent in 2018. Their queue enum slots remain, but these
+// public operations are cut for this stage (see page_queues.h).
+/*
 void PageQueues::SetPagerBackedDirty(vm_page_t* page, VmCowPages* object, uint64_t page_offset) {
   Guard<CriticalMutex> guard{&lock_};
   DEBUG_ASSERT(object);
@@ -852,6 +916,7 @@ void PageQueues::MoveToUnswappableZeroFork(vm_page_t* page, VmCowPages* object,
   DEBUG_ASSERT(object);
   MoveToQueueBacklinkLocked(page, object, page_offset, PageQueueUnswappableZeroFork);
 }
+*/
 
 void PageQueues::RemoveLocked(vm_page_t* page) {
   // Directly exchange the old gen.
@@ -892,8 +957,8 @@ void PageQueues::RecalculateActiveInactiveLocked() {
   uint64_t active = 0;
   uint64_t inactive = 0;
 
-  uint32_t lru = lru_gen_.load(ktl::memory_order_relaxed);
-  uint32_t mru = mru_gen_.load(ktl::memory_order_relaxed);
+  uint32_t lru = static_cast<uint32_t>(lru_gen_.load(ktl::memory_order_relaxed));
+  uint32_t mru = static_cast<uint32_t>(mru_gen_.load(ktl::memory_order_relaxed));
 
   for (uint32_t index = lru; index <= mru; index++) {
     uint64_t count = page_queue_counts_[gen_to_queue(index)].load(ktl::memory_order_relaxed);
@@ -968,8 +1033,8 @@ PageQueues::Counts PageQueues::QueueCounts() const {
   // Grab the lock to prevent LRU processing, this lets us get a slightly less racy snapshot of
   // the queue counts. We may still double count pages that move after we count them.
   Guard<CriticalMutex> guard{&lock_};
-  uint32_t lru = lru_gen_.load(ktl::memory_order_relaxed);
-  uint32_t mru = mru_gen_.load(ktl::memory_order_relaxed);
+  uint32_t lru = static_cast<uint32_t>(lru_gen_.load(ktl::memory_order_relaxed));
+  uint32_t mru = static_cast<uint32_t>(mru_gen_.load(ktl::memory_order_relaxed));
 
   for (uint32_t index = lru; index <= mru; index++) {
     counts.pager_backed[mru - index] =
@@ -1022,6 +1087,9 @@ bool PageQueues::DebugPageIsAnyUnswappable(const vm_page_t* page) const {
   return DebugPageIsUnswappable(page) || DebugPageIsUnswappableZeroFork(page);
 }
 
+// [PORT-BLOCKED] PopUnswappableZeroFork depends on the cut zero-fork queue ops and a
+// live VmCowPages refptr upgrade; cut for this stage. Preserved for re-diffing.
+/*
 ktl::optional<PageQueues::VmoBacklink> PageQueues::PopUnswappableZeroFork() {
   Guard<CriticalMutex> guard{&lock_};
 
@@ -1043,6 +1111,7 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::PopUnswappableZeroFork() {
   // a chance to run.
   return VmoBacklink{fbl::MakeRefPtrUpgradeFromRaw(cow, guard), page, page_offset};
 }
+*/
 
 ktl::optional<PageQueues::VmoBacklink> PageQueues::PeekPagerBacked(size_t lowest_queue) {
   // Ignore any requests to evict from the active queues as this is never allowed.
@@ -1074,6 +1143,11 @@ PageQueues::ActiveInactiveCounts PageQueues::GetActiveInactiveCountsLocked() con
   }
 }
 
+// [PORT-BLOCKED] GetCowWithReplaceablePage is the loaned-page reclaim entry point. It
+// depends on VmCowPages, VmCowPagesContainer, StackOwnedLoanedPagesInterval and the
+// upgradeable-from-raw refcount, none of which exist in 2018. Cut for this stage;
+// preserved verbatim for re-diffing.
+/*
 ktl::optional<PageQueues::VmoContainerBacklink> PageQueues::GetCowWithReplaceablePage(
     vm_page_t* page, VmCowPages* owning_cow) {
   // Wait for the page to not be in a transient state.  This is in a loop, since the wait happens
@@ -1259,3 +1333,13 @@ ktl::optional<PageQueues::VmoContainerBacklink> PageQueues::GetCowWithReplaceabl
     // ~thread_lock_guard
   }
 }
+*/
+
+// The (currently) one and only page queues instance, mirroring the pmm_node
+// singleton style in pmm.cpp. Stage 3 wires VmObjectPaged into this; the aging
+// and lru threads are intentionally never started at this stage.
+namespace {
+PageQueues g_page_queues;
+}  // namespace
+
+PageQueues& pmm_page_queues() { return g_page_queues; }

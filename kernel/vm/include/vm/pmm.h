@@ -74,3 +74,12 @@ paddr_t vaddr_to_paddr(const void* va);
 
 // paddr to vm_page_t
 vm_page_t* paddr_to_vm_page(paddr_t addr);
+
+// Forward declaration of the page queues; defined in vm/page_queues.h. The global
+// PageQueues singleton is exposed here (mirroring the pmm C accessors above) so
+// that the VM can classify pages by age for reclamation. Only the accessor is
+// declared here to avoid pulling the full page_queues.h into every pmm.h consumer.
+class PageQueues;
+
+// Returns the global page queues instance.
+PageQueues& pmm_page_queues();

@@ -86,6 +86,11 @@ public:
     bool has_value() const { return has_value_; }
     explicit operator bool() const { return has_value_; }
 
+    // Comparison against nullopt, mirroring std::optional. Only the nullopt
+    // comparisons used by ported code are provided.
+    bool operator==(nullopt_t) const { return !has_value_; }
+    bool operator!=(nullopt_t) const { return has_value_; }
+
     T& operator*() { return storage_.value; }
     const T& operator*() const { return storage_.value; }
     T* operator->() { return &storage_.value; }

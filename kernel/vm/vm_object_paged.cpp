@@ -51,7 +51,8 @@ void InitializeVmPage(vm_page_t* p) {
     p->object.always_need = 0;
     // Not yet owned by a VMO or tracked by the page queues.
     p->object.clear_object();
-    p->object.page_queue_priv = 0;
+    // page_queue_priv is now a ktl::atomic (see vm/page.h); assign via store().
+    p->object.page_queue_priv.store(0);
 }
 
 // round up the size to the next page size boundary and make sure we dont wrap
