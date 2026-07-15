@@ -388,8 +388,13 @@ zx_status_t loader_service_create_fs(async_t* async, loader_service_t** out) {
     if (root_dir_fd < 0){
       return ZX_ERR_NOT_FOUND;
     }
-    return loader_service_create_default(async, root_dir_fd, -1, fs_lib_paths,
-                                         out);
+    // Publish data sinks (such as the "llvm-profile" data an instrumented
+    // process publishes for LLVM source-based coverage) into the global tmpfs,
+    // reachable at "fs/tmp" relative to the loader root. This is best-effort: a
+    // negative descriptor leaves data-sink publishing disabled, as before.
+    int data_sink_dir_fd = openat(root_dir_fd, "fs/tmp", O_RDONLY | O_DIRECTORY);
+    return loader_service_create_default(async, root_dir_fd, data_sink_dir_fd,
+                                         fs_lib_paths, out);
 }
 
 zx_status_t loader_service_create_fd(async_t* async,
