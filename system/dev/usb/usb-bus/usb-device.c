@@ -32,6 +32,7 @@ typedef struct {
 
 static const usb_config_override_t config_overrides[] = {
     { 0x0bda, 0x8153, 2 },  // Realtek ethernet dongle has CDC interface on configuration 2
+    { 0x0525, 0xa4a2, 2 },  // QEMU usb-net gadget exposes CDC ECM on its second configuration.
     { 0, 0, 0 },
 };
 

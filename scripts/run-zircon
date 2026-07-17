@@ -73,6 +73,7 @@ RELEASE=0
 UPSCRIPT=no
 VNC=
 VIRTIO=0
+USB_NET=0
 SERIAL=1
 SMP=4
 INITRD=
@@ -124,6 +125,7 @@ while getopts "Aa:bc:CdD:gG:I:kLlm:nNo:q:rs:u:Vx:h-:" FLAG; do
             disktype=*) DISKTYPE=${OPTARG#*=};;
             diskfmt=*) DISKFMT=${OPTARG#*=};;
             no-serial) SERIAL=0;;
+            usb-net) USB_NET=1; NET=1;;
             vnc=*) VNC=${OPTARG#*=};;
             *)
                 echo unrecognized long option
@@ -282,11 +284,18 @@ if (( $NET )); then
         SUFFIX=$(for i in {0..2}; do echo -n :${HASH:$(( 2 * $i )):2}; done)
         MAC=",mac=52:54:00$SUFFIX"
     fi
-    # Use virtio-net on every arch. The target has a virtio-net driver, and it
-    # is markedly faster than the emulated e1000 the x64 path used before
-    # (roughly 3x the guest network throughput), which speeds up ssh, scp, and
-    # anything that moves data off the guest.
-    ARGS+=" -device virtio-net-pci,netdev=net0${MAC}"
+    if (( $USB_NET )); then
+        # Attach the NIC as a USB CDC ECM device behind an emulated xHCI
+        # controller instead of a PCI NIC, to exercise the USB ethernet stack.
+        ARGS+=" -device nec-usb-xhci,id=xhci"
+        ARGS+=" -device usb-net,bus=xhci.0,netdev=net0${MAC}"
+    else
+        # Use virtio-net on every arch. The target has a virtio-net driver, and it
+        # is markedly faster than the emulated e1000 the x64 path used before
+        # (roughly 3x the guest network throughput), which speeds up ssh, scp, and
+        # anything that moves data off the guest.
+        ARGS+=" -device virtio-net-pci,netdev=net0${MAC}"
+    fi
 fi
 
 if [[ -n $AUDIO ]]; then
