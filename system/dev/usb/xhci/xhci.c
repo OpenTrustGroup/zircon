@@ -450,6 +450,15 @@ zx_status_t xhci_start(xhci_t* xhci) {
     XHCI_SET32(usbcmd, start_flags, start_flags);
     xhci_wait_bits(usbsts, USBSTS_HCH, 0);
 
+    // Scan the root-hub ports once now that the controller is running. A device
+    // whose connect is already latched in PORTSC before the driver began
+    // servicing the event ring (for example a device present at reset under
+    // QEMU) never produces a port status change event, so pick up any such
+    // cold-plugged devices here. This runs before the device and completer
+    // threads start, so it does not race the event-ring path that otherwise
+    // owns the root-hub state.
+    xhci_handle_root_hub_change(xhci);
+
     xhci_start_device_thread(xhci);
 
 #if defined(__x86_64__)
