@@ -232,7 +232,7 @@ if (( $DISK )); then
     if [[ "$DISKTYPE" == "virtio" ]]; then
         ARGS+=" -device virtio-blk-pci,drive=mydisk"
     elif [[ "$DISKTYPE" == "ahci" ]]; then
-        ARGS+=" -device ich9-ahci,id=ahci -device ide-drive,drive=mydisk,bus=ahci.0"
+        ARGS+=" -device ich9-ahci,id=ahci -device ide-hd,drive=mydisk,bus=ahci.0"
     elif [[ "$DISKTYPE" == "nvme" ]]; then
         ARGS+=" -device nvme,drive=mydisk,serial=zircon"
     else
@@ -364,7 +364,10 @@ case $ARCH in
         ARGS+=" -machine q35 -kernel $BUILDDIR/zircon.bin"
         ARGS+=" -device isa-debug-exit,iobase=0xf4,iosize=0x04"
         if (( $DO_KVM )); then
-          ARGS+=" -enable-kvm -cpu host,migratable=no,+invtsc"
+          # Mask UMIP: modern QEMU passes the host's UMIP through -cpu host, but
+          # the 2018 kernel never enables CR4.UMIP, so the x86-umip test fails
+          # (it expects SGDT/SIDT/etc. to #GP once the CPU advertises UMIP).
+          ARGS+=" -enable-kvm -cpu host,migratable=no,+invtsc,-umip"
         else
           ARGS+=" -cpu Haswell,+smap,-check,-fsgsbase"
         fi
