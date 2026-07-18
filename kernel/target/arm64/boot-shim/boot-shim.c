@@ -59,7 +59,11 @@ static int node_callback(int depth, const char *name, void *cookie) {
 
     if (!strcmp(name, "chosen")) {
         ctx->node = NODE_CHOSEN;
-    } else if (!strcmp(name, "memory") || !strcmp(name, "memory@00000000")) {
+    } else if (!strcmp(name, "memory") || !strncmp(name, "memory@", 7)) {
+        // QEMU's arm64 "virt" machine names the RAM node after its base
+        // address (e.g. "memory@40000000"), so match any "memory@" node, not
+        // just "memory@00000000". Without this the FDT-provided RAM size is
+        // never read and the board default arena is used.
         ctx->node = NODE_MEMORY;
     } else {
         ctx->node = NODE_NONE;
