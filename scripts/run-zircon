@@ -219,9 +219,12 @@ else
 fi
 
 if (( $DISK )); then
-    # if disktype wasn't set on the command line, default to ahci unless VIRTIO is set
+    # if disktype wasn't set on the command line, default to ahci unless VIRTIO is
+    # set.  On arm64 the emulated AHCI controller sits behind the "virt" PCIe root
+    # and only offers MSI interrupts, which the 2018 ahci driver fails to program
+    # (bind fails with -3); virtio-blk works there, so default arm64 to virtio.
     if [[ -z $DISKTYPE ]]; then
-        if (( $VIRTIO )); then
+        if (( $VIRTIO )) || [[ "$ARCH" == "arm64" ]]; then
             DISKTYPE="virtio"
         else
             DISKTYPE="ahci"
@@ -353,6 +356,11 @@ case $ARCH in
         if [[ $GIC != 0 ]]; then
             ARGS+=",gic_version=${GIC}"
         fi
+        # Keep the PCIe ECAM at the legacy 0x3f000000 window. Newer QEMU defaults
+        # to a high-memory ECAM (0x4010000000) for 64-bit CPUs, but the board
+        # driver (system/dev/board/qemu/qemu-virt.h) hard-codes the legacy base,
+        # so zx_pci_init would hang scanning an unbacked window without this.
+        ARGS+=",highmem-ecam=off"
 
         if (( !$SERIAL )); then
           CMDLINE+="kernel.serial=none "
