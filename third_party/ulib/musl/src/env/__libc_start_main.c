@@ -27,6 +27,15 @@ struct start_params {
 static _Noreturn void start_main(const struct start_params*)
     __asm__("start_main") __attribute__((used));
 static void start_main(const struct start_params* p) {
+#if defined(__aarch64__)
+    // Point x18 at this thread's shadow call stack before running any code
+    // built with -fsanitize=shadow-call-stack (the modern Rust toolchain and
+    // its constructors, run below by __libc_start_init).  x18 is reserved in
+    // the userland ABI, so the C code here will not disturb it.
+    __asm__ volatile("mov x18, %0" : :
+                     "r"(p->td->shadow_call_stack.iov_base));
+#endif
+
     __sanitizer_startup_hook(p->argc, p->argv, __environ,
                              p->td->safe_stack.iov_base,
                              p->td->safe_stack.iov_len);

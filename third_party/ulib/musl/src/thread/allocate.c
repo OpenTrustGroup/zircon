@@ -128,7 +128,16 @@ __NO_SAFESTACK thrd_t __allocate_thread(
     const size_t tls_size = libc.tls_size;
     const size_t tcb_size = round_up_to_page(tls_size);
 
-    const size_t vmo_size = tcb_size + stack_size * 2;
+#if defined(__aarch64__)
+    // A shadow call stack for aarch64 Rust (see threads_impl.h).  It only
+    // stores return addresses, but sizing it like the machine stack keeps it
+    // comfortably larger than any real call depth; pages are committed on
+    // demand, so the extra reservation costs no physical memory until used.
+    const size_t shadow_call_stack_size = stack_size;
+#else
+    const size_t shadow_call_stack_size = 0;
+#endif
+    const size_t vmo_size = tcb_size + stack_size * 2 + shadow_call_stack_size;
     zx_handle_t vmo;
     zx_status_t status = _zx_vmo_create(vmo_size, 0, &vmo);
     if (status != ZX_OK) {
@@ -185,6 +194,24 @@ __NO_SAFESTACK thrd_t __allocate_thread(
         _zx_handle_close(vmo);
         return NULL;
     }
+
+#if defined(__aarch64__)
+    // The shadow call stack grows upward, so put the guard page after it.
+    if (map_block(_zx_vmar_root_self(), vmo,
+                  tcb_size + stack_size * 2, shadow_call_stack_size, 0, guard_size,
+                  &td->shadow_call_stack, &td->shadow_call_stack_region)) {
+        _zx_vmar_unmap(_zx_vmar_root_self(),
+                       (uintptr_t)td->unsafe_stack_region.iov_base,
+                       td->unsafe_stack_region.iov_len);
+        _zx_vmar_unmap(_zx_vmar_root_self(),
+                       (uintptr_t)td->safe_stack_region.iov_base,
+                       td->safe_stack_region.iov_len);
+        _zx_vmar_unmap(_zx_vmar_root_self(),
+                       (uintptr_t)tcb_region.iov_base, tcb_region.iov_len);
+        _zx_handle_close(vmo);
+        return NULL;
+    }
+#endif
 
     _zx_handle_close(vmo);
     td->tcb_region = tcb_region;

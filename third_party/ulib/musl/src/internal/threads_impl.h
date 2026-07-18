@@ -53,6 +53,15 @@ struct pthread {
     struct iovec tcb_region;
     struct iovec safe_stack, safe_stack_region;
     struct iovec unsafe_stack, unsafe_stack_region;
+#if defined(__aarch64__)
+    // The modern Rust toolchain compiles for aarch64 with
+    // -fsanitize=shadow-call-stack, which stores return addresses through x18.
+    // The 2018 C runtime does not otherwise set up a shadow call stack, so it
+    // is allocated here alongside the machine stacks and x18 is pointed at it
+    // when each thread starts.  x18 and the shadow call stack do not exist on
+    // x86-64.
+    struct iovec shadow_call_stack, shadow_call_stack_region;
+#endif
 
     struct tls_dtor* tls_dtors;
     void* tsd[PTHREAD_KEYS_MAX];

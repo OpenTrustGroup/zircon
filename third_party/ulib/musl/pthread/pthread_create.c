@@ -17,6 +17,13 @@
 
 static inline pthread_t prestart(void* arg) {
     pthread_t self = arg;
+#if defined(__aarch64__)
+    // Point x18 at this thread's shadow call stack before running any code
+    // built with -fsanitize=shadow-call-stack (the modern Rust toolchain).
+    // x18 is reserved in the userland ABI, so the C code below leaves it be.
+    __asm__ volatile("mov x18, %0" : :
+                     "r"(self->shadow_call_stack.iov_base));
+#endif
     zxr_tp_set(zxr_thread_get_handle(&self->zxr_thread), pthread_to_tp(self));
     __sanitizer_thread_start_hook(self->sanitizer_hook, (thrd_t)self);
     return self;
@@ -103,6 +110,9 @@ int __pthread_create(pthread_t* restrict res, const pthread_attr_t* restrict att
 fail_after_alloc:
     deallocate_region(&new->safe_stack_region);
     deallocate_region(&new->unsafe_stack_region);
+#if defined(__aarch64__)
+    deallocate_region(&new->shadow_call_stack_region);
+#endif
     deallocate_region(&new->tcb_region);
     return status == ZX_ERR_ACCESS_DENIED ? EPERM : EAGAIN;
 }
@@ -113,6 +123,9 @@ static _Noreturn void final_exit(pthread_t self)
 static __NO_SAFESTACK NO_ASAN void final_exit(pthread_t self) {
     deallocate_region(&self->safe_stack_region);
     deallocate_region(&self->unsafe_stack_region);
+#if defined(__aarch64__)
+    deallocate_region(&self->shadow_call_stack_region);
+#endif
 
     // This deallocates the TCB region too for the detached case.
     // If not detached, pthread_join will deallocate it.
