@@ -362,6 +362,13 @@ case $ARCH in
         # so zx_pci_init would hang scanning an unbacked window without this.
         ARGS+=",highmem-ecam=off"
 
+        # Enable the ARM generic-timer event stream, which kicks each CPU out of
+        # WFE roughly every 100us. QEMU's multi-threaded TCG can drop the wakeup
+        # event (SEV) that a WFE waits for, so without a periodic kick a CPU can
+        # wedge spinning in WFE (for example the cross-CPU IPI wait in
+        # mp_sync_exec). The event stream bounds any such stall; harmless on KVM.
+        CMDLINE+="kernel.arm64.event-stream.enable=true "
+
         if (( !$SERIAL )); then
           CMDLINE+="kernel.serial=none "
         fi

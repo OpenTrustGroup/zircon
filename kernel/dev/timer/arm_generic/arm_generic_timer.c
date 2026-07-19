@@ -9,8 +9,10 @@
 #include <arch/ops.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <kernel/cmdline.h>
 #include <lk/init.h>
 #include <platform.h>
+#include <pow2.h>
 #include <dev/interrupt.h>
 #include <dev/timer/arm_generic.h>
 #include <platform/timer.h>
@@ -23,6 +25,9 @@
 #define LOCAL_TRACE 0
 
 #include <lib/fixed_point.h>
+
+/* CNTKCTL AArch64 register */
+#define TIMER_REG_CNTKCTL   cntkctl_el1
 
 /* CNTFRQ AArch64 register */
 #define TIMER_REG_CNTFRQ    cntfrq_el0
@@ -45,6 +50,7 @@
 #define TIMER_REG_CNTVCT    cntvct_el0
 
 static int timer_irq;
+static uint32_t timer_cntfrq;  // Timer tick rate in Hz, saved for secondary CPUs.
 
 struct fp_32_64 cntpct_per_ns;
 struct fp_32_64 ns_per_cntpct;
@@ -317,6 +323,47 @@ static void arm_generic_timer_init_conversion_factors(uint32_t cntfrq)
     dprintf(SPEW, "ns_per_cntpct: %08x.%08x%08x\n", ns_per_cntpct.l0, ns_per_cntpct.l32, ns_per_cntpct.l64);
 }
 
+// Enable an approximately 10kHz event stream on this CPU, which kicks the CPU
+// out of any WFE within roughly 100us. Used as a workaround for stuck-WFE
+// problems, such as a lost SEV under emulated multi-core execution. It is off
+// by default and gated by the kernel.arm64.event-stream.enable command line.
+static void enable_event_stream(uint32_t cntfrq)
+{
+    if (!cmdline_get_bool("kernel.arm64.event-stream.enable", false)) {
+        return;
+    }
+
+    // Default target frequency is 10kHz.
+    uint32_t target_event_freq =
+        cmdline_get_uint32("kernel.arm64.event-stream.freq-hz", 10000);
+
+    // The event stream watches one bit of the virtual counter for a transition,
+    // which divides the counter by a power of two. Pick the shift whose
+    // resulting frequency is closest to the target, clamped to a shift of
+    // [0, 15]. If the target is too high even for shift 0, the <= keeps shift 0.
+    uint shift;
+    for (shift = 0; shift <= 14; shift++) {
+        if (log2_uint_floor(cntfrq >> (shift + 1)) <= log2_uint_floor(target_event_freq)) {
+            break;
+        }
+    }
+    DEBUG_ASSERT(shift <= 15);
+
+    uint32_t real_event_freq = (cntfrq >> (shift + 1));
+
+    // Program CNTKCTL_EL1: set EVNTI (bits 7:4) to the shift, clear EVNTDIR
+    // (bit 3) so it triggers on the 0->1 transition, and set EVNTEN (bit 2).
+    uint64_t cntkctl = ARM64_READ_SYSREG(TIMER_REG_CNTKCTL);
+    cntkctl &= ~(0xfUL << 4);
+    cntkctl |= (uint64_t)shift << 4;
+    cntkctl &= ~(1 << 3);
+    cntkctl |= (1 << 2);
+    ARM64_WRITE_SYSREG(TIMER_REG_CNTKCTL, cntkctl);
+
+    dprintf(INFO, "arm generic timer enabling event stream on cpu %u: shift %u, %u Hz\n",
+            arch_curr_cpu_num(), shift, real_event_freq);
+}
+
 static void arm_generic_timer_init(uint32_t freq_override)
 {
     uint32_t cntfrq;
@@ -333,6 +380,7 @@ static void arm_generic_timer_init(uint32_t freq_override)
     }
 
     dprintf(INFO, "arm generic timer freq %u Hz\n", cntfrq);
+    timer_cntfrq = cntfrq;
 
 #if LOCAL_TRACE
     LTRACEF("Test min cntfrq\n");
@@ -349,11 +397,18 @@ static void arm_generic_timer_init(uint32_t freq_override)
     LTRACEF("register irq %d on cpu %u\n", timer_irq, arch_curr_cpu_num());
     zx_status_t status = register_int_handler(timer_irq, &platform_tick, NULL);
     DEBUG_ASSERT(status == ZX_OK);
+
+    // Try to enable the event stream if requested.
+    enable_event_stream(cntfrq);
+
     unmask_interrupt(timer_irq);
 }
 
 static void arm_generic_timer_init_secondary_cpu(uint level)
 {
+    // Try to enable the event stream if requested.
+    enable_event_stream(timer_cntfrq);
+
     LTRACEF("unmask irq %d on cpu %u\n", timer_irq, arch_curr_cpu_num());
     unmask_interrupt(timer_irq);
 }

@@ -84,6 +84,8 @@ FUNCTION(arm64_elX_to_el1)
     */
     mrs x9, cnthctl_el2
     orr x9, x9, #3
+    /* Make sure the EL2 physical event stream is not running (CNTHCTL_EL2.EVNTEN). */
+    bic x9, x9, #(1 << 2)
     msr cnthctl_el2, x9
     msr cntvoff_el2, xzr
 
