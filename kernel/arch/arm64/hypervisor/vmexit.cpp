@@ -62,6 +62,8 @@ SgiRegister::SgiRegister(uint64_t sgir) {
     aff2 = static_cast<uint8_t>(BITS_SHIFT(sgir, 39, 32));
     aff1 = static_cast<uint8_t>(BITS_SHIFT(sgir, 23, 16));
     rs = static_cast<uint8_t>(BITS_SHIFT(sgir, 47, 44));
+    // The target list is 16 bits wide, so it is kept at the full width of the
+    // field rather than truncated to 8 bits as upstream does.
     target_list = static_cast<uint16_t>(BITS_SHIFT(sgir, 15, 0));
     int_id = static_cast<uint8_t>(BITS_SHIFT(sgir, 27, 24));
     all_but_local = BIT(sgir, 40);

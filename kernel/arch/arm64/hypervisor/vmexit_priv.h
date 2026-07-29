@@ -62,7 +62,7 @@ enum class SystemRegister : uint16_t {
     OSDLR_EL1       = 0b10100000 << 8 /* op */ | 0b00010011 /* cr */,
     DBGPRCR_EL1     = 0b10100000 << 8 /* op */ | 0b00010100 /* cr */,
 
-    // GIC v3 CPU interface, trapped by ICH_HCR_EL2.TC = 1
+    // Interrupt Controller System Registers. See GIC v3/v4 Architecture Spec Section 8.2.
     ICC_SGI1R_EL1   = 0b11101000 << 8 /* op */ | 0b11001011 /* cr */,
 };
 
