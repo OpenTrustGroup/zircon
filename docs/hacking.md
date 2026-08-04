@@ -116,6 +116,13 @@ exception used by debuggers for breakpoint handling.
 If a debugger is not attached, the system crashlogger will
 process the exception, print a backtrace, and then resume the thread.
 
+To print a backtrace of every thread of the process rather than
+the calling thread alone, use
+crashlogger\_request\_backtrace\_all\_threads instead. The threads
+that did not ask are what a wedged process has to be diagnosed
+from, so that is usually the one you want there. It suspends each
+of those threads for as long as its own backtrace takes.
+
 ### From a kernel thread
 
 ```

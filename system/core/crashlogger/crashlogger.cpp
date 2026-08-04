@@ -89,13 +89,21 @@ static bool is_resumable_swbreak(uint32_t excp_type) {
 #if defined(__x86_64__)
 
 int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
-    return regs->rax == CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
+    // This dumps the thread that made the request whichever value it used, but
+    // both have to be recognized or a request the other one makes kills the
+    // process instead.
+    return regs->rax == CRASHLOGGER_REQUEST_SELF_BT_ALL_THREADS_MAGIC ||
+        regs->rax == CRASHLOGGER_REQUEST_SELF_BT_CURRENT_THREAD_MAGIC;
 }
 
 #elif defined(__aarch64__)
 
 int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
-    return regs->r[0] == CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
+    // This dumps the thread that made the request whichever value it used, but
+    // both have to be recognized or a request the other one makes kills the
+    // process instead.
+    return regs->r[0] == CRASHLOGGER_REQUEST_SELF_BT_ALL_THREADS_MAGIC ||
+        regs->r[0] == CRASHLOGGER_REQUEST_SELF_BT_CURRENT_THREAD_MAGIC;
 }
 
 #else

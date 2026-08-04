@@ -79,23 +79,36 @@ static bool is_resumable_swbreak(uint32_t excp_type) {
 
 #if defined(__x86_64__)
 
-static int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
-    return regs->rax == CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
+static uint64_t get_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
+    return regs->rax;
 }
 
 #elif defined(__aarch64__)
 
-static int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
-    return regs->r[0] == CRASHLOGGER_REQUEST_SELF_BT_MAGIC;
+static uint64_t get_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
+    return regs->r[0];
 }
 
 #else
 
-static int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
+static uint64_t get_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
     return 0;
 }
 
 #endif
+
+static int have_swbreak_magic(const zx_thread_state_general_regs_t* regs) {
+    uint64_t magic = get_swbreak_magic(regs);
+    return magic == CRASHLOGGER_REQUEST_SELF_BT_ALL_THREADS_MAGIC ||
+        magic == CRASHLOGGER_REQUEST_SELF_BT_CURRENT_THREAD_MAGIC;
+}
+
+// Return true if the request is for the whole process rather than the thread
+// that made it alone.
+
+static bool is_swbreak_request_all_threads(const zx_thread_state_general_regs_t* regs) {
+    return get_swbreak_magic(regs) == CRASHLOGGER_REQUEST_SELF_BT_ALL_THREADS_MAGIC;
+}
 
 static const char* excp_type_to_str(uint32_t type) {
     switch (type) {
@@ -124,6 +137,15 @@ static const char* excp_type_to_str(uint32_t type) {
 // How much memory to dump, in bytes.
 // Space for this is allocated on the stack, so this can't be too large.
 constexpr size_t kMemoryDumpSize = 256;
+
+// The most threads to print a backtrace of. This is an outrageous number of
+// threads for one process to have, and space for the koids is allocated on the
+// stack, so this can't be too large.
+constexpr size_t kMaxThreads = 128;
+
+// How long to wait for a thread to suspend. The timeout is generous because a
+// process is usually asked for a backtrace when the machine is already loaded.
+constexpr zx_duration_t kSuspendTimeout = ZX_SEC(5);
 
 // Handle of the thread we're dumping.
 // This is used by both the main thread and the self-dumper thread.
@@ -220,6 +242,103 @@ static zx_koid_t get_koid(zx_handle_t handle) {
         return ZX_HANDLE_INVALID;
     }
     return info.koid;
+}
+
+// Print the backtrace of |thread|, which must already be stopped.
+
+static void print_thread_backtrace(zx_handle_t process, zx_handle_t thread, zx_koid_t tid,
+                                   inspector_dsoinfo_t* dso_list, bool use_libunwind) {
+    zx_thread_state_general_regs_t regs;
+    if (inspector_read_general_regs(thread, &regs) != ZX_OK)
+        return;
+
+    zx_vaddr_t pc, sp, fp;
+#if defined(__x86_64__)
+    pc = regs.rip;
+    sp = regs.rsp;
+    fp = regs.rbp;
+#elif defined(__aarch64__)
+    pc = regs.pc;
+    sp = regs.sp;
+    fp = regs.r[29];
+#else
+    // Reading the regs above will likely have failed already, but we don't
+    // assume that.
+    return;
+#endif
+
+    char thread_name[ZX_MAX_NAME_LEN];
+    if (zx_object_get_property(thread, ZX_PROP_NAME, thread_name, sizeof(thread_name)) != ZX_OK) {
+        strlcpy(thread_name, "unknown", sizeof(thread_name));
+    }
+
+    printf("<== thread %s[%" PRIu64 "], PC at 0x%" PRIxPTR "\n", thread_name, tid, pc);
+    inspector_print_general_regs(stdout, &regs, nullptr);
+    inspector_print_backtrace(stdout, process, thread, dso_list, pc, sp, fp, use_libunwind);
+}
+
+// Print a backtrace of every thread of |process| but |excepting_tid|, whose
+// backtrace the caller has already printed.
+//
+// A thread is suspended only for as long as its own backtrace takes, so this is
+// not a single snapshot of the process. The suspension is held with a suspend
+// token, which the kernel drops on our exit, so a thread resumes even if we die
+// partway through the dump.
+
+static void print_backtraces_of_other_threads(zx_handle_t process, zx_koid_t excepting_tid,
+                                              inspector_dsoinfo_t* dso_list, bool use_libunwind) {
+    zx_koid_t threads[kMaxThreads];
+    size_t num_threads;
+    size_t avail;
+    zx_status_t status = zx_object_get_info(process, ZX_INFO_PROCESS_THREADS, threads,
+                                            sizeof(threads), &num_threads, &avail);
+    if (status != ZX_OK) {
+        print_zx_error("unable to get the list of threads", status);
+        return;
+    }
+    if (avail > num_threads) {
+        printf("WARNING: printing %zu of the process' %zu threads\n", num_threads, avail);
+    }
+
+    for (size_t i = 0; i < num_threads; ++i) {
+        zx_koid_t tid = threads[i];
+        // The thread that made the request is stopped in the exception rather
+        // than suspended, and has been printed already.
+        if (tid == excepting_tid)
+            continue;
+
+        zx_handle_t thread;
+        status = zx_object_get_child(process, tid, ZX_RIGHT_SAME_RIGHTS, &thread);
+        if (status != ZX_OK) {
+            print_zx_error("unable to get a handle to a thread, skipping it", status);
+            continue;
+        }
+
+        zx_handle_t suspend_token;
+        status = zx_task_suspend_token(thread, &suspend_token);
+        if (status != ZX_OK) {
+            print_zx_error("unable to suspend a thread, skipping it", status);
+            zx_handle_close(thread);
+            continue;
+        }
+
+        // Asking to wait for suspension alone would wait until the timeout for
+        // a thread that terminates instead, so wait for termination as well.
+        zx_signals_t observed = 0u;
+        zx_signals_t signals = ZX_THREAD_SUSPENDED | ZX_THREAD_TERMINATED;
+        status = zx_object_wait_one(thread, signals, zx_deadline_after(kSuspendTimeout),
+                                    &observed);
+        if (status != ZX_OK) {
+            print_zx_error("a thread did not suspend, skipping it", status);
+        } else if (observed & ZX_THREAD_TERMINATED) {
+            printf("Unable to print a backtrace of thread %" PRIu64 ": terminated\n", tid);
+        } else {
+            print_thread_backtrace(process, thread, tid, dso_list, use_libunwind);
+        }
+
+        zx_handle_close(suspend_token);
+        zx_handle_close(thread);
+    }
 }
 
 void process_report(zx_handle_t process, zx_handle_t thread, bool use_libunwind) {
@@ -324,9 +443,15 @@ void process_report(zx_handle_t process, zx_handle_t thread, bool use_libunwind)
         inspector_dso_print_list(stdout, dso_list);
         inspector_print_backtrace(stdout, process, thread, dso_list,
                                   pc, sp, fp, use_libunwind);
-    }
 
-    // TODO(ZX-588): Print a backtrace of all other threads in the process.
+        // A request for the whole process asks for the threads that did not
+        // make it as well. A crash prints the thread that took it alone: the
+        // rest of the process is rarely what killed it, and the report is
+        // written before the thread can be resumed to let the process die.
+        if (is_resumable_swbreak(type) && is_swbreak_request_all_threads(regs)) {
+            print_backtraces_of_other_threads(process, tid, dso_list, use_libunwind);
+        }
+    }
 
 #ifdef __x86_64__
     if (pt_dump_enabled) {
