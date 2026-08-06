@@ -1601,6 +1601,15 @@ int pipe2(int pipefd[2], int flags) {
     if (r < 0) {
         return ERROR(r);
     }
+    // O_NONBLOCK is a local fdio flag, so apply it to both ends before binding
+    // them, the same way open() does. Without this the flag was accepted and
+    // then silently dropped, leaving a caller that asked for a non-blocking
+    // pipe with a blocking one. O_CLOEXEC is still accepted and ignored; see
+    // TODO(ZX-973) on dup3 above.
+    if (flags & O_NONBLOCK) {
+        a->ioflag |= IOFLAG_NONBLOCK;
+        b->ioflag |= IOFLAG_NONBLOCK;
+    }
     pipefd[0] = fdio_bind_to_fd(a, -1, 0);
     if (pipefd[0] < 0) {
         int errno_ = errno;
