@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 
 #include <zircon/processargs.h>
 #include <zircon/syscalls.h>
@@ -98,6 +99,43 @@ ssize_t zx_pipe_read(fdio_t* io, void* data, size_t len) {
     zx_pipe_t* p = (zx_pipe_t*)io;
     return zx_pipe_read_internal(p->h, data, len, io->ioflag & IOFLAG_NONBLOCK);
 }
+// fdio_create_fd() hands out a connected socket as a pipe (PA_FDIO_PIPE), and
+// callers that believe they hold a socket reach it through recv()/send(). With
+// no flags those are exactly read()/write() on a connected stream, so delegate.
+// A pipe has no peer address, so report an empty one rather than failing: that
+// is what a connected socket does when the caller asks for an address it does
+// not need. MSG_DONTWAIT is honoured and anything else, such as MSG_PEEK, has
+// no pipe equivalent and is rejected, matching the socketpair ops: they serve
+// the same zx_pipe_t, so the two paths must not disagree about which flags a
+// caller may pass or which error an unusable one gets.
+static ssize_t zx_pipe_recvfrom(fdio_t* io, void* data, size_t len, int flags,
+                                struct sockaddr* restrict addr,
+                                socklen_t* restrict addrlen) {
+    if (flags != 0 && flags != MSG_DONTWAIT) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    if (addrlen != NULL) {
+        *addrlen = 0;
+    }
+    zx_pipe_t* p = (zx_pipe_t*)io;
+    int nonblock = (io->ioflag & IOFLAG_NONBLOCK) || (flags & MSG_DONTWAIT);
+    return zx_pipe_read_internal(p->h, data, len, nonblock);
+}
+
+static ssize_t zx_pipe_sendto(fdio_t* io, const void* data, size_t len, int flags,
+                              const struct sockaddr* addr, socklen_t addrlen) {
+    if (flags != 0 && flags != MSG_DONTWAIT) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    // A pipe is always connected, so a destination address is meaningless.
+    if (addr != NULL) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    zx_pipe_t* p = (zx_pipe_t*)io;
+    int nonblock = (io->ioflag & IOFLAG_NONBLOCK) || (flags & MSG_DONTWAIT);
+    return zx_pipe_write_internal(p->h, data, len, nonblock);
+}
+
 zx_status_t zx_pipe_misc(fdio_t* io, uint32_t op, int64_t off, uint32_t maxreply, void* data, size_t len) {
     switch (op) {
     default:
@@ -204,8 +242,8 @@ static fdio_ops_t zx_pipe_ops = {
     .read_at = fdio_default_read_at,
     .write = zx_pipe_write,
     .write_at = fdio_default_write_at,
-    .recvfrom = fdio_default_recvfrom,
-    .sendto = fdio_default_sendto,
+    .recvfrom = zx_pipe_recvfrom,
+    .sendto = zx_pipe_sendto,
     .recvmsg = fdio_default_recvmsg,
     .sendmsg = fdio_default_sendmsg,
     .seek = fdio_default_seek,
@@ -217,7 +255,12 @@ static fdio_ops_t zx_pipe_ops = {
     .wait_begin = zx_pipe_wait_begin,
     .wait_end = zx_pipe_wait_end,
     .unwrap = zx_pipe_unwrap,
-    .shutdown = fdio_default_shutdown,
+    // A socketpair is a zx_pipe_t too, and half-closing one is the same
+    // zx_socket_write(ZX_SOCKET_SHUTDOWN_*) either way, so share its
+    // implementation rather than restating it. Callers that reached this fd
+    // through fdio_create_fd() hold a connected socket and expect shutdown() to
+    // work; the default returns ZX_ERR_WRONG_TYPE, i.e. ENOTSOCK.
+    .shutdown = fdio_socketpair_shutdown,
     .posix_ioctl = zx_pipe_posix_ioctl,
     .get_vmo = fdio_default_get_vmo,
 };
