@@ -632,7 +632,7 @@ static ssize_t eth_set_iobuf_locked(ethdev_t* edev, const void* in_buf, size_t i
 
 fail:
     if (edev->io_buf) {
-        zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)edev->io_buf, 0);
+        zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)edev->io_buf, size);
         edev->io_buf = NULL;
     }
     free(edev->paddr_map);
@@ -881,7 +881,7 @@ static void eth_kill_locked(ethdev_t* edev) {
     }
 
     if (edev->io_buf) {
-        zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)edev->io_buf, 0);
+        zx_vmar_unmap(zx_vmar_root_self(), (uintptr_t)edev->io_buf, edev->io_size);
         edev->io_buf = NULL;
     }
     if (edev->paddr_map != NULL) {
