@@ -66,6 +66,27 @@ void Dnode::Detach() {
     vnode_ = nullptr;
 }
 
+void Dnode::DetachSubtree() {
+    // Detach() clears the vnode's reference to this dnode, which may well be
+    // the last one: hold ourselves up so the object outlives the call.
+    fbl::RefPtr<Dnode> self = fbl::WrapRefPtr(this);
+    // Take each child off the list before recursing: its own Detach() would
+    // otherwise try to erase it from this list a second time.
+    while (!children_.is_empty()) {
+        fbl::RefPtr<Dnode> child = children_.pop_front();
+        if (child->vnode_ != nullptr) {
+            if (child->IsDirectory()) {
+                // '..' no longer references this directory.
+                vnode_->link_count_--;
+            }
+            child->vnode_->link_count_--;
+        }
+        child->parent_ = nullptr;
+        child->DetachSubtree();
+    }
+    Detach();
+}
+
 void Dnode::AddChild(fbl::RefPtr<Dnode> parent, fbl::RefPtr<Dnode> child) {
     ZX_DEBUG_ASSERT(parent != nullptr);
     ZX_DEBUG_ASSERT(child != nullptr);

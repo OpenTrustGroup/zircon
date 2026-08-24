@@ -119,6 +119,10 @@ zx_status_t createFilesystem(const char* name, memfs::Vfs* vfs, fbl::RefPtr<Vnod
 
 struct memfs_filesystem {
     memfs::Vfs vfs;
+    // The root, kept so teardown can take the tree apart. Nothing else holds
+    // it once the last connection closes, and a dnode and its vnode hold each
+    // other, so without this the whole tree outlives the filesystem.
+    fbl::RefPtr<memfs::VnodeDir> root;
 };
 
 zx_status_t memfs_create_filesystem(async_t* async, memfs_filesystem_t** fs_out,
@@ -140,6 +144,7 @@ zx_status_t memfs_create_filesystem(async_t* async, memfs_filesystem_t** fs_out,
     if ((status = memfs::createFilesystem("<tmp>", &fs->vfs, &root)) != ZX_OK) {
         return status;
     }
+    fs->root = root;
     if ((status = fs->vfs.ServeDirectory(fbl::move(root), fbl::move(server))) != ZX_OK) {
         return status;
     }
@@ -176,6 +181,12 @@ zx_status_t memfs_install_at(async_t* async, const char* path) {
 void memfs_free_filesystem(memfs_filesystem_t* fs, completion_t* unmounted) {
     ZX_DEBUG_ASSERT(fs != nullptr);
     fs->vfs.Shutdown([fs, unmounted](zx_status_t status) {
+        // Break the dnode/vnode cycles so the tree, and every VMO its files
+        // hold, is reclaimed. Deleting the filesystem does not: it owns the
+        // Vfs, not the vnodes.
+        if (fs->root != nullptr && fs->root->dnode_ != nullptr) {
+            fs->root->dnode_->DetachSubtree();
+        }
         delete fs;
         if (unmounted) {
             completion_signal(unmounted);

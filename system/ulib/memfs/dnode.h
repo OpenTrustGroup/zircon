@@ -60,6 +60,16 @@ public:
     // Decrements dn->vnode link count by one (if it exists).
     void Detach();
 
+    // Detaches this dnode and every dnode beneath it.
+    //
+    // A dnode and its vnode hold each other, so neither is reclaimed until
+    // something detaches them, and Detach() itself requires an empty child
+    // list: the tree has to come apart from the bottom up. A filesystem torn
+    // down without its entries having been unlinked would otherwise keep every
+    // vnode -- and whatever each holds, such as a file's VMO -- alive for as
+    // long as the process lives.
+    void DetachSubtree();
+
     bool HasChildren() const { return !children_.is_empty(); }
 
     // Look up the child dnode (within a parent directory) by name.
