@@ -33,7 +33,10 @@ PortPacket* BlockingPortAllocator::AllocBlocking() {
 }
 
 PortPacket* BlockingPortAllocator::Alloc() {
-    return arena_.New(nullptr, this);
+    // The allocator doubles as the packet's handle so that the packets belonging
+    // to one trap can be told apart from every other packet on the port, which
+    // is what lets the trap take them back in its destructor.
+    return arena_.New(this /* handle */, this /* allocator */);
 }
 
 void BlockingPortAllocator::Free(PortPacket* port_packet) {
@@ -43,8 +46,17 @@ void BlockingPortAllocator::Free(PortPacket* port_packet) {
 
 Trap::Trap(uint32_t kind, zx_vaddr_t addr, size_t len, fbl::RefPtr<PortDispatcher> port,
                      uint64_t key)
-    : kind_(kind), addr_(addr), len_(len), port_(fbl::move(port)), key_(key) {
-    (void) key_;
+    : kind_(kind), addr_(addr), len_(len), port_(fbl::move(port)), key_(key) {}
+
+Trap::~Trap() {
+    if (port_ == nullptr)
+        return;
+    // The packets this trap queued are allocated from an arena it owns, so any
+    // that the port has not delivered yet have to come off the port before that
+    // arena goes away with the trap. Otherwise the port walks freed memory the
+    // next time it touches its queue, which is what happens when a guest is
+    // torn down without draining it first.
+    port_->CancelQueued(&port_allocator_ /* handle */, key_);
 }
 
 zx_status_t Trap::Init() {

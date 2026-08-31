@@ -75,11 +75,6 @@ void ArenaPortAllocator::Free(PortPacket* port_packet) {
 PortPacket::PortPacket(const void* handle, PortAllocator* allocator)
     : packet{}, handle(handle), observer(nullptr), allocator(allocator) {
     // Note that packet is initialized to zeros.
-    if (handle) {
-        // Currently |handle| is only valid if the packets are not ephemeral
-        // which means that PortObserver always uses the kernel heap.
-        DEBUG_ASSERT(allocator == nullptr);
-    }
 }
 
 // static
