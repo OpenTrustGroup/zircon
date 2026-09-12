@@ -229,10 +229,12 @@ int analyzer_starter(void* arg) {
             uint32_t handle_types[] = {PA_HND(PA_USER0, 0), PA_HND(PA_USER0, 1)};
             // The FS_* flags that grant access should be reduced to a minimal
             // set, or potentially configured per analyzer. ZX-2151 tracks this.
+            // FS_TMP is granted so that an analyzer can leave a crash dump
+            // somewhere a shell can read it back from.
             status = devmgr_launch(svcs_job_handle, "analyzer",
                                    countof(argv_crashanalyzer), argv_crashanalyzer,
                                    NULL, -1, handles, handle_types, countof(handles),
-                                   NULL, FS_SVC | FS_DATA);
+                                   NULL, FS_SVC | FS_DATA | FS_TMP);
             if (status == ZX_OK) {
                 break;
             }
