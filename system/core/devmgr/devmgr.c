@@ -171,6 +171,49 @@ static int fuchsia_starter(void* arg) {
     return 0;
 }
 
+// An analyzer that crashes raises an exception of its own, and crashsvc reports
+// that exception here just like any other. Starting another analyzer for it
+// would start a third for that one's crash, and so on without bound; such a
+// loop exhausts memory and panics the kernel. The koids of the analyzers that
+// have been started are remembered so that an exception belonging to one of
+// them is never handed to another. Koids are never reused, so a stale entry
+// cannot match a later process.
+#define ANALYZER_KOID_COUNT 16
+static zx_koid_t analyzer_koids[ANALYZER_KOID_COUNT];
+static size_t analyzer_koid_next;
+
+static zx_koid_t koid_of(zx_handle_t handle) {
+    zx_info_handle_basic_t info;
+    zx_status_t status = zx_object_get_info(handle, ZX_INFO_HANDLE_BASIC, &info,
+                                            sizeof(info), NULL, NULL);
+    if (status != ZX_OK) {
+        return ZX_KOID_INVALID;
+    }
+    return info.koid;
+}
+
+static void remember_analyzer(zx_handle_t process) {
+    zx_koid_t koid = koid_of(process);
+    if (koid == ZX_KOID_INVALID) {
+        return;
+    }
+    analyzer_koids[analyzer_koid_next] = koid;
+    analyzer_koid_next = (analyzer_koid_next + 1) % ANALYZER_KOID_COUNT;
+}
+
+static bool is_analyzer(zx_handle_t process) {
+    zx_koid_t koid = koid_of(process);
+    if (koid == ZX_KOID_INVALID) {
+        return false;
+    }
+    for (size_t i = 0; i < ANALYZER_KOID_COUNT; ++i) {
+        if (analyzer_koids[i] == koid) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Reads messages from crashsvc and launches analyzers for exceptions.
 int analyzer_starter(void* arg) {
     for (;;) {
@@ -205,6 +248,18 @@ int analyzer_starter(void* arg) {
             continue;
         }
 
+        if (is_analyzer(handles[0])) {
+            printf("devmgr: analyzer_starter: the analyzer itself crashed, "
+                   "not starting another one\n");
+            status = zx_task_resume(handles[1], ZX_RESUME_EXCEPTION | ZX_RESUME_TRY_NEXT);
+            if (status != ZX_OK) {
+                printf("devmgr: analyzer_starter: zx_task_resume failed: %d\n", status);
+            }
+            zx_handle_close(handles[0]);
+            zx_handle_close(handles[1]);
+            continue;
+        }
+
         // launchpad always takes ownership of handles (even on failure). It's
         // necessary to resume the thread on failure otherwise the process will
         // hang indefinitely, so copy the thread handle before launch.
@@ -231,11 +286,14 @@ int analyzer_starter(void* arg) {
             // set, or potentially configured per analyzer. ZX-2151 tracks this.
             // FS_TMP is granted so that an analyzer can leave a crash dump
             // somewhere a shell can read it back from.
+            zx_handle_t analyzer_proc = ZX_HANDLE_INVALID;
             status = devmgr_launch(svcs_job_handle, "analyzer",
                                    countof(argv_crashanalyzer), argv_crashanalyzer,
                                    NULL, -1, handles, handle_types, countof(handles),
-                                   NULL, FS_SVC | FS_DATA | FS_TMP);
+                                   &analyzer_proc, FS_SVC | FS_DATA | FS_TMP);
             if (status == ZX_OK) {
+                remember_analyzer(analyzer_proc);
+                zx_handle_close(analyzer_proc);
                 break;
             }
 
