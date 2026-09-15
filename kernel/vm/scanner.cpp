@@ -8,17 +8,36 @@
 #include <sys/types.h>
 
 #include <arch/defines.h>
+#include <kernel/cmdline.h>
 #include <lk/init.h>
 #include <vm/evictor.h>
 #include <vm/page_queues.h>
 #include <vm/pmm.h>
 #include <vm/scanner.h>
 
-// Enable synchronous eviction once the VM is up. There is no scanning/aging
-// thread in the 2018 port; eviction is driven inline by the `scanner reclaim`
-// console command. LK_INIT_LEVEL_LAST ensures the page queues and pmm are fully
-// initialized before eviction is permitted.
-static void scanner_init_func(uint level) { pmm_evictor().EnableEviction(); }
+// Bring up the page queue aging machinery and enable eviction once the VM is up.
+// LK_INIT_LEVEL_LAST ensures the pmm and the page queues are fully initialized,
+// and runs on the primary cpu only, so the threads are created exactly once.
+//
+// The aging and lru threads rotate the pager-backed queues on a timer, so a page
+// that is not touched for a few aging intervals drifts into the oldest queues and
+// becomes a candidate for eviction. Eviction itself stays synchronous: there is
+// no eviction thread in this port, so pages are only reclaimed when the `scanner
+// reclaim` console command runs. What the threads add is age information that is
+// maintained continuously rather than only while a reclaim command is in flight.
+//
+// The aging interval and active ratio knobs use the same names and defaults as
+// the upstream boot options. Aging can effectively be turned off by setting the
+// intervals to a very large value.
+static void scanner_init_func(uint level) {
+  pmm_evictor().EnableEviction();
+
+  pmm_page_queues().SetActiveRatioMultiplier(
+      static_cast<uint32_t>(cmdline_get_uint64("kernel.page-scanner.active-ratio-multiplier", 0)));
+  pmm_page_queues().StartThreads(
+      ZX_SEC(cmdline_get_uint64("kernel.page-scanner.min-aging-interval", 5)),
+      ZX_SEC(cmdline_get_uint64("kernel.page-scanner.max-aging-interval", 5)));
+}
 LK_INIT_HOOK(scanner, &scanner_init_func, LK_INIT_LEVEL_LAST);
 
 static int cmd_scanner(int argc, const cmd_args* argv, uint32_t flags) {

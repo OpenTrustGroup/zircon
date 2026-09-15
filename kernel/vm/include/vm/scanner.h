@@ -6,9 +6,10 @@
 #define ZIRCON_KERNEL_VM_INCLUDE_VM_SCANNER_H_
 
 // The 2018 scanner is a thin driver that exposes the `scanner` kernel console
-// command and enables the evictor at init time. Unlike upstream it has no
-// scanning/aging thread; eviction is triggered synchronously via the console
-// command (see scanner.cpp). No public API is required beyond the console
-// command and the init hook registered in scanner.cpp.
+// command, enables the evictor at init time, and starts the page queue aging
+// and lru threads. Unlike upstream it has no accessed-bit harvesting thread,
+// and eviction itself is triggered synchronously via the console command (see
+// scanner.cpp). No public API is required beyond the console command and the
+// init hook registered in scanner.cpp.
 
 #endif  // ZIRCON_KERNEL_VM_INCLUDE_VM_SCANNER_H_

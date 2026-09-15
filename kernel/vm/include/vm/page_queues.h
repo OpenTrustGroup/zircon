@@ -347,9 +347,6 @@ class PageQueues {
   // indefinitely as they might attempt to offload work to a nonexistent thread. This issue is only
   // relevant for unittests that may wish to avoid starting the threads for some tests.
   // It is the responsibility of the caller to only call this once, otherwise it will panic.
-  //
-  // Note: for this inert porting stage the aging/lru threads are defined but never
-  // started; StartThreads must compile but must not be called (see TODO(OT-155)).
   void StartThreads(zx_duration_t min_mru_rotate_time, zx_duration_t max_mru_rotate_time);
 
   // Sets the active ratio multiplier.

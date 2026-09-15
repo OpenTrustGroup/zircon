@@ -91,7 +91,7 @@ private:
 // self-contained implementation over an atomic counter plus an event_t used to
 // wake waiters. Wait() decrements when a permit is available, otherwise blocks
 // until Post() signals. This is sufficient for the page queues, where the
-// semaphore is only manipulated by the (currently unstarted) aging/lru threads.
+// semaphore is posted by the lru thread and waited on by the aging thread.
 class Semaphore {
 public:
     explicit Semaphore(int64_t initial_count = 0) : count_(initial_count) {

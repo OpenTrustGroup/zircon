@@ -376,9 +376,11 @@ void PageQueues::MruThread() {
     aging_token_.Wait();
     auto return_token = fbl::MakeAutoCall([this] { aging_token_.Signal(); });
 
-    // [PORT-BLOCKED] The scanner subsystem (scanner_wait_for_accessed_scan) does not
-    // exist in 2018; harvest synchronization is cut for this stage. This thread is
-    // never started here, so the skip is inert. Stage 6+ ports the scanner.
+    // [PORT-BLOCKED] The accessed-bit harvesting scanner (scanner_wait_for_accessed_scan)
+    // does not exist in 2018, so there is nothing to synchronize with and the wait is cut.
+    // Age information is therefore only as good as the MarkAccessed calls made on the VMO
+    // lookup paths: a page that is mapped and then touched purely by hardware is not seen
+    // as accessed and will age as if it were idle.
     /*
     // Make sure the accessed information has been harvested since the last time we aged, otherwise
     // we are deliberately making the age information coarser, by effectively not using one of the
@@ -432,36 +434,22 @@ void PageQueues::RotatePagerBackedQueues(AgeReason reason) {
     // delays in scheduling we record in a counter as happening regularly could indicate a bug.
     kcounter_add(pq_aging_blocked_on_lru, 1);
 
-    // Upstream signals the LRU thread and blocks on |mru_semaphore_| until it posts. The 2018 port
-    // runs no background aging/lru threads (StartThreads is intentionally never called for this
-    // stage; eviction and aging are driven synchronously by the `scanner` console commands). With
-    // no thread to post the semaphore, waiting would deadlock, so drive the LRU processing inline
-    // here, mirroring LruThread(). ProcessDontNeedAndLruQueues advances |lru_gen_| and posts
-    // |mru_semaphore_| when it empties the LRU queue, satisfying the wait below.
-    if (NeedsLruProcessing()) {
-      uint64_t target_gen;
-      {
-        Guard<CriticalMutex> guard{&lock_};
-        target_gen = lru_gen_.load(ktl::memory_order_relaxed) + 1;
-      }
-      ProcessDontNeedAndLruQueues(target_gen, false);
-    }
+    MaybeTriggerLruProcessing();
 
-    // The inline LRU processing above posts |mru_semaphore_| once the LRU queue empties, so this
-    // consumes that post. In the (unexpected) event more processing is still required, keep driving
-    // it inline rather than blocking on a thread that will never run.
-    while (mru_semaphore_.Wait(Deadline::after(0)) == ZX_ERR_TIMED_OUT) {
-      if (!NeedsLruProcessing()) {
-        // Nothing left to process but the semaphore was not posted; give up waiting rather than
-        // spin forever.
-        break;
-      }
-      uint64_t target_gen;
-      {
-        Guard<CriticalMutex> guard{&lock_};
-        target_gen = lru_gen_.load(ktl::memory_order_relaxed) + 1;
-      }
-      ProcessDontNeedAndLruQueues(target_gen, false);
+    // The LRU thread could take an arbitrary amount of time to get scheduled and run, so we cannot
+    // enforce a deadline. However, we can assume there might be a bug and start making noise to
+    // inform the user if we have waited multiples of the expected maximum aging interval, since
+    // that implies we are starting to lose the requested fidelity of age information.
+    // Upstream passes TimerSlack::none() here; the 2018 Deadline has no TimerSlack.
+    // The counter is unsigned because the 2018 zx_duration_t is, so the elapsed
+    // product stays a single unsigned type.
+    uint64_t timeouts = 0;
+    while (mru_semaphore_.Wait(Deadline::after(max_mru_rotate_time_)) == ZX_ERR_TIMED_OUT) {
+      timeouts++;
+      printf("[pq] WARNING: Waited %" PRIu64 " seconds for LRU thread, MRU semaphore %" PRIu64
+             ",aging is presently stalled\n",
+             (max_mru_rotate_time_ * timeouts) / ZX_SEC(1), mru_semaphore_.count());
+      Dump();
     }
   }
 
@@ -1363,8 +1351,8 @@ ktl::optional<PageQueues::VmoContainerBacklink> PageQueues::GetCowWithReplaceabl
 */
 
 // The (currently) one and only page queues instance, mirroring the pmm_node
-// singleton style in pmm.cpp. Stage 3 wires VmObjectPaged into this; the aging
-// and lru threads are intentionally never started at this stage.
+// singleton style in pmm.cpp. Its aging and lru threads are started from the
+// scanner init hook.
 namespace {
 PageQueues g_page_queues;
 }  // namespace
