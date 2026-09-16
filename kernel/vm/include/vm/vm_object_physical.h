@@ -38,8 +38,8 @@ public:
 
     void Dump(uint depth, bool verbose) override;
 
-    zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, list_node* free_list,
-                              LazyPageRequest* page_request,
+    zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, DirtyTrackingAction mark_dirty,
+                              list_node* free_list, LazyPageRequest* page_request,
                               vm_page_t** _page, paddr_t* _pa) override TA_REQ(lock_);
 
 

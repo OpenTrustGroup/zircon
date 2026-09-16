@@ -40,6 +40,15 @@ public:
     virtual void OnOneChild() = 0;
 };
 
+// Whether a write lookup of a page in a pager-backed VMO should also transition that page to
+// dirty. Only a lookup made on behalf of an actual write to this VMO's content should ask for
+// DirtyAllPagesOnWrite; a lookup that pre-populates a mapping, commits a range, or copies a page
+// out to a clone passes None, so that the pager is not told about a write that is not happening.
+enum class DirtyTrackingAction : bool {
+    None,
+    DirtyAllPagesOnWrite,
+};
+
 // The base vm object that holds a range of bytes of data
 //
 // Can be created without mapping and used as a container of data, or mappable
@@ -255,7 +264,8 @@ public:
 
     // get a pointer to the page structure and/or physical address at the specified offset.
     // valid flags are VMM_PF_FLAG_*
-    virtual zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, list_node* free_list,
+    virtual zx_status_t GetPageLocked(uint64_t offset, uint pf_flags,
+                                      DirtyTrackingAction mark_dirty, list_node* free_list,
                                       LazyPageRequest* page_request,
                                       vm_page_t** page, paddr_t* pa) TA_REQ(lock_) {
         return ZX_ERR_NOT_SUPPORTED;

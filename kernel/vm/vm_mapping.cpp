@@ -505,7 +505,11 @@ zx_status_t VmMapping::MapRange(size_t offset, size_t len, bool commit) {
 
         zx_status_t status;
         paddr_t pa;
-        status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, nullptr, nullptr, &pa);
+        vm_page_t* page;
+        // Populating a mapping is not a write to the VMO's content, so the pager is never asked
+        // to dirty a page here.
+        status = object_->GetPageLocked(vmo_offset, pf_flags, DirtyTrackingAction::None, nullptr,
+                                        nullptr, &page, &pa);
         if (status < 0) {
             // no page to map
             if (commit) {
@@ -515,6 +519,14 @@ zx_status_t VmMapping::MapRange(size_t offset, size_t len, bool commit) {
             }
 
             // skip ahead
+            continue;
+        }
+
+        // A clean page provided by a pager has to fault again on write, so that the pager can be
+        // asked to dirty it first. Leave such a page out of a writable mapping and let the write
+        // fault populate it.
+        if (page && (page->flags & VM_PAGE_PAGER_DIRTY) == 0 && object_->is_pager_backed() &&
+            (arch_mmu_flags_ & ARCH_MMU_FLAG_PERM_WRITE)) {
             continue;
         }
 
@@ -668,7 +680,9 @@ zx_status_t VmMapping::PageFault(vaddr_t va, const uint pf_flags, LazyPageReques
     // fault in or grab an existing page
     paddr_t new_pa;
     vm_page_t* page;
-    zx_status_t status = object_->GetPageLocked(vmo_offset, pf_flags, nullptr, page_request, &page, &new_pa);
+    zx_status_t status = object_->GetPageLocked(vmo_offset, pf_flags,
+                                                DirtyTrackingAction::DirtyAllPagesOnWrite, nullptr,
+                                                page_request, &page, &new_pa);
     if (status < 0) {
         // ZX_ERR_SHOULD_WAIT is the normal pager path: GetPageLocked has
         // requested the page from the page source, and VmAspace::PageFault will

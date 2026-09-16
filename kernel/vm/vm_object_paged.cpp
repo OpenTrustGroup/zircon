@@ -1092,7 +1092,8 @@ zx_status_t VmObjectPaged::CreateFromROData(const void* data, size_t size, fbl::
 // and will not fail if |free_list| is a non-empty list, faulting in was requested,
 // and offset is in range.
 
-zx_status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, list_node* free_list,
+zx_status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags,
+                                         DirtyTrackingAction mark_dirty, list_node* free_list,
                                          LazyPageRequest* page_request,
                                          vm_page_t** const page_out, paddr_t* const pa_out) {
     canary_.Assert();
@@ -1107,10 +1108,12 @@ zx_status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, list_no
     // see if we already have a page at that offset
     p = page_list_.GetPage(offset);
     if (p) {
-        if (pf_flags & VMM_PF_FLAG_WRITE) {
+        if ((pf_flags & VMM_PF_FLAG_WRITE) &&
+            mark_dirty == DirtyTrackingAction::DirtyAllPagesOnWrite) {
             if (page_source_ && (p->flags & VM_PAGE_PAGER_DIRTY) == 0 &&
                 page_source_->ShouldTrapDirtyTransitions()) {
                 // if we're writing to a clean page provided by a pager, trap it
+                DEBUG_ASSERT(page_request);
                 VmoDebugInfo vmo_debug_info = {
                     .vmo_ptr = reinterpret_cast<uintptr_t>(this), .vmo_id = 0};
                 zx_status_t status = page_source_->RequestDirtyTransition(page_request->get(),
@@ -1151,7 +1154,10 @@ zx_status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, list_no
         uint parent_pf_flags = parent_->is_pager_backed() ? pf_flags
                                                           : pf_flags & ~(VMM_PF_FLAG_FAULT_MASK);
 
+        // A write to this VMO copies the parent's page rather than modifying it, so the parent is
+        // only ever read here and must not be asked to dirty the page.
         zx_status_t status = parent_->GetPageLocked(parent_offset, parent_pf_flags,
+                                                    DirtyTrackingAction::None,
                                                     nullptr, page_request, &p, &pa);
         // Propagate pager-backed parent wait/failure status to clones.
         if (parent_->is_pager_backed() &&
@@ -1365,7 +1371,8 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
 
                 paddr_t pa;
                 const uint flags = VMM_PF_FLAG_SW_FAULT | VMM_PF_FLAG_WRITE;
-                status = GetPageLocked(o, flags, &page_list, &page_request, &p, &pa);
+                status = GetPageLocked(o, flags, DirtyTrackingAction::None, &page_list,
+                                       &page_request, &p, &pa);
                 if (status == ZX_ERR_NEXT)
                     continue;
                 if (status != ZX_OK)
@@ -1387,7 +1394,10 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
             for (; o < end; o += PAGE_SIZE) {
                 vm_page_t* p;
                 paddr_t pa;
-                status = GetPageLocked(o, VMM_PF_FLAG_SW_FAULT | VMM_PF_FLAG_WRITE, nullptr, &page_request, &p, &pa);
+                // Committing a range only populates pages, so the pager is asked to read them in
+                // but never to dirty them.
+                status = GetPageLocked(o, VMM_PF_FLAG_SW_FAULT | VMM_PF_FLAG_WRITE,
+                                       DirtyTrackingAction::None, nullptr, &page_request, &p, &pa);
                 if (status == ZX_ERR_NEXT)
                     continue;
                 if (status != ZX_OK)
@@ -1761,6 +1771,8 @@ zx_status_t VmObjectPaged::ReadWriteInternal(uint64_t offset, size_t len, bool w
                 paddr_t pa;
                 status = GetPageLocked(src_offset,
                                        VMM_PF_FLAG_SW_FAULT | (write ? VMM_PF_FLAG_WRITE : 0),
+                                       write ? DirtyTrackingAction::DirtyAllPagesOnWrite
+                                             : DirtyTrackingAction::None,
                                        nullptr, &page_request, nullptr, &pa);
                 if (status != ZX_OK)
                     break;
@@ -1857,7 +1869,8 @@ zx_status_t VmObjectPaged::Lookup(uint64_t offset, uint64_t len, uint pf_flags,
                  missing_off += PAGE_SIZE) {
 
                 paddr_t pa;
-                zx_status_t status = this->GetPageLocked(missing_off, pf_flags, nullptr,
+                zx_status_t status = this->GetPageLocked(missing_off, pf_flags,
+                                                         DirtyTrackingAction::None, nullptr,
                                                          nullptr, nullptr, &pa);
                 if (status != ZX_OK) {
                     return ZX_ERR_NO_MEMORY;
@@ -1893,7 +1906,8 @@ zx_status_t VmObjectPaged::Lookup(uint64_t offset, uint64_t len, uint pf_flags,
     // If expected_next_off isn't at the end, there's a gap to process
     for (uint64_t off = expected_next_off; off < end_page_offset; off += PAGE_SIZE) {
         paddr_t pa;
-        zx_status_t status = GetPageLocked(off, pf_flags, nullptr, nullptr, nullptr, &pa);
+        zx_status_t status = GetPageLocked(off, pf_flags, DirtyTrackingAction::None, nullptr,
+                                           nullptr, nullptr, &pa);
         if (status != ZX_OK) {
             return ZX_ERR_NO_MEMORY;
         }
@@ -1993,7 +2007,8 @@ zx_status_t VmObjectPaged::CacheOp(const uint64_t start_offset, const uint64_t l
 
         // lookup the physical address of the page, careful not to fault in a new one
         paddr_t pa;
-        auto status = GetPageLocked(op_start_offset, 0, nullptr, nullptr, nullptr, &pa);
+        auto status = GetPageLocked(op_start_offset, 0, DirtyTrackingAction::None, nullptr,
+                                    nullptr, nullptr, &pa);
 
         if (likely(status == ZX_OK)) {
             // Convert the page address to a Kernel virtual address.
