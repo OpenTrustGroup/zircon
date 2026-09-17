@@ -1735,6 +1735,68 @@ zx_status_t VmObjectPaged::SetParentOffsetLocked(uint64_t offset) {
     return ZX_OK;
 }
 
+// Raises a single DIRTY request covering the run of committed clean pages that the write starts
+// on, so a write spanning several pages traps once instead of once per page. Returns
+// ZX_ERR_SHOULD_WAIT with |page_request| initialized if the pager has to be asked, and ZX_OK if
+// the write can proceed, in which case the per-page fault path supplies or dirties what remains.
+zx_status_t VmObjectPaged::PrepareForWriteLocked(uint64_t offset, uint64_t len,
+                                                 LazyPageRequest* page_request) {
+    canary_.Assert();
+    DEBUG_ASSERT(lock_.IsHeld());
+    DEBUG_ASSERT(page_request);
+
+    if (!page_source_ || !page_source_->ShouldTrapDirtyTransitions()) {
+        return ZX_OK;
+    }
+
+    uint64_t end;
+    if (add_overflow(offset, len, &end)) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+    const uint64_t start = ROUNDDOWN(offset, PAGE_SIZE);
+    end = ROUNDUP(end, PAGE_SIZE);
+
+    // Find the first run of clean pages in the range. Pages that are already dirty need no
+    // request, so they are skipped over, but a missing page has to be read in before it can be
+    // dirtied, so the scan stops there and leaves the read to the per-page fault path.
+    uint64_t dirty_start = start;
+    uint64_t dirty_len = 0;
+    for (uint64_t off = start; off < end; off += PAGE_SIZE) {
+        const vm_page_t* p = page_list_.GetPage(off);
+        if (!p) {
+            break;
+        }
+        if (p->flags & VM_PAGE_PAGER_DIRTY) {
+            if (dirty_len > 0) {
+                break;
+            }
+            dirty_start = off + PAGE_SIZE;
+            continue;
+        }
+        dirty_len += PAGE_SIZE;
+    }
+
+    if (dirty_len == 0) {
+        return ZX_OK;
+    }
+
+    VmoDebugInfo vmo_debug_info = {.vmo_ptr = reinterpret_cast<uintptr_t>(this), .vmo_id = 0};
+    zx_status_t status = page_source_->RequestDirtyTransition(page_request->get(), dirty_start,
+                                                              dirty_len, vmo_debug_info);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    // The transition was synchronous, which the page source API allows but a user pager never
+    // does. Mark the pages dirty, as the per-page path does for its single page.
+    for (uint64_t off = dirty_start; off < dirty_start + dirty_len; off += PAGE_SIZE) {
+        vm_page_t* p = page_list_.GetPage(off);
+        p->flags |= VM_PAGE_PAGER_DIRTY;
+        p->flags = static_cast<uint8_t>(p->flags & ~VM_PAGE_PAGER_CLEANING);
+    }
+    return ZX_OK;
+}
+
 // perform some sort of copy in/out on a range of the object using a passed in lambda
 // for the copy routine
 
@@ -1763,7 +1825,13 @@ zx_status_t VmObjectPaged::ReadWriteInternal(uint64_t offset, size_t len, bool w
     while (len > 0) {
         {
             AutoLock a(&lock_);
-            while (len > 0) {
+            status = ZX_OK;
+            // Trap the whole run of clean pages this write covers before copying into any of
+            // them, so that the pager sees one request for the run rather than one per page.
+            if (write) {
+                status = PrepareForWriteLocked(src_offset, len, &page_request);
+            }
+            while (status == ZX_OK && len > 0) {
                 size_t page_offset = src_offset % PAGE_SIZE;
                 size_t tocopy = MIN(PAGE_SIZE - page_offset, len);
 

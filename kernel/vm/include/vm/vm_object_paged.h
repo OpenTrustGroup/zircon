@@ -202,6 +202,11 @@ private:
     template <typename T>
     zx_status_t ReadWriteInternal(uint64_t offset, size_t len, bool write, T copyfunc);
 
+    // Asks the page source to dirty the run of committed clean pages that starts at |offset|,
+    // before a write copies into them. Mirrors VmCowPages::PrepareForWriteLocked in upstream.
+    zx_status_t PrepareForWriteLocked(uint64_t offset, uint64_t len,
+                                      LazyPageRequest* page_request) TA_REQ(lock_);
+
     // set our offset within our parent
     zx_status_t SetParentOffsetLocked(uint64_t o) TA_REQ(lock_);
 

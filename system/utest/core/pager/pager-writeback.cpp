@@ -56,12 +56,6 @@ VMO_VMAR_TEST(Pager, SimpleTrapDirty) {
 }
 
 // Tests that writing to the VMO with zx_vmo_write generates DIRTY requests as expected.
-// [PORT-BLOCKED] Writing disjoint ranges with zx_vmo_write blocks forever. The kernel
-// reports the page source blocked with "no active request on pager port", so the writer
-// waits on a dirty request that was never delivered to userspace. Single-page writes and
-// the equivalent writes through a mapping do work, so the gap is in how the write path
-// raises a request for a second range.
-/*
 TEST(Pager, DirtyRequestsOnVmoWrite) {
   UserPager pager;
   ASSERT_TRUE(pager.Init());
@@ -111,7 +105,6 @@ TEST(Pager, DirtyRequestsOnVmoWrite) {
   ASSERT_FALSE(pager.GetPageDirtyRequest(vmo, 0, &offset, &length));
   ASSERT_FALSE(pager.GetPageReadRequest(vmo, 0, &offset, &length));
 }
-*/
 
 // Tests that writing to the VMO through a VM mapping generates DIRTY requests as expected.
 TEST(Pager, DirtyRequestsViaMapping) {
@@ -284,9 +277,6 @@ TEST(Pager, DirtyRequestsRepeatedWrites) {
 }
 
 // Tests that DIRTY requests are generated on a write to a page that was previously read from.
-// [PORT-BLOCKED] Blocks forever with the same signature as DirtyRequestsOnVmoWrite: the
-// writer waits on a dirty request that never reaches the pager port.
-/*
 TEST(Pager, DirtyRequestsOnWriteAfterRead) {
   UserPager pager;
   ASSERT_TRUE(pager.Init());
@@ -336,13 +326,12 @@ TEST(Pager, DirtyRequestsOnWriteAfterRead) {
   ASSERT_TRUE(pager.WaitForPageDirty(vmo, 0, 1, ZX_TIME_INFINITE));
   ASSERT_TRUE(pager.DirtyPages(vmo, 0, 1));
 
-  ASSERT_TRUE(t1.Wait());
+  ASSERT_TRUE(t2.Wait());
 
   // No more requests.
   ASSERT_FALSE(pager.GetPageDirtyRequest(vmo, 0, &offset, &length));
   ASSERT_FALSE(pager.GetPageReadRequest(vmo, 0, &offset, &length));
 }
-*/
 
 // Tests that no DIRTY requests are generated for clones of pager-backed VMOs.
 TEST(Pager, NoDirtyRequestsForClones) {
@@ -391,9 +380,6 @@ TEST(Pager, NoDirtyRequestsForClones) {
 }
 
 // Tests that writes for overlapping ranges generate the expected DIRTY requests.
-// [PORT-BLOCKED] Blocks forever on overlapping dirty ranges; the kernel reports the page
-// source blocked with "no active request on pager port" for two threads at once.
-/*
 TEST(Pager, DirtyRequestsOverlap) {
   UserPager pager;
   ASSERT_TRUE(pager.Init());
@@ -470,16 +456,7 @@ TEST(Pager, DirtyRequestsOverlap) {
   // No remaining requests.
   ASSERT_FALSE(pager.GetPageDirtyRequest(vmo, 0, &offset, &length));
 }
-*/
 
-// [PORT-BLOCKED] Blocks on some page patterns with the same signature as
-// DirtyRequestsOnVmoWrite. The page states come from an unseeded rand(), and pager.cpp also
-// draws from it, so the pattern this case sees depends on how far the preceding tests
-// advanced the sequence. A pattern that leaves disjoint clean runs needs a second dirty
-// request, which is the gap that blocks DirtyRequestsOnVmoWrite, so the case passes or hangs
-// depending on the draw. Seeding it would only make it hit or miss that gap consistently,
-// which would hide the gap rather than cover it.
-/*
 // Tests that DIRTY requests are generated as expected for a VMO that has random offsets in various
 // page states: {Empty, Clean, Dirty}.
 TEST(Pager, DirtyRequestsRandomOffsets) {
@@ -566,7 +543,6 @@ TEST(Pager, DirtyRequestsRandomOffsets) {
   ASSERT_FALSE(pager.GetPageDirtyRequest(vmo, 0, &offset, &length));
   ASSERT_FALSE(pager.GetPageReadRequest(vmo, 0, &offset, &length));
 }
-*/
 
 // Tests that ZX_PAGER_OP_FAIL can fail DIRTY page requests and propagate the failure up.
 TEST(Pager, FailDirtyRequests) {
