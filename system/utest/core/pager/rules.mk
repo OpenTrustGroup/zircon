@@ -14,6 +14,7 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/userpager.cpp \
     $(LOCAL_DIR)/test_thread.cpp \
     $(LOCAL_DIR)/pager.cpp \
+    $(LOCAL_DIR)/pager-writeback.cpp \
     $(LOCAL_DIR)/main.cpp
 
 MODULE_NAME := pager-test

@@ -41,6 +41,26 @@ struct pager_test_registrar {
     }
 };
 
+// unittest's |current_test_info| is a static, and so is private to each
+// translation unit (see the BEGIN_HELPER commentary in unittest.h). RUN_NAMED_TEST
+// therefore only establishes it for the file that expands BEGIN_TEST_CASE, which
+// is pager.cpp. A test body in any other source file would find it null and the
+// ASSERT_*/EXPECT_* shims would abort with "Invalid state for EXPECT/ASSERT".
+//
+// Establish a context in the body's own translation unit when the test runner has
+// not already provided one. Where the runner has (pager.cpp), its info is left
+// alone, so reporting and crash registration there are unchanged.
+#define PAGER_TEST_RUN_BODY(call) \
+    struct test_info* pager_saved_info = current_test_info; \
+    struct test_info pager_local_info = { true, nullptr }; \
+    if (current_test_info == nullptr) { \
+        current_test_info = &pager_local_info; \
+    } \
+    call; \
+    bool pager_all_ok = current_test_info->all_ok; \
+    current_test_info = pager_saved_info; \
+    return pager_all_ok;
+
 // The test body a porter writes after TEST()/VMO_VMAR_TEST() is void, matching
 // upstream zxtest: it uses the void ASSERT_* shim (zxtest_to_unittest.h) and
 // carries no BEGIN_TEST/END_TEST. A bool trampoline named as the registered
@@ -50,8 +70,7 @@ struct pager_test_registrar {
 #define TEST(suite, name) \
     void test_body_##suite##_##name(); \
     bool test_##suite##_##name() { \
-        test_body_##suite##_##name(); \
-        return current_test_info->all_ok; \
+        PAGER_TEST_RUN_BODY(test_body_##suite##_##name()) \
     } \
     static pager_test_info info_##suite##_##name = { #name, test_##suite##_##name, nullptr }; \
     static pager_test_registrar reg_##suite##_##name(&info_##suite##_##name); \
@@ -59,8 +78,8 @@ struct pager_test_registrar {
 
 #define VMO_VMAR_TEST(suite, name) \
     void name##_inner(bool check_vmar); \
-    bool test_##suite##_##name##_Vmar() { name##_inner(true); return current_test_info->all_ok; } \
-    bool test_##suite##_##name##_Vmo() { name##_inner(false); return current_test_info->all_ok; } \
+    bool test_##suite##_##name##_Vmar() { PAGER_TEST_RUN_BODY(name##_inner(true)) } \
+    bool test_##suite##_##name##_Vmo() { PAGER_TEST_RUN_BODY(name##_inner(false)) } \
     static pager_test_info info_##suite##_##name##_Vmar = { #name "_Vmar", test_##suite##_##name##_Vmar, nullptr }; \
     static pager_test_registrar reg_##suite##_##name##_Vmar(&info_##suite##_##name##_Vmar); \
     static pager_test_info info_##suite##_##name##_Vmo = { #name "_Vmo", test_##suite##_##name##_Vmo, nullptr }; \
