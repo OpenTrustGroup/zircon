@@ -10,5 +10,9 @@
 ARCH := arm64
 TARGET := arm64
 
+# Build the user pager: the zx_pager_* syscalls, the page queues, the evictor
+# and the scanner, and the pager's 16 bytes per vm_page.
+WITH_USER_PAGER := true
+
 include kernel/project/virtual/test.mk
 include kernel/project/virtual/user.mk

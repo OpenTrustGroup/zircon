@@ -4,6 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
+// The pager syscalls are declared unconditionally so that syscall numbers do
+// not depend on the kernel configuration.  Their implementations only exist
+// when the kernel is built with WITH_USER_PAGER; otherwise each one answers
+// ZX_ERR_NOT_SUPPORTED.
+
+#include "priv.h"
+
+#if WITH_USER_PAGER
+
 #include <kernel/align.h>
 
 #include <fbl/ref_ptr.h>
@@ -11,8 +20,6 @@
 #include <object/vm_object_dispatcher.h>
 #include <vm/page_source.h>
 #include <vm/vm_object_paged.h>
-
-#include "priv.h"
 
 namespace {
 
@@ -227,3 +234,38 @@ zx_status_t sys_pager_query_dirty_ranges(zx_handle_t pager, zx_handle_t pager_vm
   return pager_dispatcher->QueryDirtyRanges(up->aspace().get(), pager_vmo_dispatcher->vmo(), offset,
                                             length, buffer, buffer_size, actual, avail);
 }
+
+#else  // WITH_USER_PAGER
+
+zx_status_t sys_pager_create(uint32_t options, user_out_handle* out) {
+  return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t sys_pager_create_vmo(zx_handle_t pager, uint32_t options, zx_handle_t port,
+                                 uint64_t key, uint64_t size, user_out_handle* out) {
+  return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t sys_pager_detach_vmo(zx_handle_t pager, zx_handle_t vmo) {
+  return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t sys_pager_supply_pages(zx_handle_t pager, zx_handle_t pager_vmo, uint64_t offset,
+                                   uint64_t size, zx_handle_t aux_vmo_handle,
+                                   uint64_t aux_offset) {
+  return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t sys_pager_op_range(zx_handle_t pager, uint32_t op, zx_handle_t pager_vmo,
+                               uint64_t offset, uint64_t length, uint64_t data) {
+  return ZX_ERR_NOT_SUPPORTED;
+}
+
+zx_status_t sys_pager_query_dirty_ranges(zx_handle_t pager, zx_handle_t pager_vmo, uint64_t offset,
+                                         uint64_t length, user_out_ptr<void> buffer,
+                                         size_t buffer_size, user_out_ptr<size_t> actual,
+                                         user_out_ptr<size_t> avail) {
+  return ZX_ERR_NOT_SUPPORTED;
+}
+
+#endif  // WITH_USER_PAGER

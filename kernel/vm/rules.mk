@@ -35,8 +35,25 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/vm_unittest.cpp \
     $(LOCAL_DIR)/vmm.cpp \
     $(LOCAL_DIR)/page_source.cpp \
-    $(LOCAL_DIR)/page_queues.cpp \
+
+# The page queues, the evictor and the scanner serve the user pager and nothing
+# else: no page is pager-backed without it, so the queues stay empty, the
+# evictor has nothing to reclaim and the scanner's only remaining job is to
+# enable that evictor. They leave the build together, replaced by the empty
+# method bodies in page_queues_disabled.cpp so that vm_page_list.cpp and
+# vm_object_paged.cpp need no #ifdef.
+ifeq (true,$(call TOBOOL,$(WITH_USER_PAGER)))
+
+MODULE_SRCS += \
     $(LOCAL_DIR)/evictor.cpp \
+    $(LOCAL_DIR)/page_queues.cpp \
     $(LOCAL_DIR)/scanner.cpp \
+
+else
+
+MODULE_SRCS += \
+    $(LOCAL_DIR)/page_queues_disabled.cpp \
+
+endif
 
 include make/module.mk

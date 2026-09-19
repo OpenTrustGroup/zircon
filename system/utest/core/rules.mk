@@ -18,6 +18,13 @@ MODULE_SRCS := \
 MODULE_SRCS := \
     $(filter-out $(LOCAL_DIR)/pager/main.cpp $(LOCAL_DIR)/stream/%,$(MODULE_SRCS))
 
+ifneq (true,$(call TOBOOL,$(WITH_USER_PAGER)))
+# The zx_pager_* syscalls answer ZX_ERR_NOT_SUPPORTED when the kernel is built
+# without the user pager, so the pager cases have nothing to exercise.
+MODULE_SRCS := \
+    $(filter-out $(LOCAL_DIR)/pager/%,$(MODULE_SRCS))
+endif
+
 MODULE_NAME := core-tests
 
 MODULE_STATIC_LIBS := \

@@ -51,8 +51,16 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/vm_address_region_dispatcher.cpp \
     $(LOCAL_DIR)/vm_object_dispatcher.cpp \
     $(LOCAL_DIR)/wait_state_observer.cpp \
+
+ifeq (true,$(call TOBOOL,$(WITH_USER_PAGER)))
+
+MODULE_SRCS += \
     $(LOCAL_DIR)/pager_dispatcher.cpp \
     $(LOCAL_DIR)/pager_proxy.cpp \
+
+GLOBAL_DEFINES += WITH_USER_PAGER=1
+
+endif
 
 # Tests
 MODULE_SRCS += \

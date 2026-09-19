@@ -4,6 +4,12 @@
 
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
+# The kernel only provides the zx_pager_* syscalls when it is built with
+# WITH_USER_PAGER, and system/utest/core/rules.mk wildcards every
+# system/utest/core/*/rules.mk into the module list. Gate the whole module so
+# this test is built and installed only where it can run.
+ifeq (true,$(call TOBOOL,$(WITH_USER_PAGER)))
+
 MODULE := $(LOCAL_DIR)
 
 MODULE_TYPE := usertest
@@ -38,3 +44,5 @@ MODULE_LIBS := \
 MODULE_COMPILEFLAGS += -Wno-unused-parameter
 
 include make/module.mk
+
+endif
