@@ -118,43 +118,6 @@ void PagerDispatcher::on_zero_handles() {
 
 zx_status_t PagerDispatcher::RangeOp(uint32_t op, fbl::RefPtr<VmObject> vmo, uint64_t offset,
                                      uint64_t length, uint64_t data) {
-  // [PORT-BLOCKED] VmObject methods (FailPageRequests, DirtyPages, Writeback*) missing in 2018.
-  /*
-  switch (op) {
-    case ZX_PAGER_OP_FAIL: {
-      auto signed_data = static_cast<int64_t>(data);
-      if (signed_data < INT32_MIN || signed_data > INT32_MAX) {
-        return ZX_ERR_INVALID_ARGS;
-      }
-      auto error_status = static_cast<zx_status_t>(data);
-      if (!PageSource::IsValidExternalFailureCode(error_status)) {
-        return ZX_ERR_INVALID_ARGS;
-      }
-      return vmo->FailPageRequests(offset, length, error_status);
-    }
-    case ZX_PAGER_OP_DIRTY: {
-      if (data != 0) {
-        return ZX_ERR_INVALID_ARGS;
-      }
-      return vmo->DirtyPages(offset, length);
-    }
-    case ZX_PAGER_OP_WRITEBACK_BEGIN: {
-      if (data != 0) {
-        return ZX_ERR_INVALID_ARGS;
-      }
-      return vmo->WritebackBegin(offset, length);
-    }
-    case ZX_PAGER_OP_WRITEBACK_END: {
-      if (data != 0) {
-        return ZX_ERR_INVALID_ARGS;
-      }
-      return vmo->WritebackEnd(offset, length);
-    }
-    default:
-      return ZX_ERR_NOT_SUPPORTED;
-  }
-  */
-
   switch (op) {
     case ZX_PAGER_OP_FAIL: {
       auto signed_data = static_cast<int64_t>(data);
