@@ -39,17 +39,29 @@ class VmObjectPaged;
 
 // core per page structure allocated at pmm arena creation time
 typedef struct vm_page {
+#if WITH_USER_PAGER
+    // A pager-backed page is queued and object-owned at the same time: the page
+    // queues thread a resident page onto an age or eviction queue while it still
+    // carries the owner backlink below. The link therefore lives outside the
+    // union.
     struct list_node queue_node;
+#endif
     paddr_t paddr_priv; // use paddr() accessor
-    // offset 0x18
 
     struct {
         uint32_t flags : 8;
         uint32_t state : VM_PAGE_STATE_BITS;
     };
-    // offset: 0x1c
 
     union {
+#if !WITH_USER_PAGER
+        // Nothing queues a resident page without the pager, so the link is only
+        // ever used while the page is free or in transit between the pmm and a
+        // VMO, and can share storage with the object fields. The page queues are
+        // the only writer of those fields and are not built here, so the storage
+        // never holds anything but the link.
+        struct list_node queue_node;
+#endif
         struct {
 #define VM_PAGE_OBJECT_PIN_COUNT_BITS 5
 #define VM_PAGE_OBJECT_MAX_PIN_COUNT ((1ul << VM_PAGE_OBJECT_PIN_COUNT_BITS) - 1)
@@ -109,7 +121,12 @@ typedef struct vm_page {
 
 // assert that the page structure isn't growing uncontrollably. Grown from 0x20 to
 // hold the pager-backed backlink/offset/queue fields the page queues need.
+#if WITH_USER_PAGER
 static_assert(sizeof(vm_page) == 0x38, "");
+#else
+// Keeping the queue link in the union buys back the 16 bytes it costs above.
+static_assert(sizeof(vm_page) == 0x28, "");
+#endif
 
 // helpers
 const char* page_state_to_string(unsigned int state);
