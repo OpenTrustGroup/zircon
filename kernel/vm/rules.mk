@@ -15,8 +15,6 @@ MODULE_DEPS += \
     kernel/lib/user_copy \
     third_party/lib/cryptolib
 
-MODULE_COMPILEFLAGS += -Wno-unused-result
-
 MODULE_SRCS += \
     $(LOCAL_DIR)/bootalloc.cpp \
     $(LOCAL_DIR)/bootreserve.cpp \

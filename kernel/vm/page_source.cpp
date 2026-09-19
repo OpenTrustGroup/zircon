@@ -368,6 +368,11 @@ void PageSource::CompleteRequestLocked(PageRequest* request, zx_status_t status)
   page_provider_->ClearAsyncRequest(request);
   request->provider_owned_ = false;
 
+  // Event::Signal() passes reschedule=true, so each wakeup below can preempt
+  // straight into the woken thread while this still holds page_source_mtx_ and
+  // the VMO lock that thread re-takes on its way back through the fault path,
+  // leaving it to block again at once. Signaling once the locks are dropped
+  // would avoid that.
   while (!request->overlap_.is_empty()) {
     auto waiter = request->overlap_.pop_front();
     VM_KTRACE_FLOW_BEGIN(1, "page_request_signal", reinterpret_cast<uintptr_t>(waiter));
