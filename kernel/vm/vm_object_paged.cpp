@@ -1365,6 +1365,10 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
 
             RangeChangeUpdateLocked(o, end - o);
 
+            // ZX_ERR_NEXT only appends to the batch; nothing is sent until the
+            // batch is finalized or a non-contiguous page displaces it.
+            bool batch_pending = false;
+
             for (; o < end; o += PAGE_SIZE) {
                 vm_page_t* p = page_list_.GetPage(o);
                 if (p) continue;
@@ -1373,10 +1377,15 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
                 const uint flags = VMM_PF_FLAG_SW_FAULT | VMM_PF_FLAG_WRITE;
                 status = GetPageLocked(o, flags, DirtyTrackingAction::None, &page_list,
                                        &page_request, &p, &pa);
-                if (status == ZX_ERR_NEXT)
+                if (status == ZX_ERR_NEXT) {
+                    batch_pending = true;
                     continue;
-                if (status != ZX_OK)
+                }
+                if (status != ZX_OK) {
+                    // Any other failure already sent whatever was batched.
+                    batch_pending = false;
                     break;
+                }
 
                 if (committed)
                     *committed += PAGE_SIZE;
@@ -1384,12 +1393,17 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
             if (!list_is_empty(&page_list)) {
                 pmm_free(&page_list);
             }
-            if (status == ZX_ERR_NEXT) {
+            // A page that was already present returns ZX_OK without touching the
+            // batch, so the loop can end on ZX_OK with pages still batched. Those
+            // pages are only requested once the batch is finalized.
+            if (batch_pending) {
                 status = GetRootPageSourceLocked()->FinalizeRequest(page_request.get());
             }
         } else {
             // Pager path: No pre-allocation, use retry loop.
             RangeChangeUpdateLocked(o, end - o);
+
+            bool batch_pending = false;
 
             for (; o < end; o += PAGE_SIZE) {
                 vm_page_t* p;
@@ -1398,15 +1412,19 @@ zx_status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* 
                 // but never to dirty them.
                 status = GetPageLocked(o, VMM_PF_FLAG_SW_FAULT | VMM_PF_FLAG_WRITE,
                                        DirtyTrackingAction::None, nullptr, &page_request, &p, &pa);
-                if (status == ZX_ERR_NEXT)
+                if (status == ZX_ERR_NEXT) {
+                    batch_pending = true;
                     continue;
-                if (status != ZX_OK)
+                }
+                if (status != ZX_OK) {
+                    batch_pending = false;
                     break;
+                }
 
                 if (committed)
                     *committed += PAGE_SIZE;
             }
-            if (status == ZX_ERR_NEXT) {
+            if (batch_pending) {
                 status = GetRootPageSourceLocked()->FinalizeRequest(page_request.get());
             }
         }
