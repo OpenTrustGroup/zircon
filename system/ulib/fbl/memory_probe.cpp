@@ -67,6 +67,12 @@ bool do_probe(ProbeOperation op, const void* addr) {
             // Thread crashed so the operation failed. The thread is now in a suspended state and
             // needs to be explicitly terminated.
             thread.kill();
+            // Wait for the kill to land before the port goes out of scope. The exception packet
+            // is queued before the faulting thread blocks for a reply, so the thread may not be
+            // waiting yet. If the port is closed first, the kernel answers the exception with
+            // "try next handler", the thread takes that answer without noticing the kill, and
+            // with no other handler bound the whole process is killed without a word.
+            thread.wait_one(ZX_THREAD_TERMINATED, zx::time::infinite(), nullptr);
             return false;
         }
         if (ZX_PKT_IS_SIGNAL_ONE(packet.type)) {
