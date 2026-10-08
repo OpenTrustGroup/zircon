@@ -70,6 +70,7 @@ zx_status_t sys_port_queue(zx_handle_t handle, user_in_ptr<const zx_port_packet_
 
 zx_status_t sys_port_wait(zx_handle_t handle, zx_time_t deadline,
                           user_out_ptr<zx_port_packet_t> packet_out, size_t count) {
+    deadline = wait_deadline_from_user(deadline);
     LTRACEF("handle %x\n", handle);
 
     // TODO(ZX-1291) Disallow 0u here.

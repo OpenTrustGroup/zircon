@@ -42,6 +42,7 @@ zx_status_t sys_object_wait_one(zx_handle_t handle_value,
                                 zx_signals_t signals,
                                 zx_time_t deadline,
                                 user_out_ptr<zx_signals_t> observed) {
+    deadline = wait_deadline_from_user(deadline);
     LTRACEF("handle %x\n", handle_value);
 
     Event event;
@@ -106,6 +107,8 @@ zx_status_t sys_object_wait_many(user_inout_ptr<zx_wait_item_t> user_items, uint
 
     if (count > kMaxWaitHandleCount)
         return ZX_ERR_OUT_OF_RANGE;
+
+    deadline = wait_deadline_from_user(deadline);
 
     zx_wait_item_t items[kMaxWaitHandleCount];
     if (user_items.copy_array_from_user(items, count) != ZX_OK)

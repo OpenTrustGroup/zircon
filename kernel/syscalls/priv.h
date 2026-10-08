@@ -20,6 +20,23 @@ class user_out_handle;
 #include <object/handle.h>
 #include <object/process_dispatcher.h>
 
+// Modern Fuchsia's ZX_TIME_INFINITE is INT64_MAX, while this kernel's zx_time_t
+// is unsigned and its ZX_TIME_INFINITE is UINT64_MAX. Rust code built against
+// the modern definition passes INT64_MAX to wait forever, so a waiting syscall
+// maps any deadline at or past it to ZX_TIME_INFINITE, which it then waits on
+// without arming a timer. zx_nanosleep, zx_timer_set and a zero-count
+// zx_object_wait_many have no such check and arm a timer at whatever deadline
+// they get, so they are not mapped: it would gain nothing and only change the
+// value that reaches the platform timer.
+//
+// The scripts repository's devshell/lib/zx_abi_layout_check.py, a CI gate,
+// reads ZX_TIME_INFINITE_MODERN and this mapping to accept Rust's INT64_MAX
+// ZX_TIME_INFINITE; keep both spelled as they are.
+#define ZX_TIME_INFINITE_MODERN ((zx_time_t)INT64_MAX)
+static inline zx_time_t wait_deadline_from_user(zx_time_t deadline) {
+    return deadline >= ZX_TIME_INFINITE_MODERN ? ZX_TIME_INFINITE : deadline;
+}
+
 // This is the type of handle result parameters in system call
 // implementation functions (sys_*).  abigen recognizes return values of
 // type zx_handle_t and converts them into user_out_handle* instead of into

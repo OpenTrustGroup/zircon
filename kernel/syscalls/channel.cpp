@@ -351,6 +351,7 @@ zx_status_t sys_channel_call_noretry(zx_handle_t handle_value, uint32_t options,
                                      user_out_ptr<uint32_t> actual_bytes,
                                      user_out_ptr<uint32_t> actual_handles,
                                      user_out_ptr<zx_status_t> read_status) {
+    deadline = wait_deadline_from_user(deadline);
     zx_channel_call_args_t args;
 
     zx_status_t status = user_args.copy_from_user(&args);
@@ -418,6 +419,7 @@ zx_status_t sys_channel_call_finish(zx_time_t deadline,
                                     user_out_ptr<uint32_t> actual_bytes,
                                     user_out_ptr<uint32_t> actual_handles,
                                     user_out_ptr<zx_status_t> read_status) {
+    deadline = wait_deadline_from_user(deadline);
 
     zx_channel_call_args_t args;
     zx_status_t status = user_args.copy_from_user(&args);

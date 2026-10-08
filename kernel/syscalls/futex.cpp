@@ -16,6 +16,7 @@
 #define LOCAL_TRACE 0
 
 zx_status_t sys_futex_wait(user_in_ptr<const zx_futex_t> value_ptr, int current_value, zx_time_t deadline) {
+    deadline = wait_deadline_from_user(deadline);
     LTRACEF("futex %p current %d\n", value_ptr.get(), current_value);
 
     return ProcessDispatcher::GetCurrent()->futex_context()->FutexWait(
