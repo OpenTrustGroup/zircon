@@ -196,7 +196,7 @@ void ProcessDispatcher::Exit(int64_t retcode) {
     __UNREACHABLE;
 }
 
-void ProcessDispatcher::Kill() {
+void ProcessDispatcher::Kill(int64_t retcode) {
     LTRACE_ENTRY_OBJ;
 
     // ZX-880: Call RemoveChildProcess outside of |state_lock_|.
@@ -213,7 +213,7 @@ void ProcessDispatcher::Kill() {
             // If there isn't an Exit already in progress, set a nonzero exit
             // status so e.g. crashing tests don't appear to have succeeded.
             DEBUG_ASSERT(retcode_ == 0);
-            retcode_ = -1;
+            retcode_ = retcode;
         }
 
         // if we have no threads, enter the dead state directly

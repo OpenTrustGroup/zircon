@@ -50,6 +50,10 @@ typedef uint64_t zx_ticks_t;
 #define ZX_MIN(n)  (ZX_SEC(n) * 60ULL)
 #define ZX_HOUR(n) (ZX_MIN(n) * 60ULL)
 
+// Task return codes. A process the kernel kills because of an unhandled
+// exception reports ZX_TASK_RETCODE_EXCEPTION_KILL; any other kill reports -1.
+#define ZX_TASK_RETCODE_EXCEPTION_KILL ((int64_t)-1028)
+
 typedef uint32_t zx_signals_t;
 
 #define ZX_SIGNAL_NONE              ((zx_signals_t)0u)

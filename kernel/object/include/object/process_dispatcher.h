@@ -186,7 +186,8 @@ public:
     zx_status_t set_name(const char* name, size_t len) final;
 
     void Exit(int64_t retcode) __NO_RETURN;
-    void Kill();
+    // Kills the process, which then reports `retcode` as its return code.
+    void Kill(int64_t retcode = -1);
 
     // Syscall helpers
     zx_status_t GetInfo(zx_info_process_t* info);

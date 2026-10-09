@@ -245,7 +245,7 @@ zx_status_t dispatch_user_exception(uint exception_type,
 #endif
 
     // kill our process
-    process->Kill();
+    process->Kill(ZX_TASK_RETCODE_EXCEPTION_KILL);
 
     // exit
     thread->Exit();
