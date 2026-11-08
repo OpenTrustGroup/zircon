@@ -162,11 +162,66 @@ static void clean_invalidate_cache(zx_paddr_t table, size_t index_shift) {
     }
 }
 
+// Returns the host's value of the ID register at op0 = 3, op1 = 0, CRn = 0,
+// CRm = crm and op2 = op2, for CRm 1 to 7, which HCR_EL2.TID3 traps.
+static uint64_t read_id_register(uint8_t crm, uint8_t op2) {
+#define ID_REG(m, o) \
+    case (m) << 3 | (o): return ARM64_READ_SYSREG(S3_0_C0_C##m##_##o)
+#define ID_REGS(m) \
+    ID_REG(m, 0); ID_REG(m, 1); ID_REG(m, 2); ID_REG(m, 3); \
+    ID_REG(m, 4); ID_REG(m, 5); ID_REG(m, 6); ID_REG(m, 7)
+    switch (crm << 3 | op2) {
+    ID_REGS(1);
+    ID_REGS(2);
+    ID_REGS(3);
+    ID_REGS(4);
+    ID_REGS(5);
+    ID_REGS(6);
+    ID_REGS(7);
+    default:
+        return 0;
+    }
+#undef ID_REGS
+#undef ID_REG
+}
+
+// Emulates a guest read of an ID register. The guest sees the host's features
+// except SVE: EL2 does not context switch the SVE registers, and CPTR_EL2.TZ
+// traps their use, so the feature is hidden rather than left to trap.
+static zx_status_t handle_id_register(const SystemInstruction& si, GuestState* guest_state) {
+    const uint16_t sysreg = static_cast<uint16_t>(si.sysreg);
+    const uint8_t op2 = static_cast<uint8_t>(BITS_SHIFT(sysreg, 13, 11));
+    const uint8_t crm = static_cast<uint8_t>(BITS(sysreg, 3, 0));
+    if (!si.read) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    uint64_t value = read_id_register(crm, op2);
+    if (crm == 4 && op2 == 0) {
+        // ID_AA64PFR0_EL1.SVE.
+        value &= ~(0xful << 32);
+    } else if (crm == 4 && op2 == 4) {
+        // ID_AA64ZFR0_EL1.
+        value = 0;
+    }
+    if (si.xt != 31) {
+        guest_state->x[si.xt] = value;
+    }
+    next_pc(guest_state);
+    return ZX_OK;
+}
+
 static zx_status_t handle_system_instruction(uint32_t iss, uint64_t* hcr, GuestState* guest_state,
                                              hypervisor::GuestPhysicalAddressSpace* gpas,
                                              zx_port_packet_t* packet) {
     const SystemInstruction si(iss);
     const uint64_t reg = guest_state->x[si.xt];
+
+    // HCR_EL2.TID3 traps the ID registers at op0 = 3, op1 = 0, CRn = 0 and
+    // CRm 1 to 7.
+    const uint16_t sysreg = static_cast<uint16_t>(si.sysreg);
+    if ((sysreg & 0xc7f0) == 0xc000 && BITS(sysreg, 3, 0) != 0 && BITS(sysreg, 3, 0) <= 7) {
+        return handle_id_register(si, guest_state);
+    }
 
     switch (si.sysreg) {
     case SystemRegister::MAIR_EL1:
@@ -352,8 +407,9 @@ zx_status_t vmexit_handler(uint64_t* hcr, GuestState* guest_state, GichState* gi
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_DATA_ABORT);
         return handle_data_abort(syndrome.iss, guest_state, gpas, traps, packet);
     default:
-        LTRACEF("unhandled exception syndrome, ec %#x iss %#x\n",
-                static_cast<uint32_t>(syndrome.ec), syndrome.iss);
+        dprintf(CRITICAL, "Unhandled exception syndrome, ec %#x iss %#x elr %#lx\n",
+                static_cast<uint32_t>(syndrome.ec), syndrome.iss,
+                guest_state->system_state.elr_el2);
         ktrace_vcpu(TAG_VCPU_EXIT, VCPU_UNKNOWN);
         return ZX_ERR_NOT_SUPPORTED;
     }

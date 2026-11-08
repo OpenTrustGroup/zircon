@@ -19,7 +19,9 @@
 #include <kernel/timer.h>
 #include <zircon/types.h>
 
-static constexpr uint16_t kNumInterrupts = 256;
+// Covers the SPIs, the extended SPIs at 4096 to 5119, and LPIs 8192 to 16383,
+// which a guest's ITS uses for message-signalled interrupts.
+static constexpr uint16_t kNumInterrupts = 16384;
 static constexpr uint32_t kTimerVector = 27;
 static_assert(kTimerVector < kNumInterrupts, "Timer vector is out of range");
 

@@ -167,8 +167,12 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
     uint64_t mpidr = ARM64_READ_SYSREG(mpidr_el1);
     vcpu->el2_state_->guest_state.system_state.vmpidr_el2 = vmpidr_of(vpid, mpidr);
     vcpu->el2_state_->host_state.system_state.vmpidr_el2 = mpidr;
-    vcpu->hcr_ = HCR_EL2_VM | HCR_EL2_PTW | HCR_EL2_IMO | HCR_EL2_DC | HCR_EL2_TWI | HCR_EL2_TWE |
-                 HCR_EL2_TSC | HCR_EL2_TVM | HCR_EL2_RW;
+    // HCR_EL2.FMO sends the guest's group 0 CPU interface accesses to the
+    // virtual interface. Without it they reach the physical one, which
+    // traps to EL3 when EL3 owns FIQs.
+    vcpu->hcr_ = HCR_EL2_VM | HCR_EL2_PTW | HCR_EL2_FMO | HCR_EL2_IMO | HCR_EL2_DC |
+                 HCR_EL2_TWI | HCR_EL2_TWE |
+                 HCR_EL2_TSC | HCR_EL2_TID3 | HCR_EL2_TVM | HCR_EL2_RW;
 
     *out = fbl::move(vcpu);
     return ZX_OK;
