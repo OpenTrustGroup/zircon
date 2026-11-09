@@ -160,6 +160,13 @@ typedef uint32_t zx_signals_t;
 // VMO
 #define ZX_VMO_ZERO_CHILDREN        __ZX_OBJECT_SIGNALED
 
+// Device suspend notifier. The kernel raises these on the object that
+// zx_suspend_notifier_init() returns, and the waiter clears them with
+// zx_object_signal(), so that object must allow them in addition to the
+// user signals.
+#define ZX_DEVICE_SUSPEND           __ZX_OBJECT_SIGNAL_4
+#define ZX_DEVICE_RESUME            __ZX_OBJECT_SIGNAL_5
+
 // global kernel object id.
 typedef uint64_t zx_koid_t;
 #define ZX_KOID_INVALID ((uint64_t) 0)

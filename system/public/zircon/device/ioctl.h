@@ -75,6 +75,13 @@
 #define IOCTL_FAMILY_DISPLAY_CONTROLLER 0x37
 #define IOCTL_FAMILY_DEBUG          0x38
 #define IOCTL_FAMILY_CPUFREQ        0x39
+#define IOCTL_FAMILY_SPI            0x3A
+#define IOCTL_FAMILY_WDT            0x3B
+#define IOCTL_FAMILY_GPIO           0x3C
+#define IOCTL_FAMILY_EINT           0x3D
+#define IOCTL_FAMILY_RAMFB          0x3E
+#define IOCTL_FAMILY_MONITOR        0x3F
+#define IOCTL_FAMILY_NEBULA         0x40  // Nebula hypervisor services
 
 // IOCTL constructor
 // --K-FFNN

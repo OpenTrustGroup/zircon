@@ -33,6 +33,11 @@
 #define ZX_ARM64_FEATURE_ISA_SM4       (1u << 12)
 #define ZX_ARM64_FEATURE_ISA_DP        (1u << 13)
 #define ZX_ARM64_FEATURE_ISA_DPB       (1u << 14)
+// The kernel does not report SHA512 yet, so this bit is never set.
+#define ZX_ARM64_FEATURE_ISA_SHA512    (1u << 18)
+
+// The name later Fuchsia uses for ZX_ARM64_FEATURE_ISA_SHA2.
+#define ZX_ARM64_FEATURE_ISA_SHA256    ZX_ARM64_FEATURE_ISA_SHA2
 
 #else
 

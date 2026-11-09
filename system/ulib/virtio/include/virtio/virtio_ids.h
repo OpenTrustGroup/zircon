@@ -43,4 +43,11 @@
 #define VIRTIO_ID_INPUT        18 /* virtio input */
 #define VIRTIO_ID_VSOCK        19 /* virtio vsock transport */
 
+// Nebula's own virtio devices: the cluster device, external interrupts and
+// an RTC. The guest's drivers match these IDs, so they must stay as they are,
+// although 42 is RDMA in the virtio specification.
+#define VIRTIO_ID_CLUSTER      14 /* virtio cluster */
+#define VIRTIO_ID_EINT         42 /* virtio eint */
+#define VIRTIO_ID_RTC          55 /* virtio rtc */
+
 #endif /* _LINUX_VIRTIO_IDS_H */
