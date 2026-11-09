@@ -18,6 +18,8 @@
 #include <string.h>
 #include <trace.h>
 #include <vm/vm.h>
+#include <vm/vm_address_region.h>
+#include <vm/vm_aspace.h>
 #include <zircon/types.h>
 
 using fbl::AutoLock;
@@ -158,6 +160,61 @@ zx_status_t VmObjectPhysical::Lookup(uint64_t offset, uint64_t len, uint pf_flag
         }
     }
     return ZX_OK;
+}
+
+template <typename F>
+zx_status_t VmObjectPhysical::CopyThroughMapping(uint64_t offset, size_t len, F copy) {
+    if (len == 0) {
+        return ZX_OK;
+    }
+    uint64_t end;
+    if (add_overflow(offset, len, &end) || end > size_) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+    const uint64_t map_start = ROUNDDOWN(offset, PAGE_SIZE);
+    const uint64_t map_size = ROUNDUP(end, PAGE_SIZE) - map_start;
+
+    fbl::RefPtr<VmMapping> mapping;
+    zx_status_t status = VmAspace::kernel_aspace()->RootVmar()->CreateVmMapping(
+        /* mapping_offset */ 0, map_size, /* align_pow2 */ 0, /* vmar_flags */ 0,
+        fbl::WrapRefPtr<VmObject>(this), map_start,
+        ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE, "physical vmo copy", &mapping);
+    if (status != ZX_OK) {
+        return status;
+    }
+    status = mapping->MapRange(0, map_size, true);
+    if (status == ZX_OK) {
+        status = copy(reinterpret_cast<uint8_t*>(mapping->base()) + (offset - map_start));
+    }
+    mapping->Destroy();
+    return status;
+}
+
+zx_status_t VmObjectPhysical::Read(void* ptr, uint64_t offset, size_t len) {
+    return CopyThroughMapping(offset, len, [ptr, len](uint8_t* src) {
+        memcpy(ptr, src, len);
+        return ZX_OK;
+    });
+}
+
+zx_status_t VmObjectPhysical::Write(const void* ptr, uint64_t offset, size_t len) {
+    return CopyThroughMapping(offset, len, [ptr, len](uint8_t* dst) {
+        memcpy(dst, ptr, len);
+        return ZX_OK;
+    });
+}
+
+zx_status_t VmObjectPhysical::ReadUser(user_out_ptr<void> ptr, uint64_t offset, size_t len) {
+    return CopyThroughMapping(offset, len, [ptr, len](uint8_t* src) {
+        return ptr.copy_array_to_user(src, len);
+    });
+}
+
+zx_status_t VmObjectPhysical::WriteUser(user_in_ptr<const void> ptr, uint64_t offset,
+                                        size_t len) {
+    return CopyThroughMapping(offset, len, [ptr, len](uint8_t* dst) {
+        return ptr.copy_array_from_user(dst, len);
+    });
 }
 
 zx_status_t VmObjectPhysical::GetMappingCachePolicy(uint32_t* cache_policy) {

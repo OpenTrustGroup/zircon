@@ -41,6 +41,8 @@ static void set_psci_hvc(bool use_hvc);
 
 // The bootdata item type GRT's zircon gives the device tree (BOOTDATA_FDT).
 #define BOOTDATA_FDT_TYPE 0x54444642 // BDFT
+// ... and to a RAM disk over physical memory (BOOTDATA_RAMDISK_NVRAM).
+#define BOOTDATA_RAMDISK_NVRAM_TYPE 0x78868277 // NVRM
 
 #if HAS_DEVICE_TREE
 typedef enum {
@@ -50,7 +52,16 @@ typedef enum {
     NODE_HEE_REGION,
     NODE_PSCI,
     NODE_NS16550A,
+    NODE_REE_REGION,
 } node_t;
+
+// The guests' payload regions (/reserved-memory/ree1-region and
+// ree2-region), where TF-A loads the SOS kernel and root file system.
+#define MAX_REE_REGIONS 2
+typedef struct {
+    uint64_t base;
+    uint64_t length;
+} ree_region_t;
 
 typedef struct {
     node_t  node;
@@ -68,6 +79,8 @@ typedef struct {
     // Nebula's venus machine gives the hypervisor a 16550A console.
     uint64_t ns16550a_mmio_phys;
     uint32_t ns16550a_irq;
+    ree_region_t ree_region[MAX_REE_REGIONS];
+    int ree_region_index;
 } device_tree_context_t;
 
 static uint64_t dt_rd64(uint8_t* data) {
@@ -97,6 +110,9 @@ static int node_callback(int depth, const char *name, void *cookie) {
         ctx->node = NODE_PSCI;
     } else if (!strncmp(name, "ns16550a@", 9) && !ctx->ns16550a_mmio_phys) {
         ctx->node = NODE_NS16550A;
+    } else if (!strcmp(name, "ree1-region") || !strcmp(name, "ree2-region")) {
+        ctx->node = NODE_REE_REGION;
+        ctx->ree_region_index = name[3] - '1';
     } else {
         ctx->node = NODE_NONE;
         if (!strncmp(name, "cpu@", 4)) {
@@ -142,6 +158,11 @@ static int prop_callback(const char *name, uint8_t *data, uint32_t size, void *c
     } else if (ctx->node == NODE_PSCI) {
         if (!strcmp(name, "method")) {
             ctx->psci_method = !strcmp((const char*)data, "hvc") ? 2 : 1;
+        }
+    } else if (ctx->node == NODE_REE_REGION) {
+        if (!strcmp(name, "reg") && size == 16) {
+            ctx->ree_region[ctx->ree_region_index].base = dt_rd64(data);
+            ctx->ree_region[ctx->ree_region_index].length = dt_rd64(data + 8);
         }
     } else if (ctx->node == NODE_NS16550A) {
         if (!strcmp(name, "reg") && size == 16) {
@@ -241,6 +262,11 @@ boot_shim_return_t boot_shim(void* device_tree) {
     ctx.psci_method = 0;
     ctx.ns16550a_mmio_phys = 0;
     ctx.ns16550a_irq = 0;
+    for (int i = 0; i < MAX_REE_REGIONS; i++) {
+        ctx.ree_region[i].base = 0;
+        ctx.ree_region[i].length = 0;
+    }
+    ctx.ree_region_index = 0;
     read_device_tree(device_tree, &ctx);
 
     // The hypervisor's own region, where the machine has one, is all the RAM
@@ -321,6 +347,16 @@ boot_shim_return_t boot_shim(void* device_tree) {
     // reads the guests' memory regions and devices from it.
     append_boot_item(bootdata, BOOTDATA_FDT_TYPE, 0, device_tree,
                      dt_rd32((uint8_t*)device_tree + 4));
+
+    // Each guest payload region as a RAM disk over its memory, as GRT's
+    // zircon has them: devmgr attaches them as the ramctl RAM disks the SOS
+    // boot loader reads.
+    for (int i = 0; i < MAX_REE_REGIONS; i++) {
+        if (ctx.ree_region[i].length) {
+            append_boot_item(bootdata, BOOTDATA_RAMDISK_NVRAM_TYPE, 0, &ctx.ree_region[i],
+                             sizeof(ctx.ree_region[i]));
+        }
+    }
 #endif
 #endif // HAS_DEVICE_TREE
 

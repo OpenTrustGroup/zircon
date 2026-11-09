@@ -667,6 +667,42 @@ static loader_service_t* loader_service;
 
 #define MAXHND ZX_CHANNEL_MAX_MSG_HANDLES
 
+// GRT's RAM disks over physical memory (BOOTDATA_RAMDISK_NVRAM): a VMO of
+// each region the bootdata in |bootdata_vmo| names, as handles of type
+// PA_HND(PA_USER2, *next) onwards. fshost, which has no root resource,
+// attaches them.
+#define FSHOST_NVRAM_HND(n) PA_HND(PA_USER2, n)
+static size_t add_ramdisk_nvram_vmos(zx_handle_t bootdata_vmo, zx_handle_t* handles,
+                                     uint32_t* types, size_t n, uint32_t* next) {
+    bootdata_t hdr;
+    if (zx_vmo_read(bootdata_vmo, &hdr, 0, sizeof(hdr)) != ZX_OK ||
+        hdr.type != BOOTDATA_CONTAINER) {
+        return n;
+    }
+    size_t off = sizeof(hdr);
+    size_t end = sizeof(hdr) + hdr.length;
+    while (off + sizeof(bootdata_t) <= end && n < MAXHND) {
+        bootdata_t item;
+        if (zx_vmo_read(bootdata_vmo, &item, off, sizeof(item)) != ZX_OK) {
+            break;
+        }
+        if (item.type == BOOTDATA_RAMDISK_NVRAM && item.length >= 2 * sizeof(uint64_t)) {
+            uint64_t region[2];
+            if (zx_vmo_read(bootdata_vmo, region, off + sizeof(item), sizeof(region)) == ZX_OK) {
+                printf("devmgr: ramdisk nvram base %#lx len %#lx\n", region[0], region[1]);
+                zx_handle_t vmo;
+                if (zx_vmo_create_physical(get_root_resource(), region[0], region[1],
+                                           &vmo) == ZX_OK) {
+                    handles[n] = vmo;
+                    types[n++] = FSHOST_NVRAM_HND((*next)++);
+                }
+            }
+        }
+        off += BOOTDATA_ALIGN(sizeof(bootdata_t) + item.length);
+    }
+    return n;
+}
+
 void fshost_start(void) {
     zx_handle_t vmo = zx_get_startup_handle(PA_HND(PA_VMO_BOOTFS, 0));
     if ((vmo == ZX_HANDLE_INVALID) ||
@@ -719,14 +755,23 @@ void fshost_start(void) {
     }
 
     // pass bootdata VMOs to fshost
+    zx_handle_t bootdata_vmos[MAXHND];
+    size_t bootdata_count = 0;
     for (size_t m = 0; n < MAXHND; m++) {
         uint32_t type = PA_HND(PA_VMO_BOOTDATA, m);
         if ((handles[n] = zx_get_startup_handle(type)) != ZX_HANDLE_INVALID) {
             devmgr_set_bootdata(handles[n]);
+            bootdata_vmos[bootdata_count++] = handles[n];
             types[n++] = type;
         } else {
             break;
         }
+    }
+
+    // and the RAM disks over physical memory they name
+    uint32_t nvram_count = 0;
+    for (size_t m = 0; m < bootdata_count; m++) {
+        n = add_ramdisk_nvram_vmos(bootdata_vmos[m], handles, types, n, &nvram_count);
     }
 
     // pass VDSO VMOS to fsboot

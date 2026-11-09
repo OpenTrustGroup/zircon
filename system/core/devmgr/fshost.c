@@ -385,6 +385,20 @@ int main(int argc, char** argv) {
     zx_handle_t devmgr_loader = zx_get_startup_handle(PA_HND(PA_USER0, 3));
     fshost_event = zx_get_startup_handle(PA_HND(PA_USER1, 0));
 
+    // RAM disks over physical memory, which devmgr made VMOs of: attach them
+    // as the bootdata RAM disks are.
+    zx_handle_t nvram_vmo;
+    for (uint32_t n = 0; (nvram_vmo = zx_get_startup_handle(PA_HND(PA_USER2, n))); n++) {
+        struct bootdata_ramdisk* br = malloc(sizeof(struct bootdata_ramdisk));
+        if (br == NULL) {
+            zx_handle_close(nvram_vmo);
+            continue;
+        }
+        br->vmo = nvram_vmo;
+        br->next = bootdata_ramdisk_list;
+        bootdata_ramdisk_list = br;
+    }
+
     fshost_start();
 
     vfs_connect_global_root_handle(_fs_root);

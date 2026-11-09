@@ -55,6 +55,10 @@
 // compression is a raw disk image rather than BOOTFS format.
 #define BOOTDATA_RAMDISK          (0x4b534452) // RDSK
 
+// A RAM disk that is not in the boot image but already in memory: the
+// payload is a physical base address and a length, two uint64_t.
+#define BOOTDATA_RAMDISK_NVRAM    (0x78868277) // NVRM
+
 // Machine description (MDI), as mdigen writes it.
 #define BOOTDATA_MDI              (0x3149444d) // MDI1
 

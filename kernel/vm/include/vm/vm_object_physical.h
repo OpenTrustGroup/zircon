@@ -36,6 +36,13 @@ public:
     zx_status_t Lookup(uint64_t offset, uint64_t len, uint pf_flags,
                        vmo_lookup_fn_t lookup_fn, void* context) override;
 
+    // GRT's zircon reads and writes physical VMOs (the guest memory and the
+    // RAM disks over physical memory), through a temporary kernel mapping.
+    zx_status_t Read(void* ptr, uint64_t offset, size_t len) override;
+    zx_status_t Write(const void* ptr, uint64_t offset, size_t len) override;
+    zx_status_t ReadUser(user_out_ptr<void> ptr, uint64_t offset, size_t len) override;
+    zx_status_t WriteUser(user_in_ptr<const void> ptr, uint64_t offset, size_t len) override;
+
     void Dump(uint depth, bool verbose) override;
 
     zx_status_t GetPageLocked(uint64_t offset, uint pf_flags, DirtyTrackingAction mark_dirty,
@@ -55,6 +62,11 @@ private:
     friend fbl::RefPtr<VmObjectPhysical>;
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(VmObjectPhysical);
+
+    // Maps [offset, offset + len) into the kernel and calls |copy| with the
+    // kernel address of |offset|.
+    template <typename F>
+    zx_status_t CopyThroughMapping(uint64_t offset, size_t len, F copy);
 
     // members
     const uint64_t size_ = 0;
