@@ -332,6 +332,10 @@ zx_status_t sys_process_create(zx_handle_t job_handle,
     // convert job handle to job dispatcher
     auto up = ProcessDispatcher::GetCurrent();
 
+    zx_status_t policy = up->QueryPolicy(ZX_POL_NEW_PROCESS);
+    if (policy != ZX_OK)
+        return policy;
+
     fbl::RefPtr<JobDispatcher> job;
     // TODO(ZX-968): define process creation job rights.
     auto status = up->GetDispatcherWithRights(job_handle, ZX_RIGHT_WRITE, &job);

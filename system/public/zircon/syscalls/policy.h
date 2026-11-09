@@ -40,7 +40,8 @@ typedef struct zx_policy_basic {
 #define ZX_POL_NEW_FIFO                     10u
 #define ZX_POL_NEW_TIMER                    11u
 #define ZX_POL_NEW_PAGER                    12u
-#define ZX_POL_MAX                          13u
+#define ZX_POL_NEW_PROCESS                  13u
+#define ZX_POL_MAX                          14u
 
 // Policy actions.
 // ZX_POL_ACTION_ALLOW and ZX_POL_ACTION_DENY can be ORed with ZX_POL_ACTION_EXCEPTION.
