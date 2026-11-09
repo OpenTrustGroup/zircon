@@ -848,6 +848,13 @@ zx_handle_t fs_clone(const char* path) {
     if (!strcmp(path, "dev")) {
         return devfs_root_clone();
     }
+#if DEVMGR_APPMGR_SERVES_SVC
+    // This appmgr serves the service directory itself on its directory
+    // request, rather than as "svc" within it, and serves no hub.
+    if (!strcmp(path, "svc")) {
+        return fdio_service_clone(appmgr_req_cli);
+    }
+#endif
     zx_handle_t h0, h1;
     if (zx_channel_create(0, &h0, &h1) != ZX_OK) {
         return ZX_HANDLE_INVALID;

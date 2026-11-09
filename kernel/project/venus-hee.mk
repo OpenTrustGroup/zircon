@@ -17,6 +17,10 @@ include kernel/project/virtual/test.mk
 
 KERNEL_DEFINES += WITH_DEBUG_LINEBUFFER=1
 
+# garnet's appmgr serves the service directory itself on the directory request
+# devmgr gives it, not as "svc" within it.
+USER_DEFINES += DEVMGR_APPMGR_SERVES_SVC=1
+
 MODULES += \
     kernel/lib/userboot \
     kernel/lib/debuglog \
@@ -27,6 +31,7 @@ MODULES += \
 
 MODULES += \
     system/core/crashlogger \
+    system/core/crashsvc \
     system/core/devmgr \
     system/core/userboot \
 

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <threads.h>
+#include <unistd.h>
 
 #include <ddk/driver.h>
 #include <driver-info/driver-info.h>
@@ -2045,12 +2046,23 @@ void dc_bind_driver(driver_t* drv) {
     }
 }
 
+static bool sys_device_deferred;
+
+// The sys device whose driver is in /system starts once that driver is known.
+static void dc_start_deferred_sys_device(void) {
+    if (sys_device_deferred && libname_to_driver(sys_device.libname) != NULL) {
+        sys_device_deferred = false;
+        dc_prepare_proxy(&sys_device);
+    }
+}
+
 void dc_handle_new_driver(void) {
     driver_t* drv;
     while ((drv = list_remove_head_type(&list_drivers_new, driver_t, node)) != NULL) {
         list_add_tail(&list_drivers, &drv->node);
         dc_bind_driver(drv);
     }
+    dc_start_deferred_sys_device();
 }
 
 #define CTL_SCAN_SYSTEM 1
@@ -2131,8 +2143,21 @@ void coordinator(void) {
     sys_device.libname = "/boot/driver/bus-acpi.so";
 #else
     sys_device.libname = "/boot/driver/platform-bus.so";
+    // The Fuchsia build may put the platform bus driver in /system rather
+    // than /boot (garnet's is a /system package): then the sys device waits
+    // for it.
+    if (access(sys_device.libname, R_OK) != 0) {
+        sys_device.libname = "/system/driver/platform-bus.so";
+        sys_device_deferred = true;
+    }
 #endif
-    dc_prepare_proxy(&sys_device);
+    if (!sys_device_deferred) {
+        dc_prepare_proxy(&sys_device);
+    } else {
+        // /system may already be loaded (the early handling above), with the
+        // platform bus driver among the drivers it brought.
+        dc_start_deferred_sys_device();
+    }
     dc_prepare_proxy(&test_device);
 
     if (require_system && !system_loaded) {
