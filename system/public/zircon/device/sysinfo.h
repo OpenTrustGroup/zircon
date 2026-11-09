@@ -28,6 +28,13 @@
 #define IOCTL_SYSINFO_GET_HYPERVISOR_RESOURCE \
     IOCTL(IOCTL_KIND_GET_HANDLE, IOCTL_FAMILY_SYSINFO, 3)
 
+// Return a VMO clone of the platform's features devicetree, the boot
+// item mkbootfs --devicetree adds, as /boot/config/devicetree has it.
+//   in: none
+//   out: zx_handle_t
+#define IOCTL_SYSINFO_GET_DEVICETREE \
+    IOCTL(IOCTL_KIND_GET_HANDLE, IOCTL_FAMILY_SYSINFO, 4)
+
 // ssize_t ioctl_sysinfo_get_root_job(int fd, zx_handle_t* out);
 IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_root_job, IOCTL_SYSINFO_GET_ROOT_JOB, zx_handle_t);
 
@@ -36,3 +43,6 @@ IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_root_resource, IOCTL_SYSINFO_GET_ROOT_RESOUR
 
 // ssize_t ioctl_sysinfo_get_hypervisor_resource(int fd, zx_handle_t* out);
 IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_hypervisor_resource, IOCTL_SYSINFO_GET_HYPERVISOR_RESOURCE, zx_handle_t);
+
+// ssize_t ioctl_sysinfo_get_devicetree(int fd, zx_handle_t* out);
+IOCTL_WRAPPER_OUT(ioctl_sysinfo_get_devicetree, IOCTL_SYSINFO_GET_DEVICETREE, zx_handle_t);

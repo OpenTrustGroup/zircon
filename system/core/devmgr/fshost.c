@@ -107,6 +107,16 @@ static void setup_last_crashlog(zx_handle_t vmo_in, uint64_t off_in, size_t sz) 
     bootfs_add_file("log/last-panic.txt", vmo, 0, sz);
 }
 
+// The platform features devicetree (BOOTDATA_DEVICETREE), as
+// /boot/config/devicetree, where the sysinfo driver serves it from.
+static void setup_devicetree(zx_handle_t vmo_in, uint64_t off_in, size_t sz) {
+    zx_handle_t vmo;
+    if (copy_vmo(vmo_in, off_in, sz, &vmo) != ZX_OK) {
+        return;
+    }
+    bootfs_add_file("config/devicetree", vmo, 0, sz);
+}
+
 struct bootdata_ramdisk {
     struct bootdata_ramdisk* next;
     zx_handle_t vmo;
@@ -232,6 +242,11 @@ static void setup_bootfs(void) {
             }
             case BOOTDATA_LAST_CRASHLOG:
                 setup_last_crashlog(vmo, off + sizeof(bootdata_t), bootdata.length);
+                break;
+            case BOOTDATA_DEVICETREE:
+                if (bootdata.length) {
+                    setup_devicetree(vmo, off + sizeof(bootdata_t), bootdata.length);
+                }
                 break;
             default:
                 break;

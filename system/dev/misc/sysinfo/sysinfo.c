@@ -13,10 +13,14 @@
 #include <zircon/device/sysinfo.h>
 #include <zircon/syscalls/resource.h>
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
+#include <unistd.h>
+
+#include <fdio/io.h>
 
 
 #define ID_HJOBROOT 4
@@ -83,6 +87,24 @@ static zx_status_t sysinfo_ioctl(void* ctx, uint32_t op, const void* cmd, size_t
             return status;
         }
         memcpy(reply, &h, sizeof(zx_handle_t));
+        *out_actual = sizeof(zx_handle_t);
+        return ZX_OK;
+    }
+    case IOCTL_SYSINFO_GET_DEVICETREE: {
+        if ((cmdlen != 0) || (max < sizeof(zx_handle_t))) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+        int fd = open("/boot/config/devicetree", O_RDONLY);
+        if (fd < 0) {
+            return ZX_ERR_NOT_FOUND;
+        }
+        zx_handle_t vmo;
+        zx_status_t status = fdio_get_vmo_clone(fd, &vmo);
+        close(fd);
+        if (status != ZX_OK) {
+            return status;
+        }
+        memcpy(reply, &vmo, sizeof(zx_handle_t));
         *out_actual = sizeof(zx_handle_t);
         return ZX_OK;
     }
