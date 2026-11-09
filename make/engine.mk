@@ -373,6 +373,9 @@ ALLEFI_LIBS :=
 # sysroot (exported libraries and headers)
 SYSROOT_DEPS :=
 
+# MDI source files the boards' MDI descriptions include
+MDI_INCLUDES := system/public/zircon/mdi/zircon.mdi
+
 # For now always enable frame pointers so kernel backtraces
 # can work and define WITH_PANIC_BACKTRACE to enable them in panics
 # ZX-623
@@ -408,6 +411,8 @@ BUILDID ?=
 TOOLS := $(BUILDDIR)/tools
 FIDL := $(TOOLS)/fidlc
 ABIGEN := $(TOOLS)/abigen
+MDIGEN := $(TOOLS)/mdigen
+MKBOOTFS := $(TOOLS)/mkbootfs
 ZBI := $(TOOLS)/zbi
 
 # set V=1 in the environment if you want to see the full command line of every command

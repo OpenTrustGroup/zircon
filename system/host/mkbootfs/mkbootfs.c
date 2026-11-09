@@ -48,6 +48,7 @@ typedef enum {
     ITEM_KERNEL,
     ITEM_CMDLINE,
     ITEM_PLATFORM_ID,
+    ITEM_DEVICETREE,
 } item_type_t;
 
 typedef struct item item_t;
@@ -960,6 +961,9 @@ int write_bootdata(const char* fn, item_t* item, const char* header_path, int he
         case ITEM_PLATFORM_ID:
             CHECK(write_bootitem(fd, false, item, BOOTDATA_PLATFORM_ID, 0));
             break;
+        case ITEM_DEVICETREE:
+            CHECK(write_bootitem(fd, false, item, BOOTDATA_DEVICETREE, 0));
+            break;
         case ITEM_BOOTFS_BOOT:
         case ITEM_BOOTFS_SYSTEM:
             CHECK(write_bootfs(fd, item, compressed));
@@ -1058,12 +1062,14 @@ int dump_bootdata(const char* fn) {
         case BOOTDATA_##type:                                       \
             printf("%08zx: %08x %s\n", off, hdr.length, #type);     \
             break
+        BOOTDATA_CASE(MDI);
         BOOTDATA_CASE(KERNEL);
         BOOTDATA_CASE(CMDLINE);
         BOOTDATA_CASE(ACPI_RSDP);
         BOOTDATA_CASE(FRAMEBUFFER);
         BOOTDATA_CASE(DEBUG_UART);
         BOOTDATA_CASE(PLATFORM_ID);
+        BOOTDATA_CASE(DEVICETREE);
         BOOTDATA_CASE(LASTLOG_NVRAM);
         BOOTDATA_CASE(LASTLOG_NVRAM2);
         BOOTDATA_CASE(E820_TABLE);
@@ -1138,6 +1144,7 @@ void usage(void) {
     "         --vid <vid>           specify VID for platform ID record\n"
     "         --pid <vid>           specify PID for platform ID record\n"
     "         --board <board-name>  specify board name for platform ID record\n"
+    "         --devicetree <file>   devicetree blob, as a BOOTDATA_DEVICETREE item\n"
     "         --ramdisk             files are raw disk images, not bootdata\n"
     "         --header <filename>   optional binary header to prepend at beginning of output file\n"
     "         --header-align <val>  optional alignment for the binary header.\n"
@@ -1208,6 +1215,18 @@ int main(int argc, char **argv) {
             have_cmdline = true;
 
             if (import_file_as(argv[1], ITEM_CMDLINE, 0, NULL) < 0) {
+                return -1;
+            }
+            argc--;
+            argv++;
+        } else if (!strcmp(cmd, "--devicetree")) {
+            // A devicetree blob, as a BOOTDATA_DEVICETREE item: the option
+            // GRT's mkbootfs has, which the Fuchsia build uses.
+            if (argc < 2) {
+                fprintf(stderr, "error: no devicetree file given\n");
+                return -1;
+            }
+            if (import_file_as(argv[1], ITEM_DEVICETREE, 0, NULL) < 0) {
                 return -1;
             }
             argc--;

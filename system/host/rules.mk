@@ -13,6 +13,7 @@ HOSTAPPS := \
 	$(LOCAL_DIR)/h2md/rules.mk \
 	$(LOCAL_DIR)/kernel-buildsig/rules.mk \
 	$(LOCAL_DIR)/loglistener/rules.mk \
+	$(LOCAL_DIR)/mdi/rules.mk \
 	$(LOCAL_DIR)/merkleroot/rules.mk \
 	$(LOCAL_DIR)/minfs/rules.mk \
 	$(LOCAL_DIR)/mkbootfs/rules.mk \

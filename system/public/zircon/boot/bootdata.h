@@ -55,6 +55,12 @@
 // compression is a raw disk image rather than BOOTFS format.
 #define BOOTDATA_RAMDISK          (0x4b534452) // RDSK
 
+// Machine description (MDI), as mdigen writes it.
+#define BOOTDATA_MDI              (0x3149444d) // MDI1
+
+// A flattened device tree, as mkbootfs --devicetree adds it.
+#define BOOTDATA_DEVICETREE       (0xd00dfeed)
+
 // A Zircon Kernel Image
 // Content: bootdata_kernel_t
 #define BOOTDATA_KERNEL           (0x4c4e524b) // KRNL

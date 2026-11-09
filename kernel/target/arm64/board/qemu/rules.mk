@@ -9,6 +9,9 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 PLATFORM_BOARD_NAME := qemu
 PLATFORM_USE_SHIM := true
+PLATFORM_VID := 1   # PDEV_VID_QEMU
+PLATFORM_PID := 1   # PDEV_PID_QEMU
+PLATFORM_MDI_SRCS += $(LOCAL_DIR)/qemu.mdi
 
 include make/board.mk
 
