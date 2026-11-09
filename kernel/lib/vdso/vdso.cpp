@@ -16,9 +16,15 @@
 #include <vm/vm.h>
 #include <vm/vm_aspace.h>
 #include <vm/vm_object.h>
+#include <zircon/syscalls/nebula.h>
 #include <zircon/types.h>
 
 #include "config-buildid.h"
+
+#if ARCH_ARM64
+#include <arch/arm64.h>
+#include <arch/arm64/mp.h>
+#endif
 #include "vdso-code.h"
 
 // This is defined in assembly by vdso-image.S; vdso-code.h
@@ -209,6 +215,34 @@ VDso::VDso() : RoDso("vdso/full", vdso_image,
                      VDSO_CODE_END, VDSO_CODE_START) {}
 
 // This is called exactly once, at boot time.
+
+// A kernel started at EL2 is the hypervisor that runs the guests, unless
+// the command line says otherwise (kernel.bootmode).
+static uint64_t vdso_bootmode() {
+#if ARCH_ARM64
+    uint32_t mode = arm64_get_boot_el() >= 2 ? ZX_BOOTMODE_AHYP : ZX_BOOTMODE_PHYP;
+#else
+    uint32_t mode = ZX_BOOTMODE_PHYP;
+#endif
+    return cmdline_get_uint32("kernel.bootmode", mode);
+}
+
+// Each CPU's hardware ID, as zx_system_get_cpu_hwid reports it.
+static void vdso_fill_cpu_hwid(uint64_t* hwid) {
+    static_assert(SMP_MAX_CPUS <= VDSO_MAX_NUM_CPUS, "VDSO_MAX_NUM_CPUS is too small");
+    for (uint cpu = 0; cpu < VDSO_MAX_NUM_CPUS; cpu++) {
+#if ARCH_ARM64
+        if (cpu < arch_max_num_cpus()) {
+            hwid[cpu] =
+                (static_cast<uint64_t>(arch_cpu_num_to_cluster_id(cpu)) << MPIDR_AFF1_SHIFT) |
+                (static_cast<uint64_t>(arch_cpu_num_to_cpu_id(cpu)) << MPIDR_AFF0_SHIFT);
+            continue;
+        }
+#endif
+        hwid[cpu] = UINT64_MAX;
+    }
+}
+
 const VDso* VDso::Create() {
     ASSERT(!instance_);
 
@@ -235,7 +269,10 @@ const VDso* VDso::Create() {
         per_second,
         pmm_count_total_bytes(),
         BUILDID,
+        vdso_bootmode(),
+        {},
     };
+    vdso_fill_cpu_hwid(constants_window.data()->cpu_hwid);
 
     // If ticks_per_second has not been calibrated, it will return 0. In this
     // case, use soft_ticks instead.

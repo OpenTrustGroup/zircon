@@ -81,6 +81,18 @@ syscall system_get_num_cpus vdsocall const
     ()
     returns (uint32_t);
 
+syscall system_get_bootmode vdsocall
+    (bootmode: uint64_t[1] OUT)
+    returns (zx_status_t);
+
+syscall system_get_cpu_hwid vdsocall
+    (hwid: uint64_t[1] OUT, cpu: uint32_t)
+    returns (zx_status_t);
+
+syscall system_get_cpu_id vdsocall
+    (cpu_id: uint8_t[1] OUT, hwid: uint64_t)
+    returns (zx_status_t);
+
 syscall system_get_version vdsocall
     (version: char[version_len] OUT, version_len: uint32_t)
     returns (zx_status_t);

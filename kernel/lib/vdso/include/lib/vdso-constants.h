@@ -16,7 +16,8 @@
 // hash. There is also a 4 byte 'git-' prefix, and possibly a 6 byte
 // '-dirty' suffix. Let's be generous and use 64 bytes.
 #define MAX_BUILDID_SIZE 64
-#define VDSO_CONSTANTS_SIZE (4 * 4 + 2 * 8 + MAX_BUILDID_SIZE)
+#define VDSO_MAX_NUM_CPUS 16
+#define VDSO_CONSTANTS_SIZE (4 * 4 + 2 * 8 + MAX_BUILDID_SIZE + 8 + 8 * VDSO_MAX_NUM_CPUS)
 
 #ifndef __ASSEMBLER__
 
@@ -56,6 +57,13 @@ struct vdso_constants {
     // A build id of the system. Currently a non-null terminated ascii
     // representation of a git SHA.
     char buildid[MAX_BUILDID_SIZE];
+
+    // The boot mode (ZX_BOOTMODE_*) zx_system_get_bootmode reports.
+    uint64_t bootmode;
+
+    // Each CPU's hardware ID, indexed by CPU number: its MPIDR affinity
+    // fields on arm64. UINT64_MAX past the last CPU.
+    uint64_t cpu_hwid[VDSO_MAX_NUM_CPUS];
 };
 
 static_assert(VDSO_CONSTANTS_SIZE == sizeof(vdso_constants),
