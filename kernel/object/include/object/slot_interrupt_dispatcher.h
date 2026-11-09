@@ -18,11 +18,11 @@
 
 // Note that unlike most Dispatcher subclasses, this one is further
 // subclassed, and so cannot be final.
-class InterruptDispatcher : public SoloDispatcher {
+class SlotInterruptDispatcher : public SoloDispatcher {
 public:
-    InterruptDispatcher& operator=(const InterruptDispatcher &) = delete;
+    SlotInterruptDispatcher& operator=(const SlotInterruptDispatcher &) = delete;
 
-    zx_obj_type_t get_type() const final { return ZX_OBJ_TYPE_INTERRUPT; }
+    zx_obj_type_t get_type() const final { return ZX_OBJ_TYPE_INTERRUPT_SLOT; }
 
     virtual zx_status_t Bind(uint32_t slot, uint32_t vector, uint32_t options) = 0;
 
@@ -40,7 +40,7 @@ protected:
     zx_status_t AddSlotLocked(uint32_t slot, uint32_t vector, uint32_t flags) TA_REQ(get_lock());
 
 
-    InterruptDispatcher();
+    SlotInterruptDispatcher();
 
     void on_zero_handles() final;
 
@@ -58,7 +58,7 @@ protected:
     static constexpr uint32_t INTERRUPT_MASK_POSTWAIT = (1u << 2);
 
     struct Interrupt {
-        InterruptDispatcher* dispatcher;
+        SlotInterruptDispatcher* dispatcher;
         volatile zx_time_t timestamp;
         uint16_t vector;
         uint16_t slot;

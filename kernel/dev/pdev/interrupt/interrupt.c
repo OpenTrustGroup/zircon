@@ -129,6 +129,20 @@ bool is_valid_interrupt(unsigned int vector, uint32_t flags) {
     return intr_ops->is_valid(vector, flags);
 }
 
+zx_status_t read_interrupt_distributor(uint32_t offset, uint64_t* val) {
+    if (!intr_ops->read_distributor) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return intr_ops->read_distributor(offset, val);
+}
+
+zx_status_t write_interrupt_distributor(uint32_t offset, uint64_t val) {
+    if (!intr_ops->write_distributor) {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    return intr_ops->write_distributor(offset, val);
+}
+
 unsigned int remap_interrupt(unsigned int vector) {
     return intr_ops->remap(vector);
 }

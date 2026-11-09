@@ -41,6 +41,8 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/resource_dispatcher.cpp \
     $(LOCAL_DIR)/resources.cpp \
     $(LOCAL_DIR)/semaphore.cpp \
+    $(LOCAL_DIR)/slot_interrupt_dispatcher.cpp \
+    $(LOCAL_DIR)/slot_interrupt_event_dispatcher.cpp \
     $(LOCAL_DIR)/socket_dispatcher.cpp \
     $(LOCAL_DIR)/stream_dispatcher.cpp \
     $(LOCAL_DIR)/suspend_token_dispatcher.cpp \

@@ -61,7 +61,7 @@ static void DumpProcessListKeyMap() {
 }
 
 static const char* ObjectTypeToString(zx_obj_type_t type) {
-    static_assert(ZX_OBJ_TYPE_LAST == 31, "need to update switch below");
+    static_assert(ZX_OBJ_TYPE_LAST == 32, "need to update switch below");
 
     switch (type) {
         case ZX_OBJ_TYPE_PROCESS: return "process";
@@ -90,6 +90,7 @@ static const char* ObjectTypeToString(zx_obj_type_t type) {
         case ZX_OBJ_TYPE_PAGER: return "pager";
         case ZX_OBJ_TYPE_STREAM: return "stream";
         case ZX_OBJ_TYPE_VQUEUE_NOTIFIER: return "vqueue-notifier";
+        case ZX_OBJ_TYPE_INTERRUPT_SLOT: return "interrupt-slot";
         default: return "???";
     }
 }
@@ -118,7 +119,7 @@ static uint32_t BuildHandleStats(const ProcessDispatcher& pd,
 // buffer as strings.
 static void FormatHandleTypeCount(const ProcessDispatcher& pd,
                                   char *buf, size_t buf_len) {
-    static_assert(ZX_OBJ_TYPE_LAST == 31, "need to update table below");
+    static_assert(ZX_OBJ_TYPE_LAST == 32, "need to update table below");
 
     uint32_t types[ZX_OBJ_TYPE_LAST] = {0};
     uint32_t handle_count = BuildHandleStats(pd, types, sizeof(types));
@@ -142,7 +143,8 @@ static void FormatHandleTypeCount(const ProcessDispatcher& pd,
              types[ZX_OBJ_TYPE_IOMMU] + types[ZX_OBJ_TYPE_BTI] +
              types[ZX_OBJ_TYPE_PROFILE] + types[ZX_OBJ_TYPE_PMT] +
              types[ZX_OBJ_TYPE_SUSPEND_TOKEN] + types[ZX_OBJ_TYPE_PAGER] +
-             types[ZX_OBJ_TYPE_STREAM] + types[ZX_OBJ_TYPE_VQUEUE_NOTIFIER]
+             types[ZX_OBJ_TYPE_STREAM] + types[ZX_OBJ_TYPE_VQUEUE_NOTIFIER] +
+             types[ZX_OBJ_TYPE_INTERRUPT_SLOT]
              );
 }
 

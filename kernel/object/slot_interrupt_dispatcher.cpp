@@ -4,15 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
-#include <object/interrupt_dispatcher.h>
+#include <object/slot_interrupt_dispatcher.h>
 
-InterruptDispatcher::InterruptDispatcher() : signals_(0) {
+SlotInterruptDispatcher::SlotInterruptDispatcher() : signals_(0) {
     event_init(&event_, false, EVENT_FLAG_AUTOUNSIGNAL);
     reported_signals_.store(0);
     memset(slot_map_, 0xff, sizeof(slot_map_));
 }
 
-zx_status_t InterruptDispatcher::AddSlotLocked(uint32_t slot, uint32_t vector, uint32_t flags) {
+zx_status_t SlotInterruptDispatcher::AddSlotLocked(uint32_t slot, uint32_t vector, uint32_t flags) {
     size_t index = interrupts_.size();
     bool is_virtual = !!(flags & INTERRUPT_VIRTUAL);
 
@@ -50,7 +50,7 @@ zx_status_t InterruptDispatcher::AddSlotLocked(uint32_t slot, uint32_t vector, u
     return ZX_OK;
 }
 
-zx_status_t InterruptDispatcher::WaitForInterrupt(uint64_t* out_slots) {
+zx_status_t SlotInterruptDispatcher::WaitForInterrupt(uint64_t* out_slots) {
     while (true) {
         uint64_t signals = signals_.exchange(0);
         if (signals) {
@@ -83,7 +83,7 @@ zx_status_t InterruptDispatcher::WaitForInterrupt(uint64_t* out_slots) {
     }
 }
 
-zx_status_t InterruptDispatcher::GetTimeStamp(uint32_t slot, zx_time_t* out_timestamp) {
+zx_status_t SlotInterruptDispatcher::GetTimeStamp(uint32_t slot, zx_time_t* out_timestamp) {
     if (slot > ZX_INTERRUPT_MAX_SLOTS)
         return ZX_ERR_INVALID_ARGS;
 
@@ -101,7 +101,7 @@ zx_status_t InterruptDispatcher::GetTimeStamp(uint32_t slot, zx_time_t* out_time
     }
 }
 
-zx_status_t InterruptDispatcher::UserSignal(uint32_t slot, zx_time_t timestamp) {
+zx_status_t SlotInterruptDispatcher::UserSignal(uint32_t slot, zx_time_t timestamp) {
     if (slot > ZX_INTERRUPT_MAX_SLOTS)
         return ZX_ERR_INVALID_ARGS;
 
@@ -121,7 +121,7 @@ zx_status_t InterruptDispatcher::UserSignal(uint32_t slot, zx_time_t timestamp) 
     return ZX_OK;
 }
 
-void InterruptDispatcher::on_zero_handles() {
+void SlotInterruptDispatcher::on_zero_handles() {
     for (const auto& interrupt : interrupts_) {
         if (!(interrupt.flags & INTERRUPT_VIRTUAL)) {
             MaskInterrupt(interrupt.vector);

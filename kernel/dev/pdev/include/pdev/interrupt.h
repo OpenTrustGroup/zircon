@@ -37,6 +37,10 @@ struct pdev_interrupt_ops {
     void (*handle_irq)(iframe* frame);
     void (*handle_fiq)(iframe* frame);
     void (*shutdown)(void);
+    // Optional. Reads or writes the distributor register at |offset|, for a
+    // VMM that passes interrupts through to a guest.
+    zx_status_t (*read_distributor)(uint32_t offset, uint64_t* val);
+    zx_status_t (*write_distributor)(uint32_t offset, uint64_t val);
 };
 
 void pdev_register_interrupts(const struct pdev_interrupt_ops* ops);

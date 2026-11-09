@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT
 
-#include <object/interrupt_event_dispatcher.h>
+#include <object/slot_interrupt_event_dispatcher.h>
 
 #include <kernel/auto_lock.h>
 #include <dev/interrupt.h>
@@ -15,11 +15,11 @@
 #include <platform.h>
 
 // static
-zx_status_t InterruptEventDispatcher::Create(fbl::RefPtr<Dispatcher>* dispatcher,
+zx_status_t SlotInterruptEventDispatcher::Create(fbl::RefPtr<Dispatcher>* dispatcher,
                                              zx_rights_t* rights) {
     // Attempt to construct the dispatcher.
     fbl::AllocChecker ac;
-    InterruptEventDispatcher* disp = new (&ac) InterruptEventDispatcher();
+    SlotInterruptEventDispatcher* disp = new (&ac) SlotInterruptEventDispatcher();
     if (!ac.check())
         return ZX_ERR_NO_MEMORY;
 
@@ -42,7 +42,7 @@ zx_status_t InterruptEventDispatcher::Create(fbl::RefPtr<Dispatcher>* dispatcher
     return ZX_OK;
 }
 
-zx_status_t InterruptEventDispatcher::Bind(uint32_t slot, uint32_t vector, uint32_t options) {
+zx_status_t SlotInterruptEventDispatcher::Bind(uint32_t slot, uint32_t vector, uint32_t options) {
     canary_.Assert();
 
     if (slot > ZX_INTERRUPT_MAX_SLOTS)
@@ -115,15 +115,15 @@ zx_status_t InterruptEventDispatcher::Bind(uint32_t slot, uint32_t vector, uint3
     return ZX_OK;
 }
 
-void InterruptEventDispatcher::IrqHandler(void* ctx) {
+void SlotInterruptEventDispatcher::IrqHandler(void* ctx) {
     Interrupt* interrupt = reinterpret_cast<Interrupt*>(ctx);
 
     // only record timestamp if this is the first IRQ since we started waiting
     zx_time_t zero_timestamp = 0;
     atomic_cmpxchg_u64(&interrupt->timestamp, &zero_timestamp, current_time());
 
-    InterruptEventDispatcher* thiz
-            = reinterpret_cast<InterruptEventDispatcher *>(interrupt->dispatcher);
+    SlotInterruptEventDispatcher* thiz
+            = reinterpret_cast<SlotInterruptEventDispatcher *>(interrupt->dispatcher);
 
     if (interrupt->flags & INTERRUPT_MASK_POSTWAIT)
         mask_interrupt(interrupt->vector);
@@ -131,17 +131,17 @@ void InterruptEventDispatcher::IrqHandler(void* ctx) {
     thiz->Signal(SIGNAL_MASK(interrupt->slot), true);
 }
 
-void InterruptEventDispatcher::MaskInterrupt(uint32_t vector) {
+void SlotInterruptEventDispatcher::MaskInterrupt(uint32_t vector) {
     mask_interrupt(vector);
 }
 
-void InterruptEventDispatcher::UnmaskInterrupt(uint32_t vector) {
+void SlotInterruptEventDispatcher::UnmaskInterrupt(uint32_t vector) {
     unmask_interrupt(vector);
 }
 
-zx_status_t InterruptEventDispatcher::RegisterInterruptHandler(uint32_t vector, void* data) {
+zx_status_t SlotInterruptEventDispatcher::RegisterInterruptHandler(uint32_t vector, void* data) {
     return register_int_handler(vector, IrqHandler, data);
 }
-void InterruptEventDispatcher::UnregisterInterruptHandler(uint32_t vector) {
+void SlotInterruptEventDispatcher::UnregisterInterruptHandler(uint32_t vector) {
     register_int_handler(vector, nullptr, nullptr);
 }

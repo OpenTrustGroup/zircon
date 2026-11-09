@@ -845,6 +845,44 @@ syscall vqueue_notifier_bind_vcpu
     (handle: zx_handle_t, vcpu_id: uint32_t, vcpu: zx_handle_t)
     returns (zx_status_t);
 
+# Slot-based interrupts
+
+syscall interrupt_slot_create
+    (hrsrc: zx_handle_t, options: uint32_t)
+    returns (zx_status_t, out_handle: zx_handle_t handle_acquire);
+
+syscall interrupt_slot_bind
+    (handle: zx_handle_t, slot: uint32_t, hrsrc: zx_handle_t, vector: uint32_t, options: uint32_t)
+    returns (zx_status_t);
+
+syscall interrupt_slot_wait blocking
+    (handle: zx_handle_t)
+    returns (zx_status_t, out_slots: uint64_t);
+
+syscall interrupt_get_timestamp
+    (handle: zx_handle_t, slot: uint32_t)
+    returns (zx_status_t, out_timestamp: zx_time_t);
+
+syscall interrupt_signal
+    (handle: zx_handle_t, slot: uint32_t, timestamp: zx_time_t)
+    returns (zx_status_t);
+
+syscall interrupt_bind_vm
+    (handle: zx_handle_t, slot: uint32_t, hrsrc: zx_handle_t, vector: uint32_t, options: uint32_t, user_vmid: int32_t)
+    returns (zx_status_t);
+
+syscall interrupt_bind_vcpu
+    (handle: zx_handle_t, vcpu: zx_handle_t, exclusive: bool)
+    returns (zx_status_t);
+
+syscall interrupt_configure_read
+    (handle: zx_handle_t, reg: uint32_t)
+    returns (zx_status_t, val: uint64_t);
+
+syscall interrupt_configure_write
+    (handle: zx_handle_t, reg: uint32_t, val: uint64_t)
+    returns (zx_status_t);
+
 # Test syscalls (keep at the end)
 
 syscall syscall_test_0() returns (zx_status_t);

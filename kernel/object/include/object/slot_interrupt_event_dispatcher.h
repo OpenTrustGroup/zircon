@@ -8,16 +8,16 @@
 
 #include <zircon/types.h>
 #include <fbl/canary.h>
-#include <object/interrupt_dispatcher.h>
+#include <object/slot_interrupt_dispatcher.h>
 #include <sys/types.h>
 
-class InterruptEventDispatcher final : public InterruptDispatcher {
+class SlotInterruptEventDispatcher final : public SlotInterruptDispatcher {
 public:
     static zx_status_t Create(fbl::RefPtr<Dispatcher>* dispatcher,
                               zx_rights_t* rights);
 
-    InterruptEventDispatcher(const InterruptDispatcher &) = delete;
-    InterruptEventDispatcher& operator=(const InterruptDispatcher &) = delete;
+    SlotInterruptEventDispatcher(const SlotInterruptDispatcher &) = delete;
+    SlotInterruptEventDispatcher& operator=(const SlotInterruptDispatcher &) = delete;
 
     zx_status_t Bind(uint32_t slot, uint32_t vector, uint32_t options) final;
 
@@ -28,7 +28,7 @@ protected:
     void UnregisterInterruptHandler(uint32_t vector) final;
 
 private:
-    explicit InterruptEventDispatcher() {}
+    explicit SlotInterruptEventDispatcher() {}
 
     static void IrqHandler(void* ctx);
 

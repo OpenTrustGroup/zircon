@@ -38,6 +38,11 @@ zx_status_t get_interrupt_config(unsigned int vector,
                                  enum interrupt_trigger_mode* tm,
                                  enum interrupt_polarity* pol);
 
+// Read or write the interrupt distributor register at |offset|. Returns
+// ZX_ERR_NOT_SUPPORTED if the interrupt controller does not allow it.
+zx_status_t read_interrupt_distributor(uint32_t offset, uint64_t* val);
+zx_status_t write_interrupt_distributor(uint32_t offset, uint64_t val);
+
 typedef void (*int_handler)(void* arg);
 
 zx_status_t register_int_handler(unsigned int vector, int_handler handler, void* arg);

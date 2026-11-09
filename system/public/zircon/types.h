@@ -308,6 +308,9 @@ typedef struct zx_iovec {
 #define ZX_INTERRUPT_MODE_EDGE_BOTH  (5u << 1)
 #define ZX_INTERRUPT_MODE_MASK       0xe
 #define ZX_INTERRUPT_VIRTUAL         0x10
+// For a slot-based interrupt bound to a guest: the guest owns the interrupt,
+// which stays masked in the host.
+#define ZX_INTERRUPT_PASSTHROUGH     0x20
 
 // Preallocated virtual interrupt slot, typically used for signaling interrupt threads to exit.
 #define ZX_INTERRUPT_SLOT_USER              62
@@ -404,7 +407,8 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_PAGER           ((zx_obj_type_t)28u)
 #define ZX_OBJ_TYPE_STREAM          ((zx_obj_type_t)29u)
 #define ZX_OBJ_TYPE_VQUEUE_NOTIFIER ((zx_obj_type_t)30u)
-#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)31u)
+#define ZX_OBJ_TYPE_INTERRUPT_SLOT  ((zx_obj_type_t)31u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)32u)
 
 // Range type used by the zx_pager_query_dirty_ranges() syscall.
 typedef struct zx_vmo_dirty_range {

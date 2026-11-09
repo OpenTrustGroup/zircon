@@ -29,6 +29,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/futex.cpp \
     $(LOCAL_DIR)/handle_ops.cpp \
     $(LOCAL_DIR)/hypervisor.cpp \
+    $(LOCAL_DIR)/interrupt_slot.cpp \
     $(LOCAL_DIR)/zircon.cpp \
     $(LOCAL_DIR)/object.cpp \
     $(LOCAL_DIR)/object_wait.cpp \

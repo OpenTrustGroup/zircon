@@ -385,6 +385,52 @@ static void gic_shutdown(void) {
     GICREG(0, GICD_CTLR) = 0;
 }
 
+// The distributor occupies 64 KiB. The registers a VMM may read are the
+// 32-bit ones, the 64-bit GICD_IROUTER<n> and GICD_IROUTER<n>E, and the
+// 64-bit GIC-600 GICD_CFGID. It may write only the registers that clear
+// pending and active state.
+#define GICD_SIZE 0x10000
+#define GICD_IROUTER_START 0x6100
+#define GICD_IROUTER_END 0x7fe0
+#define GICD_IROUTERE_START 0x8000
+#define GICD_IROUTERE_END 0xa000
+#define GICD_CFGID 0xf000
+
+static bool gic_is_64bit_distributor_register(uint32_t offset) {
+    return (offset >= GICD_IROUTER_START && offset < GICD_IROUTER_END) ||
+           (offset >= GICD_IROUTERE_START && offset < GICD_IROUTERE_END) ||
+           offset == GICD_CFGID;
+}
+
+static zx_status_t gic_read_distributor(uint32_t offset, uint64_t* val) {
+    if (offset >= GICD_SIZE || offset % 4 != 0) {
+        return ZX_ERR_OUT_OF_RANGE;
+    }
+    if (gic_is_64bit_distributor_register(offset)) {
+        if (offset % 8 != 0) {
+            return ZX_ERR_OUT_OF_RANGE;
+        }
+        *val = GICREG64(0, GICD_OFFSET + offset);
+    } else {
+        *val = GICREG(0, GICD_OFFSET + offset);
+    }
+    return ZX_OK;
+}
+
+static zx_status_t gic_write_distributor(uint32_t offset, uint64_t val) {
+    bool clear = (offset >= 0x0280 && offset < 0x0300) ||  // GICD_ICPENDR<n>
+                 (offset >= 0x0380 && offset < 0x0400) ||  // GICD_ICACTIVER<n>
+                 (offset >= 0x1800 && offset < 0x1880) ||  // GICD_ICPENDR<n>E
+                 (offset >= 0x1c00 && offset < 0x1c80);    // GICD_ICACTIVER<n>E
+    if (!clear || offset % 4 != 0) {
+        return ZX_ERR_ACCESS_DENIED;
+    }
+    // Interrupts 0 to 31 are private to each CPU; GICD_ICPENDR0 and
+    // GICD_ICACTIVER0 are RAZ/WI with affinity routing.
+    GICREG(0, GICD_OFFSET + offset) = (uint32_t)val;
+    return ZX_OK;
+}
+
 static const struct pdev_interrupt_ops gic_ops = {
     .mask = gic_mask_interrupt,
     .unmask = gic_unmask_interrupt,
@@ -398,6 +444,8 @@ static const struct pdev_interrupt_ops gic_ops = {
     .handle_irq = gic_handle_irq,
     .handle_fiq = gic_handle_fiq,
     .shutdown = gic_shutdown,
+    .read_distributor = gic_read_distributor,
+    .write_distributor = gic_write_distributor,
 };
 
 static void arm_gic_v3_init(const void* driver_data, uint32_t length) {
