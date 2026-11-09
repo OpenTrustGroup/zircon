@@ -625,7 +625,7 @@ ktl::optional<PageQueues::VmoBacklink> PageQueues::ProcessQueueHelper(
       PageQueue new_queue = processing_queue == ProcessingQueue::DontNeed
                                 ? PageQueuePagerBackedDontNeed
                                 : gen_to_queue(lru + 1);
-      PageQueue old_queue = (PageQueue)page->object.get_page_queue_ref().exchange(new_queue);
+      PageQueue old_queue = (PageQueue)page->object.get_page_queue_ref().exchange(static_cast<uint8_t>(new_queue));
       if (processing_queue == ProcessingQueue::DontNeed) {
         DEBUG_ASSERT(old_queue >= PageQueuePagerBackedDontNeed);
       } else {
@@ -774,7 +774,7 @@ void PageQueues::MarkAccessed(vm_page_t* page) {
   }
 
   PageQueue queue = mru_gen_to_queue();
-  PageQueue old_queue = (PageQueue)queue_ref.exchange(queue, ktl::memory_order_relaxed);
+  PageQueue old_queue = (PageQueue)queue_ref.exchange(static_cast<uint8_t>(queue), ktl::memory_order_relaxed);
   // Double check again that this was previously pager backed
   DEBUG_ASSERT(old_queue != PageQueueNone && old_queue >= PageQueuePagerBackedDontNeed);
   if (old_queue != queue) {
@@ -807,7 +807,7 @@ void PageQueues::SetQueueBacklinkLocked(vm_page_t* page, void* object, uintptr_t
     page->object.set_page_offset(0);
   }
   DEBUG_ASSERT(page->object.get_page_queue_ref().load(ktl::memory_order_relaxed) == PageQueueNone);
-  page->object.get_page_queue_ref().store(queue, ktl::memory_order_relaxed);
+  page->object.get_page_queue_ref().store(static_cast<uint8_t>(queue), ktl::memory_order_relaxed);
   list_add_head(&page_queues_[queue], &page->queue_node);
   page_queue_counts_[queue].fetch_add(1, ktl::memory_order_relaxed);
   UpdateActiveInactiveLocked(PageQueueNone, queue);
@@ -822,7 +822,7 @@ void PageQueues::MoveToQueueBacklinkLocked(vm_page_t* page, void* object, uintpt
   DEBUG_ASSERT(page->state == VM_PAGE_STATE_OBJECT);
   DEBUG_ASSERT(!page->is_free());
   DEBUG_ASSERT(list_in_list(&page->queue_node));
-  uint32_t old_queue = page->object.get_page_queue_ref().exchange(queue, ktl::memory_order_relaxed);
+  uint32_t old_queue = page->object.get_page_queue_ref().exchange(static_cast<uint8_t>(queue), ktl::memory_order_relaxed);
   DEBUG_ASSERT(old_queue != PageQueueNone);
   if (object) {
     DEBUG_ASSERT(!page->object.get_object() ||

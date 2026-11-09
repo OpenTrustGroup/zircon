@@ -4,6 +4,9 @@
 
 #define HAS_DEVICE_TREE 1
 #define USE_DEVICE_TREE_CPU_COUNT 1
+#define HAS_DEVICE_TREE_UART 1
+#define HAS_DEVICE_TREE_PSCI 1
+#define HAS_DEVICE_TREE_ITEM 1
 
 static zbi_cpu_config_t cpu_config = {
     .cluster_count = 1,
@@ -27,17 +30,20 @@ static const zbi_mem_range_t mem_config[] = {
     },
 };
 
-static const dcfg_simple_t uart_driver = {
+static uint32_t uart_kdrv = KDRV_PL011_UART;
+static dcfg_simple_t uart_driver = {
     .mmio_phys = 0x09000000,
     .irq = 33,
 };
 
+// The IPIs use SGIs 0 to 3: with a secure world, TF-A gives SGIs 8 to 15 to
+// it, and normal world IPIs there never arrive.
 static const dcfg_arm_gicv3_driver_t gicv3_driver = {
     .mmio_phys = 0x08000000,
     .gicd_offset = 0x00000,
     .gicr_offset = 0xa0000,
     .gicr_stride = 0x20000,
-    .ipi_base = 13,
+    .ipi_base = 0,
     .optional = true,
 };
 
@@ -46,12 +52,12 @@ static const dcfg_arm_gicv2_driver_t gicv2_driver = {
     .msi_frame_phys = 0x08020000,
     .gicd_offset = 0x00000,
     .gicc_offset = 0x10000,
-    .ipi_base = 13,
+    .ipi_base = 0,
     .optional = true,
     .use_msi = true,
 };
 
-static const dcfg_arm_psci_driver_t psci_driver = {
+static dcfg_arm_psci_driver_t psci_driver = {
     .use_hvc = true,
 };
 
@@ -77,7 +83,7 @@ static void append_board_boot_item(zbi_header_t* bootdata) {
                     sizeof(zbi_mem_range_t) * countof(mem_config));
 
     // add kernel drivers
-    append_boot_item(bootdata, ZBI_TYPE_KERNEL_DRIVER, KDRV_PL011_UART, &uart_driver,
+    append_boot_item(bootdata, ZBI_TYPE_KERNEL_DRIVER, uart_kdrv, &uart_driver,
                     sizeof(uart_driver));
     append_boot_item(bootdata, ZBI_TYPE_KERNEL_DRIVER, KDRV_ARM_GIC_V3, &gicv3_driver,
                     sizeof(gicv3_driver));
@@ -90,6 +96,18 @@ static void append_board_boot_item(zbi_header_t* bootdata) {
 
     // add platform ID
     append_boot_item(bootdata, ZBI_TYPE_PLATFORM_ID, 0, &platform_id, sizeof(platform_id));
+}
+
+// The device tree chooses the console, which on Nebula's venus machine is
+// a 16550A rather than QEMU's PL011.
+static void set_uart(uint32_t kdrv, uint64_t mmio_phys, uint32_t irq) {
+    uart_kdrv = kdrv;
+    uart_driver.mmio_phys = mmio_phys;
+    uart_driver.irq = irq;
+}
+
+static void set_psci_hvc(bool use_hvc) {
+    psci_driver.use_hvc = use_hvc;
 }
 
 static void set_cpu_count(uint32_t cpu_count) {

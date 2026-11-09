@@ -26,16 +26,30 @@ static void append_board_boot_item(zbi_header_t* container);
 static void set_cpu_count(uint32_t cpu_count);
 #endif
 
+#if HAS_DEVICE_TREE_UART
+static void set_uart(uint32_t kdrv, uint64_t mmio_phys, uint32_t irq);
+#endif
+
+#if HAS_DEVICE_TREE_PSCI
+static void set_psci_hvc(bool use_hvc);
+#endif
+
 // Include board specific definitions
 #include "boot-shim-config.h"
 
 #define ROUNDUP(a, b) (((a) + ((b)-1)) & ~((b)-1))
+
+// The bootdata item type GRT's zircon gives the device tree (BOOTDATA_FDT).
+#define BOOTDATA_FDT_TYPE 0x54444642 // BDFT
 
 #if HAS_DEVICE_TREE
 typedef enum {
     NODE_NONE,
     NODE_CHOSEN,
     NODE_MEMORY,
+    NODE_HEE_REGION,
+    NODE_PSCI,
+    NODE_NS16550A,
 } node_t;
 
 typedef struct {
@@ -46,7 +60,19 @@ typedef struct {
     char* cmdline;
     size_t cmdline_length;
     uint32_t cpu_count;
+    // Nebula's venus machine gives the hypervisor its own RAM region.
+    size_t hee_base;
+    size_t hee_size;
+    // The PSCI conduit /psci names: 0 if none, 1 for "smc", 2 for "hvc".
+    int psci_method;
+    // Nebula's venus machine gives the hypervisor a 16550A console.
+    uint64_t ns16550a_mmio_phys;
+    uint32_t ns16550a_irq;
 } device_tree_context_t;
+
+static uint64_t dt_rd64(uint8_t* data) {
+    return ((uint64_t)dt_rd32(data) << 32) | dt_rd32(data + 4);
+}
 
 static int node_callback(int depth, const char *name, void *cookie) {
 #ifdef PRINT_DEVICE_TREE
@@ -65,6 +91,12 @@ static int node_callback(int depth, const char *name, void *cookie) {
         // just "memory@00000000". Without this the FDT-provided RAM size is
         // never read and the board default arena is used.
         ctx->node = NODE_MEMORY;
+    } else if (!strcmp(name, "hee-region")) {
+        ctx->node = NODE_HEE_REGION;
+    } else if (!strcmp(name, "psci")) {
+        ctx->node = NODE_PSCI;
+    } else if (!strncmp(name, "ns16550a@", 9) && !ctx->ns16550a_mmio_phys) {
+        ctx->node = NODE_NS16550A;
     } else {
         ctx->node = NODE_NONE;
         if (!strncmp(name, "cpu@", 4)) {
@@ -100,6 +132,23 @@ static int prop_callback(const char *name, uint8_t *data, uint32_t size, void *c
         } else if (!strcmp(name, "bootargs")) {
             ctx->cmdline = (char *)data;
             ctx->cmdline_length = size;
+        }
+    } else if (ctx->node == NODE_HEE_REGION) {
+        // two address cells and two size cells, as /reserved-memory has them
+        if (!strcmp(name, "reg") && size == 16) {
+            ctx->hee_base = dt_rd64(data);
+            ctx->hee_size = dt_rd64(data + 8);
+        }
+    } else if (ctx->node == NODE_PSCI) {
+        if (!strcmp(name, "method")) {
+            ctx->psci_method = !strcmp((const char*)data, "hvc") ? 2 : 1;
+        }
+    } else if (ctx->node == NODE_NS16550A) {
+        if (!strcmp(name, "reg") && size == 16) {
+            ctx->ns16550a_mmio_phys = dt_rd64(data);
+        } else if (!strcmp(name, "interrupts") && size == 12) {
+            // SPIs start at GIC interrupt 32, PPIs at 16.
+            ctx->ns16550a_irq = dt_rd32(data + 4) + (dt_rd32(data) == 0 ? 32 : 16);
         }
     } else if (ctx->node == NODE_MEMORY) {
         if (!strcmp(name, "reg") && size == 16) {
@@ -187,7 +236,40 @@ boot_shim_return_t boot_shim(void* device_tree) {
     ctx.memory_size = 0;
     ctx.cmdline = NULL;
     ctx.cpu_count = 0;
+    ctx.hee_base = 0;
+    ctx.hee_size = 0;
+    ctx.psci_method = 0;
+    ctx.ns16550a_mmio_phys = 0;
+    ctx.ns16550a_irq = 0;
     read_device_tree(device_tree, &ctx);
+
+    // The hypervisor's own region, where the machine has one, is all the RAM
+    // the kernel may use: the rest belongs to the guests and the TEE.
+    if (ctx.hee_size) {
+        ctx.memory_base = ctx.hee_base;
+        ctx.memory_size = ctx.hee_size;
+    }
+
+#if HAS_DEVICE_TREE_UART
+    // The console is the machine's 16550A where it has one (the hypervisor's
+    // on Nebula's venus machine, as GRT's zircon uses it), its PL011
+    // otherwise.
+    if (ctx.ns16550a_mmio_phys && ctx.ns16550a_irq) {
+        set_uart(KDRV_NS16550A_UART, ctx.ns16550a_mmio_phys, ctx.ns16550a_irq);
+    }
+#endif
+
+#if HAS_DEVICE_TREE_PSCI
+    // Without a /psci node, PSCI is the firmware's below us when we run at
+    // EL2 (an SMC), and the hypervisor's above us at EL1 (an HVC).
+    if (ctx.psci_method) {
+        set_psci_hvc(ctx.psci_method == 2);
+    } else {
+        uint64_t current_el;
+        __asm__ volatile("mrs %0, CurrentEL" : "=r"(current_el));
+        set_psci_hvc(((current_el >> 2) & 3) < 2);
+    }
+#endif
 
 #if USE_DEVICE_TREE_CPU_COUNT
     set_cpu_count(ctx.cpu_count);
@@ -233,6 +315,13 @@ boot_shim_return_t boot_shim(void* device_tree) {
     if (ctx.cmdline && ctx.cmdline_length) {
         append_boot_item(bootdata, ZBI_TYPE_CMDLINE, 0, ctx.cmdline, ctx.cmdline_length);
     }
+
+#if HAS_DEVICE_TREE_ITEM
+    // Pass the device tree on, whole, as GRT's zircon does: the platform bus
+    // reads the guests' memory regions and devices from it.
+    append_boot_item(bootdata, BOOTDATA_FDT_TYPE, 0, device_tree,
+                     dt_rd32((uint8_t*)device_tree + 4));
+#endif
 #endif // HAS_DEVICE_TREE
 
     uintptr_t kernel_base;

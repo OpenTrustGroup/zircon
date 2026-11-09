@@ -61,7 +61,7 @@ class PageQueues {
   // to have a non-zero number of pages ever appear in an oldest queue for eviction the last two
   // queues are considered the oldest.
   static constexpr size_t kNumOldestQueues = 2;
-  static_assert(kNumOldestQueues + kNumActiveQueues <= kNumPagerBacked);
+  static_assert(kNumOldestQueues + kNumActiveQueues <= kNumPagerBacked, "");
 
   static constexpr zx_duration_t kDefaultMinMruRotateTime = ZX_SEC(5);
   static constexpr zx_duration_t kDefaultMaxMruRotateTime = ZX_SEC(5);
@@ -379,11 +379,11 @@ class PageQueues {
   };
 
   // Ensure that the pager-backed queue counts are always at the end.
-  static_assert(PageQueuePagerBackedLast + 1 == PageQueueNumQueues);
+  static_assert(PageQueuePagerBackedLast + 1 == PageQueueNumQueues, "");
 
   // The page queue index, unlike the full generation count, needs to be able to fit inside a
   // uint8_t in the vm_page_t.
-  static_assert(PageQueueNumQueues < 256);
+  static_assert(PageQueueNumQueues < 256, "");
 
   // Converts free running generation to pager backed queue.
   static constexpr PageQueue gen_to_queue(uint64_t gen) {
@@ -408,14 +408,14 @@ class PageQueues {
     // We check against the the DontNeed queue and not the base queue so that accessing a page can
     // move it from the DontNeed list into the LRU queues. To keep this case efficient we require
     // that the DontNeed queue be directly before the LRU queues.
-    static_assert(PageQueuePagerBackedDontNeed + 1 == PageQueuePagerBackedBase);
+    static_assert(PageQueuePagerBackedDontNeed + 1 == PageQueuePagerBackedBase, "");
 
     // Ensure that the Dirty queue comes before the smallest queue that would return true for this
     // function. This function is used for computing active/inactive sets for the purpose of
     // eviction, and dirty pages cannot be evicted. The Dirty queue also needs to come before the
     // DontNeed queue so that MarkAccessed does not try to move the page to the MRU queue on
     // access. All pager-backed queues except the Dirty queue contain evictable pages.
-    static_assert(PageQueuePagerBackedDirty < PageQueuePagerBackedDontNeed);
+    static_assert(PageQueuePagerBackedDirty < PageQueuePagerBackedDontNeed, "");
 
     return page_queue >= PageQueuePagerBackedDontNeed;
   }

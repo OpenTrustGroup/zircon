@@ -58,6 +58,9 @@
 // Machine description (MDI), as mdigen writes it.
 #define BOOTDATA_MDI              (0x3149444d) // MDI1
 
+// The whole flattened device tree the boot loader was given.
+#define BOOTDATA_FDT              (0x54444642) // BDFT
+
 // A flattened device tree, as mkbootfs --devicetree adds it.
 #define BOOTDATA_DEVICETREE       (0xd00dfeed)
 

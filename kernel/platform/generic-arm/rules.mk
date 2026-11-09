@@ -30,6 +30,7 @@ MODULE_DEPS += \
 	kernel/dev/psci \
 	kernel/dev/uart/amlogic_s905 \
 	kernel/dev/uart/nxp-imx \
+	kernel/dev/uart/ns16550a \
 	kernel/dev/uart/pl011 \
 	kernel/dev/hdcp/amlogic_s912 \
 

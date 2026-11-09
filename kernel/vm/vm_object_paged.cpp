@@ -660,7 +660,10 @@ void VmObjectPaged::CloseSource() {
     }
 }
 
-fbl::RefPtr<PageSource> VmObjectPaged::GetRootPageSourceLocked() const {
+// The ancestors hold the same lock as this VMO, which clang's analysis
+// cannot see through the parent pointers.
+fbl::RefPtr<PageSource> VmObjectPaged::GetRootPageSourceLocked() const
+    TA_NO_THREAD_SAFETY_ANALYSIS {
     auto vmo = this;
     while (vmo->parent_) {
         vmo = static_cast<const VmObjectPaged*>(vmo->parent_.get());

@@ -5,6 +5,7 @@
 #ifndef ZIRCON_KERNEL_INCLUDE_KTL_OPTIONAL_H_
 #define ZIRCON_KERNEL_INCLUDE_KTL_OPTIONAL_H_
 
+#include <zircon/compiler.h>
 #include <zxcpp/new.h>
 
 #include <fbl/type_support.h>
@@ -76,7 +77,8 @@ public:
         return storage_.value;
     }
 
-    void reset() {
+    // The analysis treats a T that is a lock guard as the lock itself.
+    void reset() __TA_NO_THREAD_SAFETY_ANALYSIS {
         if (has_value_) {
             storage_.value.~T();
             has_value_ = false;
