@@ -83,6 +83,10 @@
 // clears the counters
 #define IOCTL_BLOCK_GET_STATS   \
     IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_BLOCK, 18)
+// Discard a range of the device.  The input is a 64-bit byte offset followed
+// by a 32-bit byte length; both must be multiples of the block size.
+#define IOCTL_BLOCK_DISCARD \
+    IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_BLOCK, 19)
 
 // Block Impl ioctls (specific to each block device):
 
@@ -90,6 +94,39 @@
 #define BLOCK_FLAG_REMOVABLE 0x00000002
 #define BLOCK_FLAG_BOOTPART 0x00000004  // block device has bootdata partition map
                                         // provided by device metadata
+// block_info_t.block_id holds a valid identifier, such as a UFS logical unit
+// number.  The bit is kept clear of the low flag bits upstream Fuchsia assigns.
+#define BLOCK_FLAG_BLOCK_ID_VALID 0x00000100
+
+// Inline encryption modes a block device can support.  The values match the
+// Linux kernel's enum blk_crypto_mode_num so guest capabilities pass through
+// unchanged.
+enum blk_crypto_mode_num {
+    BLK_ENCRYPTION_MODE_INVALID,
+    BLK_ENCRYPTION_MODE_AES_256_XTS,
+    BLK_ENCRYPTION_MODE_AES_128_CBC_ESSIV,
+    BLK_ENCRYPTION_MODE_ADIANTUM,
+    BLK_ENCRYPTION_MODE_SM4_XTS,
+    BLK_ENCRYPTION_MODE_MAX,
+};
+
+// Inline encryption key types, as a bit mask.  The values match the Linux
+// kernel's enum blk_crypto_key_type.
+enum blk_crypto_key_type {
+    BLK_CRYPTO_KEY_TYPE_STANDARD = 1 << 0,
+    BLK_CRYPTO_KEY_TYPE_HW_WRAPPED = 1 << 1,
+};
+
+// The inline encryption capabilities of a block device.
+struct blk_crypto_cap {
+    // The largest data unit number, in bytes, the device accepts.
+    uint32_t max_dun_bytes_supported;
+    // A mask of enum blk_crypto_key_type values.
+    uint32_t key_types_supported;
+    // For each enum blk_crypto_mode_num, a mask of the supported data unit
+    // sizes in bytes; zero means the mode is unsupported.
+    uint32_t modes_supported[BLK_ENCRYPTION_MODE_MAX];
+};
 
 typedef struct {
     uint64_t block_count;       // The number of blocks in this block device
@@ -97,6 +134,28 @@ typedef struct {
     uint32_t max_transfer_size; // Max worst-case size in bytes per transfer, 0 is no maximum
     uint32_t flags;
     uint32_t reserved;
+    // An identifier for the device, valid when BLOCK_FLAG_BLOCK_ID_VALID is set.
+    uint16_t block_id;
+    // Nonzero if the device keeps a volatile write cache.
+    uint8_t wce;
+    // Nonzero if the device supports inline encryption, described by crypto_cap.
+    uint8_t inline_crypto_supported;
+    // The maximum number of scatter-gather regions in one block_op_t.
+    uint32_t max_seg_nums;
+    // Limits of discard requests; a zero max_bytes means unsupported.
+    uint64_t discard_max_bytes;
+    uint32_t discard_max_segments;
+    uint32_t discard_granularity;
+    // Nonzero if discarded blocks read back as zeroes.
+    uint8_t discard_zeroes_data;
+    // Limits of write-zeroes requests; a zero max_bytes means unsupported.
+    uint64_t write_zeroes_max_bytes;
+    uint32_t write_zeroes_max_segments;
+    // Limits of secure erase requests; a zero max_bytes means unsupported.
+    uint32_t secure_erase_max_segments;
+    uint64_t secure_erase_max_bytes;
+    uint32_t secure_erase_granularity;
+    struct blk_crypto_cap crypto_cap;
 } block_info_t;
 
 typedef struct {

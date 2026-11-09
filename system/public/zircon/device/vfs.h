@@ -160,6 +160,7 @@ typedef struct vfs_query_info {
 
 #define VFS_TYPE_BLOBFS 0x9e694d21
 #define VFS_TYPE_MINFS 0x6e694d21
+#define VFS_TYPE_LITTLEFS 0x73664c21
 
 // ssize_t ioctl_vfs_query_fs(int fd, vfs_query_info_t* out, size_t out_len);
 IOCTL_WRAPPER_VAROUT(ioctl_vfs_query_fs, IOCTL_VFS_QUERY_FS, vfs_query_info_t);

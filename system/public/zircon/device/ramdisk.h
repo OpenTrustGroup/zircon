@@ -23,6 +23,8 @@
     IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_RAMDISK, 5)
 #define IOCTL_RAMDISK_GET_TXN_COUNTS \
     IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_RAMDISK, 6)
+#define IOCTL_RAMDISK_GET_TXN_COUNT \
+    IOCTL(IOCTL_KIND_DEFAULT, IOCTL_FAMILY_RAMDISK, 7)
 
 // Ramdisk-specific flags
 #define RAMDISK_FLAG_RESUME_ON_WAKE 0xFF000001
@@ -79,3 +81,8 @@ IOCTL_WRAPPER_IN(ioctl_ramdisk_sleep_after, IOCTL_RAMDISK_SLEEP_AFTER, uint64_t)
 // Retrieve the number of received, successful, and failed transactions since the last call to
 // sleep/wake.
 IOCTL_WRAPPER_OUT(ioctl_ramdisk_get_txn_counts, IOCTL_RAMDISK_GET_TXN_COUNTS, ramdisk_txn_counts_t);
+
+// ssize_t ioctl_ramdisk_get_txn_count(int fd, uint64_t* out);
+// Retrieve the number of transactions completed since the last call to sleep_after, as one
+// uint64_t. Only ramdisk drivers that count transactions this way support it.
+IOCTL_WRAPPER_OUT(ioctl_ramdisk_get_txn_count, IOCTL_RAMDISK_GET_TXN_COUNT, uint64_t);
