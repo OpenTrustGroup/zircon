@@ -77,6 +77,15 @@ static zx_status_t ktrace_ioctl(void* ctx, uint32_t op,
         zx_ktrace_control(get_root_resource(), KTRACE_ACTION_REWIND, 0, NULL);
         return ZX_OK;
     }
+    case IOCTL_NBL_TRACE_SET_BUF: {
+        // The trace buffer's physical address and size. The kernel does not
+        // write nebula trace records, so the buffer is accepted and left
+        // unused.
+        if (cmdlen != sizeof(uint64_t) * 2) {
+            return ZX_ERR_INVALID_ARGS;
+        }
+        return ZX_OK;
+    }
     default:
         return ZX_ERR_INVALID_ARGS;
     }

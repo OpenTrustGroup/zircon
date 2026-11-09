@@ -33,6 +33,7 @@ MODULES += \
 MODULES += \
     system/dev/misc/builtin \
     system/dev/misc/console \
+    system/dev/misc/cpufreq \
     system/dev/misc/ktrace \
     system/dev/misc/sysinfo \
 
