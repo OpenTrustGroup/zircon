@@ -12,9 +12,13 @@
 #include <object/process_dispatcher.h>
 #include <object/resources.h>
 #include <object/vcpu_dispatcher.h>
+#include <object/vm_address_region_dispatcher.h>
 #include <object/vm_object_dispatcher.h>
+#include <object/vqueue_notifier_dispatcher.h>
 
+#include <arch/hypervisor.h>
 #include <fbl/ref_ptr.h>
+#include <hypervisor/guest_physical_address_space.h>
 
 #include "priv.h"
 
@@ -40,6 +44,59 @@ zx_status_t sys_guest_create(zx_handle_t resource, uint32_t options, zx_handle_t
         return status;
 
     return out->make(fbl::move(dispatcher), rights);
+}
+
+// GRT's guest_create_new: a guest whose physical address space starts empty,
+// and a VMAR of that address space, into which userspace maps guest memory.
+// The user VM ID is not tracked.
+zx_status_t sys_guest_create_new(zx_handle_t resource, uint32_t options, int32_t user_vmid,
+                                 user_out_handle* guest_handle, user_out_handle* vmar_handle) {
+    zx_status_t status = validate_resource(resource, ZX_RSRC_KIND_HYPERVISOR);
+    if (status != ZX_OK)
+        return status;
+
+    fbl::RefPtr<Dispatcher> guest_dispatcher;
+    zx_rights_t guest_rights;
+    status = GuestDispatcher::Create(nullptr, &guest_dispatcher, &guest_rights);
+    if (status != ZX_OK)
+        return status;
+
+    auto guest = fbl::RefPtr<GuestDispatcher>::Downcast(guest_dispatcher);
+    fbl::RefPtr<VmAddressRegion> root_vmar =
+        guest->guest()->AddressSpace()->aspace()->RootVmar();
+    fbl::RefPtr<Dispatcher> vmar_dispatcher;
+    zx_rights_t vmar_rights;
+    status = VmAddressRegionDispatcher::Create(fbl::move(root_vmar), &vmar_dispatcher,
+                                               &vmar_rights);
+    if (status != ZX_OK)
+        return status;
+
+    status = guest_handle->make(fbl::move(guest_dispatcher), guest_rights);
+    if (status != ZX_OK)
+        return status;
+    return vmar_handle->make(fbl::move(vmar_dispatcher), vmar_rights);
+}
+
+zx_status_t sys_vqueue_notifier_create(uint32_t kick_irq, int32_t vmid, user_out_handle* out) {
+    fbl::RefPtr<Dispatcher> dispatcher;
+    zx_rights_t rights;
+    zx_status_t status = VqueueNotifierDispatcher::Create(kick_irq, vmid, &dispatcher, &rights);
+    if (status != ZX_OK)
+        return status;
+    return out->make(fbl::move(dispatcher), rights);
+}
+
+// The guests kick through a fastcall rather than an interrupt here, so a
+// notifier needs no vCPU: this only checks the handles.
+zx_status_t sys_vqueue_notifier_bind_vcpu(zx_handle_t handle, uint32_t vcpu_id,
+                                          zx_handle_t vcpu_handle) {
+    auto up = ProcessDispatcher::GetCurrent();
+    fbl::RefPtr<VqueueNotifierDispatcher> notifier;
+    zx_status_t status = up->GetDispatcher(handle, &notifier);
+    if (status != ZX_OK)
+        return status;
+    fbl::RefPtr<VcpuDispatcher> vcpu;
+    return up->GetDispatcher(vcpu_handle, &vcpu);
 }
 
 zx_status_t sys_guest_set_trap(zx_handle_t guest_handle, uint32_t kind, zx_vaddr_t addr, size_t len,

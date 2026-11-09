@@ -118,6 +118,12 @@ zx_status_t sys_vmar_map(zx_handle_t vmar_handle, size_t vmar_offset,
         do_map_range = true;
         map_flags &= ~ZX_VM_FLAG_MAP_RANGE;
     }
+    // ZX_VM_FLAG_MAP_CONTIGUOUS asks for the whole range to be mapped at
+    // once, as the guest memory managers map their physical VMOs.
+    if (map_flags & ZX_VM_FLAG_MAP_CONTIGUOUS) {
+        do_map_range = true;
+        map_flags &= ~ZX_VM_FLAG_MAP_CONTIGUOUS;
+    }
 
     if (do_map_range && (map_flags & ZX_VM_FLAG_SPECIFIC_OVERWRITE)) {
         return ZX_ERR_INVALID_ARGS;

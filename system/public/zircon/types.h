@@ -403,7 +403,8 @@ typedef uint32_t zx_obj_type_t;
 #define ZX_OBJ_TYPE_SUSPEND_TOKEN   ((zx_obj_type_t)27u)
 #define ZX_OBJ_TYPE_PAGER           ((zx_obj_type_t)28u)
 #define ZX_OBJ_TYPE_STREAM          ((zx_obj_type_t)29u)
-#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)30u)
+#define ZX_OBJ_TYPE_VQUEUE_NOTIFIER ((zx_obj_type_t)30u)
+#define ZX_OBJ_TYPE_LAST            ((zx_obj_type_t)31u)
 
 // Range type used by the zx_pager_query_dirty_ranges() syscall.
 typedef struct zx_vmo_dirty_range {

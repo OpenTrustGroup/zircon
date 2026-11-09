@@ -13,6 +13,7 @@
 #include <arch/arm64/el2_state.h>
 #include <arch/hypervisor.h>
 #include <dev/psci.h>
+#include <object/vqueue_notifier_dispatcher.h>
 #include <dev/timer/arm_generic.h>
 #include <hypervisor/ktrace.h>
 #include <vm/fault.h>
@@ -115,14 +116,38 @@ static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_st
     return gich_state->interrupt_tracker.Wait(nullptr);
 }
 
+// The Nebula fastcall a guest makes to its hypervisor (SMC_FC_NBL_VHM_REQ):
+// x1 names the request. NOTIFY_VMLOG_SINK kicks the vqueue notifiers of the
+// VM ID in x2.
+static constexpr uint64_t kSmcFcNblVhmReq = 0xb4000100;
+static constexpr uint64_t kFcIdNotifyVmlogSink = 0x4;
+
+// SMCCC's result for a call it does not know.
+static constexpr uint64_t kSmcccNotSupported = static_cast<uint64_t>(-1);
+
 static zx_status_t handle_smc_instruction(uint32_t iss, GuestState* guest_state,
                                           zx_port_packet_t* packet) {
     const SmcInstruction si(iss);
-    if (si.imm != kSmcPsci)
+    if (si.imm != kSmcPsci) {
+        dprintf(CRITICAL, "Unhandled SMC immediate %#x\n", si.imm);
         return ZX_ERR_NOT_SUPPORTED;
+    }
 
     next_pc(guest_state);
-    switch (guest_state->x[0]) {
+    // SMCCC passes the function ID in w0; a guest may leave the upper half of
+    // x0 sign extended.
+    switch (static_cast<uint32_t>(guest_state->x[0])) {
+    case PSCI64_PSCI_VERSION:
+        guest_state->x[0] = 0x10000; // PSCI 1.0
+        return ZX_OK;
+    case kSmcFcNblVhmReq:
+        if (guest_state->x[1] == kFcIdNotifyVmlogSink) {
+            VqueueNotifierDispatcher::Notify(static_cast<int32_t>(guest_state->x[2]));
+            guest_state->x[0] = 0;
+        } else {
+            guest_state->x[0] = kSmcccNotSupported;
+        }
+        return ZX_OK;
     case PSCI64_CPU_ON:
         memset(packet, 0, sizeof(*packet));
         packet->type = ZX_PKT_TYPE_GUEST_VCPU;
@@ -139,8 +164,10 @@ static zx_status_t handle_smc_instruction(uint32_t iss, GuestState* guest_state,
         // See ARM PSCI Platform Design Document, Section 5.11.
         return ZX_ERR_CANCELED;
     default:
-        guest_state->x[0] = PSCI_NOT_SUPPORTED;
-        return ZX_ERR_NOT_SUPPORTED;
+        // Other calls (SMCCC queries, PSCI features, Trusty) are not
+        // supported, and the guest goes on, as GRT's hypervisor lets it.
+        guest_state->x[0] = kSmcccNotSupported;
+        return ZX_OK;
     }
 }
 

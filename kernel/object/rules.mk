@@ -50,6 +50,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/virtual_interrupt_dispatcher.cpp \
     $(LOCAL_DIR)/vm_address_region_dispatcher.cpp \
     $(LOCAL_DIR)/vm_object_dispatcher.cpp \
+    $(LOCAL_DIR)/vqueue_notifier_dispatcher.cpp \
     $(LOCAL_DIR)/wait_state_observer.cpp \
 
 ifeq (true,$(call TOBOOL,$(WITH_USER_PAGER)))

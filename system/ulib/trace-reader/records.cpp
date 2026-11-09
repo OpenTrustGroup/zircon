@@ -43,7 +43,7 @@ const char* ThreadStateToString(ThreadState state) {
 }
 
 const char* ObjectTypeToString(zx_obj_type_t type) {
-    static_assert(ZX_OBJ_TYPE_LAST == 30, "need to update switch below");
+    static_assert(ZX_OBJ_TYPE_LAST == 31, "need to update switch below");
 
     switch (type) {
     case ZX_OBJ_TYPE_PROCESS:
@@ -96,6 +96,8 @@ const char* ObjectTypeToString(zx_obj_type_t type) {
         return "pager";
     case ZX_OBJ_TYPE_STREAM:
         return "stream";
+    case ZX_OBJ_TYPE_VQUEUE_NOTIFIER:
+        return "vqueue-notifier";
     default:
         return "???";
     }

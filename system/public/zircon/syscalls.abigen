@@ -819,6 +819,20 @@ syscall job_set_relative_importance
         job: zx_handle_t, less_important_job: zx_handle_t)
     returns (zx_status_t);
 
+# Nebula guests
+
+syscall guest_create_new
+    (resource: zx_handle_t, options: uint32_t, user_vmid: int32_t)
+    returns (zx_status_t, guest: zx_handle_t handle_acquire, vmar: zx_handle_t handle_acquire);
+
+syscall vqueue_notifier_create
+    (kick_irq: uint32_t, vmid: int32_t)
+    returns (zx_status_t, out: zx_handle_t handle_acquire);
+
+syscall vqueue_notifier_bind_vcpu
+    (handle: zx_handle_t, vcpu_id: uint32_t, vcpu: zx_handle_t)
+    returns (zx_status_t);
+
 # Test syscalls (keep at the end)
 
 syscall syscall_test_0() returns (zx_status_t);

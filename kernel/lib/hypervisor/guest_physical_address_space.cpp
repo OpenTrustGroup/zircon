@@ -41,11 +41,15 @@ struct AspaceVmoLocator final : public VmEnumerator {
         }
         vmo = map->vmo();
         base = map->base();
+        size = map->size();
+        object_offset = map->object_offset();
         return false;
     }
 
     fbl::RefPtr<VmObject> vmo = nullptr;
     vaddr_t base = 0;
+    size_t size = 0;
+    uint64_t object_offset = 0;
     const vaddr_t vaddr;
 };
 
@@ -70,6 +74,13 @@ zx_status_t GuestPhysicalAddressSpace::Create(fbl::RefPtr<VmObject> guest_phys_m
 #if ARCH_ARM64
     gpas->paspace_->arch_aspace().arch_set_asid(vmid);
 #endif
+
+    // Without a VMO the address space starts empty, and userspace maps guest
+    // memory into its root VMAR (GRT's guest_create_new).
+    if (!guest_phys_mem) {
+        *_gpas = fbl::move(gpas);
+        return ZX_OK;
+    }
 
     // Initialize our VMAR with the provided VMO, mapped at address 0.
     fbl::RefPtr<VmMapping> mapping;
@@ -150,8 +161,11 @@ zx_status_t GuestPhysicalAddressSpace::CreateGuestPtr(zx_vaddr_t guest_paddr, si
     if (begin > end) {
         return ZX_ERR_INVALID_ARGS;
     }
-    // Boundaries check.
-    if (end > guest_phys_mem_->size()) {
+    // The range must lie within one mapping of the address space, which may
+    // be the VMO the address space was created with or one userspace mapped.
+    AspaceVmoLocator vmo_locator(begin);
+    paspace_->EnumerateChildren(&vmo_locator);
+    if (!vmo_locator.vmo || end > vmo_locator.base + vmo_locator.size) {
         return ZX_ERR_INVALID_ARGS;
     }
 
@@ -161,8 +175,8 @@ zx_status_t GuestPhysicalAddressSpace::CreateGuestPtr(zx_vaddr_t guest_paddr, si
         end - begin,
         /* align_pow2 */ false,
         /* vmar_flags */ 0,
-        guest_phys_mem_,
-        begin,
+        vmo_locator.vmo,
+        vmo_locator.object_offset + (begin - vmo_locator.base),
         kGuestMmuFlags,
         name,
         &mapping);
