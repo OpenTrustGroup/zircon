@@ -26,6 +26,7 @@ MODULE_SRCS := \
     $(LOCAL_DIR)/debug.cpp \
     $(LOCAL_DIR)/exceptions.cpp \
     $(LOCAL_DIR)/fifo.cpp \
+    $(LOCAL_DIR)/fifo_old.cpp \
     $(LOCAL_DIR)/futex.cpp \
     $(LOCAL_DIR)/handle_ops.cpp \
     $(LOCAL_DIR)/hypervisor.cpp \

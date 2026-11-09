@@ -29,6 +29,8 @@ public:
     bool has_state_tracker() const final { return true; }
     void on_zero_handles() final;
 
+    uint32_t elem_size() const { return elem_size_; }
+
     zx_status_t WriteFromUser(size_t elem_size, user_in_ptr<const uint8_t> src, size_t count,
                               size_t* actual);
     zx_status_t ReadToUser(size_t elem_size, user_out_ptr<uint8_t> dst, size_t count,
