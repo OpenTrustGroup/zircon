@@ -52,7 +52,7 @@ struct dlog_reader {
 #define DLOG_HDR_GET_FIFOLEN(n)   ((n) & 0xFFF)
 #define DLOG_HDR_GET_READLEN(n)  (((n) >> 12) & 0xFFF)
 
-#define DLOG_MIN_RECORD          (32u)
+#define DLOG_MIN_RECORD          (32u + 8u)
 #define DLOG_MAX_DATA            (224u)
 #define DLOG_MAX_RECORD          (DLOG_MIN_RECORD + DLOG_MAX_DATA)
 
@@ -63,6 +63,8 @@ struct dlog_header {
     uint64_t timestamp;
     uint64_t pid;
     uint64_t tid;
+    // The number of the CPU that wrote the record (zx_log_record_t's cpu).
+    uint64_t cpu;
 };
 
 struct dlog_record {

@@ -19,10 +19,13 @@ typedef struct zx_log_record {
     zx_time_t timestamp;
     uint64_t pid;
     uint64_t tid;
+    // The number of the CPU that wrote the record.
+    uint64_t cpu;
     char data[0];
 } zx_log_record_t;
 
-#define ZX_LOG_RECORD_MAX     256
+// The record grew by its cpu; the data a record can carry did not.
+#define ZX_LOG_RECORD_MAX     (256 + 8)
 
 // Common Log Levels
 #define ZX_LOG_ERROR          (0x0001)
@@ -44,6 +47,15 @@ typedef struct zx_log_record {
 // Do not forward this message via network
 // (for logging in network core and drivers)
 #define ZX_LOG_LOCAL          (0x1000)
+
+// Do not store this message in the persistent log file.
+#define ZX_LOG_FLAG_NO_FILE    (0x2000)
+
+// Do not echo this message to the serial port.
+#define ZX_LOG_FLAG_NO_SERIAL  (0x4000)
+
+// Do not show this message on the console.
+#define ZX_LOG_FLAG_NO_CONSOLE (0x8000)
 
 #define ZX_LOG_LEVEL_MASK     (0x0FFF)
 #define ZX_LOG_FLAGS_MASK     (0xFFFF)

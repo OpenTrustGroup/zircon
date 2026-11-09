@@ -89,6 +89,7 @@ zx_status_t dlog_write(uint32_t flags, const void* ptr, size_t len) {
     hdr.datalen = len;
     hdr.flags = flags;
     hdr.timestamp = current_time();
+    hdr.cpu = arch_curr_cpu_num();
     thread_t *t = get_current_thread();
     if (t) {
         hdr.pid = t->user_pid;
