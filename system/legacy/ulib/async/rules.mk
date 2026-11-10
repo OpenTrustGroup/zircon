@@ -58,12 +58,12 @@ MODULE_PACKAGE_INCS := \
     $(LOCAL_INC)/cpp/wait_with_timeout.h
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async \
+    system/legacy/ulib/async \
     system/ulib/fbl
 
 MODULE_LIBS := \
     system/ulib/c \
-    system/ulib/zx \
+    system/legacy/ulib/zx \
     system/ulib/zircon
 
 MODULE_PACKAGE := src
@@ -85,7 +85,7 @@ MODULE_SRCS = \
 MODULE_PACKAGE_SRCS := $(MODULE_SRCS)
 MODULE_PACKAGE_INCS := $(LOCAL_INC)/default.h
 
-MODULE_SO_NAME := async-default
+MODULE_SO_NAME := async-default-legacy
 MODULE_EXPORT := so
 
 MODULE_LIBS := \

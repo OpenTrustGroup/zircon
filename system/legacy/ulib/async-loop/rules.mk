@@ -23,10 +23,10 @@ MODULE_PACKAGE_INCS := $(LOCAL_INC)/loop.h
 MODULE_PACKAGE_INCS += $(LOCAL_DEPRECATED_INC)/loop.h
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async
+    system/legacy/ulib/async
 
 MODULE_LIBS := \
-    system/ulib/async.default \
+    system/legacy/ulib/async.default \
     system/ulib/c \
     system/ulib/zircon
 
@@ -51,14 +51,14 @@ MODULE_PACKAGE_INCS := $(LOCAL_INC)/cpp/loop.h
 MODULE_PACKAGE_INCS += $(LOCAL_DEPRECATED_INC)/cpp/loop.h
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async.cpp \
-    system/ulib/async \
-    system/ulib/async-loop \
+    system/legacy/ulib/async.cpp \
+    system/legacy/ulib/async \
+    system/legacy/ulib/async-loop \
     system/ulib/fbl \
-    system/ulib/zx
+    system/legacy/ulib/zx
 
 MODULE_LIBS := \
-    system/ulib/async.default \
+    system/legacy/ulib/async.default \
     system/ulib/c \
     system/ulib/zircon
 

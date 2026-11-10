@@ -73,6 +73,10 @@ public:
     // Returns |ZX_ERR_BAD_STATE| if the loop was shut down with |Shutdown()|.
     zx_status_t RunUntilIdle();
 
+    // Sets the scheduling priority of the threads started by |StartThread()|.
+    // Not supported: this kernel has no such call.
+    zx_status_t SetThreadPriority(uint32_t priority) { return ZX_ERR_NOT_SUPPORTED; }
+
     // Quits the message loop.
     // Active invocations of |Run()| and threads started using |StartThread()|
     // will eventually terminate upon completion of their current unit of work.

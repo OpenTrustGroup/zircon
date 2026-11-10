@@ -60,6 +60,7 @@ public:
     // Must be set before beginning the wait.
     const Handler& handler() const { return handler_; }
     void set_handler(Handler handler) { handler_ = fbl::move(handler); }
+    bool has_handler() const { return !!handler_; }
 
     // The object to wait for signals on.
     zx_handle_t object() const { return async_wait_t::object; }
@@ -72,6 +73,9 @@ public:
     // Valid flags: |ASYNC_FLAG_HANDLE_SHUTDOWN|.
     uint32_t flags() const { return async_wait_t::flags; }
     void set_flags(uint32_t flags) { async_wait_t::flags = flags; }
+
+    // Whether the wait has begun and has neither completed nor been canceled.
+    bool is_pending() const { return pending_; }
 
     // Begins asynchronously waiting for the object to receive one or more of
     // the trigger signals.
@@ -89,6 +93,7 @@ private:
                                            zx_status_t status, const zx_packet_signal_t* signal);
 
     Handler handler_;
+    bool pending_ = false;
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(Wait);
 };

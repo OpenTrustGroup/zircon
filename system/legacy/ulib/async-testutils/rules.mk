@@ -16,14 +16,14 @@ MODULE_SRCS += \
         $(LOCAL_DIR)/test_loop_dispatcher.cpp
 
 MODULE_STATIC_LIBS := \
-        system/ulib/async.cpp \
-        system/ulib/async \
-        system/ulib/zx \
+        system/legacy/ulib/async.cpp \
+        system/legacy/ulib/async \
+        system/legacy/ulib/zx \
         system/ulib/zxcpp \
         system/ulib/fbl
 
 MODULE_LIBS := \
-        system/ulib/async.default \
+        system/legacy/ulib/async.default \
         system/ulib/c \
         system/ulib/zircon \
         system/ulib/fdio \
