@@ -1,0 +1,9 @@
+library example_7;
+
+using pkg;
+
+// ¡🇷🇸🇷
+
+interface Hello {
+  1: Say(string req) -> (string response);
+};
