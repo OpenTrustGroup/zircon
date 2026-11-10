@@ -60,6 +60,18 @@ ifeq ($(wildcard $(MODULE_SRCDIR)/rules.mk),)
 $(error Module '$(MODULE)' missing $(MODULE_SRCDIR)/rules.mk)
 endif
 
+# With LEGACY_ULIB, a module whose directory has an April 2018 counterpart
+# under system/legacy (system/X and system/legacy/X) is neither exported as a
+# package nor installed in the sysroot: the counterpart is, under the same
+# name, for the Fuchsia build. The module is still built for Zircon's own
+# programs.
+ifeq ($(LEGACY_ULIB),1)
+ifneq ($(wildcard system/legacy/$(patsubst system/%,%,$(MODULE_SRCDIR))/rules.mk),)
+MODULE_PACKAGE :=
+MODULE_EXPORT :=
+endif
+endif
+
 # Catch the "defined a module twice" failure case as soon
 # as possible, so it's easier to understand.
 ifneq ($(filter $(MODULE),$(DUPMODULES)),)
@@ -305,6 +317,7 @@ MODULE_HOST_LIBS :=
 MODULE_HOST_SYSLIBS :=
 MODULE_GROUP :=
 MODULE_PACKAGE :=
+MODULE_PACKAGE_NAME :=
 MODULE_PACKAGE_SRCS :=
 MODULE_PACKAGE_INCS :=
 MODULE_FIRMWARE :=

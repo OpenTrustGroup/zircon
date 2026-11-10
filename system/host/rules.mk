@@ -23,3 +23,8 @@ HOSTAPPS := \
 	$(LOCAL_DIR)/zbi/rules.mk \
 
 include $(HOSTAPPS)
+
+# With LEGACY_ULIB, also the April 2018 fidlc the Fuchsia build uses.
+ifeq ($(LEGACY_ULIB),1)
+include system/legacy/host/fidl/compiler/rules.mk
+endif

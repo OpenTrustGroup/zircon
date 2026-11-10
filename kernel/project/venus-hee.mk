@@ -94,4 +94,10 @@ MODULES += \
     third_party/ulib/linenoise \
     third_party/ulib/ngunwind \
 
+# With LEGACY_ULIB, the April 2018 libraries garnet uses (system/legacy),
+# which Zircon exports for the Fuchsia build in place of its own.
+ifeq ($(LEGACY_ULIB),1)
+MODULES += $(patsubst %/rules.mk,%,$(wildcard system/legacy/ulib/*/rules.mk))
+endif
+
 EXTRA_BUILDDEPS += $(USER_BOOTDATA)

@@ -23,6 +23,10 @@ MODULES += $(patsubst %/rules.mk,%,$(wildcard system/dev/*/*/rules.mk))
 MODULES += $(patsubst %/rules.mk,%,$(wildcard system/fidl/*/rules.mk))
 MODULES += $(patsubst %/rules.mk,%,$(wildcard system/uapp/*/rules.mk))
 MODULES += $(patsubst %/rules.mk,%,$(wildcard system/ulib/*/rules.mk))
+# With LEGACY_ULIB, also the April 2018 libraries the Fuchsia build uses.
+ifeq ($(LEGACY_ULIB),1)
+MODULES += $(patsubst %/rules.mk,%,$(wildcard system/legacy/ulib/*/rules.mk))
+endif
 ifeq ($(call TOBOOL,$(DISABLE_UTEST)),false)
 MODULES += $(patsubst %/rules.mk,%,$(wildcard system/utest/*/rules.mk))
 endif
