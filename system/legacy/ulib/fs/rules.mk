@@ -25,10 +25,10 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/watcher.cpp \
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async.cpp \
-    system/ulib/async \
-    system/ulib/trace \
-    system/ulib/zx \
+    system/legacy/ulib/async.cpp \
+    system/legacy/ulib/async \
+    system/legacy/ulib/trace \
+    system/legacy/ulib/zx \
     system/ulib/zxcpp \
     system/ulib/fbl \
 
@@ -36,7 +36,7 @@ MODULE_LIBS := \
     system/ulib/c \
     system/ulib/fdio \
     system/ulib/fidl \
-    system/ulib/trace-engine \
+    system/legacy/ulib/trace-engine \
     system/ulib/zircon \
 
 MODULE_PACKAGE := src

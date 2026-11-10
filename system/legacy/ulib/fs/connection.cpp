@@ -13,6 +13,7 @@
 
 #include <fdio/debug.h>
 #include <fdio/io.fidl.h>
+#include "io-legacy.h"
 #include <fdio/io.h>
 #include <fdio/remoteio.h>
 #include <fdio/vfs.h>
@@ -855,6 +856,7 @@ zx_status_t Connection::HandleMessage(zxrio_msg_t* msg) {
         }
         }
         assert(false);
+        __FALLTHROUGH;
     }
     case ZXFIDL_GET_VMO:
     case ZXRIO_MMAP: {

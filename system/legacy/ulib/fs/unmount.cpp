@@ -5,6 +5,7 @@
 #include <fs/vfs.h>
 #include <fdio/debug.h>
 #include <fdio/io.fidl.h>
+#include "io-legacy.h"
 #include <fdio/remoteio.h>
 #include <fdio/vfs.h>
 

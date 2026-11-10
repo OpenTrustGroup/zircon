@@ -14,15 +14,15 @@ MODULE_SRCS = \
     $(LOCAL_DIR)/observer.cpp
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async.cpp \
-    system/ulib/async \
-    system/ulib/zx \
+    system/legacy/ulib/async.cpp \
+    system/legacy/ulib/async \
+    system/legacy/ulib/zx \
     system/ulib/fbl
 
 MODULE_LIBS := \
     system/ulib/c \
     system/ulib/zircon \
-    system/ulib/trace-engine
+    system/legacy/ulib/trace-engine
 
 MODULE_PACKAGE := src
 

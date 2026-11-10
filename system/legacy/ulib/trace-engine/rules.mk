@@ -14,12 +14,12 @@ MODULE_SRCS = \
     $(LOCAL_DIR)/nonce.cpp
 
 MODULE_EXPORT := so
-MODULE_SO_NAME := trace-engine
+MODULE_SO_NAME := trace-engine-legacy
 
 MODULE_STATIC_LIBS := \
-    system/ulib/async.cpp \
-    system/ulib/async \
-    system/ulib/zx \
+    system/legacy/ulib/async.cpp \
+    system/legacy/ulib/async \
+    system/legacy/ulib/zx \
     system/ulib/zxcpp \
     system/ulib/fbl
 
