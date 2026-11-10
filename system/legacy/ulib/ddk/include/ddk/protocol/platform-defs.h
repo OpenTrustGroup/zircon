@@ -81,4 +81,45 @@ __BEGIN_CDECLS;
 
 #define PDEV_DID_IMX_GPIO           1
 
+// MediaTek. Boards' bootdata carries these IDs (build/bootfs/BUILD.gn), and
+// garnet's programs name some platform devices by them (guest_manager opens
+// /dev/sys/platform/00:00:f), so they keep the values garnet was written
+// against.
+#define PDEV_VID_MTK                100
+#define PDEV_PID_MT8675             11
+#define PDEV_PID_MT8678             20
+#define PDEV_PID_MT8676             21
+#define PDEV_PID_MT8668             22
+
+#define PDEV_DID_GRT_UFS            1   // UFS host controller
+#define PDEV_DID_GRT_WDT            2   // Watchdog
+#define PDEV_DID_GRT_RAMFB          3   // RAM framebuffer
+#define PDEV_DID_GRT_FRAMEBUFFER    4   // Framebuffer
+#define PDEV_DID_GRT_SPI            5   // SPI controller
+#define PDEV_DID_GRT_GPIO           6   // GPIO controller
+#define PDEV_DID_GRT_MONITOR        7   // Monitor
+#define PDEV_DID_GRT_EINT           8   // External interrupt controller
+#define PDEV_DID_GRT_RTC            9   // Real-time clock
+#define PDEV_DID_GRT_GUEST_MEMORY_ALLOCATOR 15  // Guest memory allocator
+
+#define PDEV_DID_GRT_DISP           3   // Display controller
+
+// GoldenRiver's MediaTek ARMv8 boards.
+#define PDEV_VID_GRT_MTKV8          100
+
+// Qualcomm
+#define PDEV_VID_QCOM               101
+
+// Nebula's own platform devices.
+#define PDEV_VID_GRT                0x545247 // 'GRT'
+#define PDEV_PID_NBL                0x4c424e // 'NBL'
+#define PDEV_DID_NBL_BOARD          4   // Board; 3 is the kernel PCI device
+#define PDEV_DID_NBL_DISPLAY        5   // Display controller
+#define PDEV_DID_NBL_TOUCH          6   // Touch controller
+#define PDEV_DID_NBL_DRVTEST        7   // Driver API test device
+
+#define PDEV_FSL_IMX1_I2C           0x1000
+#define PDEV_FSL_IMX21_I2C          0x1001
+#define PDEV_QEMU_ECHO_I2C          0xF000
+
 __END_CDECLS;

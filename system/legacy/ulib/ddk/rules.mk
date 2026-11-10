@@ -15,7 +15,7 @@ MODULE_SRCS += \
 
 MODULE_STATIC_LIBS := system/ulib/pretty system/ulib/sync
 
-MODULE_EXPORT := a
+MODULE_PACKAGE := static
 
 include make/module.mk
 
@@ -23,9 +23,9 @@ include make/module.mk
 #
 # ddk-test
 #
-MODULE := $(LOCAL_DIR).ddk-test
+MODULE := $(LOCAL_DIR).ddk-legacy-test
 
-MODULE_NAME := ddk-test
+MODULE_NAME := ddk-legacy-test
 
 MODULE_TYPE := drivertest
 
@@ -36,7 +36,7 @@ MODULE_SRCS := \
     $(TEST_DIR)/ddk-test-binding.c \
     $(TEST_DIR)/usb-request-test.c \
 
-MODULE_STATIC_LIBS := system/ulib/ddk system/ulib/sync
+MODULE_STATIC_LIBS := system/legacy/ulib/ddk system/ulib/sync
 
 MODULE_LIBS := \
     system/ulib/unittest \

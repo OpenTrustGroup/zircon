@@ -75,6 +75,9 @@ typedef struct {
     zx_status_t (*device_add)(void* ctx, const pbus_dev_t* dev, uint32_t flags);
     zx_status_t (*device_enable)(void* ctx, uint32_t vid, uint32_t pid, uint32_t did, bool enable);
     const char* (*get_board_name)(void* ctx);
+    void (*get_fdt)(void* ctx, void** out_fdt);
+    zx_status_t (*get_boot_item)(void* ctx, uint32_t type, void* out, size_t capacity,
+                                 size_t* actual);
 } platform_bus_protocol_ops_t;
 
 typedef struct {
@@ -107,6 +110,20 @@ static inline zx_status_t pbus_device_enable(platform_bus_protocol_t* pbus, uint
 
 static inline const char* pbus_get_board_name(platform_bus_protocol_t* pbus) {
     return pbus->ops->get_board_name(pbus->ctx);
+}
+
+// Returns the flattened device tree the platform bus loaded from bootdata, or
+// NULL in "out_fdt" if there is none. The platform bus owns the memory.
+static inline void pbus_get_fdt(platform_bus_protocol_t* pbus, void** out_fdt) {
+    pbus->ops->get_fdt(pbus->ctx, out_fdt);
+}
+
+// Copies the boot item of the given bootdata "type" into "out". "actual"
+// receives the size of the item; pass a NULL "out" or a zero "capacity" to
+// query that size, in which case ZX_ERR_BUFFER_TOO_SMALL is returned.
+static inline zx_status_t pbus_get_boot_item(platform_bus_protocol_t* pbus, uint32_t type,
+                                             void* out, size_t capacity, size_t* actual) {
+    return pbus->ops->get_boot_item(pbus->ctx, type, out, capacity, actual);
 }
 
 __END_CDECLS;

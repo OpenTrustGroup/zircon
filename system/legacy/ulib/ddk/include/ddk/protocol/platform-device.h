@@ -31,12 +31,38 @@ typedef struct {
     uint32_t reserved[8];
 } pdev_device_info_t;
 
+// Interrupt description returned by pdev_get_irq_info(). The fields mirror
+// pbus_irq_t.
+typedef struct {
+    uint32_t irq;
+    uint32_t mode;  // ZX_INTERRUPT_MODE_* flags
+} pdev_irq_t;
+
+// MMIO region description returned by pdev_get_mmio_info(). The fields mirror
+// pbus_mmio_t.
+typedef struct {
+    zx_paddr_t base;
+    size_t length;
+} pdev_mmio_t;
+
+// I2C channel description returned by pdev_get_i2c_channels_info(). The
+// fields mirror pbus_i2c_channel_t.
+typedef struct {
+    uint32_t bus_id;
+    uint16_t address;
+} pdev_i2c_channel_t;
+
 typedef struct {
     zx_status_t (*map_mmio)(void* ctx, uint32_t index, uint32_t cache_policy, void** out_vaddr,
                             size_t* out_size, zx_handle_t* out_handle);
     zx_status_t (*map_interrupt)(void* ctx, uint32_t index, zx_handle_t* out_handle);
     zx_status_t (*get_bti)(void* ctx, uint32_t index, zx_handle_t* out_handle);
     zx_status_t (*get_device_info)(void* ctx, pdev_device_info_t* out_info);
+    zx_status_t (*get_env_info)(void* ctx, const char* key, char* out_val);
+    zx_status_t (*get_irq_info)(void* ctx, uint32_t index, pdev_irq_t* out_irq);
+    zx_status_t (*get_mmio_info)(void* ctx, uint32_t index, pdev_mmio_t* out_mmio);
+    zx_status_t (*get_i2c_channels_info)(void* ctx, uint32_t index,
+                                         pdev_i2c_channel_t* out_i2c_channel);
 } platform_device_protocol_ops_t;
 
 typedef struct {
@@ -67,6 +93,34 @@ static inline zx_status_t pdev_get_bti(platform_device_protocol_t* pdev, uint32_
 static inline zx_status_t pdev_get_device_info(platform_device_protocol_t* pdev,
                                                pdev_device_info_t* out_info) {
     return pdev->ops->get_device_info(pdev->ctx, out_info);
+}
+
+// Looks up "key" in the environment of the platform bus devhost and copies
+// its value into "out_val", which must hold at least PAGE_SIZE bytes.
+static inline zx_status_t pdev_get_env_info(platform_device_protocol_t* pdev, const char* key,
+                                            char* out_val) {
+    return pdev->ops->get_env_info(pdev->ctx, key, out_val);
+}
+
+// Returns the interrupt number and mode of the IRQ at "index", without
+// creating an interrupt handle.
+static inline zx_status_t pdev_get_irq_info(platform_device_protocol_t* pdev, uint32_t index,
+                                            pdev_irq_t* out_irq) {
+    return pdev->ops->get_irq_info(pdev->ctx, index, out_irq);
+}
+
+// Returns the physical base and length of the MMIO region at "index",
+// without mapping it.
+static inline zx_status_t pdev_get_mmio_info(platform_device_protocol_t* pdev, uint32_t index,
+                                             pdev_mmio_t* out_mmio) {
+    return pdev->ops->get_mmio_info(pdev->ctx, index, out_mmio);
+}
+
+// Returns the bus ID and address of the I2C channel at "index".
+static inline zx_status_t pdev_get_i2c_channels_info(platform_device_protocol_t* pdev,
+                                                     uint32_t index,
+                                                     pdev_i2c_channel_t* out_i2c_channel) {
+    return pdev->ops->get_i2c_channels_info(pdev->ctx, index, out_i2c_channel);
 }
 
 // MMIO mapping helpers
