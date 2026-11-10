@@ -28,20 +28,33 @@ public:
         return *this;
     }
 
+    // Pinning without a pinned memory token, and unpinning by address, are
+    // not supported: this kernel's pins are released through their token
+    // (pin_new).
     zx_status_t pin(uint32_t options, const vmo& vmo, uint64_t offset, uint64_t size,
                     zx_paddr_t* addrs, size_t addrs_count) const {
-        return zx_bti_pin(get(), options, vmo.get(), offset, size, addrs, addrs_count);
+        return ZX_ERR_NOT_SUPPORTED;
     }
 
     zx_status_t unpin(zx_paddr_t base) const {
-        return zx_bti_unpin(get(), base);
+        return ZX_ERR_NOT_SUPPORTED;
     }
 
     zx_status_t pin_new(uint32_t options, const vmo& vmo, uint64_t offset, uint64_t size,
                         zx_paddr_t* addrs, size_t addrs_count, pmt* pmt) const {
-        return zx_bti_pin_new(get(), options, vmo.get(), offset, size, addrs, addrs_count,
-                              pmt->reset_and_get_address());
+        return zx_bti_pin(get(), options, vmo.get(), offset, size, addrs, addrs_count,
+                          pmt->reset_and_get_address());
     }
+
+    // Hardware page tables and attaching to an IOMMU's translation are not
+    // supported by this kernel's BTIs.
+    zx_status_t attach() const { return ZX_ERR_NOT_SUPPORTED; }
+    zx_status_t detach() const { return ZX_ERR_NOT_SUPPORTED; }
+    zx_status_t alloc_hwpt(const void* data, uint32_t data_len, uint32_t* hwpt_id) const {
+        return ZX_ERR_NOT_SUPPORTED;
+    }
+    zx_status_t attach_hwpt(uint32_t hwpt_id) const { return ZX_ERR_NOT_SUPPORTED; }
+    zx_status_t release_hwpt(uint32_t hwpt_id) const { return ZX_ERR_NOT_SUPPORTED; }
 };
 
 using unowned_bti = const unowned<bti>;
