@@ -181,7 +181,9 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
     vcpu->gich_state_.num_lrs = gic_get_num_lrs();
     vcpu->gich_state_.num_aprs = gic_get_num_aprs();
     vcpu->gich_state_.vmcr = gic_default_gich_vmcr();
-    vcpu->gich_state_.elrsr = gic_read_gich_elrsr();
+    // All list registers start empty. The hardware's register describes the
+    // last vCPU to run on this CPU, possibly another guest's.
+    vcpu->gich_state_.elrsr = (1ul << vcpu->gich_state_.num_lrs) - 1;
     vcpu->el2_state_->guest_state.system_state.elr_el2 = entry;
     vcpu->el2_state_->guest_state.system_state.spsr_el2 = kSpsrDaif | kSpsrEl1h;
     uint64_t mpidr = ARM64_READ_SYSREG(mpidr_el1);

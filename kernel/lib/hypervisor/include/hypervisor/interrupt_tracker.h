@@ -35,7 +35,9 @@ public:
         AutoSpinLock lock(&lock_);
         bool has_vector = bitmap_.GetOne(reverse(vector));
         if (has_vector) {
-            bitmap_.ClearOne(vector);
+            // The bitmap holds vectors reversed. Clearing `vector` itself left
+            // it pending, and it was popped and loaded a second time.
+            bitmap_.ClearOne(reverse(vector));
         }
         return has_vector;
     }

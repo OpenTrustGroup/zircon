@@ -157,24 +157,25 @@ static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_st
     // An interrupt in a list register wakes the guest, whatever it is, so do
     // not wait for the timer then. This only checked for the timer before, and
     // a guest that waited with a device interrupt pending slept until its next
-    // timer interrupt, or for good if it had none.
-    bool pending = gich_state->UsingListRegister();
-    bool enabled = guest_state->cntv_ctl_el0 & TimerControl::ENABLE;
-    bool masked = guest_state->cntv_ctl_el0 & TimerControl::IMASK;
-    if (pending || !enabled || masked) {
+    // timer interrupt, or for good if it had none. An interrupt still queued
+    // because the list registers were full counts too: its signal may already
+    // have been consumed, so a wait would not see it.
+    bool pending =
+        gich_state->UsingListRegister() || gich_state->interrupt_tracker.Pending();
+    if (pending) {
         thread_yield();
         return ZX_OK;
     }
 
-    timer_cancel_deadline(gich_state);
-    uint64_t cntpct_deadline = guest_state->cntv_cval_el0;
-    zx_time_t deadline = cntpct_to_zx_time(cntpct_deadline);
-    if (deadline <= current_time()) {
-        return gich_state->interrupt_tracker.Track(kTimerVector);
+    // Arm a host timer for the guest's deadline, or queue the guest's timer
+    // interrupt if the deadline has passed. With its timer off or masked, the
+    // guest waits for any other interrupt, as upstream does: returning to the
+    // guest at once made it spin on WFI and take the whole CPU, which every
+    // guest's first vCPU shares.
+    timer_maybe_interrupt(guest_state, gich_state);
+    if (gich_state->interrupt_tracker.Pending()) {
+        return ZX_OK;
     }
-
-    gich_state->timer_deadline.store(deadline);
-    timer_set_oneshot(&gich_state->timer, deadline, deadline_callback, gich_state);
     return gich_state->interrupt_tracker.Wait(nullptr);
 }
 
