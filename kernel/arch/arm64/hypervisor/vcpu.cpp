@@ -223,6 +223,7 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
         // IRQ even when no list register held one it could take, such as when
         // they held only an active interrupt, and the guest then read the
         // spurious ID.
+        timer_maybe_interrupt(guest_state, &gich_state_);
         gich_maybe_interrupt(&gich_state_);
         {
             AutoGich auto_gich(&gich_state_);

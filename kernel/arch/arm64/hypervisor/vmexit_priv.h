@@ -101,6 +101,10 @@ struct DataAbort {
 
 // clang-format on
 
+// Queues the guest's timer interrupt if its deadline has passed, or arms a
+// host timer for it otherwise. Called before each entry to the guest.
+void timer_maybe_interrupt(GuestState* guest_state, GichState* gich_state);
+
 zx_status_t vmexit_handler(uint64_t* hcr, GuestState* guest_state, GichState* gich_state,
                            hypervisor::GuestPhysicalAddressSpace* gpas, hypervisor::TrapMap* traps,
                            zx_port_packet_t* packet);

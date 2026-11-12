@@ -7,6 +7,7 @@
 #pragma once
 
 #include <arch/arm64/el2_state.h>
+#include <fbl/atomic.h>
 #include <fbl/ref_ptr.h>
 #include <fbl/unique_ptr.h>
 #include <hypervisor/guest_physical_address_space.h>
@@ -63,6 +64,9 @@ private:
 struct GichState {
     // Timer for ARM generic timer.
     timer_t timer;
+    // The deadline `timer` is armed for, or 0 once it has fired or been
+    // cancelled.
+    fbl::atomic<zx_time_t> timer_deadline{0};
     // Tracks pending interrupts.
     hypervisor::InterruptTracker<kNumInterrupts> interrupt_tracker;
     // Tracks active interrupts.

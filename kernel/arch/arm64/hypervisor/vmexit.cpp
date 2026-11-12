@@ -82,10 +82,67 @@ static void next_pc(GuestState* guest_state) {
     guest_state->system_state.elr_el2 += 4;
 }
 
+// While the guest is still handling a timer interrupt, how soon to look at
+// its deadline again if it has not moved it yet.
+static constexpr zx_duration_t kTimerRecheck = ZX_MSEC(1);
+
 static void deadline_callback(timer_t* timer, zx_time_t now, void* arg) {
     auto gich_state = static_cast<GichState*>(arg);
+    gich_state->timer_deadline.store(0);
     __UNUSED zx_status_t status = gich_state->interrupt_tracker.Interrupt(kTimerVector, nullptr);
     DEBUG_ASSERT(status == ZX_OK);
+}
+
+// Only makes the vCPU exit: the host timer's interrupt does that on the CPU the
+// vCPU is pinned to, and the next pass decides whether the guest's interrupt
+// is due. Unlike deadline_callback, it injects nothing, since by now the guest
+// may have moved its deadline into the future.
+static void recheck_callback(timer_t* timer, zx_time_t now, void* arg) {
+    auto gich_state = static_cast<GichState*>(arg);
+    gich_state->timer_deadline.store(0);
+}
+
+static void timer_cancel_deadline(GichState* gich_state) {
+    timer_cancel(&gich_state->timer);
+    gich_state->timer_deadline.store(0);
+}
+
+void timer_maybe_interrupt(GuestState* guest_state, GichState* gich_state) {
+    bool enabled = guest_state->cntv_ctl_el0 & TimerControl::ENABLE;
+    bool masked = guest_state->cntv_ctl_el0 & TimerControl::IMASK;
+    if (!enabled || masked) {
+        timer_cancel_deadline(gich_state);
+        return;
+    }
+    zx_time_t deadline = cntpct_to_zx_time(guest_state->cntv_cval_el0);
+    zx_time_t now = current_time();
+    timer_callback callback = deadline_callback;
+    if (gich_state->active_interrupts.GetOne(kTimerVector)) {
+        // The guest is still handling its last timer interrupt, so do not
+        // raise it again. Its handler may move the deadline before it finishes,
+        // without an exit, so still make the vCPU exit to look again: at the
+        // new deadline, or shortly if the old one has not been moved yet.
+        if (deadline <= now) {
+            deadline = now + kTimerRecheck;
+            callback = recheck_callback;
+        }
+    } else if (deadline <= now) {
+        timer_cancel_deadline(gich_state);
+        gich_state->interrupt_tracker.Track(kTimerVector);
+        return;
+    }
+    // The guest's own timer interrupt never reaches the host: the host runs on
+    // the physical timer and leaves the virtual timer's interrupt masked. A
+    // host timer at the guest's deadline makes the vCPU exit then, here on the
+    // CPU it is pinned to, and the next pass injects the guest's interrupt.
+    // Most exits leave the deadline as it was, so keep a timer already armed
+    // for it.
+    if (gich_state->timer_deadline.load() == deadline) {
+        return;
+    }
+    timer_cancel(&gich_state->timer);
+    gich_state->timer_deadline.store(deadline);
+    timer_set_oneshot(&gich_state->timer, deadline, callback, gich_state);
 }
 
 static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_state,
@@ -109,13 +166,14 @@ static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_st
         return ZX_OK;
     }
 
-    timer_cancel(&gich_state->timer);
+    timer_cancel_deadline(gich_state);
     uint64_t cntpct_deadline = guest_state->cntv_cval_el0;
     zx_time_t deadline = cntpct_to_zx_time(cntpct_deadline);
     if (deadline <= current_time()) {
         return gich_state->interrupt_tracker.Track(kTimerVector);
     }
 
+    gich_state->timer_deadline.store(deadline);
     timer_set_oneshot(&gich_state->timer, deadline, deadline_callback, gich_state);
     return gich_state->interrupt_tracker.Wait(nullptr);
 }
