@@ -1032,19 +1032,28 @@ zx_status_t ArmArchVmAspace::Destroy() {
 
     // XXX make sure it's not mapped
 
-    vm_page_t* page = paddr_to_vm_page(tt_phys_);
-    DEBUG_ASSERT(page);
-    pmm_free_page(page);
-
+    // Flush before the root table is freed: until then, cached walks may still
+    // reach it.
     if (flags_ & ARCH_ASPACE_FLAG_GUEST) {
         paddr_t vttbr = arm64_vttbr(asid_, tt_phys_);
         __UNUSED zx_status_t status = arm64_el2_tlbi_vmid(vttbr);
         DEBUG_ASSERT(status == ZX_OK);
     } else {
-        ARM64_TLBI(ASIDE1IS, asid_);
+        // The ASID goes in bits 63:48 of the operand, as for the other TLB
+        // operations here. Passing it as is flushed ASID 0 instead. A
+        // broadcast flush is complete only after a DSB, so one goes after it
+        // as well as before, as upstream does, before the ASID and the table
+        // can be reused.
+        DSB;
+        ARM64_TLBI(ASIDE1IS, (uint64_t)asid_ << 48);
+        DSB;
         asid.Free(asid_);
         asid_ = MMU_ARM64_UNUSED_ASID;
     }
+
+    vm_page_t* page = paddr_to_vm_page(tt_phys_);
+    DEBUG_ASSERT(page);
+    pmm_free_page(page);
 
     return ZX_OK;
 }

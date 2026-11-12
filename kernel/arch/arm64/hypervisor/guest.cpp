@@ -64,6 +64,9 @@ Guest::Guest(uint8_t vmid)
     : vmid_(vmid) {}
 
 Guest::~Guest() {
+    // Tear the guest's address space down, and with it flush the guest's
+    // translations for this VMID, before another guest can be given the VMID.
+    gpas_.reset();
     free_vmid(vmid_);
 }
 
