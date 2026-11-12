@@ -92,6 +92,12 @@ private:
 // wake waiters. Wait() decrements when a permit is available, otherwise blocks
 // until Post() signals. This is sufficient for the page queues, where the
 // semaphore is posted by the lru thread and waited on by the aging thread.
+//
+// It lives in a namespace of its own: object/semaphore.h defines a global
+// Semaphore as well, and two global classes of one name are one class to the
+// linker, which could bind an out-of-line member of either to the other.
+namespace page_queues_shim {
+
 class Semaphore {
 public:
     explicit Semaphore(int64_t initial_count = 0) : count_(initial_count) {
@@ -135,5 +141,12 @@ private:
     ktl::atomic<int64_t> count_;
     event_t event_;
 };
+
+} // namespace page_queues_shim
+
+// page_queues.h keeps upstream's spelling, so bring the name back. This fixes
+// only the link-level clash: one file still cannot include both this header
+// and object/semaphore.h.
+using page_queues_shim::Semaphore;
 
 #endif  // ZIRCON_KERNEL_VM_INCLUDE_VM_PAGE_QUEUES_SHIMS_H_
