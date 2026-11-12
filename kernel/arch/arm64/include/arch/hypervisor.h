@@ -78,6 +78,12 @@ struct GichState {
     // priority to the next guest on the same CPU, which then took no interrupt.
     uint32_t num_aprs;
     uint32_t apr[8] = {};
+
+    // Returns whether a list register holds a pending or active interrupt.
+    bool UsingListRegister() const {
+        const uint64_t all_free = (1ul << num_lrs) - 1;
+        return (elrsr & all_free) != all_free;
+    }
 };
 
 // Loads a GICH within a given scope.

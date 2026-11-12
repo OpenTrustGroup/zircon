@@ -97,7 +97,11 @@ static zx_status_t handle_wfi_wfe_instruction(uint32_t iss, GuestState* guest_st
         return ZX_OK;
     }
 
-    bool pending = gich_state->active_interrupts.GetOne(kTimerVector);
+    // An interrupt in a list register wakes the guest, whatever it is, so do
+    // not wait for the timer then. This only checked for the timer before, and
+    // a guest that waited with a device interrupt pending slept until its next
+    // timer interrupt, or for good if it had none.
+    bool pending = gich_state->UsingListRegister();
     bool enabled = guest_state->cntv_ctl_el0 & TimerControl::ENABLE;
     bool masked = guest_state->cntv_ctl_el0 & TimerControl::IMASK;
     if (pending || !enabled || masked) {

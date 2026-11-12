@@ -36,15 +36,27 @@ static uint64_t vmpidr_of(uint8_t vpid, uint64_t mpidr) {
     return (vpid - 1) | (mpidr & 0xffffff00fe000000);
 }
 
-static bool gich_maybe_interrupt(GichState* gich_state) {
+// Makes a vector that is in a list register pending there as well. A vector
+// that is only active becomes pending and active, so the guest sees it again
+// once it finishes the active one.
+static void gich_set_pending(GichState* gich_state, uint32_t vector) {
+    for (uint32_t i = 0; i < gich_state->num_lrs; i++) {
+        if ((gich_state->elrsr & (1ul << i)) == 0 &&
+            gic_get_vector_from_lr(gich_state->lr[i]) == vector) {
+            gich_state->lr[i] |= gic_get_lr_from_vector(vector);
+        }
+    }
+}
+
+// Moves pending interrupts into free list registers. The virtual CPU interface
+// signals an interrupt held in a list register to the guest by itself.
+static void gich_maybe_interrupt(GichState* gich_state) {
     uint64_t elrsr = gich_state->elrsr;
     if (elrsr == 0) {
-        // All list registers are in use, therefore return and indicate that we
-        // should raise an IRQ.
-        return true;
+        // All list registers are in use.
+        return;
     }
     zx_status_t status;
-    uint32_t pending = 0;
     uint32_t vector = kTimerVector;
     if (gich_state->interrupt_tracker.TryPop(vector)) {
         // We give timer interrupts precedence over all others. If we find a
@@ -58,9 +70,10 @@ static bool gich_maybe_interrupt(GichState* gich_state) {
             break;
         }
     has_timer:
-        pending++;
         if (gich_state->active_interrupts.GetOne(vector)) {
-            // Skip an interrupt if it was already active.
+            // The vector is already in a list register. Dropping it there
+            // would lose it if the guest is still handling the last one.
+            gich_set_pending(gich_state, vector);
             continue;
         }
         uint32_t lr_index = __builtin_ctzl(elrsr);
@@ -68,18 +81,18 @@ static bool gich_maybe_interrupt(GichState* gich_state) {
         gich_state->lr[lr_index] = lr;
         elrsr &= ~(1u << lr_index);
     }
-    // If there are pending interrupts, indicate that we should raise an IRQ.
-    return pending > 0;
 }
 
-static bool gich_active_interrupts(GichState* gich_state) {
+static void gich_active_interrupts(GichState* gich_state) {
     gich_state->active_interrupts.ClearAll();
-    const uint32_t lr_limit = __builtin_ctzl(gich_state->elrsr);
-    for (uint32_t i = 0; i < lr_limit; i++) {
+    // A list register in use need not follow another in use, so check each.
+    for (uint32_t i = 0; i < gich_state->num_lrs; i++) {
+        if (gich_state->elrsr & (1ul << i)) {
+            continue;
+        }
         uint32_t vector = gic_get_vector_from_lr(gich_state->lr[i]);
         gich_state->active_interrupts.SetOne(vector);
     }
-    return lr_limit > 0;
 }
 
 static VcpuMeta vmexit_interrupt_ktrace_meta(uint32_t misr) {
@@ -202,15 +215,15 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
     const ArchVmAspace& aspace = guest_->AddressSpace()->aspace()->arch_aspace();
     zx_paddr_t vttbr = arm64_vttbr(aspace.arch_asid(), aspace.arch_table_phys());
     GuestState* guest_state = &el2_state_->guest_state;
-    bool force_virtual_interrupt = false;
     zx_status_t status;
     do {
-        uint64_t curr_hcr = hcr_;
         uint32_t misr = 0;
-        if (gich_maybe_interrupt(&gich_state_) || force_virtual_interrupt) {
-            curr_hcr |= HCR_EL2_VI;
-            force_virtual_interrupt = false;
-        }
+        // Pending interrupts reach the guest through the list registers alone,
+        // as upstream does. Raising HCR_EL2.VI as well made the guest take an
+        // IRQ even when no list register held one it could take, such as when
+        // they held only an active interrupt, and the guest then read the
+        // spurious ID.
+        gich_maybe_interrupt(&gich_state_);
         {
             AutoGich auto_gich(&gich_state_);
 
@@ -227,7 +240,7 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
 
             ktrace(TAG_VCPU_ENTER, 0, 0, 0, 0);
             running_.store(true);
-            status = arm64_el2_resume(vttbr, el2_state_.PhysicalAddress(), curr_hcr);
+            status = arm64_el2_resume(vttbr, el2_state_.PhysicalAddress(), hcr_);
             running_.store(false);
 
             // If we enabled underflow interrupt before we entered the guest we disable it
@@ -239,16 +252,13 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
                 gic_write_gich_hcr(gich_hcr & ~kGichHcrUie);
             }
         }
-        bool has_active_interrupt = gich_active_interrupts(&gich_state_);
+        gich_active_interrupts(&gich_state_);
         if (status == ZX_ERR_NEXT) {
             // We received a physical interrupt. If it was due to the thread
             // being killed, then we should exit with an error, otherwise return
             // to the guest.
             ktrace_vcpu(TAG_VCPU_EXIT, vmexit_interrupt_ktrace_meta(misr));
             status = thread_->signals & THREAD_SIGNAL_KILL ? ZX_ERR_CANCELED : ZX_OK;
-            // If there were active interrupts when the physical interrupt
-            // occurred, raise a virtual interrupt when we re-enter the guest.
-            force_virtual_interrupt = has_active_interrupt;
         } else if (status == ZX_OK) {
             status = vmexit_handler(&hcr_, guest_state, &gich_state_, guest_->AddressSpace(),
                                     guest_->Traps(), packet);
