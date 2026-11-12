@@ -121,6 +121,14 @@ InterruptCommandRegister::InterruptCommandRegister(uint32_t hi, uint32_t lo) {
     vector = static_cast<uint8_t>(BITS(lo, 7, 0));
 }
 
+// Trap::Queue now passes on a suspend's retry status. The guest cannot be
+// stepped back here to repeat the access, as arm64 does: Queue may have
+// blocked, and the VMCS loaded now may be another vCPU's. Keep the error a
+// failed queue returned before.
+static zx_status_t queue_status(zx_status_t status) {
+    return status == ZX_ERR_INTERNAL_INTR_RETRY ? ZX_ERR_NO_MEMORY : status;
+}
+
 static void next_rip(const ExitInfo& exit_info, AutoVmcs* vmcs) {
     vmcs->Write(VmcsFieldXX::GUEST_RIP, exit_info.guest_rip + exit_info.exit_instruction_length);
 
@@ -448,7 +456,7 @@ static zx_status_t handle_io_instruction(const ExitInfo& exit_info, AutoVmcs* vm
     } else {
         memcpy(packet->guest_io.data, &guest_state->rax, io_info.access_size);
         if (trap->HasPort())
-            return trap->Queue(*packet, vmcs);
+            return queue_status(trap->Queue(*packet, vmcs));
         // If there was no port for the range, then return to user-space.
     }
 
@@ -869,7 +877,7 @@ static zx_status_t handle_trap(const ExitInfo& exit_info, AutoVmcs* vmcs, bool r
         packet->guest_bell.addr = guest_paddr;
         if (!trap->HasPort())
             return ZX_ERR_BAD_STATE;
-        return trap->Queue(*packet, vmcs);
+        return queue_status(trap->Queue(*packet, vmcs));
     case ZX_GUEST_TRAP_MEM: {
         *packet = {};
         packet->key = trap->key();

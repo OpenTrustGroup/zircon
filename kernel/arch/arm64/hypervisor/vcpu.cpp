@@ -219,6 +219,16 @@ zx_status_t Vcpu::Resume(zx_port_packet_t* packet) {
     GuestState* guest_state = &el2_state_->guest_state;
     zx_status_t status;
     do {
+        // Before each entry, as upstream does: a kill ends the vCPU, and a
+        // suspend returns to user space so that it can take effect, after
+        // which zx_vcpu_resume retries. Either may have arrived while this
+        // thread was in the host, not only as the interrupt that made it exit.
+        if (thread_->signals & THREAD_SIGNAL_KILL) {
+            return ZX_ERR_CANCELED;
+        }
+        if (thread_->signals & THREAD_SIGNAL_SUSPEND) {
+            return ZX_ERR_INTERNAL_INTR_RETRY;
+        }
         uint32_t misr = 0;
         // Pending interrupts reach the guest through the list registers alone,
         // as upstream does. Raising HCR_EL2.VI as well made the guest take an

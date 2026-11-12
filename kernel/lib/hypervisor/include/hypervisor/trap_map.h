@@ -21,7 +21,7 @@ public:
     BlockingPortAllocator();
 
     zx_status_t Init() TA_NO_THREAD_SAFETY_ANALYSIS;
-    PortPacket* AllocBlocking();
+    zx_status_t AllocBlocking(PortPacket** port_packet);
     virtual void Free(PortPacket* port_packet) override;
 
 private:

@@ -23,13 +23,16 @@ zx_status_t BlockingPortAllocator::Init() {
     return arena_.Init("hypervisor-packets", kMaxPacketsPerRange);
 }
 
-PortPacket* BlockingPortAllocator::AllocBlocking() {
+zx_status_t BlockingPortAllocator::AllocBlocking(PortPacket** port_packet) {
     ktrace_vcpu(TAG_VCPU_BLOCK, VCPU_PORT);
     zx_status_t status = semaphore_.Wait(ZX_TIME_INFINITE, nullptr);
     ktrace_vcpu(TAG_VCPU_UNBLOCK, VCPU_PORT);
+    // The wait's own status goes back to the caller: a suspend is a retry, not
+    // a lack of memory.
     if (status != ZX_OK)
-        return nullptr;
-    return Alloc();
+        return status;
+    *port_packet = Alloc();
+    return *port_packet == nullptr ? ZX_ERR_NO_MEMORY : ZX_OK;
 }
 
 PortPacket* BlockingPortAllocator::Alloc() {
@@ -68,11 +71,12 @@ zx_status_t Trap::Queue(const zx_port_packet_t& packet, StateInvalidator* invali
         invalidator->Invalidate();
     if (port_ == nullptr)
         return ZX_ERR_NOT_FOUND;
-    PortPacket* port_packet = port_allocator_.AllocBlocking();
-    if (port_packet == nullptr)
-        return ZX_ERR_NO_MEMORY;
+    PortPacket* port_packet;
+    zx_status_t status = port_allocator_.AllocBlocking(&port_packet);
+    if (status != ZX_OK)
+        return status;
     port_packet->packet = packet;
-    zx_status_t status = port_->Queue(port_packet, ZX_SIGNAL_NONE, 0);
+    status = port_->Queue(port_packet, ZX_SIGNAL_NONE, 0);
     if (status != ZX_OK)
         port_allocator_.Free(port_packet);
     return status;

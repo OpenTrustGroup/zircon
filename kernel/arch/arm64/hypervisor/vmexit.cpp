@@ -446,7 +446,13 @@ static zx_status_t handle_data_abort(uint32_t iss, GuestState* guest_state,
         packet->guest_bell.addr = guest_paddr;
         if (!trap->HasPort())
             return ZX_ERR_BAD_STATE;
-        return trap->Queue(*packet, nullptr);
+        status = trap->Queue(*packet, nullptr);
+        if (status == ZX_ERR_INTERNAL_INTR_RETRY) {
+            // Nothing was queued: step back so that the guest rings the bell
+            // again when zx_vcpu_resume retries.
+            guest_state->system_state.elr_el2 -= 4;
+        }
+        return status;
     case ZX_GUEST_TRAP_MEM:
         if (!data_abort.valid)
             return ZX_ERR_IO_DATA_INTEGRITY;

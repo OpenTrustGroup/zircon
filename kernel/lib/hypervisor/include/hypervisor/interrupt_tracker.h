@@ -89,7 +89,9 @@ public:
             zx_status_t status = event_wait_deadline(&event_, ZX_TIME_INFINITE, true);
             if (status != ZX_OK) {
                 ktrace_vcpu(TAG_VCPU_UNBLOCK, VCPU_INTERRUPT);
-                return ZX_ERR_CANCELED;
+                // A suspend asks the thread to return to user space and retry,
+                // which zx_vcpu_resume does; it must not end the guest.
+                return status == ZX_ERR_INTERNAL_INTR_RETRY ? status : ZX_ERR_CANCELED;
             }
         } while (!Pending());
         ktrace_vcpu(TAG_VCPU_UNBLOCK, VCPU_INTERRUPT);
