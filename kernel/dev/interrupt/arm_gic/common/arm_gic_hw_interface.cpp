@@ -63,6 +63,14 @@ void gic_write_gich_lr(uint32_t idx, uint64_t val) {
     return gic_ops->write_gich_lr(idx, val);
 }
 
+uint32_t gic_read_gich_apr(uint32_t idx) {
+    return gic_ops->read_gich_apr(idx);
+}
+
+void gic_write_gich_apr(uint32_t idx, uint32_t val) {
+    return gic_ops->write_gich_apr(idx, val);
+}
+
 zx_status_t gic_get_gicv(paddr_t* gicv_paddr) {
     return gic_ops->get_gicv(gicv_paddr);
 }
@@ -77,4 +85,8 @@ uint32_t gic_get_vector_from_lr(uint64_t lr) {
 
 uint32_t gic_get_num_lrs() {
     return gic_ops->get_num_lrs();
+}
+
+uint32_t gic_get_num_aprs() {
+    return gic_ops->get_num_aprs();
 }

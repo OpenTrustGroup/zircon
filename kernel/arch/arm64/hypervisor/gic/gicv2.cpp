@@ -95,6 +95,19 @@ static uint32_t gicv2_get_vector_from_lr(uint64_t lr) {
     return lr & GICH_LR_VIRTUAL_ID_MASK;
 }
 
+static uint32_t gicv2_read_gich_apr(uint32_t idx) {
+    return gich->apr;
+}
+
+static void gicv2_write_gich_apr(uint32_t idx, uint32_t val) {
+    gich->apr = val;
+}
+
+// GICv2 has a single active priority register.
+static uint32_t gicv2_get_num_aprs() {
+    return 1;
+}
+
 static uint32_t gicv2_get_num_lrs() {
     return (gicv2_read_gich_vtr() & GICH_VTR_LIST_REGS_MASK) + 1;
 }
@@ -110,10 +123,13 @@ static const struct arm_gic_hw_interface_ops gic_hw_register_ops = {
     .read_gich_misr = gicv2_read_gich_misr,
     .read_gich_lr = gicv2_read_gich_lr,
     .write_gich_lr = gicv2_write_gich_lr,
+    .read_gich_apr = gicv2_read_gich_apr,
+    .write_gich_apr = gicv2_write_gich_apr,
     .get_gicv = gicv2_get_gicv,
     .get_lr_from_vector = gicv2_get_lr_from_vector,
     .get_vector_from_lr = gicv2_get_vector_from_lr,
     .get_num_lrs = gicv2_get_num_lrs,
+    .get_num_aprs = gicv2_get_num_aprs,
 };
 
 void gicv2_hw_interface_register() {

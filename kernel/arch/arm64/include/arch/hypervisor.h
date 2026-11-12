@@ -73,6 +73,11 @@ struct GichState {
     uint32_t vmcr;
     uint64_t elrsr;
     uint64_t lr[64] = {};
+    // The active priorities belong to the guest as much as the list registers
+    // do. Without them, a guest that acknowledged an interrupt left its running
+    // priority to the next guest on the same CPU, which then took no interrupt.
+    uint32_t num_aprs;
+    uint32_t apr[8] = {};
 };
 
 // Loads a GICH within a given scope.

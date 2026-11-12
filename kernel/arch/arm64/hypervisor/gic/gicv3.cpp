@@ -49,6 +49,18 @@ static void gicv3_write_gich_lr(uint32_t idx, uint64_t val) {
     arm64_el2_gicv3_write_gich_lr(val, idx);
 }
 
+// The active priority registers of group 0 come first, then those of group 1.
+// Each group has gicv3_get_num_aprs() / 2 of them.
+static uint32_t gicv3_apr_index(uint32_t idx);
+
+static uint32_t gicv3_read_gich_apr(uint32_t idx) {
+    return arm64_el2_gicv3_read_gich_apr(gicv3_apr_index(idx));
+}
+
+static void gicv3_write_gich_apr(uint32_t idx, uint32_t val) {
+    arm64_el2_gicv3_write_gich_apr(val, gicv3_apr_index(idx));
+}
+
 static zx_status_t gicv3_get_gicv(paddr_t* gicv_paddr) {
     // Check for presence of GICv3 virtualisation extensions.
     // We return ZX_ERR_NOT_FOUND since this API is used to get
@@ -70,6 +82,26 @@ static uint32_t gicv3_get_num_lrs() {
     return (gicv3_read_gich_vtr() & ICH_VTR_LIST_REGS_MASK) + 1;
 }
 
+// From ARM GIC v3/v4, Section 12.4.1: there are 2^(PREbits - 5) active
+// priority registers for each group, where PREbits is the number of virtual
+// preemption bits.
+static uint32_t gicv3_get_num_aprs() {
+    uint32_t pre_bits =
+        ((gicv3_read_gich_vtr() >> ICH_VTR_PRE_BITS_SHIFT) & ICH_VTR_PRE_BITS_MASK) + 1;
+    return 2u << (pre_bits - 5);
+}
+
+static uint32_t gicv3_apr_index(uint32_t idx) {
+    // Reading ICH_VTR_EL2 takes a call into EL2, so do it once. Every CPU
+    // reads the same value.
+    static uint32_t per_group = 0;
+    if (per_group == 0) {
+        per_group = gicv3_get_num_aprs() / 2;
+    }
+    // The EL2 accessors number ICH_AP0R0..3 as 0..3 and ICH_AP1R0..3 as 4..7.
+    return (idx / per_group) * 4 + idx % per_group;
+}
+
 static const struct arm_gic_hw_interface_ops gic_hw_register_ops = {
     .read_gich_hcr = gicv3_read_gich_hcr,
     .write_gich_hcr = gicv3_write_gich_hcr,
@@ -81,10 +113,13 @@ static const struct arm_gic_hw_interface_ops gic_hw_register_ops = {
     .read_gich_misr = gicv3_read_gich_misr,
     .read_gich_lr = gicv3_read_gich_lr,
     .write_gich_lr = gicv3_write_gich_lr,
+    .read_gich_apr = gicv3_read_gich_apr,
+    .write_gich_apr = gicv3_write_gich_apr,
     .get_gicv = gicv3_get_gicv,
     .get_lr_from_vector = gicv3_get_lr_from_vector,
     .get_vector_from_lr = gicv3_get_vector_from_lr,
     .get_num_lrs = gicv3_get_num_lrs,
+    .get_num_aprs = gicv3_get_num_aprs,
 };
 
 void gicv3_hw_interface_register() {

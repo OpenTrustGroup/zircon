@@ -14,6 +14,8 @@
 #define ICH_VMCR_VENG1            (1u << 1)
 #define ICH_VMCR_VPMR_MASK        (0xffu << 24)
 #define ICH_VTR_LIST_REGS_MASK    0x1f
+#define ICH_VTR_PRE_BITS_SHIFT    26
+#define ICH_VTR_PRE_BITS_MASK     0x7
 
 __BEGIN_CDECLS;
 

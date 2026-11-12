@@ -99,6 +99,9 @@ AutoGich::AutoGich(GichState* gich_state)
     for (uint32_t i = 0; i < gich_state_->num_lrs; i++) {
         gic_write_gich_lr(i, gich_state->lr[i]);
     }
+    for (uint32_t i = 0; i < gich_state_->num_aprs; i++) {
+        gic_write_gich_apr(i, gich_state_->apr[i]);
+    }
 }
 
 AutoGich::~AutoGich() {
@@ -109,6 +112,9 @@ AutoGich::~AutoGich() {
     gich_state_->elrsr = gic_read_gich_elrsr();
     for (uint32_t i = 0; i < gich_state_->num_lrs; i++) {
         gich_state_->lr[i] = gic_read_gich_lr(i);
+    }
+    for (uint32_t i = 0; i < gich_state_->num_aprs; i++) {
+        gich_state_->apr[i] = gic_read_gich_apr(i);
     }
     arch_enable_ints();
 }
@@ -160,6 +166,7 @@ zx_status_t Vcpu::Create(Guest* guest, zx_vaddr_t entry, fbl::unique_ptr<Vcpu>* 
     gic_write_gich_hcr(kGichHcrEn);
     vcpu->gich_state_.active_interrupts.Reset(kNumInterrupts);
     vcpu->gich_state_.num_lrs = gic_get_num_lrs();
+    vcpu->gich_state_.num_aprs = gic_get_num_aprs();
     vcpu->gich_state_.vmcr = gic_default_gich_vmcr();
     vcpu->gich_state_.elrsr = gic_read_gich_elrsr();
     vcpu->el2_state_->guest_state.system_state.elr_el2 = entry;
