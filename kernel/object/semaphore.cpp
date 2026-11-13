@@ -11,6 +11,7 @@
 #include <zircon/types.h>
 
 Semaphore::Semaphore(int64_t initial_count) : count_(initial_count) {
+    DEBUG_ASSERT(initial_count >= 0);
     wait_queue_init(&waitq_);
 }
 
@@ -19,38 +20,55 @@ Semaphore::~Semaphore() {
 }
 
 void Semaphore::Post() {
-    // If the count is or was negative then a thread is waiting for a resource,
-    // otherwise it's safe to just increase the count available with no downsides.
     AutoThreadLock lock;
-    if (unlikely(++count_ <= 0))
-        wait_queue_wake_one(&waitq_, true, ZX_OK);
+
+    // There may be waiters or a positive count, never both.
+    DEBUG_ASSERT(count_ == 0 || wait_queue_is_empty(&waitq_));
+
+    // Hand the post to a waiter if there is one. Counting it instead, and
+    // letting a waiter take it back out of a negative count, loses a wakeup:
+    // a waiter that times out leaves the wait queue at once but only gives
+    // back its decrement when it next runs, and a Post in between wakes
+    // nobody.
+    if (wait_queue_wake_one(&waitq_, true, ZX_OK) == 0) {
+        ++count_;
+    }
 }
 
 zx_status_t Semaphore::Wait(zx_time_t deadline, bool* was_blocked) {
     thread_t *current_thread = get_current_thread();
 
-     // If there are no resources available then we need to
-     // sit in the wait queue until sem_post adds some.
     zx_status_t ret = ZX_OK;
     bool block;
 
     {
         AutoThreadLock lock;
-        current_thread->interruptable = true;
-        block = --count_ < 0;
+        DEBUG_ASSERT(count_ == 0 || wait_queue_is_empty(&waitq_));
 
-        if (unlikely(block)) {
+        // Take a count if there is one. Otherwise sit in the wait queue until
+        // a Post releases us. A wait that times out or is interrupted took
+        // nothing, so there is nothing to give back.
+        block = count_ == 0;
+        if (likely(!block)) {
+            --count_;
+        } else {
+            current_thread->interruptable = true;
             ret = wait_queue_block(&waitq_, deadline);
-            if (ret < ZX_OK) {
-                if ((ret == ZX_ERR_TIMED_OUT) || (ret == ZX_ERR_INTERNAL_INTR_KILLED))
-                    count_++;
-            }
+            current_thread->interruptable = false;
         }
-
-        current_thread->interruptable = false;
     }
 
     if (was_blocked != nullptr)
         *was_blocked = block;
     return ret;
+}
+
+int64_t Semaphore::count() {
+    AutoThreadLock lock;
+    return count_;
+}
+
+int Semaphore::num_waiters() {
+    AutoThreadLock lock;
+    return waitq_.count;
 }
