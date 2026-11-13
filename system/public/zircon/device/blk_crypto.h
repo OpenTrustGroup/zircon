@@ -116,16 +116,6 @@ struct blk_crypto_profile_dev {
     };
 };
 
-// A hash list, a singly linked list whose nodes can unlink themselves.
-struct hlist_node {
-    struct hlist_node* next;
-    struct hlist_node** pprev;
-};
-
-struct hlist_head {
-    struct hlist_node* first;
-};
-
 // The idle-keyslot list is a zircon list.
 typedef list_node_t list_head;
 
@@ -136,45 +126,12 @@ struct blk_crypto_keyslot {
     _Atomic int slot_refs;
     // Links the slot into the profile's idle list while slot_refs is zero.
     list_node_t idle_slot_node;
-    // Links the slot into the profile's hash table while it holds a key.
-    struct hlist_node hash_node;
+    // Links the slot into its bucket of the profile's hash table while it
+    // holds a key; the buckets are zircon lists.
+    list_node_t hash_node;
     const struct blk_crypto_key* key;
     struct blk_crypto_profile* profile;
 };
-#endif
-
-#ifndef INIT_HLIST_HEAD
-#define INIT_HLIST_HEAD(head) ((head)->first = NULL)
-#endif
-
-static inline void hlist_add_head(struct hlist_node* node, struct hlist_head* head) {
-    node->next = head->first;
-    if (node->next) {
-        node->next->pprev = &node->next;
-    }
-    head->first = node;
-    node->pprev = &head->first;
-}
-
-static inline void hlist_del(struct hlist_node* node) {
-    if (node->pprev) {
-        *node->pprev = node->next;
-        if (node->next) {
-            node->next->pprev = node->pprev;
-        }
-    }
-    node->next = NULL;
-    node->pprev = NULL;
-}
-
-// Iterates over the entries of type |type| on a hash list, |member| naming the
-// struct hlist_node inside the entry.
-#ifndef hlist_for_each_entry
-#define hlist_entry_or_null(node, type, member) \
-    ((node) ? (type*)((uintptr_t)(node) - offsetof(type, member)) : (type*)NULL)
-#define hlist_for_each_entry(type, pos, head, member)                    \
-    for ((pos) = hlist_entry_or_null((head)->first, type, member); (pos); \
-         (pos) = hlist_entry_or_null((pos)->member.next, type, member))
 #endif
 
 // Hashes a pointer into |bits| bits with the 64-bit golden ratio multiplier.
@@ -187,5 +144,26 @@ static inline uint32_t hash_ptr(const void* ptr, unsigned int bits) {
 #define roundup_pow_of_two(n) \
     ((n) <= 1 ? 1UL : 1UL << (64 - __builtin_clzl((unsigned long)(n) - 1)))
 #endif
+
+// The base-2 logarithm of |n|, rounded down; |n| must be nonzero.
+#ifndef ilog2
+#define ilog2(n) (63 - __builtin_clzll((unsigned long long)(n)))
+#endif
+
+// What a storage driver calls on the profile, which the block crypto library
+// implements; the profile itself stays opaque to the driver.
+
+// Allocates a profile for |dev_profile|'s |num_slots| keyslots into
+// |*profile|.
+void blk_crypto_profile_init(struct blk_crypto_profile_dev* dev_profile,
+                             struct blk_crypto_profile** profile,
+                             uint16_t num_slots);
+
+// Programs every key the profile holds into the hardware again, after the
+// hardware lost its keyslots (a controller reset).
+void blk_crypto_reprogram_all_keys(struct blk_crypto_profile* profile);
+
+// The index of |slot| among its device's keyslots.
+unsigned int blk_crypto_keyslot_index(struct blk_crypto_keyslot* slot);
 
 __END_CDECLS
