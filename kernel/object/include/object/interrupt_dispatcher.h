@@ -47,12 +47,24 @@ protected:
     void Signal() {
         event_signal_etc(&event_, true, ZX_OK);
     }
-    void set_flags(uint32_t flags) { flags_ = flags; }
+    void set_flags(uint32_t flags) {
+        // The unlocked unmask excludes the locked one, and cannot be combined
+        // with a mask that runs under spinlock_ (see SendPacketLocked()).
+        ASSERT(!(flags & INTERRUPT_UNMASK_PREWAIT_UNLOCKED) ||
+               !(flags & (INTERRUPT_UNMASK_PREWAIT | INTERRUPT_MASK_POSTWAIT)));
+        flags_ = flags;
+    }
     bool SendPacketLocked(zx_time_t timestamp) TA_REQ(spinlock_);
     // Bits for Interrupt.flags
     static constexpr uint32_t INTERRUPT_VIRTUAL         = (1u << 0);
     static constexpr uint32_t INTERRUPT_UNMASK_PREWAIT  = (1u << 1);
     static constexpr uint32_t INTERRUPT_MASK_POSTWAIT   = (1u << 2);
+    // Like INTERRUPT_UNMASK_PREWAIT, but unmask once spinlock_ is released,
+    // for interrupts whose unmask may block (a PCI device's takes its mutex).
+    // As upstream; mutually exclusive with INTERRUPT_UNMASK_PREWAIT, and not
+    // to be combined with INTERRUPT_MASK_POSTWAIT, whose mask runs under
+    // spinlock_.
+    static constexpr uint32_t INTERRUPT_UNMASK_PREWAIT_UNLOCKED = (1u << 3);
 
 private:
     event_t event_;

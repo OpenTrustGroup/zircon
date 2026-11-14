@@ -50,7 +50,9 @@ zx_status_t PciInterruptDispatcher::Create(
 
     fbl::AutoLock lock(interrupt_dispatcher->get_lock());
 
-    interrupt_dispatcher->set_flags(INTERRUPT_UNMASK_PREWAIT);
+    // Unmasking takes the device's mutex, so not under the dispatcher's
+    // spinlock.
+    interrupt_dispatcher->set_flags(INTERRUPT_UNMASK_PREWAIT_UNLOCKED);
 
     // Register the interrupt
     zx_status_t status = interrupt_dispatcher->RegisterInterruptHandler();
