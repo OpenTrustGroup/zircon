@@ -63,6 +63,9 @@ typedef struct {
 static suspend_context_t suspend_ctx = {
     .devhosts = LIST_INITIAL_VALUE(suspend_ctx.devhosts),
 };
+// Counts the suspends started, so that a reply to, or the removal of a device
+// still owing, a suspend that failed is not counted against a newer one.
+static uint32_t suspend_gen;
 
 typedef struct {
     list_node_t node;
@@ -428,6 +431,11 @@ static void dc_handle_new_driver(void);
 #define WORK_IDLE 0
 #define WORK_DEVICE_ADDED 1
 #define WORK_DRIVER_ADDED 2
+#define WORK_SUSPEND_CONTINUE 3
+
+// Goes on with a suspend once removed devices were counted as suspended;
+// see dc_count_removed_suspend().
+static work_t suspend_work;
 
 static list_node_t list_pending_work = LIST_INITIAL_VALUE(list_pending_work);
 static list_node_t list_unbound_devices = LIST_INITIAL_VALUE(list_unbound_devices);
@@ -458,6 +466,16 @@ static void process_work(work_t* work) {
     }
     case WORK_DRIVER_ADDED: {
         dc_handle_new_driver();
+        break;
+    }
+    case WORK_SUSPEND_CONTINUE: {
+        // Take and drop a count, so the suspend goes on. Nothing can have been
+        // sent since the count reached zero, but the suspend may have failed
+        // since; a new suspend cancels the work.
+        if (dc_in_suspend() && (suspend_ctx.count == 0)) {
+            suspend_ctx.count += 1;
+            dc_continue_suspend(&suspend_ctx);
+        }
         break;
     }
     default:
@@ -675,6 +693,16 @@ static void dc_release_devhost(devhost_t* dh) {
         return;
     }
     log(INFO, "devcoord: destroy host %p\n", dh);
+    // A devhost that dies during a suspend is still on the suspend list, and
+    // may be the next one to suspend; take it off before it is freed. The list
+    // is emptied whenever a suspend ends, so a linked node is always current.
+    if (list_in_list(&dh->snode)) {
+        if (suspend_ctx.dh == dh) {
+            suspend_ctx.dh = list_next_type(&suspend_ctx.devhosts, &dh->snode,
+                                            devhost_t, snode);
+        }
+        list_delete(&dh->snode);
+    }
     devhost_t* parent = dh->parent;
     if (parent != NULL) {
         dh->parent = NULL;
@@ -853,6 +881,35 @@ static zx_status_t dc_make_visible(device_t* dev) {
     return ZX_OK;
 }
 
+// A suspend still pending on a device whose devhost is dying will never be
+// answered, and the suspend would wait for it forever. Count the device as
+// suspended instead, as upstream does once a device is removed, and go on with
+// the suspend from queued work once the removal is done: going on here could
+// suspend the next devhosts, or power off, with this one half torn down.
+static void dc_count_removed_suspend(device_t* dev) {
+    pending_t* pending;
+    pending_t* tmp;
+    list_for_every_entry_safe(&dev->pending, pending, tmp, pending_t, node) {
+        if (pending->op != PENDING_SUSPEND) {
+            continue;
+        }
+        uint32_t gen = pending->suspend_gen;
+        list_delete(&pending->node);
+        free(pending);
+        if (!dc_in_suspend() || (gen != suspend_gen) || (suspend_ctx.count == 0)) {
+            continue;
+        }
+        log(INFO, "devcoord: suspend: '%s' removed, counted as suspended\n",
+            dev->name);
+        suspend_ctx.count -= 1;
+        // Only the last outstanding suspend needs the work; otherwise a reply
+        // still to come goes on with the suspend.
+        if ((suspend_ctx.count == 0) && (suspend_work.op == WORK_IDLE)) {
+            queue_work(&suspend_work, WORK_SUSPEND_CONTINUE, 0);
+        }
+    }
+}
+
 // Remove device from parent
 // forced indicates this is removal due to a channel close
 // or process exit, which means we should remove all other
@@ -863,6 +920,9 @@ static zx_status_t dc_remove_device(device_t* dev, bool forced) {
         // (process exit or some other channel on that devhost
         // closing), and is now receiving the final remove call
         dev->flags &= (~DEV_CTX_ZOMBIE);
+        // It left its devhost's device list when it became a zombie, so a
+        // forced removal of the devhost does not reach it.
+        dc_count_removed_suspend(dev);
         dc_release_device(dev);
         return ZX_OK;
     }
@@ -879,6 +939,10 @@ static zx_status_t dc_remove_device(device_t* dev, bool forced) {
 
     log(DEVLC, "devcoord: remove %p name='%s' parent=%p\n", dev, dev->name, dev->parent);
     dev->flags |= DEV_CTX_DEAD;
+
+    if (forced || (dev->host && (dev->host->flags & DEV_HOST_DYING))) {
+        dc_count_removed_suspend(dev);
+    }
 
     // remove from devfs, preventing further OPEN attempts
     devfs_unpublish(dev);
@@ -951,6 +1015,11 @@ static zx_status_t dc_remove_device(device_t* dev, bool forced) {
                 // AND our parent is a BUSDEV
                 // AND our parent's devhost is not dying
                 // THEN we will want to rebind our parent
+                //
+                // During a suspend the rebind waits for the suspend to end:
+                // a new devhost would not be on the suspend list, and its
+                // devices could not be added. dc_suspend_end() rebinds the
+                // parent if the system stays up.
                 if (!(parent->flags & DEV_CTX_DEAD) &&
                     (parent->flags & DEV_CTX_MUST_ISOLATE) &&
                     ((parent->host == NULL) || !(parent->host->flags & DEV_HOST_DYING))) {
@@ -958,8 +1027,12 @@ static zx_status_t dc_remove_device(device_t* dev, bool forced) {
                     log(DEVLC, "devcoord: bus device %p name='%s' is unbound\n",
                         parent, parent->name);
 
-                    //TODO: introduce timeout, exponential backoff
-                    queue_work(&parent->work, WORK_DEVICE_ADDED, 0);
+                    if (dc_in_suspend()) {
+                        parent->flags |= DEV_CTX_REBIND_AFTER_SUSPEND;
+                    } else {
+                        //TODO: introduce timeout, exponential backoff
+                        queue_work(&parent->work, WORK_DEVICE_ADDED, 0);
+                    }
                 }
             }
         }
@@ -1306,6 +1379,12 @@ static zx_status_t dc_handle_device_read(device_t* dev) {
             if (msg.status != ZX_OK) {
                 log(ERROR, "devcoord: rpc: suspend '%s' status %d\n",
                     dev->name, msg.status);
+            }
+            // A devhost answers in order, so a late reply to a suspend that
+            // failed takes that suspend's pending entry; leave the newer
+            // suspend alone.
+            if (!dc_in_suspend() || (pending->suspend_gen != suspend_gen)) {
+                break;
             }
             suspend_context_t* ctx = pending->ctx;
             ctx->status = msg.status;
@@ -1736,6 +1815,7 @@ static zx_status_t dc_suspend_devhost(devhost_t* dh, suspend_context_t* ctx) {
     dh->flags |= DEV_HOST_SUSPEND;
     pending->op = PENDING_SUSPEND;
     pending->ctx = ctx;
+    pending->suspend_gen = suspend_gen;
     list_add_tail(&dev->pending, &pending->node);
 
     ctx->count += 1;
@@ -1766,14 +1846,62 @@ static void build_suspend_list(suspend_context_t* ctx) {
     // test devices do not (yet) participate in suspend
 }
 
+// Rebinds a bus device whose rebind waited for a suspend to end (see
+// dc_remove_device()), unless it has been bound or removed since.
+static void dc_rebind_after_suspend(device_t* dev) {
+    if (!(dev->flags & DEV_CTX_REBIND_AFTER_SUSPEND)) {
+        return;
+    }
+    dev->flags &= ~DEV_CTX_REBIND_AFTER_SUSPEND;
+    if (!(dev->flags & (DEV_CTX_BOUND | DEV_CTX_DEAD | DEV_CTX_ZOMBIE)) &&
+        list_is_empty(&dev->children) && (dev->work.op == WORK_IDLE)) {
+        queue_work(&dev->work, WORK_DEVICE_ADDED, 0);
+    }
+}
+
+// Called once a suspend has ended without the system going down. Empties the
+// suspend list, so that no devhost keeps a node pointing into a list that is
+// gone (see dc_release_devhost()), and rebinds the bus devices whose devhost
+// died during the suspend.
+static void dc_suspend_end(suspend_context_t* ctx) {
+    while (list_remove_head(&ctx->devhosts) != NULL) {
+    }
+    device_t* dev;
+    list_for_every_entry(&list_devices, dev, device_t, anode) {
+        dc_rebind_after_suspend(dev);
+    }
+    dc_rebind_after_suspend(&root_device);
+    dc_rebind_after_suspend(&misc_device);
+    dc_rebind_after_suspend(&sys_device);
+    dc_rebind_after_suspend(&test_device);
+}
+
+// Starts a new suspend's bookkeeping: drops work queued for one that failed,
+// and moves to a new generation, so that what is still pending from it is not
+// counted against this one.
+static void dc_suspend_reset(void) {
+    cancel_work(&suspend_work);
+    suspend_gen += 1;
+}
+
 static void process_suspend_list(suspend_context_t* ctx) {
+    // Hold a count while sending the batch and drop it at the end, so the
+    // suspend goes on even when no devhost in the batch takes a suspend, as
+    // when they have died or have no devices; it would wait forever.
+    ctx->count += 1;
     devhost_t* dh = ctx->dh;
     devhost_t* parent = NULL;
     do {
         if (!parent || (dh->parent == parent)) {
             // send DC_OP_SUSPEND each set of children of a devhost at a time,
             // since they can run in parallel
-            dc_suspend_devhost(dh, &suspend_ctx);
+            // A devhost that cannot be sent the suspend is skipped, as it
+            // always was, so that a reboot or poweroff still happens; the
+            // count held above keeps the suspend going if the batch is empty.
+            zx_status_t r = dc_suspend_devhost(dh, &suspend_ctx);
+            if ((r != ZX_OK) && (r != ZX_ERR_PEER_CLOSED)) {
+                log(ERROR, "devcoord: cannot suspend devhost %p: %d\n", dh, r);
+            }
             parent = dh->parent;
         } else {
             // if the parent is different than the previous devhost's
@@ -1787,6 +1915,7 @@ static void process_suspend_list(suspend_context_t* ctx) {
                                   devhost_t, snode)) != NULL);
     // next devhost to process once all the outstanding suspends are done
     ctx->dh = dh;
+    dc_continue_suspend(ctx);
 }
 
 static bool check_pending(device_t* dev) {
@@ -1841,6 +1970,7 @@ static void dc_suspend(uint32_t flags) {
     if (ctx->flags) {
         return;
     }
+    dc_suspend_reset();
     memset(ctx, 0, sizeof(*ctx));
     ctx->status = ZX_OK;
     ctx->flags = SUSPEND;
@@ -1875,6 +2005,7 @@ static void dc_mexec(zx_handle_t* h) {
     if (ctx->flags) {
         return;
     }
+    dc_suspend_reset();
     memset(ctx, 0, sizeof(*ctx));
     ctx->status = ZX_OK;
     ctx->flags = SUSPEND;
@@ -1899,11 +2030,14 @@ static void dc_continue_suspend(suspend_context_t* ctx) {
         // notify dmctl
         if (ctx->socket) {
             zx_handle_close(ctx->socket);
+            // A reply still outstanding comes back here too.
+            ctx->socket = ZX_HANDLE_INVALID;
         }
         if (ctx->sflags == DEVICE_SUSPEND_FLAG_MEXEC) {
             zx_object_signal(ctx->kernel, 0, ZX_USER_SIGNAL_0);
         }
         ctx->flags = 0;
+        dc_suspend_end(ctx);
         return;
     }
 
@@ -1913,6 +2047,10 @@ static void dc_continue_suspend(suspend_context_t* ctx) {
             process_suspend_list(ctx);
         } else if (ctx->sflags == DEVICE_SUSPEND_FLAG_MEXEC) {
             zx_system_mexec(ctx->kernel, ctx->bootdata);
+            // If we get here the mexec failed. End the suspend, as below, so
+            // that the rebinds it held back are not held back for good.
+            ctx->flags = RUNNING;
+            dc_suspend_end(ctx);
         } else {
             // should never get here on x86
             // on arm, if the platform driver does not implement
@@ -1924,6 +2062,7 @@ static void dc_continue_suspend(suspend_context_t* ctx) {
             }
             // if we get here the system did not suspend successfully
             ctx->flags = RUNNING;
+            dc_suspend_end(ctx);
         }
     }
 }

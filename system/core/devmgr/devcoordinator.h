@@ -31,6 +31,8 @@ struct dc_pending {
     list_node_t node;
     void* ctx;
     uint32_t op;
+    // For PENDING_SUSPEND: which suspend it belongs to (see dc_suspend()).
+    uint32_t suspend_gen;
 };
 
 #define PENDING_BIND 1
@@ -139,6 +141,10 @@ struct dc_device {
 // Devices may be created in this state, but may not
 // return to this state once made visible.
 #define DEV_CTX_INVISIBLE     0x80
+
+// This bus device's devhost died during a suspend, and its rebind waits for
+// the suspend to end; see dc_suspend_end().
+#define DEV_CTX_REBIND_AFTER_SUSPEND 0x100
 
 struct dc_driver {
     const char* name;
