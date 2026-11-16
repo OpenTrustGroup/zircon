@@ -9,6 +9,7 @@
 #include <ddk/device.h>
 #include <ddk/driver.h>
 #include <ddk/protocol/pci.h>
+#include <fbl/atomic.h>
 #include <fbl/mutex.h>
 #include <fbl/unique_ptr.h>
 #include <threads.h>
@@ -34,6 +35,10 @@ public:
     virtual void Unbind();
 
     void StartIrqThread();
+    // Stops the IRQ thread and waits for it to exit, if it was started; it
+    // must not be called with a lock that IrqRingUpdate() or IrqConfigChange()
+    // takes.
+    void StopIrqThread();
     // interrupt cases that devices may override
     virtual void IrqRingUpdate() = 0;
     virtual void IrqConfigChange() = 0;
@@ -87,6 +92,8 @@ protected:
     fbl::unique_ptr<Backend> backend_;
     // irq thread object
     thrd_t irq_thread_ = {};
+    bool irq_thread_started_ = false;
+    fbl::atomic<bool> irq_thread_should_exit_{false};
     zx::handle irq_handle_ = {};
     // Bus device is the parent device on the bus, device is this driver's device node.
     zx_device_t* bus_device_ = nullptr;

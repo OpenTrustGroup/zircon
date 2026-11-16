@@ -37,6 +37,8 @@ void Device::Unbind() {
 }
 
 void Device::Release() {
+    // The IRQ thread uses the backend, so stop it first, as upstream does.
+    StopIrqThread();
     backend_.reset();
 }
 
@@ -44,11 +46,13 @@ void Device::IrqWorker() {
     zx_status_t rc;
     zxlogf(TRACE, "%s: starting irq worker\n", tag());
 
-    while (backend_->InterruptValid() == ZX_OK) {
+    while (!irq_thread_should_exit_.load() && (backend_->InterruptValid() == ZX_OK)) {
         if ((rc = backend_->WaitForInterrupt()) != ZX_OK) {
+            // The wait fails for good once StopIrqThread() has terminated it,
+            // so stop rather than spin, as upstream does.
             zxlogf(SPEW, "%s: error while waiting for interrupt: %s\n",
                    tag(), zx_status_get_string(rc));
-            continue;
+            break;
         }
 
         // Read the status before completing the interrupt in case
@@ -81,8 +85,22 @@ int Device::IrqThreadEntry(void* arg) {
 }
 
 void Device::StartIrqThread() {
-    thrd_create_with_name(&irq_thread_, IrqThreadEntry, this, "virtio-irq-thread");
-    thrd_detach(irq_thread_);
+    // Not detached: the device or its backend must not go away while the
+    // thread runs, so StopIrqThread() joins it.
+    if (thrd_create_with_name(&irq_thread_, IrqThreadEntry, this, "virtio-irq-thread") ==
+        thrd_success) {
+        irq_thread_started_ = true;
+    }
+}
+
+void Device::StopIrqThread() {
+    if (!irq_thread_started_) {
+        return;
+    }
+    irq_thread_should_exit_.store(true);
+    backend_->Terminate();
+    thrd_join(irq_thread_, nullptr);
+    irq_thread_started_ = false;
 }
 
 zx_status_t Device::CopyDeviceConfig(void* _buf, size_t len) const {

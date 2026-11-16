@@ -58,6 +58,9 @@ public:
     virtual uint32_t IsrStatus() = 0;
     virtual zx_status_t InterruptValid() = 0;
     virtual zx_status_t WaitForInterrupt() = 0;
+    // Wakes a thread blocked in WaitForInterrupt(), and makes it and any later
+    // wait fail, as upstream's Terminate() does.
+    void Terminate() { zx_interrupt_destroy(irq_handle_.get()); }
 
     DISALLOW_COPY_ASSIGN_AND_MOVE(Backend);
 

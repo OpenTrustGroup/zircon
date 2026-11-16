@@ -301,7 +301,6 @@ zx_status_t InputDevice::Init() {
     // Prepare the HID report buffer
     memset(&report_, 0, sizeof(report_));
 
-    StartIrqThread();
     DriverStatusOk();
 
     device_ops_.release = virtio_input_release;
@@ -334,6 +333,9 @@ zx_status_t InputDevice::Init() {
         return status;
     }
 
+    // Start the interrupt thread only now: the cleanup above runs with lock_
+    // held, which the thread takes too, so it must not have to stop it.
+    StartIrqThread();
     vring_.Kick();
     cleanup.cancel();
     return ZX_OK;
@@ -356,11 +358,17 @@ void InputDevice::Stop() {
 }
 
 void InputDevice::Release() {
+    // The IRQ thread uses the buffers and takes lock_, so stop it before
+    // taking lock_ and freeing them.
+    StopIrqThread();
     fbl::AutoLock lock(&lock_);
     ReleaseLocked();
 }
 
 void InputDevice::ReleaseLocked() {
+    // The IRQ thread takes lock_ and uses the buffers: it must already be
+    // stopped (Release()) or not yet started (Init()'s cleanup).
+    ZX_DEBUG_ASSERT(!irq_thread_started_);
     hidbus_ifc_ = nullptr;
     hidbus_cookie_ = nullptr;
     for (size_t i = 0; i < kEventCount; ++i) {

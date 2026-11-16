@@ -266,9 +266,6 @@ zx_status_t EthernetDevice::Init() {
         LTRACE_DO(virtio_dump_desc(desc));
     }
 
-    // Start the interrupt thread and set the driver OK status
-    StartIrqThread();
-
     // Initialize the zx_device and publish us
     device_add_args_t args;
     memset(&args, 0, sizeof(args));
@@ -282,6 +279,11 @@ zx_status_t EthernetDevice::Init() {
         zxlogf(ERROR, "failed to add device: %s\n", zx_status_get_string(rc));
         return rc;
     }
+    // Start the interrupt thread and set the driver OK status
+    //
+    // The thread starts only now: the cleanup above runs with state_lock_
+    // held, which the thread takes too, so it must not have to stop it.
+    StartIrqThread();
     // Give the rx buffers to the host
     rx_.Kick();
 
@@ -293,11 +295,16 @@ zx_status_t EthernetDevice::Init() {
 
 void EthernetDevice::Release() {
     LTRACE_ENTRY;
+    // The IRQ thread takes state_lock_, so stop it before taking it.
+    StopIrqThread();
     fbl::AutoLock lock(&state_lock_);
     ReleaseLocked();
 }
 
 void EthernetDevice::ReleaseLocked() {
+    // Device::Release() joins the IRQ thread, which takes state_lock_: it must
+    // already be stopped (Release()) or not yet started (Init()'s cleanup).
+    ZX_DEBUG_ASSERT(!irq_thread_started_);
     ifc_ = nullptr;
     ReleaseBuffers(fbl::move(bufs_));
     Device::Release();

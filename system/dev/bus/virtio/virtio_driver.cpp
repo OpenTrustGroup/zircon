@@ -102,6 +102,9 @@ extern "C" zx_status_t virtio_pci_bind(void* ctx, zx_device_t* bus_device, void*
 
     status = virtio_device->Init();
     if (status != ZX_OK) {
+        // Init() may have started the IRQ thread before it failed; stop it
+        // before the device is deleted.
+        virtio_device->StopIrqThread();
         return status;
     }
 
