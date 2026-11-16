@@ -256,8 +256,11 @@ zx_status_t InputDevice::Init() {
 
     DriverStatusAck();
 
-    // Plan to clean up unless everything succeeds.
-    auto cleanup = fbl::MakeAutoCall([this]() { Release(); });
+    // Plan to clean up unless everything succeeds. The cleanup runs while
+    // lock_ is still held, so it must not take it again.
+    auto cleanup = fbl::MakeAutoCall([this]() TA_NO_THREAD_SAFETY_ANALYSIS {
+        ReleaseLocked();
+    });
 
     // Allocate the main vring
     zx_status_t status = vring_.Init(0, kEventCount);
@@ -354,6 +357,10 @@ void InputDevice::Stop() {
 
 void InputDevice::Release() {
     fbl::AutoLock lock(&lock_);
+    ReleaseLocked();
+}
+
+void InputDevice::ReleaseLocked() {
     hidbus_ifc_ = nullptr;
     hidbus_cookie_ = nullptr;
     for (size_t i = 0; i < kEventCount; ++i) {

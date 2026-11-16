@@ -228,8 +228,11 @@ zx_status_t EthernetDevice::Init() {
         return rc;
     }
 
-    // Plan to clean up unless everything goes right.
-    auto cleanup = fbl::MakeAutoCall([this]() { Release(); });
+    // Plan to clean up unless everything goes right. The cleanup runs while
+    // state_lock_ is still held, so it must not take it again.
+    auto cleanup = fbl::MakeAutoCall([this]() TA_NO_THREAD_SAFETY_ANALYSIS {
+        ReleaseLocked();
+    });
 
     // Allocate I/O buffers and virtqueues.
     uint16_t num_descs = static_cast<uint16_t>(kBacklog & 0xffff);

@@ -9,6 +9,7 @@
 #include <ddk/protocol/hidbus.h>
 #include <virtio/input.h>
 #include <zircon/device/input.h>
+#include <zircon/thread_annotations.h>
 
 #include "device.h"
 #include "ring.h"
@@ -28,6 +29,8 @@ public:
     const char* tag() const override { return "virtio-input"; }
 
 private:
+    void ReleaseLocked() TA_REQ(lock_);
+
     // DDK driver hooks
     static void virtio_input_release(void* ctx);
 
