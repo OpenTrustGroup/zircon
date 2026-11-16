@@ -21,7 +21,8 @@ struct int_handler_struct* pdev_get_int_handler(unsigned int vector)
     return &int_handler_table[vector];
 }
 
-zx_status_t register_int_handler(unsigned int vector, int_handler handler, void* arg)
+static zx_status_t register_int_handler_etc(unsigned int vector, int_handler handler,
+                                            void* arg, bool permanent)
 {
     if (!is_valid_interrupt(vector, 0)) {
         return ZX_ERR_INVALID_ARGS;
@@ -33,15 +34,54 @@ zx_status_t register_int_handler(unsigned int vector, int_handler handler, void*
     spin_lock_save(&lock, &state, SPIN_LOCK_FLAG_INTERRUPTS);
 
     h = pdev_get_int_handler(vector);
-    if (handler && h->handler) {
+    // Wait for a handler already running on another CPU, so that a caller
+    // unregistering it can free what the handler uses.
+    spin_lock(&h->lock);
+    if (h->permanent || (handler && h->handler)) {
+        spin_unlock(&h->lock);
         spin_unlock_restore(&lock, state, SPIN_LOCK_FLAG_INTERRUPTS);
         return ZX_ERR_ALREADY_BOUND;
     }
     h->handler = handler;
     h->arg = arg;
+    h->permanent = permanent;
+    spin_unlock(&h->lock);
 
     spin_unlock_restore(&lock, state, SPIN_LOCK_FLAG_INTERRUPTS);
     return ZX_OK;
+}
+
+zx_status_t register_int_handler(unsigned int vector, int_handler handler, void* arg)
+{
+    return register_int_handler_etc(vector, handler, arg, false);
+}
+
+zx_status_t register_permanent_int_handler(unsigned int vector, int_handler handler, void* arg)
+{
+    if (!handler) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+    return register_int_handler_etc(vector, handler, arg, true);
+}
+
+bool pdev_invoke_int_if_present(unsigned int vector)
+{
+    struct int_handler_struct* h = pdev_get_int_handler(vector);
+    if (h->permanent) {
+        // Set before the vector was unmasked and never changed since.
+        h->handler(h->arg);
+        return true;
+    }
+    // The handler runs under its vector's lock, which register_int_handler()
+    // takes too, so that unregistering it waits for a handler running here.
+    bool present = false;
+    spin_lock(&h->lock);
+    if (h->handler) {
+        h->handler(h->arg);
+        present = true;
+    }
+    spin_unlock(&h->lock);
+    return present;
 }
 
 static zx_status_t default_mask(unsigned int vector) {

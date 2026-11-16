@@ -7,17 +7,31 @@
 #pragma once
 
 #include <dev/interrupt.h>
+#include <kernel/spinlock.h>
 #include <zircon/compiler.h>
 #include <zircon/types.h>
 
 __BEGIN_CDECLS
 
 struct int_handler_struct {
+    // Held while a handler that is not permanent runs and while
+    // register_int_handler() changes it, as on x64.
+    spin_lock_t lock;
     int_handler handler;
     void* arg;
+    // Set once at boot for the kernel's own handlers (IPIs, the timer), which
+    // then never change and run without the lock, as in F31.
+    bool permanent;
 };
 
 struct int_handler_struct* pdev_get_int_handler(unsigned int vector);
+
+// Registers a handler that is never changed or removed afterwards.
+zx_status_t register_permanent_int_handler(unsigned int vector, int_handler handler, void* arg);
+
+// Calls the vector's handler, if it has one, for the interrupt controller's
+// IRQ path; returns whether there was one.
+bool pdev_invoke_int_if_present(unsigned int vector);
 
 // Interrupt Controller interface
 struct pdev_interrupt_ops {

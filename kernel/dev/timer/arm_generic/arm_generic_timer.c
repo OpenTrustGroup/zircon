@@ -20,6 +20,7 @@
 #include <zircon/types.h>
 
 #include <pdev/driver.h>
+#include <pdev/interrupt.h>
 #include <zircon/boot/driver-config.h>
 
 #define LOCAL_TRACE 0
@@ -395,7 +396,7 @@ static void arm_generic_timer_init(uint32_t freq_override)
     test_time_conversions(cntfrq);
 
     LTRACEF("register irq %d on cpu %u\n", timer_irq, arch_curr_cpu_num());
-    zx_status_t status = register_int_handler(timer_irq, &platform_tick, NULL);
+    zx_status_t status = register_permanent_int_handler(timer_irq, &platform_tick, NULL);
     DEBUG_ASSERT(status == ZX_OK);
 
     // Try to enable the event stream if requested.

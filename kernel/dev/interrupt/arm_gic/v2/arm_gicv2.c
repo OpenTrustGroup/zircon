@@ -263,10 +263,7 @@ static void gic_handle_irq(struct iframe* frame) {
                   get_current_thread(), vector, (uintptr_t)IFRAME_PC(frame));
 
     // deliver the interrupt
-    struct int_handler_struct* handler = pdev_get_int_handler(vector);
-    if (handler->handler) {
-        handler->handler(handler->arg);
-    }
+    pdev_invoke_int_if_present(vector);
 
     GICREG(0, GICC_EOIR) = iar;
 
@@ -375,11 +372,13 @@ static void arm_gic_v2_init(const void* driver_data, uint32_t length) {
     }
     pdev_register_interrupts(&gic_ops);
 
-    zx_status_t status = register_int_handler(MP_IPI_GENERIC + ipi_base, &arm_ipi_generic_handler, 0);
+    zx_status_t status = register_permanent_int_handler(MP_IPI_GENERIC + ipi_base,
+                                                        &arm_ipi_generic_handler, 0);
     DEBUG_ASSERT(status == ZX_OK);
-    status = register_int_handler(MP_IPI_RESCHEDULE + ipi_base, &arm_ipi_reschedule_handler, 0);
+    status = register_permanent_int_handler(MP_IPI_RESCHEDULE + ipi_base,
+                                            &arm_ipi_reschedule_handler, 0);
     DEBUG_ASSERT(status == ZX_OK);
-    status = register_int_handler(MP_IPI_HALT + ipi_base, &arm_ipi_halt_handler, 0);
+    status = register_permanent_int_handler(MP_IPI_HALT + ipi_base, &arm_ipi_halt_handler, 0);
     DEBUG_ASSERT(status == ZX_OK);
 
     gicv2_hw_interface_register();
